@@ -16,6 +16,7 @@ import { bindFilesToolbar } from './files-toolbar.js';
 import { bindFilesWorkspaceInteractions } from './files-workspace-bindings.js';
 import { createFilesLocale, loadFilesUiState, storageGet, storageSet } from './files-preferences.js';
 import { createFilesHostConnection } from './files-host-connection.js';
+import { loadAppNavigation, saveAppNavigation, projectionFromApps, isStaleProjection, mountAppMenu } from './app-navigation-projection.js';
 import { createFilesFeedback } from './files-feedback.js';
 import { createFilesWatchController } from './files-watch-controller.js';
 import { fileUri, normalizePathInput, parentAndName, pathParts, renderFilesBreadcrumb } from './files-paths.js';
@@ -552,6 +553,22 @@ function openSearchDialog() {
   });
 }
 
+async function refreshAppProjection() {
+  // ADR-0025 D37: the files page owns the live host connection, so it
+  // refreshes the sidebar UI cache while connected. Writes are skipped
+  // when the projection is already current to avoid storage churn.
+  try {
+    const { apps, revision } = await call('apps:list');
+    const current = await loadAppNavigation();
+    if (isStaleProjection(current, revision)) {
+      await saveAppNavigation(projectionFromApps(apps, revision));
+    }
+  } catch {
+    // apps:* is optional at the transport level (older host build); the
+    // cached projection remains the fallback and the App Center repairs.
+  }
+}
+
 async function init() {
   try {
     setStatus(t('connecting', '正在连接本地文件系统…'));
@@ -559,6 +576,7 @@ async function init() {
     await loadUiState();
     const version = await versionRequest;
     if (version?.protocolVersion !== 1) throw new Error(t('nativeHostIncompatible', 'Native Host 协议不兼容'));
+    refreshAppProjection().catch(() => {});
     const roots = await call('roots');
     rootPaths = roots.map((root) => root.path);
     bindAppMenu(roots);
@@ -625,6 +643,10 @@ async function bootstrap() {
   document.documentElement.lang = filesLocale.language === 'en' ? 'en' : 'zh-CN';
   applyI18n();
   for (const id of Object.keys(rootLabels)) rootLabels[id] = t(id, rootLabels[id]);
+  // ADR-0025 D33/D37: the "应用" section is a projection UI cache rendered
+  // from chrome.storage.local — no extra host round-trip is needed here
+  // because refreshAppProjection() already updated it for this page.
+  mountAppMenu($('app-menu-apps'), { t }).catch(() => {});
   filesSidebar = createFilesSidebar({
     container: $('app-sidebar'),
     resizer: $('sidebar-resizer'),

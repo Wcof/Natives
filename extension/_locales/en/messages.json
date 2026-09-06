@@ -1,775 +1,2324 @@
 {
-  "addFirstWidget": {"message":"Add first widget"},
-  "addWidget": {"message":"Add widget"},
-  "appName": {"message":"Natives Files"},
-  "applyCrop": {"message":"Apply crop"},
-  "archiveCompressing": {"message":"compressing"},
-  "archiveCreated": {"message":"files archived"},
-  "archiveEntries": {"message":"Archive entries"},
-  "archiveExtracted": {"message":"files extracted"},
-  "archiveName": {"message":"Archive name"},
-  "archivePreviewUnavailable": {"message":"Archive preview is unavailable"},
-  "archiveToolUnavailable": {"message":"No controlled system tool is installed to list this archive format; listing is unavailable and creation/extraction are not supported."},
-  "archiveValidating": {"message":"validating"},
-  "back": {"message":"Back"},
-  "background": {"message":"Background"},
-  "backgroundSettings": {"message":"Background settings"},
-  "backgroundSource": {"message":"Background source"},
-  "blur": {"message":"Blur"},
-  "breadcrumb": {"message":"Breadcrumb"},
-  "brightness": {"message":"Brightness"},
-  "cancel": {"message":"Cancel"},
-  "carouselInterval": {"message":"Carousel interval"},
-  "changes": {"message":"Changed this session"},
-  "clearClipboard": {"message":"Clear clipboard"},
-  "clipboardCleared": {"message":"Clipboard cleared"},
-  "clipboardCopied": {"message":"items copied"},
-  "clipboardCut": {"message":"items cut"},
-  "clipboardUnavailable": {"message":"Clipboard unavailable"},
-  "close": {"message":"Close"},
-  "collapseSidebar": {"message":"Collapse sidebar"},
-  "completed": {"message":"items completed"},
-  "confirm": {"message":"Confirm"},
-  "confirmImport": {"message":"Confirm import & overwrite"},
-  "confirmRemoveWidget": {"message":"Are you sure you want to remove this widget?"},
-  "confirmResetWorkspace": {"message":"Reset workspace"},
-  "connecting": {"message":"Connecting to local file system…"},
-  "contentSearchUnavailable": {"message":"PDF text search unavailable"},
-  "copiedPath": {"message":"Path copied"},
-  "copy": {"message":"Copy to…"},
-  "copyFile": {"message":"Copy file"},
-  "copyImage": {"message":"Copy image"},
-  "copyPath": {"message":"Copy path"},
-  "createArchive": {"message":"Create ZIP"},
-  "createArchiveHint": {"message":"Selected items must be in the same directory"},
-  "created": {"message":"Created"},
-  "createdAt": {"message":"Created"},
-  "cropHandle": {"message":"Crop handle"},
-  "csvPreview": {"message":"CSV preview"},
-  "currentDirectorySearch": {"message":"Current folder search"},
-  "customClass": {"message":"Custom CSS class"},
-  "dashboard": {"message":"Dashboard"},
-  "delete": {"message":"Delete"},
-  "deleteWidget": {"message":"Delete widget"},
-  "deleteWorkspace": {"message":"Delete workspace"},
-  "deleteWorkspaceHint": {"message":"This action cannot be undone."},
-  "desktop": {"message":"Desktop"},
-  "destination": {"message":"Destination folder path"},
-  "destinationHint": {"message":"Enter the full destination folder path"},
-  "disable": {"message":"Disable"},
-  "discardChanges": {"message":"Discard changes"},
-  "diskUsage": {"message":"Usage"},
-  "documents": {"message":"Documents"},
-  "doneEditingPosition": {"message":"Done editing position"},
-  "downloads": {"message":"Downloads"},
-  "dropHint": {"message":"Release to import or move files"},
-  "duplicate": {"message":"Make a copy"},
-  "duplicated": {"message":"Copy created"},
-  "edit": {"message":"Edit"},
-  "editConflict": {"message":"File changed externally"},
-  "editConflictMessage": {"message":"The file changed outside Natives. Choose whether to reload or overwrite it."},
-  "editImage": {"message":"Edit image"},
-  "editPosition": {"message":"Edit position"},
-  "editorLabel": {"message":"File editor"},
-  "emptyFolder": {"message":"This folder is empty"},
-  "emptySpaceDesc": {"message":"Choose widgets from the catalog to add to your space"},
-  "emptySpaceTitle": {"message":"This space has no widgets yet"},
-  "enable": {"message":"Enable"},
-  "expandSidebar": {"message":"Expand sidebar"},
-  "exportTabliss": {"message":"Export Tabliss config"},
-  "extractArchive": {"message":"Extract archive"},
-  "extractArchiveHint": {"message":"Enter an extraction folder path (ZIP/TAR)"},
-  "failed": {"message":"failed"},
-  "favorites": {"message":"Favorites"},
-  "fileCopied": {"message":"File copied"},
-  "files": {"message":"Files"},
-  "filesCount": {"message":"files"},
-  "filterCurrentDirectory": {"message":"Filter current folder"},
-  "flipHorizontal": {"message":"Flip horizontally"},
-  "flipVertical": {"message":"Flip vertically"},
-  "folder": {"message":"Folder"},
-  "folderName": {"message":"Folder name"},
-  "followChanges": {"message":"Follow changes"},
-  "followChangesStopped": {"message":"Manual browsing stopped follow mode"},
-  "fontSize": {"message":"Font size"},
-  "fontWeight": {"message":"Font weight"},
-  "forward": {"message":"Forward"},
-  "freeMoveHelp": {"message":"After clicking \"Edit position\", freely drag the widget on the canvas, drag corner handles to scale, or top handle to rotate."},
-  "fullscreenTooltip": {"message":"Fullscreen (F)"},
-  "globalSearch": {"message":"Global search"},
-  "greetingAfternoon": {"message":"Good afternoon"},
-  "greetingEvening": {"message":"Good evening"},
-  "greetingMorning": {"message":"Good morning"},
-  "grid": {"message":"Grid"},
-  "gridLarge": {"message":"Large grid"},
-  "gridMedium": {"message":"Medium grid"},
-  "gridSmall": {"message":"Small grid"},
-  "home": {"message":"Home"},
-  "hostConnected": {"message":"Host connected"},
-  "hostConnectionFailed": {"message":"Native Host connection failed"},
-  "hostDisconnected": {"message":"Native Host disconnected"},
-  "hostDisconnectedShort": {"message":"Host disconnected"},
-  "htmlPreview": {"message":"HTML preview (scripts disabled)"},
-  "imageArrow": {"message":"Arrow"},
-  "imageBrushSize": {"message":"Brush size"},
-  "imageColor": {"message":"Brush color"},
-  "imageCopied": {"message":"Image copied"},
-  "imageCrop": {"message":"Crop"},
-  "imageFormat": {"message":"Output format"},
-  "imageInserted": {"message":"Image inserted"},
-  "imageMosaic": {"message":"Mosaic"},
-  "imagePen": {"message":"Pen"},
-  "imagePreviewUnavailable": {"message":"Image preview is unavailable; use the system app to open it"},
-  "imageQuality": {"message":"Output quality"},
-  "imageRectangle": {"message":"Rectangle"},
-  "imageText": {"message":"Text"},
-  "imageTextPrompt": {"message":"Text to place"},
-  "importCancelled": {"message":"Import cancelled"},
-  "importDestination": {"message":"Importing to"},
-  "importFiles": {"message":"Import files"},
-  "importFolder": {"message":"Import folder"},
-  "importPreview": {"message":"Import preview"},
-  "importSummary": {"message":"Configuration summary"},
-  "importTabliss": {"message":"Import Tabliss config"},
-  "imported": {"message":"files imported"},
-  "importing": {"message":"Importing"},
-  "inspector": {"message":"Inspector"},
-  "interfaceLanguage": {"message":"Interface language"},
-  "interfaceTheme": {"message":"Interface theme"},
-  "invalidImportPath": {"message":"Invalid import path"},
-  "invalidPath": {"message":"Invalid path"},
-  "insertLink": {"message":"Insert link"},
-  "items": {"message":"items"},
-  "jsonPreview": {"message":"JSON preview"},
-  "language": {"message":"Language"},
-  "languageEn": {"message":"English"},
-  "languageZh": {"message":"Chinese Simplified"},
-  "largeFilePreviewUnavailable": {"message":"Large files are not read into the browser; use the system app to open them"},
-  "largeTextReadOnly": {"message":"Large files are preview-only; editing is disabled"},
-  "linkPrompt": {"message":"Link URL"},
-  "list": {"message":"List"},
-  "loading": {"message":"Loading…"},
-  "management": {"message":"Configuration management"},
-  "markdownImage": {"message":"Insert image"},
-  "markdownImages": {"message":"Markdown images"},
-  "markdownPreview": {"message":"Markdown preview"},
-  "mediaPreviewUnavailable": {"message":"Open audio and video with the system default app"},
-  "modelAPIFormat": {"message":"API format"},
-  "modelAPIKeyPlaceholder": {"message":"Leave blank to keep the current key"},
-  "modelAccessKeyUnavailable": {"message":"No access key has been generated"},
-  "modelAccountActive": {"message":"Available"},
-  "modelAccountNeedsReauth": {"message":"Sign-in required"},
-  "modelAccounts": {"message":"accounts"},
-  "modelActions": {"message":"Actions"},
-  "modelAddProvider": {"message":"Add custom provider"},
-  "modelAdvBasic": {"message":"Basic Control"},
-  "modelAdvBasicDesc": {"message":"Manage the local core, listen port, and compatible API URLs."},
-  "modelAdvBasicTitle": {"message":"Gateway Control"},
-  "modelAdvKeys": {"message":"Access Keys"},
-  "modelAdvKeysDesc": {"message":"Support creating up to 64 independent access keys persisted in OS Keychain."},
-  "modelAdvKeysTitle": {"message":"Gateway Access Keys Management"},
-  "modelAuthKeysDesc": {"message":"Manage API keys for accessing the local proxy with full CRUD support."},
-  "modelAuthKeysTitle": {"message":"Access Key Management"},
-  "modelClaudeCompat": {"message":"Anthropic Compatible"},
-  "modelGeminiCompat": {"message":"Gemini Compatible"},
-  "modelKernelCheckDone": {"message":"Checked latest kernel version"},
-  "modelKernelUpToDate": {"message":"Up to date"},
-  "modelKernelUpdated": {"message":"Kernel updated successfully"},
-  "modelKernelUpdating": {"message":"Updating kernel…"},
-  "modelKernelVersion": {"message":"Kernel Version"},
-  "modelLatestKernelVersion": {"message":"Latest Version"},
-  "modelOpenAICompat": {"message":"OpenAI Compatible"},
-  "modelProcessPID": {"message":"Process PID"},
-  "modelPromptKeyName": {"message":"Enter new key name:"},
-  "modelRefreshStatus": {"message":"Refresh Status"},
-  "modelRename": {"message":"Rename"},
-  "modelRunningControl": {"message":"Running Control"},
-  "modelRunStatus": {"message":"Run Status"},
-  "modelSoftwareVersion": {"message":"Software Version"},
-  "modelStatusRefreshed": {"message":"Status Refreshed"},
-  "modelAdvKernel": {"message":"Core Settings"},
-  "modelAdvKernelDesc": {"message":"Configure failure retries. A running gateway restarts safely after saving."},
-  "modelAdvKernelTitle": {"message":"Core Retry Settings"},
-  "modelAdvNetwork": {"message":"Network & Proxy"},
-  "modelAdvNetworkRouting": {"message":"Network & Routing"},
-  "modelAdvancedSettings": {"message":"Advanced Settings"},
-  "modelAgentSettings": {"message":"Agent Clients"},
-  "agentLocalClients": {"message":"Local Clients"},
-  "agentLocalClientsHint": {"message":"Choose an agent to manage"},
-  "agentClientsDetected": {"message":"local clients"},
-  "agentRedetect": {"message":"Re-detect"},
-  "agentDetecting": {"message":"Detecting local clients…"},
-  "agentDetectFailed": {"message":"Detection failed"},
-  "agentNoClientsFound": {"message":"No supported agent clients detected"},
-  "agentNotInstalled": {"message":"Not detected"},
-  "agentInstalled": {"message":"Installed"},
-  "agentInstalledKeepConfig": {"message":"Installed · original config kept"},
-  "agentModified": {"message":"Modified"},
-  "agentInstallStatus": {"message":"Install status"},
-  "agentClientDetected": {"message":"Client detected"},
-  "agentClientMissing": {"message":"Client not found"},
-  "agentClientVersion": {"message":"Client version"},
-  "agentVersionUnknown": {"message":"Unknown"},
-  "agentCoreConfig": {"message":"Core Configuration"},
-  "agentUseModel": {"message":"Use Model"},
-  "agentModelLabel": {"message":"Default model"},
-  "agentModelsHint": {"message":"available models, first one selected by default"},
-  "agentModelsLoading": {"message":"Reading available models…"},
-  "agentModelsEmpty": {"message":"No models found on the local gateway yet. Add providers or accounts first."},
-  "agentModifyTitle": {"message":"Config Changes"},
-  "agentModifyHint": {"message":"After applying or closing the config, fully restart the client; model and context length apply to new sessions."},
-  "agentApply": {"message":"Apply Changes"},
-  "agentDefault": {"message":"Default Config"},
-  "agentCloseConfig": {"message":"Close Modification"},
-  "agentCloseConfirm": {"message":"Close modification and restore the original config?"},
-  "agentApplyDone": {"message":"Configuration updated"},
-  "agentLaunch": {"message":"Launch"},
-  "agentLaunched": {"message":"Launched"},
-  "agentSelectHint": {"message":"Select an agent client on the left"},
-  "agentSelectHintDetail": {"message":"After detection, review install status and apply gateway config."},
-  "agentNotInstalledTitle": {"message":"Not detected"},
-  "agentNotInstalledHint": {"message":"Install the client, then Re-detect."},
-  "agentManualClient": {"message":"Gateway parameters are managed automatically"},
-  "agentManualClientHint": {"message":"Launching routes the client through the local gateway."},
-  "modelAdvancedSettingsDescription": {"message":"Manage gateway control, access keys, network routing, and core parameters."},
-  "modelAlias": {"message":"Alias"},
-  "modelAllowLAN": {"message":"Allow LAN address"},
-  "modelAuthorizationFailed": {"message":"OAuth authorization failed. Please try again."},
-  "modelAuthorizationTimeout": {"message":"OAuth authorization timed out. Start again."},
-  "modelBackToWorkspace": {"message":"Back to workspace"},
-  "modelConfirmImport": {"message":"Confirm and Merge"},
-  "modelConnectionSucceeded": {"message":"Connected; found $1 models"},
-  "modelContextLength": {"message":"Context"},
-  "modelCreateKey": {"message":"Create Key"},
-  "modelCustomModels": {"message":"Custom models"},
-  "modelCustomModelsDescription": {"message":"Configure compatible endpoints, API keys, and available models."},
-  "modelCustomProviders": {"message":"Custom providers"},
-  "modelDeleteAccountConfirm": {"message":"Delete this OAuth account?"},
-  "modelDeleteKeyConfirm": {"message":"Are you sure you want to delete this access key? Clients will lose access immediately."},
-  "modelDeleteProviderConfirm": {"message":"Delete this provider and its models?"},
-  "modelDisplayName": {"message":"Display name"},
-  "modelEndpointUnavailable": {"message":"Gateway endpoint is unavailable"},
-  "modelErrorGatewayRestart": {"message":"The configuration was saved, but the gateway could not restart. Try again."},
-  "modelErrorGatewayStart": {"message":"The local model gateway could not start."},
-  "modelErrorGatewayStop": {"message":"The local model gateway could not stop."},
-  "modelErrorInternal": {"message":"The model settings operation failed."},
-  "modelErrorInvalidRequest": {"message":"Some input is invalid. Check it and try again."},
-  "modelErrorKeychainUnavailable": {"message":"The system keychain is unavailable."},
-  "modelErrorNotFound": {"message":"This configuration no longer exists. Refresh and try again."},
-  "modelErrorOAuthInProgress": {"message":"Another OAuth authorization is already in progress."},
-  "modelErrorRevisionConflict": {"message":"The configuration changed in another page. Refresh and try again."},
-  "modelErrorSecretMissing": {"message":"Configure credentials first."},
-  "modelErrorTimeout": {"message":"The request timed out. Try again."},
-  "modelErrorUpstream": {"message":"The provider request failed. Try again later."},
-  "modelErrorUpstreamInvalid": {"message":"The provider returned an invalid response."},
-  "modelErrorUpstreamTooLarge": {"message":"The provider response exceeded the size limit."},
-  "modelErrorUpstreamUnauthorized": {"message":"The provider rejected the credential. Check the API key."},
-  "modelErrorUpstreamUnreachable": {"message":"Could not reach the provider. Check the address and network."},
-  "modelEventCache": {"message":"Cache"},
-  "modelEventCacheRate": {"message":"Cache Rate"},
-  "modelEventCost": {"message":"Cost"},
-  "modelEventInput": {"message":"Input"},
-  "modelEventKey": {"message":"Access Key"},
-  "modelEventLatency": {"message":"Total Latency"},
-  "modelEventModel": {"message":"Model"},
-  "modelEventOutput": {"message":"Output"},
-  "modelEventProviderModel": {"message":"Provider / Model"},
-  "modelEventSpeed": {"message":"Speed"},
-  "modelEventStatus": {"message":"Status"},
-  "modelEventTime": {"message":"Time"},
-  "modelEventTokens": {"message":"Tokens (In/Out)"},
-  "modelEventTotal": {"message":"Total"},
-  "modelEventTtft": {"message":"TTFT"},
-  "modelFailed": {"message":"Failed"},
-  "modelFetchModels": {"message":"Fetch models"},
-  "modelGatewayNotRunning": {"message":"Gateway is not running"},
-  "modelGatewaySummary": {"message":"$1 providers · $2 accounts · $3 models"},
-  "modelHostDisconnected": {"message":"Model Host disconnected"},
-  "modelID": {"message":"Model ID"},
-  "modelImportPreview": {"message":"Import Data Preview"},
-  "modelImportSuccess": {"message":"Successfully imported $1 records"},
-  "modelKeyCopied": {"message":"Access key copied to clipboard"},
-  "modelKeyCreated": {"message":"Created At"},
-  "modelKeyCreatedAndCopied": {"message":"Access key created and copied to clipboard"},
-  "modelKeyMask": {"message":"Key Mask"},
-  "modelKeyRotatedAndCopied": {"message":"Access key rotated and copied to clipboard"},
-  "modelList": {"message":"Models"},
-  "modelLoading": {"message":"Loading model settings…"},
-  "modelLocalProxy": {"message":"Local proxy"},
-  "modelLocalProxyDescription": {"message":"Manage local compatible endpoints, access keys, and resident mode."},
-  "modelMetricCacheHitRate": {"message":"Prompt Cache Hit Rate"},
-  "modelMetricEstimatedCost": {"message":"Estimated Cost"},
-  "modelMetricSuccessRate": {"message":"Success Rate"},
-  "modelMetricTPS": {"message":"Avg Throughput (TPS)"},
-  "modelMetricTotalRequests": {"message":"Total Requests"},
-  "modelMetricTotalTokens": {"message":"Total Tokens"},
-  "modelModelsAndServices": {"message":"Models and services"},
-  "modelNoAnalyticsData": {"message":"No Analytics Data"},
-  "modelNoCustomProviders": {"message":"No custom providers yet"},
-  "modelNoData": {"message":"No data"},
-  "modelNoEventsFound": {"message":"No matching events found"},
-  "modelNoEventsHint": {"message":"Adjust search filters or make new API requests."},
-  "modelNoKeys": {"message":"No Access Keys"},
-  "modelNoKeysHint": {"message":"Click Create Key to generate new client credentials."},
-  "modelNoModels": {"message":"No models"},
-  "modelNoModelsHint": {"message":"Fetch models automatically or add one with the form below."},
-  "modelNoPricingData": {"message":"No Pricing Data"},
-  "modelNoPricingHint": {"message":"Click Sync Pricing from Remote to load model rates."},
-  "modelNoUsageHint": {"message":"Start the gateway and make API requests to see usage statistics."},
-  "modelNoUsageRecords": {"message":"No Usage Records"},
-  "modelOAuthModels": {"message":"OAuth"},
-  "modelOAuthLogin": {"message":"OAuth Login"},
-  "modelAuthFiles": {"message":"Auth Files"},
-  "modelQuotaInquiry": {"message":"Quota"},
-  "chooseBrowser": {"message":"Browser"},
-  "systemDefaultBrowser": {"message":"System Default Browser"},
-  "doNotAutoOpen": {"message":"Do not auto open (Generate link only)"},
-  "browserSelectionHint": {"message":"Auto-selected available browser, your choice will be remembered"},
-  "startLogin": {"message":"Start Login"},
-  "searchAuthFilesPlaceholder": {"message":"Search filename, account or provider"},
-  "allProviders": {"message":"All Providers"},
-  "allStatus": {"message":"All Status"},
-  "refreshQuota": {"message":"Refresh Quota"},
-  "copyName": {"message":"Copy Filename"},
-  "getQuota": {"message":"Get Quota"},
-  "queryableCredentials": {"message":"credentials queryable"},
-  "readList": {"message":"Read List"},
-  "refreshAll": {"message":"Refresh All"},
-  "credentialsCount": {"message":"credentials"},
-  "disabledCount": {"message":"disabled"},
-  "openFolder": {"message":"Open Folder"},
-  "import": {"message":"Import"},
-  "priority": {"message":"Priority"},
-  "models": {"message":"Models"},
-  "remaining": {"message":"Remaining"},
-  "queryingQuota": {"message":"Querying quota..."},
-  "quotaNotFetched": {"message":"Quota not fetched yet"},
-  "noAuthFiles": {"message":"No auth files"},
-  "importAuthFilesHint": {"message":"Click Import to upload .json credentials, or login to save automatically."},
-  "noActiveCredentials": {"message":"No active credentials available"},
-  "quotaNoCredsHint": {"message":"Import and enable credentials in Auth Files to query quota here."},
-  "confirmDeleteAuthFile": {"message":"Are you sure you want to delete this auth file?"},
-  "authFileImported": {"message":"Auth file imported successfully"},
-  "modelOAuthModelsHint": {"message":"Models sync automatically after account authorization and gateway startup."},
-  "modelPreferredPort": {"message":"Preferred Gateway Port (0 for auto)"},
-  "modelPriceCacheRead": {"message":"Cache Read ($/1M)"},
-  "modelPriceCacheWrite": {"message":"Cache Write ($/1M)"},
-  "modelPriceCatalogVer": {"message":"Catalog Version"},
-  "modelPriceInput": {"message":"Input ($/1M)"},
-  "modelPriceOutput": {"message":"Output ($/1M)"},
-  "modelPriceSource": {"message":"Source"},
-  "modelProvider": {"message":"Provider"},
-  "modelProxyURL": {"message":"Upstream Proxy URL"},
-  "modelRange30d": {"message":"Past 30 Days"},
-  "modelRange7d": {"message":"Past 7 Days"},
-  "modelRangeAll": {"message":"All Time"},
-  "modelRangeToday": {"message":"Today"},
-  "modelRankByAccessKey": {"message":"Requests by Access Key"},
-  "modelRankByHour": {"message":"24h Activity Distribution"},
-  "modelRankByModel": {"message":"Requests by Model"},
-  "modelRankByProvider": {"message":"Requests by Provider"},
-  "modelRefresh": {"message":"Refresh"},
-  "modelRequestRetry": {"message":"Automatic Request Retries (0-10)"},
-  "modelResident": {"message":"Keep running"},
-  "modelRestarting": {"message":"Restarting"},
-  "modelRotate": {"message":"Rotate"},
-  "modelRoutingStrategy": {"message":"Credential Routing Strategy"},
-  "modelRunning": {"message":"Running"},
-  "modelSettings": {"message":"Models and services"},
-  "modelSettingsDescription": {"message":"Manage model providers, including custom models, OAuth models, and local proxy settings."},
-  "modelSettingsSaved": {"message":"Gateway settings saved"},
-  "modelStartGateway": {"message":"Start"},
-  "modelStarting": {"message":"Starting"},
-  "modelStatus": {"message":"Status"},
-  "modelStopGateway": {"message":"Stop"},
-  "modelStopped": {"message":"Stopped"},
-  "modelStopping": {"message":"Stopping"},
-  "modelStrategyFillFirst": {"message":"Fill First"},
-  "modelStrategyRoundRobin": {"message":"Round Robin"},
-  "modelSyncPricing": {"message":"Sync Pricing from Remote"},
-  "modelSyncPricingSuccess": {"message":"Pricing catalog synced successfully"},
-  "modelTestConnection": {"message":"Test connection"},
-  "modelTimeSpan": {"message":"Time Span"},
-  "modelTokenCacheRead": {"message":"Cache Read"},
-  "modelTokenCacheWrite": {"message":"Cache Write"},
-  "modelTokenComposition": {"message":"Token Breakdown"},
-  "modelTokenInput": {"message":"Input Tokens"},
-  "modelTokenOutput": {"message":"Output Tokens"},
-  "modelTokenReasoning": {"message":"Reasoning Tokens"},
-  "modelTotalRecords": {"message":"$1 total records"},
-  "modelTrendBreakdown": {"message":"Hourly Trend"},
-  "modelUploading": {"message":"Uploading chunks and validating..."},
-  "modelUsageAnalytics": {"message":"Analytics"},
-  "modelUsageEvents": {"message":"Events"},
-  "modelUsageOverview": {"message":"Overview"},
-  "modelUsagePricing": {"message":"Pricing & Rates"},
-  "modelUsageRecords": {"message":"Usage Records"},
-  "modelUsageRecordsDescription": {"message":"View request metrics, token consumption, analytics breakdowns, and model pricing."},
-  "modified": {"message":"Modified"},
-  "modifiedAt": {"message":"Modified"},
-  "moreActions": {"message":"More"},
-  "moreAvailable": {"message":"more available"},
-  "move": {"message":"Move to…"},
-  "movePreviewBelow": {"message":"Move preview below"},
-  "movePreviewSide": {"message":"Move preview to the side"},
-  "moveToTrash": {"message":"Move to trash"},
-  "moved": {"message":"Moved"},
-  "movies": {"message":"Movies"},
-  "music": {"message":"Music"},
-  "name": {"message":"Name"},
-  "nativeHostIncompatible": {"message":"Native Host protocol is incompatible; update Native Host (v1 required)"},
-  "navAccount": {"message":"Natives user"},
-  "navAccountType": {"message":"Personal account"},
-  "navDocuments": {"message":"Documents"},
-  "navSpace": {"message":"Space"},
-  "navigation": {"message":"Navigation"},
-  "new": {"message":"New"},
-  "newFile": {"message":"New file"},
-  "newFolder": {"message":"New folder"},
-  "newName": {"message":"New name"},
-  "newWorkspace": {"message":"New workspace"},
-  "nextPage": {"message":"Next page"},
-  "nextWallpaper": {"message":"Switch to next wallpaper"},
-  "nightDim": {"message":"Night auto-dim"},
-  "matches": {"message":"matches"},
-  "noFilterResults": {"message":"No matching items in this folder"},
-  "noMatchingWidgets": {"message":"No matching widgets found"},
-  "noSearchResults": {"message":"No matching files"},
-  "noWidgets": {"message":"No widgets in this workspace."},
-  "noWidgetsInWorkspace": {"message":"No widgets in this workspace"},
-  "open": {"message":"Open"},
-  "openEditor": {"message":"Open in editor"},
-  "openTrash": {"message":"Open Trash"},
-  "opened": {"message":"Opened"},
-  "openedEditor": {"message":"Opened in editor"},
-  "operationCancelled": {"message":"Operation cancelled"},
-  "operationFailed": {"message":"Operation failed"},
-  "operationProgress": {"message":"Operation progress"},
-  "overwriteFile": {"message":"Overwrite"},
-  "pageError": {"message":"Page failed to initialise"},
-  "pagination": {"message":"Pagination"},
-  "paste": {"message":"Paste"},
-  "pasted": {"message":"items pasted"},
-  "path": {"message":"Path"},
-  "pdfNext": {"message":"Next page"},
-  "pdfPage": {"message":"Current page"},
-  "pdfPreviewUnavailable": {"message":"Open PDFs with the system default app"},
-  "pdfPrevious": {"message":"Previous page"},
-  "pdfViewerHint": {"message":"PDF viewer"},
-  "personalDesktop": {"message":"personal desktop"},
-  "personalSpace": {"message":"Personal space"},
-  "pictures": {"message":"Pictures"},
-  "position": {"message":"Position mode"},
-  "positionAndLayout": {"message":"Position & Layout"},
-  "preview": {"message":"Preview"},
-  "previewCancelled": {"message":"Preview cancelled"},
-  "previewTruncated": {"message":"Content truncated"},
-  "previewUnavailable": {"message":"Preview changed; retry is unavailable"},
-  "previewUnsupported": {"message":"This file type is outside the safe built-in preview range."},
-  "previousPage": {"message":"Previous page"},
-  "processing": {"message":"Processing"},
-  "productMenu": {"message":"Product menu"},
-  "productNavigation": {"message":"Product navigation"},
-  "projects": {"message":"Projects"},
-  "readFailed": {"message":"Failed to read file"},
-  "ready": {"message":"Ready"},
-  "recent": {"message":"Recent"},
-  "recentModified": {"message":"Recently modified"},
-  "recursiveSearch": {"message":"Recursive"},
-  "redo": {"message":"Redo"},
-  "refresh": {"message":"Refresh"},
-  "regionMarket": {"message":"Wallpaper region"},
-  "reloadFile": {"message":"Reload file"},
-  "reloaded": {"message":"Reloaded"},
-  "remove": {"message":"Remove"},
-  "rename": {"message":"Rename"},
-  "renameWorkspace": {"message":"Rename workspace"},
-  "renamed": {"message":"Renamed"},
-  "requestTimeout": {"message":"Request timed out"},
-  "resetPosition": {"message":"Reset position"},
-  "resetTemplateClassic": {"message":"Classic"},
-  "resetTemplateClassicDesc": {"message":"Time, greeting, and quote"},
-  "resetTemplateFocus": {"message":"Focus"},
-  "resetTemplateFocusDesc": {"message":"Time, todo, and notes"},
-  "resetTemplateBlank": {"message":"Blank"},
-  "resetTemplateBlankDesc": {"message":"Start without widgets"},
-  "resetWorkspace": {"message":"Reset workspace..."},
-  "resetWorkspaceDescription": {"message":"Choose the template to apply. Current widgets and background settings will be replaced."},
-  "resetWorkspaceTemplate": {"message":"Workspace template"},
-  "resetWorkspaceTitle": {"message":"Reset workspace"},
-  "resolution": {"message":"Resolution"},
-  "retry": {"message":"Retry connection"},
-  "retryFailed": {"message":"Retry failed"},
-  "reveal": {"message":"Reveal"},
-  "rotateLeft": {"message":"Rotate left"},
-  "rotateRight": {"message":"Rotate right"},
-  "save": {"message":"Save"},
-  "saveAndContinue": {"message":"Save and continue"},
-  "saveAsImage": {"message":"Save as image"},
-  "saveFailed": {"message":"Save failed"},
-  "saved": {"message":"Saved"},
-  "search": {"message":"Search files"},
-  "searchFiles": {"message":"Search files"},
-  "searchHint": {"message":"Use content:keyword to search file contents"},
-  "searchResults": {"message":"search results"},
-  "searchWidgets": {"message":"Search widgets..."},
-  "selectPreview": {"message":"Select a file to preview"},
-  "selected": {"message":"selected"},
-  "selectedSize": {"message":"selected size"},
-  "selectedText": {"message":"text"},
-  "settings": {"message":"Settings"},
-  "showHidden": {"message":"Hidden"},
-  "singleSelectionRequired": {"message":"Select one item first"},
-  "size": {"message":"Size"},
-  "skipped": {"message":"skipped"},
-  "sort": {"message":"Sort"},
-  "sortAscending": {"message":"Ascending"},
-  "sortDescending": {"message":"Descending"},
-  "sourceSettings": {"message":"Source settings"},
-  "spaceEmptyDesc": {"message":"Nothing here yet. Your files and materials will appear here once organized."},
-  "spaceEmptyTitle": {"message":"Personal space"},
-  "spaceSettings": {"message":"Space settings"},
-  "spaceSettingsTooltip": {"message":"Space settings (S)"},
-  "textColor": {"message":"Text color"},
-  "textOutline": {"message":"Text outline"},
-  "theme": {"message":"Theme"},
-  "text": {"message":"Text content"},
-  "themeArchive": {"message":"Light"},
-  "themeVolt": {"message":"Dark"},
-  "tmp": {"message":"Temporary"},
-  "toggleSearchScope": {"message":"Toggle search scope"},
-  "toggleWidgetsTooltip": {"message":"Show/hide widgets (W)"},
-  "trash": {"message":"Delete"},
-  "trashFolderConfirm": {"message":"Move selected folders to the system Trash? They can be restored."},
-  "trashOpened": {"message":"System Trash opened"},
-  "trashed": {"message":"items moved to Trash and can be restored"},
-  "type": {"message":"Type"},
-  "typographyAndStyle": {"message":"Typography & Style"},
-  "undo": {"message":"Undo"},
-  "unsaved": {"message":"Unsaved"},
-  "unsavedChanges": {"message":"Unsaved changes"},
-  "unsavedChangesMessage": {"message":"Save your changes before continuing?"},
-  "unsplashThemeQuery": {"message":"Theme (Query)"},
-  "up": {"message":"Parent directory"},
-  "usageErrors": {"message":"items unreadable"},
-  "usageTruncated": {"message":"scan limit reached"},
-  "useAccentColor": {"message":"Use accent color"},
-  "visualEffects": {"message":"Visual effects"},
-  "volumes": {"message":"Drives and external devices"},
-  "welcomeDesc": {"message":"Select a workspace from the left sidebar, or press ⌘K to quickly search files."},
-  "welcomeTitle": {"message":"Select a directory from the left"},
-  "widgetCatalog": {"message":"Widget catalog"},
-  "widgetCustomSettings": {"message":"Widget settings"},
-  "widgetInstanceCount": {"message":"Added"},
-  "widgetList": {"message":"Widget"},
-  "widgets": {"message":"Widgets"},
-  "widgetsCount": {"message":"Importable widgets"},
-  "githubPromptUsername": {"message":"Set a GitHub username to display contribution calendar"},
-  "workspaceCreated": {"message":"Workspace created"},
-  "workspaceDeleted": {"message":"Workspace deleted"},
-  "workspaceName": {"message":"Workspace name"},
-  "workspaceRenamed": {"message":"Workspace renamed"},
-  "modelCreateKeyDefaultName": {"message":"New key"},
-  "modelGatewayBaseURL": {"message":"Current API URL"},
-  "modelImportHistory": {"message":"Import history"},
-  "modelMaxRetryCredentials": {"message":"Maximum credentials per round"},
-  "modelMaxRetryInterval": {"message":"Maximum retry wait (seconds)"},
-  "modelNetworkRoutingDesc": {"message":"Configure the upstream proxy, credential selection, and session affinity."},
-  "modelNetworkRoutingTitle": {"message":"Network and Session Routing"},
-  "modelPricedRequests": {"message":"Priced requests"},
-  "modelRange24h": {"message":"Last 24 hours"},
-  "modelRange4h": {"message":"Last 4 hours"},
-  "modelRestartGateway": {"message":"Restart"},
-  "modelSessionAffinity": {"message":"Enable session affinity"},
-  "modelSessionAffinityTTL": {"message":"Session affinity TTL (seconds)"},
-  "modelStreamingRetries": {"message":"Streaming bootstrap retries"},
-  "modelUnpricedRequests": {"message":"Unpriced requests"},
-  "modelAllKeys": {"message":"All keys"},
-  "modelAllModels": {"message":"All models"},
-  "modelAllProviders": {"message":"All providers"},
-  "modelAllResults": {"message":"All results"},
-  "modelAllSources": {"message":"All sources"},
-  "modelCancelled": {"message":"Cancelled"},
-  "modelCustomRange": {"message":"Custom range"},
-  "modelEndTime": {"message":"End time"},
-  "modelInvalidTimeRange": {"message":"End time must be after start time"},
-  "modelProviderOptional": {"message":"Provider (optional)"},
-  "modelSavePrice": {"message":"Save custom price"},
-  "modelStartTime": {"message":"Start time"},
-  "modelSuccess": {"message":"Success"},
-  "showHours": {"message":"Show hours"},
-  "showMinutes": {"message":"Show minutes"},
-  "showSeconds": {"message":"Show seconds"},
-  "activeColor": {"message":"Active color"},
-  "inactiveColor": {"message":"Inactive color"},
-  "color": {"message":"Color"},
-  "transparent": {"message":"Transparent"},
-  "bookmarksAuthRequired": {"message":"Bookmark permission is required"},
-  "clickToAuthorizeBookmarks": {"message":"Grant bookmark permission"},
-  "searchBookmarks": {"message":"Search bookmarks…"},
-  "noMatchingBookmarks": {"message":"No matching bookmarks"},
-  "viewMode": {"message":"View mode"},
-  "listView": {"message":"List"},
-  "gridView": {"message":"Grid"},
-  "showSearchBar": {"message":"Show bookmark search"},
-  "setCountdownDate": {"message":"Set a target date"},
-  "countdownComplete": {"message":"It is time"},
-  "eventTitle": {"message":"Event title"},
-  "eventDateTime": {"message":"Event date and time"},
-  "customCssLabel": {"message":"CSS (personal space only)"},
-  "contributionsLastYear": {"message":"contributions in the last year"},
-  "username": {"message":"Username"},
-  "colorGreen": {"message":"Green"},
-  "colorBlue": {"message":"Blue"},
-  "colorOrange": {"message":"Orange"},
-  "colorPurple": {"message":"Purple"},
-  "showStreak": {"message":"Show contribution streak"},
-  "yourName": {"message":"Your name"},
-  "safeHtml": {"message":"HTML (sanitized)"},
-  "ipDetecting": {"message":"IP: detecting…"},
-  "ipUnavailable": {"message":"IP: unavailable"},
-  "ipFetchFailed": {"message":"Unable to fetch IP"},
-  "ipInfoNotice": {"message":"Detect and show the current public IP address."},
-  "columnsCount": {"message":"Columns (1–6)"},
-  "showFavicons": {"message":"Show site icons"},
-  "openInNewTab": {"message":"Open in a new tab"},
-  "linksList": {"message":"Links"},
-  "addLink": {"message":"Add link"},
-  "message": {"message":"Message"},
-  "clickToWriteNote": {"message":"Click to add a note…"},
-  "notesNotice": {"message":"Click the note on the canvas to edit; it saves on blur."},
-  "clickToCopy": {"message":"Click to copy"},
-  "copied": {"message":"Copied"},
-  "paletteNotice": {"message":"Hover to view a color and click to copy it."},
-  "nextPalette": {"message":"Next palette"},
-  "quote": {"message":"Quote"},
-  "author": {"message":"Author"},
-  "searchProvider": {"message":"Search engine"},
-  "placeholder": {"message":"Placeholder text"},
-  "style": {"message":"Style"},
-  "default": {"message":"Default"},
-  "rounded": {"message":"Transparent rounded"},
-  "outlined": {"message":"Minimal outline"},
-  "decrease": {"message":"Decrease"},
-  "increase": {"message":"Increase"},
-  "reset": {"message":"Reset"},
-  "label": {"message":"Label"},
-  "currentCount": {"message":"Current count"},
-  "step": {"message":"Step"},
-  "showReset": {"message":"Show reset button"},
-  "days": {"message":"days"},
-  "hours": {"message":"hours"},
-  "minutes": {"message":"minutes"},
-  "seconds": {"message":"seconds"},
-  "displayMode": {"message":"Display mode"},
-  "compact": {"message":"Compact"},
-  "digitalClock": {"message":"Digital clock"},
-  "analogueClock": {"message":"Analogue clock"},
-  "hour12Format": {"message":"12-hour format"},
-  "addTodo": {"message":"Add todo…"},
-  "enablePomodoroFocus": {"message":"Enable Pomodoro / Focus Timer"},
-  "pomodoroDuration": {"message":"Focus Duration (Minutes)"},
-  "todoNotice": {"message":"Add, complete, and remove todo items directly on the canvas."},
-  "noTopSites": {"message":"No top sites"},
-  "clickToAuthorizeTopSites": {"message":"Grant top-sites permission"},
-  "displayLimit": {"message":"Display limit (1–18)"},
-  "noTrelloCards": {"message":"No cards"},
-  "addCard": {"message":"Add card…"},
-  "boardName": {"message":"Board name"},
-  "listName": {"message":"List name"},
-  "feelsLike": {"message":"Feels like"},
-  "humidity": {"message":"Humidity"},
-  "weatherRegionType": {"message":"Region type"},
-  "weatherRegionDomestic": {"message":"Domestic (Chinese Mainland)"},
-  "weatherRegionOverseas": {"message":"International / Overseas"},
-  "weatherProvince": {"message":"Province / Municipality"},
-  "weatherCity": {"message":"City"},
-  "weatherDistrict": {"message":"District"},
-  "weatherContinent": {"message":"Continent"},
-  "weatherOverseasCity": {"message":"City"},
-  "cityName": {"message":"City"},
-  "temperatureUnit": {"message":"Temperature unit"},
-  "showFiveDayForecast": {"message":"Show five-day forecast"},
-  "latitude": {"message":"Latitude"},
-  "longitude": {"message":"Longitude"},
-  "weatherClear": {"message":"Clear"},
-  "weatherPartlyCloudy": {"message":"Partly cloudy"},
-  "weatherOvercast": {"message":"Overcast"},
-  "weatherFoggy": {"message":"Fog"},
-  "weatherDrizzle": {"message":"Drizzle"},
-  "weatherRainy": {"message":"Rain"},
-  "weatherSnowy": {"message":"Snow"},
-  "weatherThunder": {"message":"Thunderstorm"},
-  "weatherCloudy": {"message":"Cloudy"},
-  "startTime": {"message":"Start time"},
-  "endTime": {"message":"End time"},
-  "flipPercentage": {"message":"Show remaining percentage"},
-  "clickToAuthorize": {"message":"Click to grant permission"},
-  "catTimeAndClocks": {"message":"Time & Clocks"},
-  "catProductivity": {"message":"Productivity & Tools"},
-  "catInformationFeeds": {"message":"Information & Feeds"},
-  "catInspirationText": {"message":"Inspiration & Text"},
-  "catCustomAdvanced": {"message":"Custom & Advanced"},
-  "zoomImageHint": {"message":"Scroll to zoom image"},
-  "searchSuggestions": {"message":"Show search suggestions while typing"},
-  "suggestionsEngine": {"message":"Suggestions source"},
-  "suggestionsQuantity": {"message":"Suggestions count"},
-  "noPairs": {"message":"Add a currency pair in settings to get started."},
-  "addPair": {"message":"Add currency pair"},
-  "rateDecimals": {"message":"Decimal places"},
-  "modelLoginPending": {"message":"Authorizing. Complete sign-in in your browser."},
-  "modelLoginSucceeded": {"message":"Signed in"},
-  "modelLoginFailed": {"message":"Sign-in failed. Try again."},
-  "modelLoginTimeout": {"message":"Sign-in timed out. Try again."},
-  "modelLoginCancelled": {"message":"Sign-in cancelled"},
-  "modelLoginIdle": {"message":"Not signed in"},
-  "modelLoginCancelAction": {"message":"Cancel sign-in"},
-  "modelLoginAddAccount": {"message":"Add another account"},
-  "modelAccountModelsTitle": {"message":"Account models"},
-  "modelAccountModelsSearch": {"message":"Search models"},
-  "modelAccountModelsSelectVisible": {"message":"Toggle visible"},
-  "modelAccountModelsSelectAll": {"message":"Enable all"},
-  "modelAccountModelsSelectNone": {"message":"Disable all"},
-  "modelAccountModelsSummary": {"message":"$1 models, $2 enabled"},
-  "modelAccountModelsEmpty": {"message":"No models available"},
-  "modelAccountModelsSaved": {"message":"Account model settings saved"},
-  "modelAccountModelsLoadFailed": {"message":"Failed to load models"},
-  "agentCliVersion": {"message":"CLI Version"},
-  "agentAppVersion": {"message":"App Version"},
-  "agentPiPluginVersion": {"message":"Plugin Version"},
-  "agentTabCore": {"message":"Core Configuration"},
-  "agentTabSessions": {"message":"Sessions"},
-  "agentSessionName": {"message":"Session"},
-  "agentSessionsEmpty": {"message":"No Codex session recordings found"},
-  "agentSessionDeleted": {"message":"Session deleted"},
-  "agentSessionDeleteConfirm": {"message":"Delete this session recording?"},
-  "agentCodexDangerTitle": {"message":"Codex Config Cleanup"},
-  "agentCodexDangerHint": {"message":"Removes the Codex config and credential files written by this tool, restoring the unmanaged state."},
-  "agentCodexClear": {"message":"Clear Config"},
-  "agentCodexClearConfirm": {"message":"Clear the Codex config and credential files?"},
-  "agentCodexCleared": {"message":"Deleted $1 files"},
-  "agentUpdate": {"message":"Update Config"},
-  "agentPiTitle": {"message":"Pi Provider Plugin"},
-  "agentPiInstalled": {"message":"Pi provider plugin installed"},
-  "agentPiMissing": {"message":"Pi provider plugin not installed"},
-  "agentPiInstall": {"message":"Install Plugin"},
-  "agentPiUpdate": {"message":"Update Plugin"},
-  "agentPiRepair": {"message":"Repair Plugin"},
-  "agentPiUninstall": {"message":"Uninstall Plugin"},
-  "agentPiDone": {"message":"Pi plugin action finished"},
-  "agentModelSearchPlaceholder": {"message":"Search or pick a model"},
-  "agentModelNoMatch": {"message":"No matching models"},
-  "agentClaudeMappingTitle": {"message":"Claude Model Mappings"},
-  "agentClaudeMappingHint": {"message":"Route Claude role requests to concrete gateway models; 1M enables million-token context."},
-  "agentMaxContext": {"message":"Max Context Tokens"},
-  "agentCompactPct": {"message":"Auto-compact Trigger %"},
-  "agentDisableCompact": {"message":"Disable auto-compact"},
-  "agentLaunchDirPrompt": {"message":"Working directory (blank for home):"},
-  "authFileNoAccountHint": {"message":"No matching OAuth account"},
-  "authFileNoAccountMatch": {"message":"This credential file has no matching OAuth account, so per-account models are unavailable"},
-  "authFilePriorityPrompt": {"message":"Enter priority (higher number wins):"},
-  "authFilePriorityInvalid": {"message":"Priority must be an integer"},
-  "authFilePrioritySaved": {"message":"Priority updated"},
-  "checkUpdate": {"message":"Check for updates"},
-  "update": {"message":"Update"}
+  "addFirstWidget": {
+    "message": "Add first widget"
+  },
+  "addWidget": {
+    "message": "Add widget"
+  },
+  "appName": {
+    "message": "Natives Files"
+  },
+  "applyCrop": {
+    "message": "Apply crop"
+  },
+  "archiveCompressing": {
+    "message": "compressing"
+  },
+  "archiveCreated": {
+    "message": "files archived"
+  },
+  "archiveEntries": {
+    "message": "Archive entries"
+  },
+  "archiveExtracted": {
+    "message": "files extracted"
+  },
+  "archiveName": {
+    "message": "Archive name"
+  },
+  "archivePreviewUnavailable": {
+    "message": "Archive preview is unavailable"
+  },
+  "archiveToolUnavailable": {
+    "message": "No controlled system tool is installed to list this archive format; listing is unavailable and creation/extraction are not supported."
+  },
+  "archiveValidating": {
+    "message": "validating"
+  },
+  "back": {
+    "message": "Back"
+  },
+  "background": {
+    "message": "Background"
+  },
+  "backgroundSettings": {
+    "message": "Background settings"
+  },
+  "backgroundSource": {
+    "message": "Background source"
+  },
+  "blur": {
+    "message": "Blur"
+  },
+  "breadcrumb": {
+    "message": "Breadcrumb"
+  },
+  "brightness": {
+    "message": "Brightness"
+  },
+  "cancel": {
+    "message": "Cancel"
+  },
+  "carouselInterval": {
+    "message": "Carousel interval"
+  },
+  "changes": {
+    "message": "Changed this session"
+  },
+  "clearClipboard": {
+    "message": "Clear clipboard"
+  },
+  "clipboardCleared": {
+    "message": "Clipboard cleared"
+  },
+  "clipboardCopied": {
+    "message": "items copied"
+  },
+  "clipboardCut": {
+    "message": "items cut"
+  },
+  "clipboardUnavailable": {
+    "message": "Clipboard unavailable"
+  },
+  "close": {
+    "message": "Close"
+  },
+  "collapseSidebar": {
+    "message": "Collapse sidebar"
+  },
+  "completed": {
+    "message": "items completed"
+  },
+  "confirm": {
+    "message": "Confirm"
+  },
+  "confirmImport": {
+    "message": "Confirm import & overwrite"
+  },
+  "confirmRemoveWidget": {
+    "message": "Are you sure you want to remove this widget?"
+  },
+  "confirmResetWorkspace": {
+    "message": "Reset workspace"
+  },
+  "connecting": {
+    "message": "Connecting to local file system…"
+  },
+  "contentSearchUnavailable": {
+    "message": "PDF text search unavailable"
+  },
+  "copiedPath": {
+    "message": "Path copied"
+  },
+  "copy": {
+    "message": "Copy to…"
+  },
+  "copyFile": {
+    "message": "Copy file"
+  },
+  "copyImage": {
+    "message": "Copy image"
+  },
+  "copyPath": {
+    "message": "Copy path"
+  },
+  "createArchive": {
+    "message": "Create ZIP"
+  },
+  "createArchiveHint": {
+    "message": "Selected items must be in the same directory"
+  },
+  "created": {
+    "message": "Created"
+  },
+  "createdAt": {
+    "message": "Created"
+  },
+  "cropHandle": {
+    "message": "Crop handle"
+  },
+  "csvPreview": {
+    "message": "CSV preview"
+  },
+  "currentDirectorySearch": {
+    "message": "Current folder search"
+  },
+  "customClass": {
+    "message": "Custom CSS class"
+  },
+  "dashboard": {
+    "message": "Dashboard"
+  },
+  "delete": {
+    "message": "Delete"
+  },
+  "deleteWidget": {
+    "message": "Delete widget"
+  },
+  "deleteWorkspace": {
+    "message": "Delete workspace"
+  },
+  "deleteWorkspaceHint": {
+    "message": "This action cannot be undone."
+  },
+  "desktop": {
+    "message": "Desktop"
+  },
+  "destination": {
+    "message": "Destination folder path"
+  },
+  "destinationHint": {
+    "message": "Enter the full destination folder path"
+  },
+  "disable": {
+    "message": "Disable"
+  },
+  "discardChanges": {
+    "message": "Discard changes"
+  },
+  "diskUsage": {
+    "message": "Usage"
+  },
+  "documents": {
+    "message": "Documents"
+  },
+  "doneEditingPosition": {
+    "message": "Done editing position"
+  },
+  "downloads": {
+    "message": "Downloads"
+  },
+  "dropHint": {
+    "message": "Release to import or move files"
+  },
+  "duplicate": {
+    "message": "Make a copy"
+  },
+  "duplicated": {
+    "message": "Copy created"
+  },
+  "edit": {
+    "message": "Edit"
+  },
+  "editConflict": {
+    "message": "File changed externally"
+  },
+  "editConflictMessage": {
+    "message": "The file changed outside Natives. Choose whether to reload or overwrite it."
+  },
+  "editImage": {
+    "message": "Edit image"
+  },
+  "editPosition": {
+    "message": "Edit position"
+  },
+  "editorLabel": {
+    "message": "File editor"
+  },
+  "emptyFolder": {
+    "message": "This folder is empty"
+  },
+  "emptySpaceDesc": {
+    "message": "Choose widgets from the catalog to add to your space"
+  },
+  "emptySpaceTitle": {
+    "message": "This space has no widgets yet"
+  },
+  "enable": {
+    "message": "Enable"
+  },
+  "expandSidebar": {
+    "message": "Expand sidebar"
+  },
+  "exportTabliss": {
+    "message": "Export Tabliss config"
+  },
+  "extractArchive": {
+    "message": "Extract archive"
+  },
+  "extractArchiveHint": {
+    "message": "Enter an extraction folder path (ZIP/TAR)"
+  },
+  "failed": {
+    "message": "failed"
+  },
+  "favorites": {
+    "message": "Favorites"
+  },
+  "fileCopied": {
+    "message": "File copied"
+  },
+  "files": {
+    "message": "Files"
+  },
+  "filesCount": {
+    "message": "files"
+  },
+  "filterCurrentDirectory": {
+    "message": "Filter current folder"
+  },
+  "flipHorizontal": {
+    "message": "Flip horizontally"
+  },
+  "flipVertical": {
+    "message": "Flip vertically"
+  },
+  "folder": {
+    "message": "Folder"
+  },
+  "folderName": {
+    "message": "Folder name"
+  },
+  "followChanges": {
+    "message": "Follow changes"
+  },
+  "followChangesStopped": {
+    "message": "Manual browsing stopped follow mode"
+  },
+  "fontSize": {
+    "message": "Font size"
+  },
+  "fontWeight": {
+    "message": "Font weight"
+  },
+  "forward": {
+    "message": "Forward"
+  },
+  "freeMoveHelp": {
+    "message": "After clicking \"Edit position\", freely drag the widget on the canvas, drag corner handles to scale, or top handle to rotate."
+  },
+  "fullscreenTooltip": {
+    "message": "Fullscreen (F)"
+  },
+  "globalSearch": {
+    "message": "Global search"
+  },
+  "greetingAfternoon": {
+    "message": "Good afternoon"
+  },
+  "greetingEvening": {
+    "message": "Good evening"
+  },
+  "greetingMorning": {
+    "message": "Good morning"
+  },
+  "grid": {
+    "message": "Grid"
+  },
+  "gridLarge": {
+    "message": "Large grid"
+  },
+  "gridMedium": {
+    "message": "Medium grid"
+  },
+  "gridSmall": {
+    "message": "Small grid"
+  },
+  "home": {
+    "message": "Home"
+  },
+  "hostConnected": {
+    "message": "Host connected"
+  },
+  "hostConnectionFailed": {
+    "message": "Native Host connection failed"
+  },
+  "hostDisconnected": {
+    "message": "Native Host disconnected"
+  },
+  "hostDisconnectedShort": {
+    "message": "Host disconnected"
+  },
+  "htmlPreview": {
+    "message": "HTML preview (scripts disabled)"
+  },
+  "imageArrow": {
+    "message": "Arrow"
+  },
+  "imageBrushSize": {
+    "message": "Brush size"
+  },
+  "imageColor": {
+    "message": "Brush color"
+  },
+  "imageCopied": {
+    "message": "Image copied"
+  },
+  "imageCrop": {
+    "message": "Crop"
+  },
+  "imageFormat": {
+    "message": "Output format"
+  },
+  "imageInserted": {
+    "message": "Image inserted"
+  },
+  "imageMosaic": {
+    "message": "Mosaic"
+  },
+  "imagePen": {
+    "message": "Pen"
+  },
+  "imagePreviewUnavailable": {
+    "message": "Image preview is unavailable; use the system app to open it"
+  },
+  "imageQuality": {
+    "message": "Output quality"
+  },
+  "imageRectangle": {
+    "message": "Rectangle"
+  },
+  "imageText": {
+    "message": "Text"
+  },
+  "imageTextPrompt": {
+    "message": "Text to place"
+  },
+  "importCancelled": {
+    "message": "Import cancelled"
+  },
+  "importDestination": {
+    "message": "Importing to"
+  },
+  "importFiles": {
+    "message": "Import files"
+  },
+  "importFolder": {
+    "message": "Import folder"
+  },
+  "importPreview": {
+    "message": "Import preview"
+  },
+  "importSummary": {
+    "message": "Configuration summary"
+  },
+  "importTabliss": {
+    "message": "Import Tabliss config"
+  },
+  "imported": {
+    "message": "files imported"
+  },
+  "importing": {
+    "message": "Importing"
+  },
+  "inspector": {
+    "message": "Inspector"
+  },
+  "interfaceLanguage": {
+    "message": "Interface language"
+  },
+  "interfaceTheme": {
+    "message": "Interface theme"
+  },
+  "invalidImportPath": {
+    "message": "Invalid import path"
+  },
+  "invalidPath": {
+    "message": "Invalid path"
+  },
+  "insertLink": {
+    "message": "Insert link"
+  },
+  "items": {
+    "message": "items"
+  },
+  "jsonPreview": {
+    "message": "JSON preview"
+  },
+  "language": {
+    "message": "Language"
+  },
+  "languageEn": {
+    "message": "English"
+  },
+  "languageZh": {
+    "message": "Chinese Simplified"
+  },
+  "largeFilePreviewUnavailable": {
+    "message": "Large files are not read into the browser; use the system app to open them"
+  },
+  "largeTextReadOnly": {
+    "message": "Large files are preview-only; editing is disabled"
+  },
+  "linkPrompt": {
+    "message": "Link URL"
+  },
+  "list": {
+    "message": "List"
+  },
+  "loading": {
+    "message": "Loading…"
+  },
+  "management": {
+    "message": "Configuration management"
+  },
+  "markdownImage": {
+    "message": "Insert image"
+  },
+  "markdownImages": {
+    "message": "Markdown images"
+  },
+  "markdownPreview": {
+    "message": "Markdown preview"
+  },
+  "mediaPreviewUnavailable": {
+    "message": "Open audio and video with the system default app"
+  },
+  "modelAPIFormat": {
+    "message": "API format"
+  },
+  "modelAPIKeyPlaceholder": {
+    "message": "Leave blank to keep the current key"
+  },
+  "modelAccessKeyUnavailable": {
+    "message": "No access key has been generated"
+  },
+  "modelAccountActive": {
+    "message": "Available"
+  },
+  "modelAccountNeedsReauth": {
+    "message": "Sign-in required"
+  },
+  "modelAccounts": {
+    "message": "accounts"
+  },
+  "modelActions": {
+    "message": "Actions"
+  },
+  "modelAddProvider": {
+    "message": "Add custom provider"
+  },
+  "modelAdvBasic": {
+    "message": "Basic Control"
+  },
+  "modelAdvBasicDesc": {
+    "message": "Manage the local core, listen port, and compatible API URLs."
+  },
+  "modelAdvBasicTitle": {
+    "message": "Gateway Control"
+  },
+  "modelAdvKeys": {
+    "message": "Access Keys"
+  },
+  "modelAdvKeysDesc": {
+    "message": "Support creating up to 64 independent access keys persisted in OS Keychain."
+  },
+  "modelAdvKeysTitle": {
+    "message": "Gateway Access Keys Management"
+  },
+  "modelAuthKeysDesc": {
+    "message": "Manage API keys for accessing the local proxy with full CRUD support."
+  },
+  "modelAuthKeysTitle": {
+    "message": "Access Key Management"
+  },
+  "modelClaudeCompat": {
+    "message": "Anthropic Compatible"
+  },
+  "modelGeminiCompat": {
+    "message": "Gemini Compatible"
+  },
+  "modelKernelCheckDone": {
+    "message": "Checked latest kernel version"
+  },
+  "modelKernelUpToDate": {
+    "message": "Up to date"
+  },
+  "modelKernelUpdated": {
+    "message": "Kernel updated successfully"
+  },
+  "modelKernelUpdating": {
+    "message": "Updating kernel…"
+  },
+  "modelKernelVersion": {
+    "message": "Kernel Version"
+  },
+  "modelLatestKernelVersion": {
+    "message": "Latest Version"
+  },
+  "modelOpenAICompat": {
+    "message": "OpenAI Compatible"
+  },
+  "modelProcessPID": {
+    "message": "Process PID"
+  },
+  "modelPromptKeyName": {
+    "message": "Enter new key name:"
+  },
+  "modelRefreshStatus": {
+    "message": "Refresh Status"
+  },
+  "modelRename": {
+    "message": "Rename"
+  },
+  "modelRunningControl": {
+    "message": "Running Control"
+  },
+  "modelRunStatus": {
+    "message": "Run Status"
+  },
+  "modelSoftwareVersion": {
+    "message": "Software Version"
+  },
+  "modelStatusRefreshed": {
+    "message": "Status Refreshed"
+  },
+  "modelAdvKernel": {
+    "message": "Core Settings"
+  },
+  "modelAdvKernelDesc": {
+    "message": "Configure failure retries. A running gateway restarts safely after saving."
+  },
+  "modelAdvKernelTitle": {
+    "message": "Core Retry Settings"
+  },
+  "modelAdvNetwork": {
+    "message": "Network & Proxy"
+  },
+  "modelAdvNetworkRouting": {
+    "message": "Network & Routing"
+  },
+  "modelAdvancedSettings": {
+    "message": "Advanced Settings"
+  },
+  "modelAgentSettings": {
+    "message": "Agent Clients"
+  },
+  "agentLocalClients": {
+    "message": "Local Clients"
+  },
+  "agentLocalClientsHint": {
+    "message": "Choose an agent to manage"
+  },
+  "agentClientsDetected": {
+    "message": "local clients"
+  },
+  "agentRedetect": {
+    "message": "Re-detect"
+  },
+  "agentDetecting": {
+    "message": "Detecting local clients…"
+  },
+  "agentDetectFailed": {
+    "message": "Detection failed"
+  },
+  "agentNoClientsFound": {
+    "message": "No supported agent clients detected"
+  },
+  "agentNotInstalled": {
+    "message": "Not detected"
+  },
+  "agentInstalled": {
+    "message": "Installed"
+  },
+  "agentInstalledKeepConfig": {
+    "message": "Installed · original config kept"
+  },
+  "agentModified": {
+    "message": "Modified"
+  },
+  "agentInstallStatus": {
+    "message": "Install status"
+  },
+  "agentClientDetected": {
+    "message": "Client detected"
+  },
+  "agentClientMissing": {
+    "message": "Client not found"
+  },
+  "agentClientVersion": {
+    "message": "Client version"
+  },
+  "agentVersionUnknown": {
+    "message": "Unknown"
+  },
+  "agentCoreConfig": {
+    "message": "Core Configuration"
+  },
+  "agentUseModel": {
+    "message": "Use Model"
+  },
+  "agentModelLabel": {
+    "message": "Default model"
+  },
+  "agentModelsHint": {
+    "message": "available models, first one selected by default"
+  },
+  "agentModelsLoading": {
+    "message": "Reading available models…"
+  },
+  "agentModelsEmpty": {
+    "message": "No models found on the local gateway yet. Add providers or accounts first."
+  },
+  "agentModifyTitle": {
+    "message": "Config Changes"
+  },
+  "agentModifyHint": {
+    "message": "After applying or closing the config, fully restart the client; model and context length apply to new sessions."
+  },
+  "agentApply": {
+    "message": "Apply Changes"
+  },
+  "agentDefault": {
+    "message": "Default Config"
+  },
+  "agentCloseConfig": {
+    "message": "Close Modification"
+  },
+  "agentCloseConfirm": {
+    "message": "Close modification and restore the original config?"
+  },
+  "agentApplyDone": {
+    "message": "Configuration updated"
+  },
+  "agentLaunch": {
+    "message": "Launch"
+  },
+  "agentLaunched": {
+    "message": "Launched"
+  },
+  "agentSelectHint": {
+    "message": "Select an agent client on the left"
+  },
+  "agentSelectHintDetail": {
+    "message": "After detection, review install status and apply gateway config."
+  },
+  "agentNotInstalledTitle": {
+    "message": "Not detected"
+  },
+  "agentNotInstalledHint": {
+    "message": "Install the client, then Re-detect."
+  },
+  "agentManualClient": {
+    "message": "Gateway parameters are managed automatically"
+  },
+  "agentManualClientHint": {
+    "message": "Launching routes the client through the local gateway."
+  },
+  "modelAdvancedSettingsDescription": {
+    "message": "Manage gateway control, access keys, network routing, and core parameters."
+  },
+  "modelAlias": {
+    "message": "Alias"
+  },
+  "modelAllowLAN": {
+    "message": "Allow LAN address"
+  },
+  "modelAuthorizationFailed": {
+    "message": "OAuth authorization failed. Please try again."
+  },
+  "modelAuthorizationTimeout": {
+    "message": "OAuth authorization timed out. Start again."
+  },
+  "modelBackToWorkspace": {
+    "message": "Back to workspace"
+  },
+  "modelConfirmImport": {
+    "message": "Confirm and Merge"
+  },
+  "modelConnectionSucceeded": {
+    "message": "Connected; found $1 models"
+  },
+  "modelContextLength": {
+    "message": "Context"
+  },
+  "modelCreateKey": {
+    "message": "Create Key"
+  },
+  "modelCustomModels": {
+    "message": "Custom models"
+  },
+  "modelCustomModelsDescription": {
+    "message": "Configure compatible endpoints, API keys, and available models."
+  },
+  "modelCustomProviders": {
+    "message": "Custom providers"
+  },
+  "modelDeleteAccountConfirm": {
+    "message": "Delete this OAuth account?"
+  },
+  "modelDeleteKeyConfirm": {
+    "message": "Are you sure you want to delete this access key? Clients will lose access immediately."
+  },
+  "modelDeleteProviderConfirm": {
+    "message": "Delete this provider and its models?"
+  },
+  "modelDisplayName": {
+    "message": "Display name"
+  },
+  "modelEndpointUnavailable": {
+    "message": "Gateway endpoint is unavailable"
+  },
+  "modelErrorGatewayRestart": {
+    "message": "The configuration was saved, but the gateway could not restart. Try again."
+  },
+  "modelErrorGatewayStart": {
+    "message": "The local model gateway could not start."
+  },
+  "modelErrorGatewayStop": {
+    "message": "The local model gateway could not stop."
+  },
+  "modelErrorInternal": {
+    "message": "The model settings operation failed."
+  },
+  "modelErrorInvalidRequest": {
+    "message": "Some input is invalid. Check it and try again."
+  },
+  "modelErrorKeychainUnavailable": {
+    "message": "The system keychain is unavailable."
+  },
+  "modelErrorNotFound": {
+    "message": "This configuration no longer exists. Refresh and try again."
+  },
+  "modelErrorOAuthInProgress": {
+    "message": "Another OAuth authorization is already in progress."
+  },
+  "modelErrorRevisionConflict": {
+    "message": "The configuration changed in another page. Refresh and try again."
+  },
+  "modelErrorSecretMissing": {
+    "message": "Configure credentials first."
+  },
+  "modelErrorTimeout": {
+    "message": "The request timed out. Try again."
+  },
+  "modelErrorUpstream": {
+    "message": "The provider request failed. Try again later."
+  },
+  "modelErrorUpstreamInvalid": {
+    "message": "The provider returned an invalid response."
+  },
+  "modelErrorUpstreamTooLarge": {
+    "message": "The provider response exceeded the size limit."
+  },
+  "modelErrorUpstreamUnauthorized": {
+    "message": "The provider rejected the credential. Check the API key."
+  },
+  "modelErrorUpstreamUnreachable": {
+    "message": "Could not reach the provider. Check the address and network."
+  },
+  "modelEventCache": {
+    "message": "Cache"
+  },
+  "modelEventCacheRate": {
+    "message": "Cache Rate"
+  },
+  "modelEventCost": {
+    "message": "Cost"
+  },
+  "modelEventInput": {
+    "message": "Input"
+  },
+  "modelEventKey": {
+    "message": "Access Key"
+  },
+  "modelEventLatency": {
+    "message": "Total Latency"
+  },
+  "modelEventModel": {
+    "message": "Model"
+  },
+  "modelEventOutput": {
+    "message": "Output"
+  },
+  "modelEventProviderModel": {
+    "message": "Provider / Model"
+  },
+  "modelEventSpeed": {
+    "message": "Speed"
+  },
+  "modelEventStatus": {
+    "message": "Status"
+  },
+  "modelEventTime": {
+    "message": "Time"
+  },
+  "modelEventTokens": {
+    "message": "Tokens (In/Out)"
+  },
+  "modelEventTotal": {
+    "message": "Total"
+  },
+  "modelEventTtft": {
+    "message": "TTFT"
+  },
+  "modelFailed": {
+    "message": "Failed"
+  },
+  "modelFetchModels": {
+    "message": "Fetch models"
+  },
+  "modelGatewayNotRunning": {
+    "message": "Gateway is not running"
+  },
+  "modelGatewaySummary": {
+    "message": "$1 providers · $2 accounts · $3 models"
+  },
+  "modelHostDisconnected": {
+    "message": "Model Host disconnected"
+  },
+  "modelID": {
+    "message": "Model ID"
+  },
+  "modelImportPreview": {
+    "message": "Import Data Preview"
+  },
+  "modelImportSuccess": {
+    "message": "Successfully imported $1 records"
+  },
+  "modelKeyCopied": {
+    "message": "Access key copied to clipboard"
+  },
+  "modelKeyCreated": {
+    "message": "Created At"
+  },
+  "modelKeyCreatedAndCopied": {
+    "message": "Access key created and copied to clipboard"
+  },
+  "modelKeyMask": {
+    "message": "Key Mask"
+  },
+  "modelKeyRotatedAndCopied": {
+    "message": "Access key rotated and copied to clipboard"
+  },
+  "modelList": {
+    "message": "Models"
+  },
+  "modelLoading": {
+    "message": "Loading model settings…"
+  },
+  "modelLocalProxy": {
+    "message": "Local proxy"
+  },
+  "modelLocalProxyDescription": {
+    "message": "Manage local compatible endpoints, access keys, and resident mode."
+  },
+  "modelMetricCacheHitRate": {
+    "message": "Prompt Cache Hit Rate"
+  },
+  "modelMetricEstimatedCost": {
+    "message": "Estimated Cost"
+  },
+  "modelMetricSuccessRate": {
+    "message": "Success Rate"
+  },
+  "modelMetricTPS": {
+    "message": "Avg Throughput (TPS)"
+  },
+  "modelMetricTotalRequests": {
+    "message": "Total Requests"
+  },
+  "modelMetricTotalTokens": {
+    "message": "Total Tokens"
+  },
+  "modelModelsAndServices": {
+    "message": "Models and services"
+  },
+  "modelNoAnalyticsData": {
+    "message": "No Analytics Data"
+  },
+  "modelNoCustomProviders": {
+    "message": "No custom providers yet"
+  },
+  "modelNoData": {
+    "message": "No data"
+  },
+  "modelNoEventsFound": {
+    "message": "No matching events found"
+  },
+  "modelNoEventsHint": {
+    "message": "Adjust search filters or make new API requests."
+  },
+  "modelNoKeys": {
+    "message": "No Access Keys"
+  },
+  "modelNoKeysHint": {
+    "message": "Click Create Key to generate new client credentials."
+  },
+  "modelNoModels": {
+    "message": "No models"
+  },
+  "modelNoModelsHint": {
+    "message": "Fetch models automatically or add one with the form below."
+  },
+  "modelNoPricingData": {
+    "message": "No Pricing Data"
+  },
+  "modelNoPricingHint": {
+    "message": "Click Sync Pricing from Remote to load model rates."
+  },
+  "modelNoUsageHint": {
+    "message": "Start the gateway and make API requests to see usage statistics."
+  },
+  "modelNoUsageRecords": {
+    "message": "No Usage Records"
+  },
+  "modelOAuthModels": {
+    "message": "OAuth"
+  },
+  "modelOAuthLogin": {
+    "message": "OAuth Login"
+  },
+  "modelAuthFiles": {
+    "message": "Auth Files"
+  },
+  "modelQuotaInquiry": {
+    "message": "Quota"
+  },
+  "chooseBrowser": {
+    "message": "Browser"
+  },
+  "systemDefaultBrowser": {
+    "message": "System Default Browser"
+  },
+  "doNotAutoOpen": {
+    "message": "Do not auto open (Generate link only)"
+  },
+  "browserSelectionHint": {
+    "message": "Auto-selected available browser, your choice will be remembered"
+  },
+  "startLogin": {
+    "message": "Start Login"
+  },
+  "searchAuthFilesPlaceholder": {
+    "message": "Search filename, account or provider"
+  },
+  "allProviders": {
+    "message": "All Providers"
+  },
+  "allStatus": {
+    "message": "All Status"
+  },
+  "refreshQuota": {
+    "message": "Refresh Quota"
+  },
+  "copyName": {
+    "message": "Copy Filename"
+  },
+  "getQuota": {
+    "message": "Get Quota"
+  },
+  "queryableCredentials": {
+    "message": "credentials queryable"
+  },
+  "readList": {
+    "message": "Read List"
+  },
+  "refreshAll": {
+    "message": "Refresh All"
+  },
+  "credentialsCount": {
+    "message": "credentials"
+  },
+  "disabledCount": {
+    "message": "disabled"
+  },
+  "openFolder": {
+    "message": "Open Folder"
+  },
+  "import": {
+    "message": "Import"
+  },
+  "priority": {
+    "message": "Priority"
+  },
+  "models": {
+    "message": "Models"
+  },
+  "remaining": {
+    "message": "Remaining"
+  },
+  "queryingQuota": {
+    "message": "Querying quota..."
+  },
+  "quotaNotFetched": {
+    "message": "Quota not fetched yet"
+  },
+  "noAuthFiles": {
+    "message": "No auth files"
+  },
+  "importAuthFilesHint": {
+    "message": "Click Import to upload .json credentials, or login to save automatically."
+  },
+  "noActiveCredentials": {
+    "message": "No active credentials available"
+  },
+  "quotaNoCredsHint": {
+    "message": "Import and enable credentials in Auth Files to query quota here."
+  },
+  "confirmDeleteAuthFile": {
+    "message": "Are you sure you want to delete this auth file?"
+  },
+  "authFileImported": {
+    "message": "Auth file imported successfully"
+  },
+  "modelOAuthModelsHint": {
+    "message": "Models sync automatically after account authorization and gateway startup."
+  },
+  "modelPreferredPort": {
+    "message": "Preferred Gateway Port (0 for auto)"
+  },
+  "modelPriceCacheRead": {
+    "message": "Cache Read ($/1M)"
+  },
+  "modelPriceCacheWrite": {
+    "message": "Cache Write ($/1M)"
+  },
+  "modelPriceCatalogVer": {
+    "message": "Catalog Version"
+  },
+  "modelPriceInput": {
+    "message": "Input ($/1M)"
+  },
+  "modelPriceOutput": {
+    "message": "Output ($/1M)"
+  },
+  "modelPriceSource": {
+    "message": "Source"
+  },
+  "modelProvider": {
+    "message": "Provider"
+  },
+  "modelProxyURL": {
+    "message": "Upstream Proxy URL"
+  },
+  "modelRange30d": {
+    "message": "Past 30 Days"
+  },
+  "modelRange7d": {
+    "message": "Past 7 Days"
+  },
+  "modelRangeAll": {
+    "message": "All Time"
+  },
+  "modelRangeToday": {
+    "message": "Today"
+  },
+  "modelRankByAccessKey": {
+    "message": "Requests by Access Key"
+  },
+  "modelRankByHour": {
+    "message": "24h Activity Distribution"
+  },
+  "modelRankByModel": {
+    "message": "Requests by Model"
+  },
+  "modelRankByProvider": {
+    "message": "Requests by Provider"
+  },
+  "modelRefresh": {
+    "message": "Refresh"
+  },
+  "modelRequestRetry": {
+    "message": "Automatic Request Retries (0-10)"
+  },
+  "modelResident": {
+    "message": "Keep running"
+  },
+  "modelRestarting": {
+    "message": "Restarting"
+  },
+  "modelRotate": {
+    "message": "Rotate"
+  },
+  "modelRoutingStrategy": {
+    "message": "Credential Routing Strategy"
+  },
+  "modelRunning": {
+    "message": "Running"
+  },
+  "modelSettings": {
+    "message": "Models and services"
+  },
+  "modelSettingsDescription": {
+    "message": "Manage model providers, including custom models, OAuth models, and local proxy settings."
+  },
+  "modelSettingsSaved": {
+    "message": "Gateway settings saved"
+  },
+  "modelStartGateway": {
+    "message": "Start"
+  },
+  "modelStarting": {
+    "message": "Starting"
+  },
+  "modelStatus": {
+    "message": "Status"
+  },
+  "modelStopGateway": {
+    "message": "Stop"
+  },
+  "modelStopped": {
+    "message": "Stopped"
+  },
+  "modelStopping": {
+    "message": "Stopping"
+  },
+  "modelStrategyFillFirst": {
+    "message": "Fill First"
+  },
+  "modelStrategyRoundRobin": {
+    "message": "Round Robin"
+  },
+  "modelSyncPricing": {
+    "message": "Sync Pricing from Remote"
+  },
+  "modelSyncPricingSuccess": {
+    "message": "Pricing catalog synced successfully"
+  },
+  "modelTestConnection": {
+    "message": "Test connection"
+  },
+  "modelTimeSpan": {
+    "message": "Time Span"
+  },
+  "modelTokenCacheRead": {
+    "message": "Cache Read"
+  },
+  "modelTokenCacheWrite": {
+    "message": "Cache Write"
+  },
+  "modelTokenComposition": {
+    "message": "Token Breakdown"
+  },
+  "modelTokenInput": {
+    "message": "Input Tokens"
+  },
+  "modelTokenOutput": {
+    "message": "Output Tokens"
+  },
+  "modelTokenReasoning": {
+    "message": "Reasoning Tokens"
+  },
+  "modelTotalRecords": {
+    "message": "$1 total records"
+  },
+  "modelTrendBreakdown": {
+    "message": "Hourly Trend"
+  },
+  "modelUploading": {
+    "message": "Uploading chunks and validating..."
+  },
+  "modelUsageAnalytics": {
+    "message": "Analytics"
+  },
+  "modelUsageEvents": {
+    "message": "Events"
+  },
+  "modelUsageOverview": {
+    "message": "Overview"
+  },
+  "modelUsagePricing": {
+    "message": "Pricing & Rates"
+  },
+  "modelUsageRecords": {
+    "message": "Usage Records"
+  },
+  "modelUsageRecordsDescription": {
+    "message": "View request metrics, token consumption, analytics breakdowns, and model pricing."
+  },
+  "modified": {
+    "message": "Modified"
+  },
+  "modifiedAt": {
+    "message": "Modified"
+  },
+  "moreActions": {
+    "message": "More"
+  },
+  "moreAvailable": {
+    "message": "more available"
+  },
+  "move": {
+    "message": "Move to…"
+  },
+  "movePreviewBelow": {
+    "message": "Move preview below"
+  },
+  "movePreviewSide": {
+    "message": "Move preview to the side"
+  },
+  "moveToTrash": {
+    "message": "Move to trash"
+  },
+  "moved": {
+    "message": "Moved"
+  },
+  "movies": {
+    "message": "Movies"
+  },
+  "music": {
+    "message": "Music"
+  },
+  "name": {
+    "message": "Name"
+  },
+  "nativeHostIncompatible": {
+    "message": "Native Host protocol is incompatible; update Native Host (v1 required)"
+  },
+  "navAccount": {
+    "message": "Natives user"
+  },
+  "navAccountType": {
+    "message": "Personal account"
+  },
+  "navDocuments": {
+    "message": "Documents"
+  },
+  "navSpace": {
+    "message": "Space"
+  },
+  "navigation": {
+    "message": "Navigation"
+  },
+  "new": {
+    "message": "New"
+  },
+  "newFile": {
+    "message": "New file"
+  },
+  "newFolder": {
+    "message": "New folder"
+  },
+  "newName": {
+    "message": "New name"
+  },
+  "newWorkspace": {
+    "message": "New workspace"
+  },
+  "nextPage": {
+    "message": "Next page"
+  },
+  "nextWallpaper": {
+    "message": "Switch to next wallpaper"
+  },
+  "nightDim": {
+    "message": "Night auto-dim"
+  },
+  "matches": {
+    "message": "matches"
+  },
+  "noFilterResults": {
+    "message": "No matching items in this folder"
+  },
+  "noMatchingWidgets": {
+    "message": "No matching widgets found"
+  },
+  "noSearchResults": {
+    "message": "No matching files"
+  },
+  "noWidgets": {
+    "message": "No widgets in this workspace."
+  },
+  "noWidgetsInWorkspace": {
+    "message": "No widgets in this workspace"
+  },
+  "open": {
+    "message": "Open"
+  },
+  "openEditor": {
+    "message": "Open in editor"
+  },
+  "openTrash": {
+    "message": "Open Trash"
+  },
+  "opened": {
+    "message": "Opened"
+  },
+  "openedEditor": {
+    "message": "Opened in editor"
+  },
+  "operationCancelled": {
+    "message": "Operation cancelled"
+  },
+  "operationFailed": {
+    "message": "Operation failed"
+  },
+  "operationProgress": {
+    "message": "Operation progress"
+  },
+  "overwriteFile": {
+    "message": "Overwrite"
+  },
+  "pageError": {
+    "message": "Page failed to initialise"
+  },
+  "pagination": {
+    "message": "Pagination"
+  },
+  "paste": {
+    "message": "Paste"
+  },
+  "pasted": {
+    "message": "items pasted"
+  },
+  "path": {
+    "message": "Path"
+  },
+  "pdfNext": {
+    "message": "Next page"
+  },
+  "pdfPage": {
+    "message": "Current page"
+  },
+  "pdfPreviewUnavailable": {
+    "message": "Open PDFs with the system default app"
+  },
+  "pdfPrevious": {
+    "message": "Previous page"
+  },
+  "pdfViewerHint": {
+    "message": "PDF viewer"
+  },
+  "personalDesktop": {
+    "message": "personal desktop"
+  },
+  "personalSpace": {
+    "message": "Personal space"
+  },
+  "pictures": {
+    "message": "Pictures"
+  },
+  "position": {
+    "message": "Position mode"
+  },
+  "positionAndLayout": {
+    "message": "Position & Layout"
+  },
+  "preview": {
+    "message": "Preview"
+  },
+  "previewCancelled": {
+    "message": "Preview cancelled"
+  },
+  "previewTruncated": {
+    "message": "Content truncated"
+  },
+  "previewUnavailable": {
+    "message": "Preview changed; retry is unavailable"
+  },
+  "previewUnsupported": {
+    "message": "This file type is outside the safe built-in preview range."
+  },
+  "previousPage": {
+    "message": "Previous page"
+  },
+  "processing": {
+    "message": "Processing"
+  },
+  "productMenu": {
+    "message": "Product menu"
+  },
+  "productNavigation": {
+    "message": "Product navigation"
+  },
+  "projects": {
+    "message": "Projects"
+  },
+  "readFailed": {
+    "message": "Failed to read file"
+  },
+  "ready": {
+    "message": "Ready"
+  },
+  "recent": {
+    "message": "Recent"
+  },
+  "recentModified": {
+    "message": "Recently modified"
+  },
+  "recursiveSearch": {
+    "message": "Recursive"
+  },
+  "redo": {
+    "message": "Redo"
+  },
+  "refresh": {
+    "message": "Refresh"
+  },
+  "regionMarket": {
+    "message": "Wallpaper region"
+  },
+  "reloadFile": {
+    "message": "Reload file"
+  },
+  "reloaded": {
+    "message": "Reloaded"
+  },
+  "remove": {
+    "message": "Remove"
+  },
+  "rename": {
+    "message": "Rename"
+  },
+  "renameWorkspace": {
+    "message": "Rename workspace"
+  },
+  "renamed": {
+    "message": "Renamed"
+  },
+  "requestTimeout": {
+    "message": "Request timed out"
+  },
+  "resetPosition": {
+    "message": "Reset position"
+  },
+  "resetTemplateClassic": {
+    "message": "Classic"
+  },
+  "resetTemplateClassicDesc": {
+    "message": "Time, greeting, and quote"
+  },
+  "resetTemplateFocus": {
+    "message": "Focus"
+  },
+  "resetTemplateFocusDesc": {
+    "message": "Time, todo, and notes"
+  },
+  "resetTemplateBlank": {
+    "message": "Blank"
+  },
+  "resetTemplateBlankDesc": {
+    "message": "Start without widgets"
+  },
+  "resetWorkspace": {
+    "message": "Reset workspace..."
+  },
+  "resetWorkspaceDescription": {
+    "message": "Choose the template to apply. Current widgets and background settings will be replaced."
+  },
+  "resetWorkspaceTemplate": {
+    "message": "Workspace template"
+  },
+  "resetWorkspaceTitle": {
+    "message": "Reset workspace"
+  },
+  "resolution": {
+    "message": "Resolution"
+  },
+  "retry": {
+    "message": "Retry connection"
+  },
+  "retryFailed": {
+    "message": "Retry failed"
+  },
+  "reveal": {
+    "message": "Reveal"
+  },
+  "rotateLeft": {
+    "message": "Rotate left"
+  },
+  "rotateRight": {
+    "message": "Rotate right"
+  },
+  "save": {
+    "message": "Save"
+  },
+  "saveAndContinue": {
+    "message": "Save and continue"
+  },
+  "saveAsImage": {
+    "message": "Save as image"
+  },
+  "saveFailed": {
+    "message": "Save failed"
+  },
+  "saved": {
+    "message": "Saved"
+  },
+  "search": {
+    "message": "Search files"
+  },
+  "searchFiles": {
+    "message": "Search files"
+  },
+  "searchHint": {
+    "message": "Use content:keyword to search file contents"
+  },
+  "searchResults": {
+    "message": "search results"
+  },
+  "searchWidgets": {
+    "message": "Search widgets..."
+  },
+  "selectPreview": {
+    "message": "Select a file to preview"
+  },
+  "selected": {
+    "message": "selected"
+  },
+  "selectedSize": {
+    "message": "selected size"
+  },
+  "selectedText": {
+    "message": "text"
+  },
+  "settings": {
+    "message": "Settings"
+  },
+  "showHidden": {
+    "message": "Hidden"
+  },
+  "singleSelectionRequired": {
+    "message": "Select one item first"
+  },
+  "size": {
+    "message": "Size"
+  },
+  "skipped": {
+    "message": "skipped"
+  },
+  "sort": {
+    "message": "Sort"
+  },
+  "sortAscending": {
+    "message": "Ascending"
+  },
+  "sortDescending": {
+    "message": "Descending"
+  },
+  "sourceSettings": {
+    "message": "Source settings"
+  },
+  "spaceEmptyDesc": {
+    "message": "Nothing here yet. Your files and materials will appear here once organized."
+  },
+  "spaceEmptyTitle": {
+    "message": "Personal space"
+  },
+  "spaceSettings": {
+    "message": "Space settings"
+  },
+  "spaceSettingsTooltip": {
+    "message": "Space settings (S)"
+  },
+  "textColor": {
+    "message": "Text color"
+  },
+  "textOutline": {
+    "message": "Text outline"
+  },
+  "theme": {
+    "message": "Theme"
+  },
+  "text": {
+    "message": "Text content"
+  },
+  "themeArchive": {
+    "message": "Light"
+  },
+  "themeVolt": {
+    "message": "Dark"
+  },
+  "tmp": {
+    "message": "Temporary"
+  },
+  "toggleSearchScope": {
+    "message": "Toggle search scope"
+  },
+  "toggleWidgetsTooltip": {
+    "message": "Show/hide widgets (W)"
+  },
+  "trash": {
+    "message": "Delete"
+  },
+  "trashFolderConfirm": {
+    "message": "Move selected folders to the system Trash? They can be restored."
+  },
+  "trashOpened": {
+    "message": "System Trash opened"
+  },
+  "trashed": {
+    "message": "items moved to Trash and can be restored"
+  },
+  "type": {
+    "message": "Type"
+  },
+  "typographyAndStyle": {
+    "message": "Typography & Style"
+  },
+  "undo": {
+    "message": "Undo"
+  },
+  "unsaved": {
+    "message": "Unsaved"
+  },
+  "unsavedChanges": {
+    "message": "Unsaved changes"
+  },
+  "unsavedChangesMessage": {
+    "message": "Save your changes before continuing?"
+  },
+  "unsplashThemeQuery": {
+    "message": "Theme (Query)"
+  },
+  "up": {
+    "message": "Parent directory"
+  },
+  "usageErrors": {
+    "message": "items unreadable"
+  },
+  "usageTruncated": {
+    "message": "scan limit reached"
+  },
+  "useAccentColor": {
+    "message": "Use accent color"
+  },
+  "visualEffects": {
+    "message": "Visual effects"
+  },
+  "volumes": {
+    "message": "Drives and external devices"
+  },
+  "welcomeDesc": {
+    "message": "Select a workspace from the left sidebar, or press ⌘K to quickly search files."
+  },
+  "welcomeTitle": {
+    "message": "Select a directory from the left"
+  },
+  "widgetCatalog": {
+    "message": "Widget catalog"
+  },
+  "widgetCustomSettings": {
+    "message": "Widget settings"
+  },
+  "widgetInstanceCount": {
+    "message": "Added"
+  },
+  "widgetList": {
+    "message": "Widget"
+  },
+  "widgets": {
+    "message": "Widgets"
+  },
+  "widgetsCount": {
+    "message": "Importable widgets"
+  },
+  "githubPromptUsername": {
+    "message": "Set a GitHub username to display contribution calendar"
+  },
+  "workspaceCreated": {
+    "message": "Workspace created"
+  },
+  "workspaceDeleted": {
+    "message": "Workspace deleted"
+  },
+  "workspaceName": {
+    "message": "Workspace name"
+  },
+  "workspaceRenamed": {
+    "message": "Workspace renamed"
+  },
+  "modelCreateKeyDefaultName": {
+    "message": "New key"
+  },
+  "modelGatewayBaseURL": {
+    "message": "Current API URL"
+  },
+  "modelImportHistory": {
+    "message": "Import history"
+  },
+  "modelMaxRetryCredentials": {
+    "message": "Maximum credentials per round"
+  },
+  "modelMaxRetryInterval": {
+    "message": "Maximum retry wait (seconds)"
+  },
+  "modelNetworkRoutingDesc": {
+    "message": "Configure the upstream proxy, credential selection, and session affinity."
+  },
+  "modelNetworkRoutingTitle": {
+    "message": "Network and Session Routing"
+  },
+  "modelPricedRequests": {
+    "message": "Priced requests"
+  },
+  "modelRange24h": {
+    "message": "Last 24 hours"
+  },
+  "modelRange4h": {
+    "message": "Last 4 hours"
+  },
+  "modelRestartGateway": {
+    "message": "Restart"
+  },
+  "modelSessionAffinity": {
+    "message": "Enable session affinity"
+  },
+  "modelSessionAffinityTTL": {
+    "message": "Session affinity TTL (seconds)"
+  },
+  "modelStreamingRetries": {
+    "message": "Streaming bootstrap retries"
+  },
+  "modelUnpricedRequests": {
+    "message": "Unpriced requests"
+  },
+  "modelAllKeys": {
+    "message": "All keys"
+  },
+  "modelAllModels": {
+    "message": "All models"
+  },
+  "modelAllProviders": {
+    "message": "All providers"
+  },
+  "modelAllResults": {
+    "message": "All results"
+  },
+  "modelAllSources": {
+    "message": "All sources"
+  },
+  "modelCancelled": {
+    "message": "Cancelled"
+  },
+  "modelCustomRange": {
+    "message": "Custom range"
+  },
+  "modelEndTime": {
+    "message": "End time"
+  },
+  "modelInvalidTimeRange": {
+    "message": "End time must be after start time"
+  },
+  "modelProviderOptional": {
+    "message": "Provider (optional)"
+  },
+  "modelSavePrice": {
+    "message": "Save custom price"
+  },
+  "modelStartTime": {
+    "message": "Start time"
+  },
+  "modelSuccess": {
+    "message": "Success"
+  },
+  "showHours": {
+    "message": "Show hours"
+  },
+  "showMinutes": {
+    "message": "Show minutes"
+  },
+  "showSeconds": {
+    "message": "Show seconds"
+  },
+  "activeColor": {
+    "message": "Active color"
+  },
+  "inactiveColor": {
+    "message": "Inactive color"
+  },
+  "color": {
+    "message": "Color"
+  },
+  "transparent": {
+    "message": "Transparent"
+  },
+  "bookmarksAuthRequired": {
+    "message": "Bookmark permission is required"
+  },
+  "clickToAuthorizeBookmarks": {
+    "message": "Grant bookmark permission"
+  },
+  "searchBookmarks": {
+    "message": "Search bookmarks…"
+  },
+  "noMatchingBookmarks": {
+    "message": "No matching bookmarks"
+  },
+  "viewMode": {
+    "message": "View mode"
+  },
+  "listView": {
+    "message": "List"
+  },
+  "gridView": {
+    "message": "Grid"
+  },
+  "showSearchBar": {
+    "message": "Show bookmark search"
+  },
+  "setCountdownDate": {
+    "message": "Set a target date"
+  },
+  "countdownComplete": {
+    "message": "It is time"
+  },
+  "eventTitle": {
+    "message": "Event title"
+  },
+  "eventDateTime": {
+    "message": "Event date and time"
+  },
+  "customCssLabel": {
+    "message": "CSS (personal space only)"
+  },
+  "contributionsLastYear": {
+    "message": "contributions in the last year"
+  },
+  "username": {
+    "message": "Username"
+  },
+  "colorGreen": {
+    "message": "Green"
+  },
+  "colorBlue": {
+    "message": "Blue"
+  },
+  "colorOrange": {
+    "message": "Orange"
+  },
+  "colorPurple": {
+    "message": "Purple"
+  },
+  "showStreak": {
+    "message": "Show contribution streak"
+  },
+  "yourName": {
+    "message": "Your name"
+  },
+  "safeHtml": {
+    "message": "HTML (sanitized)"
+  },
+  "ipDetecting": {
+    "message": "IP: detecting…"
+  },
+  "ipUnavailable": {
+    "message": "IP: unavailable"
+  },
+  "ipFetchFailed": {
+    "message": "Unable to fetch IP"
+  },
+  "ipInfoNotice": {
+    "message": "Detect and show the current public IP address."
+  },
+  "columnsCount": {
+    "message": "Columns (1–6)"
+  },
+  "showFavicons": {
+    "message": "Show site icons"
+  },
+  "openInNewTab": {
+    "message": "Open in a new tab"
+  },
+  "linksList": {
+    "message": "Links"
+  },
+  "addLink": {
+    "message": "Add link"
+  },
+  "message": {
+    "message": "Message"
+  },
+  "clickToWriteNote": {
+    "message": "Click to add a note…"
+  },
+  "notesNotice": {
+    "message": "Click the note on the canvas to edit; it saves on blur."
+  },
+  "clickToCopy": {
+    "message": "Click to copy"
+  },
+  "copied": {
+    "message": "Copied"
+  },
+  "paletteNotice": {
+    "message": "Hover to view a color and click to copy it."
+  },
+  "nextPalette": {
+    "message": "Next palette"
+  },
+  "quote": {
+    "message": "Quote"
+  },
+  "author": {
+    "message": "Author"
+  },
+  "searchProvider": {
+    "message": "Search engine"
+  },
+  "placeholder": {
+    "message": "Placeholder text"
+  },
+  "style": {
+    "message": "Style"
+  },
+  "default": {
+    "message": "Default"
+  },
+  "rounded": {
+    "message": "Transparent rounded"
+  },
+  "outlined": {
+    "message": "Minimal outline"
+  },
+  "decrease": {
+    "message": "Decrease"
+  },
+  "increase": {
+    "message": "Increase"
+  },
+  "reset": {
+    "message": "Reset"
+  },
+  "label": {
+    "message": "Label"
+  },
+  "currentCount": {
+    "message": "Current count"
+  },
+  "step": {
+    "message": "Step"
+  },
+  "showReset": {
+    "message": "Show reset button"
+  },
+  "days": {
+    "message": "days"
+  },
+  "hours": {
+    "message": "hours"
+  },
+  "minutes": {
+    "message": "minutes"
+  },
+  "seconds": {
+    "message": "seconds"
+  },
+  "displayMode": {
+    "message": "Display mode"
+  },
+  "compact": {
+    "message": "Compact"
+  },
+  "digitalClock": {
+    "message": "Digital clock"
+  },
+  "analogueClock": {
+    "message": "Analogue clock"
+  },
+  "hour12Format": {
+    "message": "12-hour format"
+  },
+  "addTodo": {
+    "message": "Add todo…"
+  },
+  "enablePomodoroFocus": {
+    "message": "Enable Pomodoro / Focus Timer"
+  },
+  "pomodoroDuration": {
+    "message": "Focus Duration (Minutes)"
+  },
+  "todoNotice": {
+    "message": "Add, complete, and remove todo items directly on the canvas."
+  },
+  "noTopSites": {
+    "message": "No top sites"
+  },
+  "clickToAuthorizeTopSites": {
+    "message": "Grant top-sites permission"
+  },
+  "displayLimit": {
+    "message": "Display limit (1–18)"
+  },
+  "noTrelloCards": {
+    "message": "No cards"
+  },
+  "addCard": {
+    "message": "Add card…"
+  },
+  "boardName": {
+    "message": "Board name"
+  },
+  "listName": {
+    "message": "List name"
+  },
+  "feelsLike": {
+    "message": "Feels like"
+  },
+  "humidity": {
+    "message": "Humidity"
+  },
+  "weatherRegionType": {
+    "message": "Region type"
+  },
+  "weatherRegionDomestic": {
+    "message": "Domestic (Chinese Mainland)"
+  },
+  "weatherRegionOverseas": {
+    "message": "International / Overseas"
+  },
+  "weatherProvince": {
+    "message": "Province / Municipality"
+  },
+  "weatherCity": {
+    "message": "City"
+  },
+  "weatherDistrict": {
+    "message": "District"
+  },
+  "weatherContinent": {
+    "message": "Continent"
+  },
+  "weatherOverseasCity": {
+    "message": "City"
+  },
+  "cityName": {
+    "message": "City"
+  },
+  "temperatureUnit": {
+    "message": "Temperature unit"
+  },
+  "showFiveDayForecast": {
+    "message": "Show five-day forecast"
+  },
+  "latitude": {
+    "message": "Latitude"
+  },
+  "longitude": {
+    "message": "Longitude"
+  },
+  "weatherClear": {
+    "message": "Clear"
+  },
+  "weatherPartlyCloudy": {
+    "message": "Partly cloudy"
+  },
+  "weatherOvercast": {
+    "message": "Overcast"
+  },
+  "weatherFoggy": {
+    "message": "Fog"
+  },
+  "weatherDrizzle": {
+    "message": "Drizzle"
+  },
+  "weatherRainy": {
+    "message": "Rain"
+  },
+  "weatherSnowy": {
+    "message": "Snow"
+  },
+  "weatherThunder": {
+    "message": "Thunderstorm"
+  },
+  "weatherCloudy": {
+    "message": "Cloudy"
+  },
+  "startTime": {
+    "message": "Start time"
+  },
+  "endTime": {
+    "message": "End time"
+  },
+  "flipPercentage": {
+    "message": "Show remaining percentage"
+  },
+  "clickToAuthorize": {
+    "message": "Click to grant permission"
+  },
+  "catTimeAndClocks": {
+    "message": "Time & Clocks"
+  },
+  "catProductivity": {
+    "message": "Productivity & Tools"
+  },
+  "catInformationFeeds": {
+    "message": "Information & Feeds"
+  },
+  "catInspirationText": {
+    "message": "Inspiration & Text"
+  },
+  "catCustomAdvanced": {
+    "message": "Custom & Advanced"
+  },
+  "zoomImageHint": {
+    "message": "Scroll to zoom image"
+  },
+  "searchSuggestions": {
+    "message": "Show search suggestions while typing"
+  },
+  "suggestionsEngine": {
+    "message": "Suggestions source"
+  },
+  "suggestionsQuantity": {
+    "message": "Suggestions count"
+  },
+  "noPairs": {
+    "message": "Add a currency pair in settings to get started."
+  },
+  "addPair": {
+    "message": "Add currency pair"
+  },
+  "rateDecimals": {
+    "message": "Decimal places"
+  },
+  "modelLoginPending": {
+    "message": "Authorizing. Complete sign-in in your browser."
+  },
+  "modelLoginSucceeded": {
+    "message": "Signed in"
+  },
+  "modelLoginFailed": {
+    "message": "Sign-in failed. Try again."
+  },
+  "modelLoginTimeout": {
+    "message": "Sign-in timed out. Try again."
+  },
+  "modelLoginCancelled": {
+    "message": "Sign-in cancelled"
+  },
+  "modelLoginIdle": {
+    "message": "Not signed in"
+  },
+  "modelLoginCancelAction": {
+    "message": "Cancel sign-in"
+  },
+  "modelLoginAddAccount": {
+    "message": "Add another account"
+  },
+  "modelAccountModelsTitle": {
+    "message": "Account models"
+  },
+  "modelAccountModelsSearch": {
+    "message": "Search models"
+  },
+  "modelAccountModelsSelectVisible": {
+    "message": "Toggle visible"
+  },
+  "modelAccountModelsSelectAll": {
+    "message": "Enable all"
+  },
+  "modelAccountModelsSelectNone": {
+    "message": "Disable all"
+  },
+  "modelAccountModelsSummary": {
+    "message": "$1 models, $2 enabled"
+  },
+  "modelAccountModelsEmpty": {
+    "message": "No models available"
+  },
+  "modelAccountModelsSaved": {
+    "message": "Account model settings saved"
+  },
+  "modelAccountModelsLoadFailed": {
+    "message": "Failed to load models"
+  },
+  "agentCliVersion": {
+    "message": "CLI Version"
+  },
+  "agentAppVersion": {
+    "message": "App Version"
+  },
+  "agentPiPluginVersion": {
+    "message": "Plugin Version"
+  },
+  "agentTabCore": {
+    "message": "Core Configuration"
+  },
+  "agentTabSessions": {
+    "message": "Sessions"
+  },
+  "agentSessionName": {
+    "message": "Session"
+  },
+  "agentSessionsEmpty": {
+    "message": "No Codex session recordings found"
+  },
+  "agentSessionDeleted": {
+    "message": "Session deleted"
+  },
+  "agentSessionDeleteConfirm": {
+    "message": "Delete this session recording?"
+  },
+  "agentCodexDangerTitle": {
+    "message": "Codex Config Cleanup"
+  },
+  "agentCodexDangerHint": {
+    "message": "Removes the Codex config and credential files written by this tool, restoring the unmanaged state."
+  },
+  "agentCodexClear": {
+    "message": "Clear Config"
+  },
+  "agentCodexClearConfirm": {
+    "message": "Clear the Codex config and credential files?"
+  },
+  "agentCodexCleared": {
+    "message": "Deleted $1 files"
+  },
+  "agentUpdate": {
+    "message": "Update Config"
+  },
+  "agentPiTitle": {
+    "message": "Pi Provider Plugin"
+  },
+  "agentPiInstalled": {
+    "message": "Pi provider plugin installed"
+  },
+  "agentPiMissing": {
+    "message": "Pi provider plugin not installed"
+  },
+  "agentPiInstall": {
+    "message": "Install Plugin"
+  },
+  "agentPiUpdate": {
+    "message": "Update Plugin"
+  },
+  "agentPiRepair": {
+    "message": "Repair Plugin"
+  },
+  "agentPiUninstall": {
+    "message": "Uninstall Plugin"
+  },
+  "agentPiDone": {
+    "message": "Pi plugin action finished"
+  },
+  "agentModelSearchPlaceholder": {
+    "message": "Search or pick a model"
+  },
+  "agentModelNoMatch": {
+    "message": "No matching models"
+  },
+  "agentClaudeMappingTitle": {
+    "message": "Claude Model Mappings"
+  },
+  "agentClaudeMappingHint": {
+    "message": "Route Claude role requests to concrete gateway models; 1M enables million-token context."
+  },
+  "agentMaxContext": {
+    "message": "Max Context Tokens"
+  },
+  "agentCompactPct": {
+    "message": "Auto-compact Trigger %"
+  },
+  "agentDisableCompact": {
+    "message": "Disable auto-compact"
+  },
+  "agentLaunchDirPrompt": {
+    "message": "Working directory (blank for home):"
+  },
+  "authFileNoAccountHint": {
+    "message": "No matching OAuth account"
+  },
+  "authFileNoAccountMatch": {
+    "message": "This credential file has no matching OAuth account, so per-account models are unavailable"
+  },
+  "authFilePriorityPrompt": {
+    "message": "Enter priority (higher number wins):"
+  },
+  "authFilePriorityInvalid": {
+    "message": "Priority must be an integer"
+  },
+  "authFilePrioritySaved": {
+    "message": "Priority updated"
+  },
+  "checkUpdate": {
+    "message": "Check for updates"
+  },
+  "update": {
+    "message": "Update"
+  },
+  "navApps": {
+    "message": "Apps"
+  }
 }

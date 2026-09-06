@@ -9,6 +9,7 @@ import { createSpaceToolbar } from './space-toolbar.js';
 import { createSpaceNameModal } from './space-modal-name.js';
 import { createSpaceDeleteModal } from './space-modal-delete.js';
 import { createSidebarController } from './sidebar-controller.js';
+import { mountAppMenu } from './app-navigation-projection.js';
 import { createSettingsMenu } from './settings-menu.js';
 import { createGlobalSearchModal } from './global-search-modal.js';
 
@@ -287,6 +288,11 @@ async function init() {
     onModelSettings: (anchor) => openModelSettings(anchor).catch((error) => toast(error.message, 'error')),
     t,
   });
+
+  // ADR-0025 D33/D36: space.html stays 0-Native-Port for apps — the
+  // "应用" section renders from the projection UI cache written by the
+  // App Center / files page, and tracks chrome.storage changes live.
+  mountAppMenu($('app-menu-apps'), { t }).catch(() => {});
 
   $('workspace-create').onclick = () => nameModal.open(null);
 
