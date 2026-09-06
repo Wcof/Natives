@@ -30,6 +30,8 @@ Service Worker 长连接。旧 Tauri Files 调用链是迁移源，不得继续�
 
 **Model Host 例外（ADR-0020 §6.1）**：扩展通过独立 Native Messaging interface 调用单用途 `model-host`，不得共享 Files 能力。默认由页面连接拥有生命周期；仅用户显式开启常驻后可跨页面关闭存活，必须单实例、可停止且无登录自启动。Gateway 仅绑定 `127.0.0.1` 并鉴权，禁止 Management API；持久 Secret 由 OS Keychain 持有。该例外不授权通用 Daemon 或新的产品 Surface。
 
+**Extension App Host 例外（ADR-0025）**：Extension App 的 Native Runtime（如 `fund-host`，`com.natives.app.<id>`）是 Chrome 按需启动的独立 Native Messaging Host，生命周期由 App 页面（`app.html`）拥有，stdin EOF 2 秒内退出。Core `native-file-host` 只承担安装事务、Registry 与 Host Manifest 注册，**不代理** App Runtime 的业务调用。App Runtime 禁止访问 `natives.db`；Core Host 禁止打开 App 数据库（如 `apps/fund/data/fund.db`）。该例外不授权 daemon、后台 scheduler、tray 或第二产品 Surface。
+
 #### R-T2 · 数据 authority 单一
 - **等级**：MUST
 - **分类**：数据、安全
@@ -64,7 +66,7 @@ Infrastructure ── Tauri / SQLite / Keychain / PTY / HTTP / supervised proces
   - Host ↔ 必要 sidecar：版本化协议、鉴权、大小/超时限制、取消与 shutdown；协议能力必须诚实。
   - Legacy Workshop iframe：删除前继续遵守 postMessage source 验证、Session Token 与 sandbox 红线。
   - Embed/WebView：禁止获得 Workshop Bridge/Session Token。
-  - Chrome Files Surface：只有 `files.html` 可直接持有 Native Port；新标签页与 Service Worker 禁止持有或保活 Native Host。
+  - Chrome Surface：`files.html`、`space.html`（ADR-0024 短连接）、`app.html` 与 `apps.html`（ADR-0025）可直接持有 Native Port，生命周期一律为按需连接 + `pagehide` 断开 + 隐藏空闲 60 秒断开；Service Worker 禁止持有、轮询或保活任何 Native Host。
 - **为什么**：通信通道同时决定权限、生命周期与可观测性。
 
 #### R-T5 · 命名与协议 Source of Truth

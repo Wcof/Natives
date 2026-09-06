@@ -22,10 +22,18 @@
   ~/.natives/
   ├── natives.db        # SQLite（WAL）
   ├── modules/          # 已安装模块
+  ├── apps/             # Extension App 安装物（ADR-0025 D11）
+  │   └── <appId>/
+  │       ├── runtime/<version>/<host> + current
+  │       ├── packages/        # kind=data 资源包
+  │       ├── data/            # App 自有数据库（如 fund.db，只有该 App Host 可写）
+  │       ├── cache/  imports/  staging/
   ├── migrations/       # 可恢复迁移 checkpoint（禁止明文 Secret）
-  └── logs/             # 运行日志
+  └── logs/             # 运行日志（apps/<appId>/ 子目录）
   ```
   Secret **必须**按 R-S12 进入 OS Keychain；DB 只保存 opaque reference。**禁止**把其它用户数据散落到项目目录或任意路径；**禁止**用 env 变量随意覆盖此根目录（除非有受控测试夹具）。
+
+  **App 数据分账（ADR-0025）**：`natives.db` 内的 App Store 表（`apps` / `app_packages` / `app_permissions` / `app_install_transactions`）是 App 安装状态的唯一权威，只由 `native-file-host` 写入；App 业务数据库（如 `apps/fund/data/fund.db`）只由该 App 的 Runtime Host 写入。两者互不开放：Core Host 禁止打开 App DB，App Host 禁止访问 `natives.db`。卸载默认保留 `data/` 与 `imports/`；「删除应用及全部个人数据」必须二次确认。
 - **为什么**：dotfile 目录模式与兄弟项目（CodePilot/Natives2）一致，便于备份、迁移、清理。
 - **检查方法**：新增持久化路径时核对是否在 `~/.natives/` 下。
 

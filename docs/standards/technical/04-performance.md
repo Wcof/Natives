@@ -95,9 +95,19 @@
   - 文件页面按需直连 Host；`pagehide` 必须断开，隐藏且无进行中操作 60 秒后必须断开。
   - 最后端口关闭后 Host 必须在 2 秒内退出；未打开文件页面时 Host 的 CPU、RSS、GPU 占用均为 0。
   - Release Host 空闲 RSS ≤ 12 MB、60 秒平均 CPU ≤ 0.5%，不得创建 GPU 进程或上下文。
-  - 扩展 ZIP ≤ 250 KB、单架构 Release Host ≤ 3 MB；安装包目标 ≤ 10 MB，超出必须给出文件级归因。
+  - 扩展估算包 Hard Gate ≤ 300 KiB（307,200 bytes，ADR-0024 修订）；`native-file-host` 目标 ≤ 3 MiB，过渡硬 Gate ≤ 4 MiB（ADR-0025 D19，与 `scripts/perf/check-native-host.mjs` 对齐）；安装包目标 ≤ 10 MB，超出必须给出文件级归因。
   - 安装、启动和更新不得引入 Electron/Tauri 壳、daemon、托盘常驻进程或后台更新轮询。
 - **为什么**：Natives 复用用户已有 Chrome，增量成本必须限制在当前文件 Surface，而不是复制浏览器或常驻运行时。
+
+#### R-P13 · App Package 与 Extension App Host 预算
+- **等级**：MUST
+- **分类**：性能、分发、Apps
+- **规则**（详见 ADR-0025 D3/D19/D21）：
+  - 单个下载 Package（`.nap`）wire 大小 ≤ 5 MiB（5,242,880 bytes），精确到字节；Required Packages ≤ 3 个且总量 ≤ 15 MiB；全部 Package ≤ 16 个；单包解压 payload ≤ 20 MiB；应用安装代码+静态资源总体 ≤ 50 MiB（不含用户个人数据）。
+  - 超过 Gate 的 CI 必须直接失败；禁止 `ALLOW_OVERSIZE`/`SKIP_APP_SIZE_CHECK`/baseline waiver 等豁免；修改 Gate 数字本身必须新增 ADR。
+  - Extension App Host（如 `fund-host`）：EOF 退出 ≤ 2s、Idle CPU ≤ 0.5%、Idle RSS 目标 ≤ 24 MiB / 硬 Gate ≤ 32 MiB、GPU 0、background timer 0；与 `native-file-host` 预算完全分开，禁止把 App 业务编进 Core Host。
+  - Apps Framework 相对 A1 baseline 的扩展增量 ≤ 20 KiB（gzip 估算）；扩展估算 ≥ 290 KiB 时 CI 必须输出 NEAR_BUDGET 警告。
+- **为什么**：在线分发的 App 包是供应链与体积的双重风险点；Core 与 App 的预算必须分账，防止一个 App 拖垮 Core Gate。
 
 ## 提交前清单
 

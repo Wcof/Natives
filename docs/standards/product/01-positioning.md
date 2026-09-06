@@ -20,7 +20,7 @@
 #### R-P1 · 一级 IA 固定
 - **等级**：MUST
 - **分类**：产品、交互
-- **规则**：一级入口**必须**为：首页、文件、应用、AI、数据与用量、设置。AI 下分 AI Resources、Local Proxy、AI Tool Integration。**禁止**新增 Workspace 一级菜单；Home 是唯一 Workspace 一级入口，其下可打开多个 Workspace（ADR-0021）。
+- **规则**：一级入口**必须**为：首页、文件、应用、AI、数据与用量、设置。AI 下分 AI Resources、Local Proxy、AI Tool Integration。**禁止**新增 Workspace 一级菜单；Home 是唯一 Workspace 一级入口，其下可打开多个 Workspace（ADR-0021）。「应用」入口在至少 1 个 Extension App 安装后显示（ADR-0025 D17），卸载后自动消失；「设置」下提供「应用中心」作为 App 安装/管理入口（ADR-0025 D26）。
 - **为什么**：这是用户任务组织方式，不以内部 runtime/技术名暴露产品结构。
 
 ## 二、Home 与 Widget
@@ -44,7 +44,7 @@
 - **分类**：命名、分层
 - **规则**：
   - Files 的资源 CRUD/Trash/Watch/Search 与内容编辑能力分离。
-  - Apps 使用 App / RuntimeSpec / RuntimeInstance / Surface；App 不是 Widget，运行不等于呈现。
+  - Apps 使用 App / RuntimeSpec / RuntimeInstance / Surface / PackageSpec（ADR-0025 D1）；只有一个 Apps Registry；App 不是 Widget，运行不等于呈现；Extension App 的浏览器 UI 必须 build-time 进入扩展包，禁止在线下载执行代码（ADR-0025 D2）。
   - Provider = 厂商；Connection = 真实 upstream；Credential = 独立可轮换凭证；API protocol 不是 Provider。
   - Proxy = 个人本地轻量代理；**禁止**建设企业 AI Gateway、租户计费或通用控制/数据平面。
   - Claude Code、Codex、Gemini CLI、OpenCode = AI Tool Integration。

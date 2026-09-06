@@ -54,6 +54,7 @@ AiNative
 | 任务 | 先读 |
 |---|---|
 | 任何编码 | `standards/README.md` + 相关 1–3 篇 |
+| Apps Framework / 应用中心 / App 打包分发 | **ADR-0025** + `contracts`（无）+ `standards/technical/01` (R-T4) + `standards/technical/02` (R-S14) + `standards/technical/04` (R-P13) + `standards/technical/03` (R-D1) |
 | 全局产品/IA/Legacy | ADR-0020 + `standards/product/01-positioning.md` |
 | 主题偏好与外观协调 | **ADR-0022** + `contracts/appearance-preference-contract.md` + `standards/ui-ux/01` + `standards/frontend/02` (R-E7.1) |
 | 多 Workspace/Grid/Canvas/Widget/Data View | **ADR-0021** + **ADR-0022** + `contracts/workspace-v2-contract.md` + `standards/ui-ux/02` + `standards/technical/04` (R-P11) |

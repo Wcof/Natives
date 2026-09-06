@@ -136,6 +136,18 @@ Natives 把不可信的第三方代码（插件）以 iframe 形式跑在用户�
 - **为什么**：Renderer 是 XSS 的攻击面，内存里的明文凭证可被脚本窃取。
 - **检查方法**：Tauri adapter 暴露的凭证相关 API 是否仅返回掩码。
 
+#### R-S14 · App 分发的供应链防线（ADR-0025）
+- **等级**：MUST
+- **分类**：安全、供应链、Apps
+- **规则**：
+  - App Catalog 必须为签名产物（`catalog-v1.json` + `catalog-v1.sig`，Ed25519，公钥编译进扩展）；签名验证失败、hash 不匹配、包超尺寸一律拒绝安装并进入 rollback。
+  - 浏览器执行代码禁止在线下载安装（JS/WASM/远程 DSL 解释器）；Extension App 的 UI 必须 build-time 进入扩展包，`app-module-registry.js` 是唯一的 UI module 映射表。
+  - 安装路径由 Core 按 `kind` 决定（`~/.natives/apps/<appId>/`），Catalog/请求参数禁止携带目标路径；`../`、绝对路径、`C:\`、`~/`、symlink 逃逸必须被拒绝。
+  - Native Messaging Host Manifest（OS Integration Stub）只能包含 `name/path/type/allowed_origins`；`allowed_origins` 必须来自 Chrome 启动 Host 时提供的真实 caller origin，禁止硬编码占位 origin。
+  - App 专属 Secret（如养基宝 token）只进 OS Keychain（namespace `com.natives.app.<id>`），禁止进入 `fund.db`/`natives.db`/日志/前端/`chrome.storage`。
+- **为什么**：App Center 是新的在线供应链入口；签名、hash、路径白名单与 Secret 隔离是四道不可缺的闸。
+- **检查方法**：`scripts/apps/check-catalog-signature.mjs`、`check-app-security.mjs`、`check-package-budget.mjs` 全绿；Path Security Gate 测试覆盖逃逸向量。
+
 ---
 
 ## 四、本篇合规自检清单
