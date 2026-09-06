@@ -110,3 +110,4 @@ credentials.json
 !crates/**/Cargo.lock
 !third_party/**/testdata/**/*.json
 
+Natives-source-clean.zip
