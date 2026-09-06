@@ -92,3 +92,21 @@ References/
 !.runtime-evidence/after/baseline.md
 .cargo-target-local/
 .zcode/
+
+# OAuth, API Keys, Credentials and Private Config
+*.token
+*.pem
+*.key
+auth.json
+accounts.json
+credentials.json
+*auth_file*.json
+*oauth*.json
+!extension/_locales/**/*.json
+!package*.json
+!tsconfig*.json
+!manifest.json
+!skills-lock.json
+!crates/**/Cargo.lock
+!third_party/**/testdata/**/*.json
+
