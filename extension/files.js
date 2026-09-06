@@ -89,6 +89,16 @@ async function openModelSettings(returnFocus) {
   await module.openModelSettings({ t, language: filesLocale.language, returnFocus });
 }
 
+async function openAppsCenter(returnFocus) {
+  // ADR-0025 D40: App Center is a settings-level surface on its own tab,
+  // so the files page never hosts a second port just to manage apps.
+  const url = chrome.runtime.getURL('apps.html');
+  const existing = (await chrome.tabs.query({ url: `${location.origin}/apps.html` })) || [];
+  if (existing[0]) chrome.tabs.update(existing[0].id, { active: true });
+  else chrome.tabs.create({ url });
+  returnFocus?.focus?.();
+}
+
 chrome.storage?.onChanged?.addListener((changes, area) => {
   if (area !== 'local') return;
   const next = changes['natives-language']?.newValue;
@@ -666,6 +676,7 @@ async function bootstrap() {
     onLanguageChange: (lang) => switchLanguage(lang),
     onThemeChange: (theme) => applyTheme(theme),
     onModelSettings: (anchor) => openModelSettings(anchor).catch((error) => toast(error.message, 'error')),
+    onAppsCenter: (anchor) => openAppsCenter(anchor).catch((error) => toast(error.message, 'error')),
     t: (key, fallback) => t(key, fallback),
   });
   init();

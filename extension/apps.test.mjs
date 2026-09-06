@@ -1,0 +1,196 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { setupTestDomEnvironment } from './test-dom-mock.js';
+import { createAppCenter } from './apps.js';
+
+setupTestDomEnvironment();
+
+const t = (key, fallback) => fallback || key;
+
+function fakeNativeClient(overrides = {}) {
+  const calls = [];
+  const apps = [];
+  return {
+    calls,
+    apps,
+    async call(method, params = {}) {
+      calls.push({ method, params });
+      if (overrides[method]) return overrides[method](params);
+      switch (method) {
+        case 'apps:list':
+          return { apps: [...apps], revision: apps.length + 1 };
+        case 'apps:install_begin': {
+          const request = JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(params.request), (c) => c.charCodeAt(0))));
+          if (apps.some((a) => a.app_id === request.app.app_id)) {
+            const error = new Error('app already installed');
+            error.code = 'APP_CONFLICT';
+            throw error;
+          }
+          return { install_id: 'tx-1' };
+        }
+        case 'apps:install_commit': {
+          apps.push({
+            app_id: 'com.natives.app.demo',
+            kind: 'extension_app',
+            name: 'Demo',
+            version: '0.1.0',
+            enabled: true,
+            show_in_sidebar: true,
+            sidebar_order: 0,
+            runtime_spec_json: '{"host":"com.natives.app.demo"}',
+            surface_json: '{"icon":"grid","route":"app.html?app=com.natives.app.demo"}',
+            manifest_json: '{}',
+            installed_at: 1,
+            updated_at: 1,
+            revision: 1,
+          });
+          return { app_id: 'com.natives.app.demo', revision: 2 };
+        }
+        case 'apps:uninstall': {
+          const index = apps.findIndex((a) => a.app_id === params.appId);
+          if (index < 0) {
+            const error = new Error('not found');
+            error.code = 'APP_NOT_FOUND';
+            throw error;
+          }
+          apps.splice(index, 1);
+          return { app_id: params.appId, revision: 3 };
+        }
+        default:
+          return {};
+      }
+    },
+  };
+}
+
+// each scenario gets a fresh body so getElementById binds to this scenario's DOM
+function makeDom() {
+  document.body.replaceChildren();
+  const listEl = document.createElement('div');
+  listEl.id = 'apps-list';
+  const toastEl = document.createElement('div');
+  toastEl.id = 'apps-toast';
+  const backEl = document.createElement('button');
+  backEl.id = 'nav-back';
+  document.body.append(listEl, toastEl, backEl);
+  return { listEl, toastEl };
+}
+
+const catalog = {
+  apps: [
+    {
+      app_id: 'com.natives.app.demo',
+      name: 'Demo',
+      version: '0.1.0',
+      description: '示例应用',
+      icon: 'grid',
+      permissions: [],
+      wireSize: 0,
+    },
+    {
+      app_id: 'fund',
+      name: '基金',
+      version: '0.1.0',
+      description: '基金资产分析',
+      icon: 'box',
+      permissions: ['keychain:com.natives.app.fund'],
+      wireSize: 0,
+    },
+  ],
+};
+
+const tick = () => new Promise((r) => setTimeout(r, 25));
+
+// 1. Gate A4: catalog + empty registry → every entry renders as an AppCenterItem
+const client1 = fakeNativeClient();
+const dom1 = makeDom();
+createAppCenter({ t, client: client1, catalogLoader: async () => catalog });
+await tick();
+assert.equal(dom1.listEl.querySelectorAll('.app-card').length, 2, '目录中的每个条目都显示');
+assert.equal(dom1.listEl.querySelectorAll('.action.primary').length, 2, '未安装条目提供安装按钮');
+assert.ok(dom1.listEl.textContent.includes('未安装'));
+
+// 2. install flow: begin → commit → card flips to installed with 打开 button
+const installBtn = dom1.listEl.querySelector('.app-card[data-app-id="com.natives.app.demo"] .action.primary');
+installBtn.onclick(new Event('click', { bubbles: true }));
+await tick();
+assert.ok(client1.calls.some((c) => c.method === 'apps:install_begin'), 'install 必须调用 apps:install_begin');
+assert.ok(client1.calls.some((c) => c.method === 'apps:install_commit'), 'install 必须调用 apps:install_commit');
+const installedCard = dom1.listEl.querySelector('.app-card[data-app-id="com.natives.app.demo"]');
+assert.equal(installedCard.querySelector('.status')?.textContent, '已安装');
+assert.ok(installedCard.textContent.includes('打开'), '已安装条目提供打开按钮');
+assert.equal(client1.apps.length, 1, 'install 后注册表恰好新增 1 个 App');
+
+// 3. D42: catalog entries do NOT become Apps — only the installed demo is
+//    in the native registry, fund is still catalog-only
+assert.equal(client1.apps[0].app_id, 'com.natives.app.demo');
+assert.ok(!client1.apps.some((a) => a.app_id === 'fund'), '未安装的目录条目不得进入注册表');
+
+// 4. APP_CONFLICT: installing an already-installed app surfaces the error
+const client2 = fakeNativeClient();
+client2.apps.push({ app_id: 'com.natives.app.demo', name: 'Demo', version: '0.1.0', enabled: true, show_in_sidebar: true });
+const dom2 = makeDom();
+const center2 = createAppCenter({ t, client: client2, catalogLoader: async () => catalog });
+await tick();
+// registry-wins merge: the card shows the installed state, not a fresh install
+assert.equal(dom2.listEl.querySelector('.app-card[data-app-id="com.natives.app.demo"] .status')?.textContent, '已安装');
+const conflict = await center2.install(catalog.apps[0]).catch((error) => error);
+assert.equal(conflict.code, 'APP_CONFLICT', '重复安装必须暴露 APP_CONFLICT（由 UI 按钮层显示 toast）');
+assert.equal(client2.apps.length, 1, '冲突后注册表不新增条目');
+// button path surfaces a failing commit in the toast:
+const client5 = fakeNativeClient({
+  'apps:install_commit': async () => {
+    const error = new Error('commit rejected');
+    error.code = 'INTERNAL';
+    throw error;
+  },
+});
+const dom5 = makeDom();
+createAppCenter({ t, client: client5, catalogLoader: async () => catalog });
+await tick();
+const demoInstall = dom5.listEl.querySelector('.app-card[data-app-id="com.natives.app.demo"] .action.primary');
+demoInstall.onclick(new Event('click', { bubbles: true }));
+await tick();
+assert.ok(dom5.toastEl.textContent.includes('commit rejected'), '按钮路径错误必须显示在 toast');
+assert.equal(client5.apps.length, 0, 'commit 失败不得留下注册表条目');
+
+// 5. uninstall: confirm dialog → registry empties → card back to 未安装
+const uninstallBtn = dom1.listEl.querySelector('.app-card[data-app-id="com.natives.app.demo"] .action.danger');
+assert.ok(uninstallBtn, '已安装条目提供卸载按钮');
+uninstallBtn.onclick(new Event('click', { bubbles: true }));
+await tick();
+const okButton = document.querySelector('.apps-dialog [data-role="ok"]');
+assert.ok(okButton, '卸载需要确认对话框');
+okButton.onclick(new Event('click', { bubbles: true }));
+await tick();
+assert.equal(client1.apps.length, 0, '卸载后注册表为空');
+assert.equal(dom1.listEl.querySelector('.app-card[data-app-id="com.natives.app.demo"] .status')?.textContent, '未安装');
+assert.ok(dom1.toastEl.textContent.includes('应用已卸载'), '卸载成功 toast');
+
+// 6. structural: settings menu exposes 应用中心 from both surfaces
+for (const page of ['files.js', 'space.js']) {
+  const src = readFileSync(new URL(`./${page}`, import.meta.url), 'utf8');
+  assert.ok(src.includes('onAppsCenter'), `${page} 必须接线 onAppsCenter`);
+  assert.ok(src.includes('openAppsCenter'), `${page} 必须定义 openAppsCenter`);
+}
+const settingsMenu = readFileSync(new URL('./settings-menu.js', import.meta.url), 'utf8');
+assert.ok(settingsMenu.includes('appsRow') && settingsMenu.includes('appsCenter'), '设置菜单必须含应用中心行');
+
+// 7. locales
+for (const loc of ['zh_CN', 'en']) {
+  const messages = JSON.parse(readFileSync(new URL(`./_locales/${loc}/messages.json`, import.meta.url), 'utf8'));
+  for (const key of ['appsCenter', 'appsInstall', 'appsUninstallBody', 'navApps']) {
+    assert.equal(typeof messages[key]?.message, 'string', `${loc} 缺少 ${key}`);
+  }
+}
+
+// 8. D44: build-time fixed catalog inside the package
+const parsed = JSON.parse(readFileSync(new URL('./apps/catalog-v1.json', import.meta.url), 'utf8'));
+assert.ok(Array.isArray(parsed.apps) && parsed.apps.length >= 1, 'build-time fake catalog 必须存在');
+
+// 9. apps.html declares the required containers
+const appsHtml = readFileSync(new URL('./apps.html', import.meta.url), 'utf8');
+assert.ok(appsHtml.includes('id="apps-list"'), 'apps.html 必须声明 #apps-list');
+assert.ok(appsHtml.includes('apps.js'), 'apps.html 必须加载 apps.js');
+
+console.log('apps: Gate A4 checks passed (catalog items, install cycle, D42, conflict, uninstall confirm, settings entry, locales)');

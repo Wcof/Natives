@@ -1,0 +1,34 @@
+{
+  "catalogVersion": 1,
+  "publishedAt": "2026-09-06T00:00:00Z",
+  "apps": [
+    {
+      "app_id": "com.natives.app.demo",
+      "name": "Demo",
+      "version": "0.1.0",
+      "kind": "extension_app",
+      "description": "Hello Demo 示例应用，用于验证应用中心安装链路。",
+      "icon": "grid",
+      "permissions": [],
+      "wireSize": 0,
+      "runtime_spec": { "host": "com.natives.app.demo", "version": "0.1.0" },
+      "surface": { "icon": "grid", "route": "app.html?app=com.natives.app.demo" },
+      "manifest": { "permissions": [] },
+      "packages": []
+    },
+    {
+      "app_id": "fund",
+      "name": "基金",
+      "version": "0.1.0",
+      "kind": "extension_app",
+      "description": "个人基金 / ETF / 股票资产管理与分析",
+      "icon": "box",
+      "permissions": ["keychain:com.natives.app.fund"],
+      "wireSize": 0,
+      "runtime_spec": { "host": "com.natives.app.fund", "version": "0.1.0" },
+      "surface": { "icon": "box", "route": "app.html?app=fund" },
+      "manifest": { "permissions": ["keychain:com.natives.app.fund"] },
+      "packages": []
+    }
+  ]
+}

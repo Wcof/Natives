@@ -7,6 +7,7 @@ export function createSettingsMenu({
   onLanguageChange,
   onThemeChange,
   onModelSettings,
+  onAppsCenter,
   t = (k, f) => f || k,
 }) {
   let language = initialLanguage;
@@ -29,6 +30,13 @@ export function createSettingsMenu({
     toggle(false);
     onModelSettings?.(anchorButton);
   };
+  const appsRow = _menuRow('i-grid', 'appsCenter', '应用中心');
+  appsRow.querySelector('.chev')?.remove();
+  appsRow.removeAttribute('aria-haspopup');
+  appsRow.onclick = () => {
+    toggle(false);
+    onAppsCenter?.(anchorButton);
+  };
 
   langRow.onmouseenter = () => _showSubmenu(langRow, 'lang');
   themeRow.onmouseenter = () => _showSubmenu(themeRow, 'theme');
@@ -37,7 +45,7 @@ export function createSettingsMenu({
 
   const langSub = _buildSubmenu('lang');
   const themeSub = _buildSubmenu('theme');
-  menu.append(modelRow, langRow, themeRow);
+  menu.append(appsRow, modelRow, langRow, themeRow);
   document.body.append(menu, langSub, themeSub);
 
   if (anchorButton) {
@@ -98,6 +106,7 @@ export function createSettingsMenu({
     langRow.querySelector('span').textContent = t('interfaceLanguage', '界面语言');
     themeRow.querySelector('span').textContent = t('interfaceTheme', '界面主题');
     modelRow.querySelector('span').textContent = t('modelSettings', '模型与服务');
+    appsRow.querySelector('span').textContent = t('appsCenter', '应用中心');
     _syncSubmenus();
   }
 

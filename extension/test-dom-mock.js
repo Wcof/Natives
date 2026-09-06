@@ -108,6 +108,12 @@ export class MockElement {
 
   append(...nodes) {
     nodes.forEach((n) => {
+      if (typeof n === 'string' || typeof n === 'number') {
+        const textNode = new MockElement('#text');
+        textNode.nodeType = globalThis.Node.TEXT_NODE;
+        textNode._textContent = String(n);
+        n = textNode;
+      }
       n.parentNode = this;
       this.childNodes.push(n);
     });
@@ -141,6 +147,7 @@ export class MockElement {
     const handlers = this._listeners?.[evt.type || evt] || [];
     handlers.forEach((h) => h(evt));
   }
+  focus() {}
   remove() {
     if (this.parentNode) {
       this.parentNode.childNodes = this.parentNode.childNodes.filter((c) => c !== this);
@@ -158,36 +165,70 @@ export class MockElement {
   }
   querySelector(sel) { return this.querySelectorAll(sel)[0] || null; }
   querySelectorAll(sel) {
-    const idMatch = sel.match(/#([a-zA-Z0-9_-]+)/);
-    const tagMatch = sel.match(/^[a-zA-Z0-9_-]+/);
-    const isCheckbox = sel.includes('[type="checkbox"]');
-    const classMatches = [...sel.matchAll(/\.([a-zA-Z0-9_-]+)/g)].map((m) => m[1]);
-
+    const parts = sel.trim().split(/\s+/).map(parseCompoundSelector);
     const results = [];
-    const walk = (node) => {
+    const walk = (node, index) => {
       for (const child of node.childNodes) {
-        if (child.nodeType === globalThis.Node.ELEMENT_NODE) {
-          let match = true;
-          if (idMatch && child.id !== idMatch[1]) match = false;
-          if (tagMatch && !sel.startsWith('.') && !sel.startsWith('#') && child.tagName !== tagMatch[0].toUpperCase()) match = false;
-          if (classMatches.length > 0 && !classMatches.some((c) => child.classList?.contains(c))) match = false;
-          if (isCheckbox && (child.tagName !== 'INPUT' || child.type !== 'checkbox')) match = false;
-          if (match) results.push(child);
-          walk(child);
+        if (child.nodeType !== globalThis.Node.ELEMENT_NODE) continue;
+        if (!matchesCompound(child, parts[index])) {
+          walk(child, index);
+          continue;
         }
+        if (index === parts.length - 1) results.push(child);
+        else walk(child, index + 1);
       }
     };
-    walk(this);
+    walk(this, 0);
     return results;
   }
+}
+
+// Supports: tag, #id, .class (AND), [attr="value"] / [data-x="value"],
+// and the descendant combinator via whitespace between compounds.
+function parseCompoundSelector(sel) {
+  const compound = { tag: null, id: null, classes: [], attrs: [] };
+  // mask [attr="value"] groups first so dots/ids inside values are not
+  // misread as classes or #id selectors
+  const masked = sel.replace(/\[([a-zA-Z0-9-]+)="([^"]*)"\]/g, (_m, name, value) => {
+    compound.attrs.push([name, value]);
+    return ' ';
+  });
+  const tagMatch = masked.match(/^([a-zA-Z][a-zA-Z0-9-]*)/);
+  if (tagMatch) compound.tag = tagMatch[1].toUpperCase();
+  const idMatch = masked.match(/#([a-zA-Z0-9_-]+)/);
+  if (idMatch) compound.id = idMatch[1];
+  for (const m of masked.matchAll(/\.([a-zA-Z0-9_-]+)/g)) compound.classes.push(m[1]);
+  return compound;
+}
+
+function matchesCompound(node, compound) {
+  if (!compound.tag && !compound.id && compound.classes.length === 0 && compound.attrs.length === 0) return false;
+  if (compound.tag && node.tagName !== compound.tag) return false;
+  if (compound.id && node.id !== compound.id) return false;
+  if (compound.classes.length > 0 && !compound.classes.every((cls) => node.classList?.contains(cls))) return false;
+  for (const [name, value] of compound.attrs) {
+    let actual = node.getAttribute(name);
+    if (actual === null && name.startsWith('data-')) {
+      // dataset camelCase: data-app-id ↔ dataset.appId (matches real DOM)
+      const key = name.slice(5).replace(/-([a-z])/g, (_, c) => c.toUpperCase());
+      actual = node.dataset?.[key];
+    }
+    if (actual === null && name === 'type') actual = node.type;
+    if (actual !== value) return false;
+  }
+  return true;
 }
 
 export function setupTestDomEnvironment() {
   const bodyEl = new MockElement('body');
   globalThis.document = {
     body: bodyEl,
+    documentElement: new MockElement('html'),
     createElement: (tag) => new MockElement(tag),
     createElementNS: (_namespace, tag) => new MockElement(tag),
+    getElementById: (id) => bodyEl.querySelector(`#${id}`),
+    querySelector: (sel) => bodyEl.querySelector(sel),
+    querySelectorAll: (sel) => bodyEl.querySelectorAll(sel),
     addEventListener: () => {},
     removeEventListener: () => {},
   };

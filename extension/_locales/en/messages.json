@@ -2320,5 +2320,86 @@
   },
   "navApps": {
     "message": "Apps"
+  },
+  "appsCenter": {
+    "message": "App Center"
+  },
+  "appsCenterTitle": {
+    "message": "App Center"
+  },
+  "appsCenterSub": {
+    "message": "Manage optional Natives apps"
+  },
+  "backToSpace": {
+    "message": "Back"
+  },
+  "appsEmpty": {
+    "message": "No apps available"
+  },
+  "appsHostOffline": {
+    "message": "Native host offline. Make sure Natives is running."
+  },
+  "appsCatalogUnavailable": {
+    "message": "Catalog unavailable. Installed apps only."
+  },
+  "appsNotInstalled": {
+    "message": "Not installed"
+  },
+  "appsInstalled": {
+    "message": "Installed"
+  },
+  "appsDisabled": {
+    "message": "Disabled"
+  },
+  "appsHasUpdate": {
+    "message": "Update available"
+  },
+  "appsBroken": {
+    "message": "Broken"
+  },
+  "appsInstall": {
+    "message": "Install"
+  },
+  "appsUninstall": {
+    "message": "Uninstall"
+  },
+  "appsUpdate": {
+    "message": "Update"
+  },
+  "appsOpen": {
+    "message": "Open"
+  },
+  "appsResolving": {
+    "message": "Resolving catalog…"
+  },
+  "appsDownloading": {
+    "message": "Downloading package…"
+  },
+  "appsVerifying": {
+    "message": "Verifying integrity…"
+  },
+  "appsRegistering": {
+    "message": "Registering runtime…"
+  },
+  "appsCommitting": {
+    "message": "Committing to registry…"
+  },
+  "appsInstalledToast": {
+    "message": "App installed"
+  },
+  "appsUninstalledToast": {
+    "message": "App uninstalled (personal data preserved)"
+  },
+  "appsUninstallTitle": {
+    "message": "Uninstall app?"
+  },
+  "appsUninstallBody": {
+    "message": "Removes the program, runtime and registration. Personal data is preserved; use “Delete app and all data” to wipe it."
+  },
+  "appsUpdateHint": {
+    "message": "V1 update: uninstall the current version, then install the new one (personal data preserved)"
+  },
+  "appsNoPermissions": {
+    "message": "No permissions required"
   }
 }

@@ -2320,5 +2320,86 @@
   },
   "navApps": {
     "message": "应用"
+  },
+  "appsCenter": {
+    "message": "应用中心"
+  },
+  "appsCenterTitle": {
+    "message": "应用中心"
+  },
+  "appsCenterSub": {
+    "message": "管理可选 Natives 应用"
+  },
+  "backToSpace": {
+    "message": "返回"
+  },
+  "appsEmpty": {
+    "message": "暂无可安装应用"
+  },
+  "appsHostOffline": {
+    "message": "Native Host 未连接，请确认 Natives 已启动"
+  },
+  "appsCatalogUnavailable": {
+    "message": "应用目录暂不可用，仅显示已安装应用"
+  },
+  "appsNotInstalled": {
+    "message": "未安装"
+  },
+  "appsInstalled": {
+    "message": "已安装"
+  },
+  "appsDisabled": {
+    "message": "已停用"
+  },
+  "appsHasUpdate": {
+    "message": "有更新"
+  },
+  "appsBroken": {
+    "message": "异常"
+  },
+  "appsInstall": {
+    "message": "安装"
+  },
+  "appsUninstall": {
+    "message": "卸载"
+  },
+  "appsUpdate": {
+    "message": "更新"
+  },
+  "appsOpen": {
+    "message": "打开"
+  },
+  "appsResolving": {
+    "message": "解析目录…"
+  },
+  "appsDownloading": {
+    "message": "下载安装包…"
+  },
+  "appsVerifying": {
+    "message": "校验完整性…"
+  },
+  "appsRegistering": {
+    "message": "注册运行时…"
+  },
+  "appsCommitting": {
+    "message": "写入应用库…"
+  },
+  "appsInstalledToast": {
+    "message": "应用已安装"
+  },
+  "appsUninstalledToast": {
+    "message": "应用已卸载（个人数据保留）"
+  },
+  "appsUninstallTitle": {
+    "message": "卸载应用？"
+  },
+  "appsUninstallBody": {
+    "message": "将删除程序、运行时与注册信息，保留个人数据。如需清除个人数据，请另行执行「删除应用及全部数据」。"
+  },
+  "appsUpdateHint": {
+    "message": "V1 更新：先卸载当前版本，再安装新版本（个人数据保留）"
+  },
+  "appsNoPermissions": {
+    "message": "无权限需求"
   }
 }

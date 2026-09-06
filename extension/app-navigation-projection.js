@@ -81,10 +81,10 @@ function appIconFromSurface(surfaceJson) {
 export function renderAppMenuInto(nav, projection, options = {}) {
   if (!nav) return;
   const { t = (key, fallback) => fallback || key, iconBase = '' } = options;
-  const existing = nav.querySelector(':scope > .app-menu-section');
-  if (existing) nav.replaceChildren();
   const section = appSectionFromProjection(projection, { t });
+  nav.replaceChildren();
   if (section.length === 0) {
+    // 0 App → no section at all (ADR-0025 D38)
     nav.hidden = true;
     return;
   }

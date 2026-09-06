@@ -46,6 +46,16 @@ async function openModelSettings(returnFocus) {
   await module.openModelSettings({ t, language: selectedLanguage, returnFocus });
 }
 
+async function openAppsCenter(returnFocus) {
+  // ADR-0025 D40: App Center is a settings-level surface on its own tab —
+  // space.html keeps 0 Native Port (D36) and never opens one for apps.
+  const url = chrome.runtime.getURL('apps.html');
+  const existing = (await chrome.tabs.query({ url: `${location.origin}/apps.html` })) || [];
+  if (existing[0]) chrome.tabs.update(existing[0].id, { active: true });
+  else chrome.tabs.create({ url });
+  returnFocus?.focus?.();
+}
+
 function toast(message, kind = 'info') {
   const el = $('toast');
   if (!el) return;
@@ -286,6 +296,7 @@ async function init() {
       await setStored('natives-theme', theme);
     },
     onModelSettings: (anchor) => openModelSettings(anchor).catch((error) => toast(error.message, 'error')),
+    onAppsCenter: (anchor) => openAppsCenter(anchor).catch((error) => toast(error.message, 'error')),
     t,
   });
 
