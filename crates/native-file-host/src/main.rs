@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
+mod app_dispatch;
 mod app_store;
 mod batch;
 mod dispatch;
@@ -24,6 +25,7 @@ mod workspace_store;
 #[cfg(test)]
 mod tests;
 
+use app_store::AppStore;
 use batch::{emit_archive_progress, run_batch};
 use dispatch::handle;
 use import::handle_import;
@@ -53,6 +55,13 @@ fn main() -> io::Result<()> {
         Ok(store) => Some(store),
         Err(error) => {
             eprintln!("workspace store initialization failed: {error}");
+            None
+        }
+    };
+    let app_store_singleton = match AppStore::open(&workspace_store::default_db_path()) {
+        Ok(store) => Some(store),
+        Err(error) => {
+            eprintln!("app store initialization failed: {error}");
             None
         }
     };
@@ -146,6 +155,28 @@ fn main() -> io::Result<()> {
                 .as_ref()
                 .ok_or_else(|| "workspace store is not available".to_string())
                 .and_then(|store| workspace_dispatch(store, &request))
+            {
+                Ok(result) => Response {
+                    id: &request.id,
+                    ok: true,
+                    result: Some(result),
+                    error: None,
+                },
+                Err(error) => Response {
+                    id: &request.id,
+                    ok: false,
+                    result: None,
+                    error: Some(safe_error(error)),
+                },
+            };
+            respond(&writer, response)?;
+            continue;
+        }
+        if request.method.starts_with("apps:") {
+            let response = match app_store_singleton
+                .as_ref()
+                .ok_or_else(|| "app store is not available".to_string())
+                .and_then(|store| app_dispatch::app_dispatch(store, &request))
             {
                 Ok(result) => Response {
                     id: &request.id,

@@ -400,6 +400,9 @@ Sidebar 渲染统一走 `NavigationTarget`；`app.html?app=fund` 不得出现在
 | `fund-host`（App，经 NAP） | ≤ 4 MiB wire 目标 | **5 MiB wire（D3）** |
 
 - 本次 Apps Framework 对 `native-file-host` 的 binary delta **≤ 64 KiB**；若 App Store 逻辑导致超 64 KiB，必须做依赖归因（哪个 crate 贡献多少字节）并优化。
+  - **Gate A2 实测（2026-09-06，metadata-only install flow）**：以同一 release profile（`opt-level="z"` / `lto="fat"` / `codegen-units=1` / `panic="abort"` / `strip="symbols"`）在「无 App 代码基线 `2a33e827`」与「App Store 数据层 + `apps:*` dispatch」间公平对比，二进制 1,763,504 B → 1,830,048 B，**delta = 66,544 B（≈ 65 KiB）**，超 64 KiB 目标 1,008 B（1.5%）。绝对值仍远低于 4 MiB 过渡硬 Gate（≈44% 余量）。
+  - **依赖归因**：未新增任何外部 crate（`Cargo.toml` 依赖集不变，仅改 `[profile.release]`）。delta 全部来自 App 自身代码的编译产物——`app_dispatch` 单符号 17.9 KiB、`app_store::query` 约 2.6 KiB、App 类型 serde 单态化 + 异常表约 45 KiB；基线共享的 serde/alloc/rusqlite 无增量。
+  - **已实施优化**：release profile 优化使 raw delta 从 165 KiB → 65 KiB；registry 行类型精简为 `Serialize`-only（去 Debug/Clone/PartialEq/Eq/Deserialize 单态化）、移除未用的 `PackageReceipt` 死代码。残余 1,008 B 低于 Mach-O 单 section 页粒度，无 ADR 规范代码可再删；后续 Phase A5 真实包处理接入后按同一 profile 重新核算。
 - `native-file-host` ≠ `fund-host`：Core 预算与 Fund 预算完全分开，**禁止**为 Fund 把基金业务编进 `native-file-host`。
 - Fund Host 性能预算（V1）：EOF 退出 ≤ 2s；Idle CPU ≤ 0.5%；Idle RSS 目标 ≤ 24 MiB / 硬 Gate ≤ 32 MiB；GPU 0；background timer 0。
 

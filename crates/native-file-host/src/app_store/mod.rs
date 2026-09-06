@@ -16,6 +16,12 @@
 //! yet; dead code is allowed explicitly for that staged window.
 #![allow(dead_code)]
 
+pub mod mutation;
 pub mod query;
 pub mod schema;
 pub mod types;
+
+#[cfg(test)]
+mod tests;
+
+pub use mutation::{AppStore, UninstallReceipt};

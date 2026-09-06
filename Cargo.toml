@@ -10,3 +10,15 @@ default-members = ["crates/file-manager-core", "crates/native-file-host"]
 [workspace.package]
 edition = "2021"
 authors = ["Natives"]
+
+# ADR-0025 D19: the Apps Framework must not grow native-file-host beyond the
+# 64 KiB delta budget, so the release profile is tuned for size:
+# LTO + single codegen unit collapses cross-module monomorphization, and
+# panic=abort drops unwind/exception tables (a Native Messaging host is
+# launched per-connection by Chrome; a panic already means the port is dead).
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"

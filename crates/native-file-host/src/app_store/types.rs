@@ -14,7 +14,7 @@ pub const KIND_EXTENSION_APP: &str = "extension_app";
 pub const APP_ID_MAX_LEN: usize = 64;
 
 /// Complete App Registry row (`apps` table).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Serialize)]
 pub struct App {
     pub app_id: String,
     pub kind: String,
@@ -32,7 +32,7 @@ pub struct App {
 }
 
 /// Installed package receipt row (`app_packages` table, ADR-0025 D7/D13).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Serialize)]
 pub struct AppPackage {
     pub app_id: String,
     pub package_id: String,
@@ -49,7 +49,7 @@ pub struct AppPackage {
 }
 
 /// Permission grant row (`app_permissions` table).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Serialize)]
 pub struct AppPermission {
     pub app_id: String,
     pub permission: String,
@@ -88,7 +88,7 @@ pub mod install_state {
 }
 
 /// Install transaction row (`app_install_transactions` table).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Serialize)]
 pub struct InstallTransaction {
     pub install_id: String,
     pub app_id: String,
@@ -108,7 +108,7 @@ pub struct InstallTransaction {
 /// Payload of `apps:install_begin`. A catalog entry only becomes an App
 /// after `apps:install_commit` (ADR-0025 D11/D42). Package bytes are not
 /// part of this call; they arrive via `apps:install_package` (Phase A5).
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Serialize, Deserialize)]
 pub struct InstallRequest {
     pub app: AppMeta,
     #[serde(default)]
@@ -118,7 +118,7 @@ pub struct InstallRequest {
 }
 
 /// Catalog-derived app metadata.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct AppMeta {
     pub app_id: String,
     pub kind: String,
@@ -177,7 +177,7 @@ impl AppMeta {
 
 /// Catalog-derived package descriptor (ADR-0025 D7). Describes the target;
 /// the install path is decided by Core from `kind`, never by the catalog.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Serialize, Deserialize)]
 pub struct PackageMeta {
     pub package_id: String,
     pub kind: String,
@@ -190,21 +190,9 @@ pub struct PackageMeta {
     pub payload_sha256: String,
 }
 
-/// Package receipt recorded at `apps:install_commit`; `installed_path` is
-/// Core-decided (ADR-0025 D8).
-#[derive(Debug, Clone, Deserialize)]
-pub struct PackageReceipt {
-    pub package_id: String,
-    pub kind: String,
-    pub version: String,
-    pub platform: String,
-    pub arch: String,
-    pub wire_size: i64,
-    pub payload_size: i64,
-    pub artifact_sha256: String,
-    pub payload_sha256: String,
-    pub installed_path: String,
-}
+// NOTE (ADR-0025 D8): the commit-time package receipt (PackageReceipt) is
+// introduced together with real package handling in Phase A5; Phase A2
+// persists receipts directly from the validated PackageMeta.
 
 #[derive(Debug)]
 pub enum AppError {

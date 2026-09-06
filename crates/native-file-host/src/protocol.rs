@@ -140,6 +140,15 @@ pub(crate) fn validate_request(request: &Request) -> Result<(), String> {
             | "workspace_reset"
             | "settings_get"
             | "settings_set"
+            | "apps:list"
+            | "apps:get"
+            | "apps:health"
+            | "apps:install_begin"
+            | "apps:install_commit"
+            | "apps:install_abort"
+            | "apps:uninstall"
+            | "apps:set_enabled"
+            | "apps:set_sidebar"
     ) {
         return Err("unsupported method".into());
     }
@@ -213,6 +222,13 @@ pub(crate) fn validate_request(request: &Request) -> Result<(), String> {
         "workspace_reset" => &["workspaceId", "template", "expectedRevision"],
         "settings_get" => &["keys"],
         "settings_set" => &["entries"],
+        "apps:list" | "apps:health" => &[],
+        "apps:get" | "apps:uninstall" | "apps:set_enabled" | "apps:set_sidebar" => {
+            &["appId", "enabled", "show", "order"]
+        }
+        "apps:install_begin" => &["request"],
+        "apps:install_commit" => &["installId"],
+        "apps:install_abort" => &["installId", "errorCode", "errorMessage"],
         _ => &[],
     };
     let params = request.params.as_object().expect("validated object");
