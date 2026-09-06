@@ -24,14 +24,17 @@ function renderRuntime(gateway, running, busy, t) {
   state.setAttribute('aria-live', 'polite');
   heading.append(state);
 
-  const latestVer = gateway.latestKernelVersion || '—';
-  const hasUpdate = Boolean(gateway.latestKernelVersion && gateway.kernelVersion && gateway.latestKernelVersion !== gateway.kernelVersion);
+  const latestVer = gateway.latestKernelVersion || gateway.kernelVersion || '—';
+  const hasUpdate = Boolean(gateway.latestKernelVersion && gateway.kernelVersion && isNewerVersion(gateway.latestKernelVersion, gateway.kernelVersion));
 
   const latestRow = element('div', 'model-settings-row');
   const latestLabel = element('span', '', t('modelLatestKernelVersion', '最新版本'));
   const latestVal = element('div', 'model-kernel-latest-val');
   latestVal.innerHTML = `
     <span class="font-mono">${escapeText(latestVer)}</span>
+    ${!hasUpdate && latestVer !== '—'
+      ? `<span class="badge-up-to-date" style="font-size:11px;padding:1px 6px;border-radius:999px;background:rgba(34,197,94,0.12);color:#22c55e;margin:0 4px;">${escapeText(t('modelKernelUpToDate', '已是最新'))}</span>`
+      : ''}
     ${hasUpdate
       ? `<button type="button" class="btn-af-tool btn-kernel-update primary" data-action="update-kernel">${escapeText(t('update', '更新'))}</button>`
       : `<button type="button" class="btn-af-tool btn-kernel-check" data-action="check-kernel-update" title="${escapeText(t('checkUpdate', '检查更新'))}"><svg class="icon" aria-hidden="true" style="width:12px;height:12px;"><use href="#i-refresh" /></svg><span>${escapeText(t('checkUpdate', '检查更新'))}</span></button>`}
@@ -60,6 +63,16 @@ function renderRuntime(gateway, running, busy, t) {
   footer.append(resident, actions);
   section.append(heading, details, footer);
   return section;
+}
+
+function isNewerVersion(candidate, current) {
+  const parse = (value) => String(value).trim().replace(/^v/, '').split('.').map((part) => Number.parseInt(part, 10) || 0);
+  const next = parse(candidate);
+  const old = parse(current);
+  for (let index = 0; index < Math.max(next.length, old.length); index += 1) {
+    if ((next[index] || 0) !== (old[index] || 0)) return (next[index] || 0) > (old[index] || 0);
+  }
+  return false;
 }
 
 function renderEndpoints(baseUrl, t) {

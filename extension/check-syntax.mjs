@@ -1,4 +1,4 @@
-import { readdirSync, statSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import assert from 'node:assert/strict';
@@ -32,3 +32,25 @@ for (const file of jsFiles) {
 }
 
 console.log(`✓ Syntax check passed for all ${jsFiles.length} extension JavaScript files`);
+
+// Chrome Web Extension i18n locales schema check
+const localesDir = join(EXTENSION_DIR, '_locales');
+for (const lang of readdirSync(localesDir)) {
+  const messagesPath = join(localesDir, lang, 'messages.json');
+  try {
+    const raw = readFileSync(messagesPath, 'utf8');
+    const json = JSON.parse(raw);
+    for (const [key, val] of Object.entries(json)) {
+      assert.ok(
+        typeof val === 'object' && val !== null && typeof val.message === 'string',
+        `Invalid i18n entry in ${lang}/messages.json for key "${key}": must be an object with a "message" string property`
+      );
+    }
+  } catch (err) {
+    console.error(`Locale schema check failed for ${messagesPath}:\n`, err);
+    process.exit(1);
+  }
+}
+
+console.log(`✓ Locale schema check passed for all _locales messages.json files`);
+

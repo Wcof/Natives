@@ -72,6 +72,8 @@ class ModelSettings {
         await this.loadUsageData();
       } else if (this.view.activePage === 'oauth') {
         await this.loadAuthFiles();
+      } else if (this.view.activePage === 'agent') {
+        await loadAgentClients(this, { force: true });
       }
       this.render();
     } catch (error) {
@@ -123,6 +125,18 @@ class ModelSettings {
 
   render() {
     if (this.snapshot) {
+      const agentState = {
+        agentStatuses: this.agentStatuses,
+        agentSelectedId: this.agentSelectedId,
+        agentModels: this.agentModels,
+        agentModelsError: this.agentModelsError,
+        agentSelections: this.agentSelections,
+        agentBusy: this.agentBusy,
+        agentActiveTab: this.agentActiveTab,
+        agentSessions: this.agentSessions,
+        agentLoadError: this.agentLoadError,
+        agentDetecting: this.agentDetecting,
+      };
       this.view.render(
         this.snapshot,
         this.selectedID,
@@ -134,22 +148,14 @@ class ModelSettings {
           pricingData: this.pricingData,
           currentFilter: this.usageFilter,
           filterOptions: this.usageFilterOptions,
+          ...agentState,
         },
         {
           results: this.oauthResults,
           authFiles: this.authFiles,
           quotaMap: this.quotaMap,
           authFileFilter: this.authFileFilter,
-          agentStatuses: this.agentStatuses,
-          agentSelectedId: this.agentSelectedId,
-          agentModels: this.agentModels,
-          agentModelsError: this.agentModelsError,
-          agentSelections: this.agentSelections,
-          agentBusy: this.agentBusy,
-          agentActiveTab: this.agentActiveTab,
-          agentSessions: this.agentSessions,
-          agentLoadError: this.agentLoadError,
-          agentDetecting: this.agentDetecting,
+          ...agentState,
         },
       );
     }
@@ -179,6 +185,7 @@ class ModelSettings {
     if (action === 'close') return this.view.close();
     if (action === 'refresh') return this.refresh();
     if (action === 'select-model-page') {
+      this.view.showError('');
       const page = target.dataset.page;
       const kind = page === 'custom' ? 'custom' : page === 'oauth' ? 'oauth' : '';
       if (kind && !this.snapshot.providers.some((provider) => provider.id === this.selectedID && provider.kind === kind)) {
@@ -193,7 +200,7 @@ class ModelSettings {
           this.view.setLoading(false);
         }
       }
-      if (page === 'agent' && !this.agentStatuses) {
+      if (page === 'agent' && (!this.agentStatuses || !this.agentStatuses.length)) {
         this.view.setLoading(true);
         try {
           await loadAgentClients(this, { force: true });
@@ -213,7 +220,7 @@ class ModelSettings {
     if (action === 'refresh-gateway') {
       this.view.setLoading(true);
       try {
-        this.snapshot = await this.api.loadSnapshot();
+        this.snapshot = await this.api.snapshot();
         this.view.showNotice(this.t('modelStatusRefreshed', '状态已刷新'));
       } catch (error) {
         this.showError(error);
@@ -224,13 +231,14 @@ class ModelSettings {
       return;
     }
     if (action === 'check-kernel-update') {
+      this.view.showError('');
       try {
         const res = await this.api.checkKernelUpdate();
         if (this.snapshot?.gateway) {
           this.snapshot.gateway.latestKernelVersion = res?.latestVersion;
         }
         this.render();
-        this.view.showToast(this.t('modelKernelCheckDone', '已检查内核最新版本'));
+        this.view?.showToast?.(this.t('modelKernelCheckDone', '已检查内核最新版本'));
       } catch (err) {
         this.showError(err);
       }
@@ -240,7 +248,7 @@ class ModelSettings {
       this.view.showToast(this.t('modelKernelUpdating', '正在更新内核…'));
       try {
         const res = await this.api.updateKernel();
-        this.snapshot = await this.api.loadSnapshot();
+        this.snapshot = await this.api.snapshot();
         this.render();
         this.view.showNotice(res?.message || this.t('modelKernelUpdated', '内核已成功更新'));
       } catch (err) {

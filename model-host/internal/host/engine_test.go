@@ -328,6 +328,14 @@ func TestGatewayMultiKeyAndUsageAPIs(t *testing.T) {
 		t.Fatal(err)
 	}
 	engine.runtimeConfigPath = filepath.Join(dir, "runtime.yaml")
+	testUsageDB := filepath.Join(dir, "usage.db")
+	testStore, err := usage.NewStore(testUsageDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine.usageStore = testStore
+	engine.usageCalculator = usage.NewCalculator(testStore)
+	engine.usageImporter = usage.NewImporter(testStore, engine.usageCalculator)
 	t.Cleanup(engine.Close)
 
 	// 1. Gateway settings update

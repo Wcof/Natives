@@ -44,11 +44,18 @@ func (e *Engine) agentGatewayContext() (baseURL, apiKey string, err error) {
 	if err != nil {
 		return "", "", err
 	}
-	if snapshot.Gateway.State != "running" || snapshot.Gateway.BaseURL == "" {
-		return "", "", invalid("本地代理未运行，请先在「本地代理」页启动后再管理智能体配置")
+	port := snapshot.Gateway.Port
+	if port == 0 {
+		port = snapshot.Gateway.Settings.PreferredPort
 	}
-	baseURL = strings.TrimRight(snapshot.Gateway.BaseURL, "/")
-	apiKey = fallbackGatewayAPIKey
+	if port == 0 {
+		port = snapshot.Gateway.PreferredPort
+	}
+	if port == 0 {
+		port = 8317
+	}
+	baseURL = fmt.Sprintf("http://127.0.0.1:%d", port)
+	apiKey = ""
 	for _, key := range snapshot.Gateway.AccessKeys {
 		if !key.Enabled || key.SecretRef == "" {
 			continue
@@ -57,6 +64,14 @@ func (e *Engine) agentGatewayContext() (baseURL, apiKey string, err error) {
 			apiKey = strings.TrimSpace(secret)
 			break
 		}
+	}
+	if apiKey == "" {
+		if secret, err := e.secrets.Get(gatewaySecretRef); err == nil && strings.TrimSpace(secret) != "" {
+			apiKey = strings.TrimSpace(secret)
+		}
+	}
+	if apiKey == "" {
+		apiKey = fallbackGatewayAPIKey
 	}
 	return baseURL, apiKey, nil
 }
@@ -69,14 +84,14 @@ func (e *Engine) agentClientModels(ctx context.Context, raw json.RawMessage) (an
 	var params agentClientParams
 	_ = json.Unmarshal(raw, &params)
 	baseURL, apiKey, err := e.agentGatewayContext()
-	if err != nil {
-		return nil, err
+	if err == nil {
+		models, fetchErr := agentclients.FetchModels(ctx, baseURL, apiKey)
+		if fetchErr == nil && len(models) > 0 {
+			return map[string]any{"models": models}, nil
+		}
 	}
-	models, err := agentclients.FetchModels(ctx, baseURL, apiKey)
-	if err != nil {
-		return nil, err
-	}
-	return map[string]any{"models": models}, nil
+	// Fallback to client-recommended models so the picker is never blocked
+	return map[string]any{"models": agentclients.FallbackModelsForClient(params.Client)}, nil
 }
 
 func (e *Engine) applyAgentClientConfig(raw json.RawMessage, mode string) (any, error) {
@@ -94,27 +109,28 @@ func (e *Engine) applyAgentClientConfig(raw json.RawMessage, mode string) (any, 
 	var message string
 	switch mode {
 	case "apply", "default":
-		if strings.TrimSpace(params.Model) == "" {
-			return nil, invalid("参数无效: model 不能为空")
+		targetModel := strings.TrimSpace(params.Model)
+		if targetModel == "" {
+			targetModel = agentclients.DefaultModelForClient(params.Client)
 		}
 		baseURL, apiKey, err := e.agentGatewayContext()
 		if err != nil {
 			return nil, err
 		}
-		changes, primaryPath, err := agentclients.BuildChanges(params.Client, home, baseURL, apiKey, params.Model, params.Mappings)
+		changes, primaryPath, err := agentclients.BuildChanges(params.Client, home, baseURL, apiKey, targetModel, params.Mappings)
 		if err != nil {
 			return nil, err
 		}
 		if primaryPath != "" {
 			primary = primaryPath
 		}
-		if err := agentclients.CommitTransaction(params.Client, primary, params.Model, changes, params.Mappings); err != nil {
+		if err := agentclients.CommitTransaction(params.Client, primary, targetModel, changes, params.Mappings); err != nil {
 			return nil, err
 		}
 		if mode == "default" {
 			message = fmt.Sprintf("已为 %s 写入默认网关配置", definition.Name)
 		} else {
-			message = fmt.Sprintf("已应用配置修改：%s 将使用模型 %s", definition.Name, params.Model)
+			message = fmt.Sprintf("已应用配置修改：%s 将使用模型 %s", definition.Name, targetModel)
 		}
 	case "close":
 		var err error

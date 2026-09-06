@@ -36,6 +36,12 @@ func (e *Engine) reconfigureGateway(snapshot domain.Snapshot, mutationErr error)
 				snapshot, err = e.repo.Update(nil, func(current *domain.Snapshot) error {
 					current.Gateway.State = "running"
 					current.Gateway.Port = port
+					if current.Gateway.PreferredPort == 0 {
+						current.Gateway.PreferredPort = 8317
+					}
+					if current.Gateway.Settings.PreferredPort == 0 {
+						current.Gateway.Settings.PreferredPort = 8317
+					}
 					current.Gateway.BaseURL = fmt.Sprintf("http://127.0.0.1:%d", port)
 					current.Gateway.PID = os.Getpid()
 					current.Gateway.KernelVersion = getLocalKernelVersion()

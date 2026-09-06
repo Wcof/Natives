@@ -108,6 +108,8 @@ assert.match(css, /\.model-settings-subnav button \.icon\s*\{[^}]*width:\s*15px;
 assert.match(css, /\.model-gateway-layout\s*\{[^}]*grid-template-areas:"runtime endpoints" "keys keys" "summary summary";/, 'gateway layout must place runtime and endpoints side by side with keys and summary full width');
 assert.match(css, /\.model-toast\.visible\s*\{[^}]*opacity:1;/, 'model settings must provide a visible toast state for action feedback');
 assert.match(view, /showToast\(message\)/, 'model settings view must expose showToast for action feedback');
+assert.doesNotMatch(view, /showToast\._timer/, 'showToast must not reference undefined showToast identifier internally');
+assert.match(view, /toastTimer = setTimeout/, 'showToast must manage toastTimer safely');
 assert.match(advancedController, /view\.showToast\(controller\.t\(key, fallback\)\)/, 'key copy and rotate actions must surface a toast on success');
 for (const [page, icon] of [['custom', 'i-pen'], ['oauth', 'i-globe'], ['gateway', 'i-bolt'], ['usage', 'i-list'], ['advanced', 'i-gear']]) {
   assert.match(view, new RegExp(`data-page="${page}"[^>]*><svg class="icon"[^>]*><use href="#${icon}"`), `subnav ${page} must declare its ${icon} icon inline`);

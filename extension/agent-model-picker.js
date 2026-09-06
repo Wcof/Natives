@@ -9,7 +9,13 @@ export function createAgentModelPicker({ value, models, t, onChange, onRefresh }
   root.className = 'agent-model-picker';
   root.innerHTML = `
     <div class="agent-model-picker-input-wrap">
-      <input type="text" class="agent-model-picker-input" placeholder="${t('agentModelSearchPlaceholder', '搜索或选择模型')}" autocomplete="off" />
+      <div class="agent-model-picker-field">
+        <svg class="icon agent-model-search-icon" aria-hidden="true"><use href="#i-target" /></svg>
+        <input type="text" class="agent-model-picker-input" placeholder="${t('agentModelSearchPlaceholder', '搜索或选择模型')}" autocomplete="off" />
+        <button type="button" class="agent-model-chevron" tabindex="-1" aria-hidden="true">
+          <svg class="icon" aria-hidden="true"><use href="#i-chevron-down" /></svg>
+        </button>
+      </div>
       <button type="button" class="model-icon-button agent-model-refresh" title="${t('modelFetchModels', '自动获取模型')}" aria-label="${t('modelFetchModels', '自动获取模型')}"><svg class="icon" aria-hidden="true"><use href="#i-refresh" /></svg></button>
     </div>
     <div class="agent-model-picker-list" role="listbox" hidden></div>
@@ -35,7 +41,16 @@ export function createAgentModelPicker({ value, models, t, onChange, onRefresh }
       row.className = `agent-model-option${model.name === value ? ' selected' : ''}`;
       row.setAttribute('role', 'option');
       row.setAttribute('aria-selected', String(model.name === value));
-      row.innerHTML = `<span class="agent-model-option-name">${escapeHtml(model.name)}</span>${model.alias && model.alias !== model.name ? `<small class="muted">${escapeHtml(model.alias)}</small>` : ''}`;
+      row.innerHTML = `
+        <span class="agent-model-option-left">
+          <span class="agent-model-option-dot" aria-hidden="true"></span>
+          <span class="agent-model-option-name">${escapeHtml(model.name)}</span>
+        </span>
+        <span class="agent-model-option-right">
+          ${model.alias && model.alias !== model.name ? `<small class="muted">${escapeHtml(model.alias)}</small>` : ''}
+          ${model.name === value ? '<svg class="icon icon-check" aria-hidden="true" style="width:13px;height:13px;margin-left:6px;"><use href="#i-check" /></svg>' : ''}
+        </span>
+      `;
       row.onclick = () => {
         commit(model.name);
       };
@@ -46,6 +61,7 @@ export function createAgentModelPicker({ value, models, t, onChange, onRefresh }
     }
     activeIndex = filtered.findIndex((model) => model.name === value);
   };
+
 
   const commit = (name) => {
     input.value = name;

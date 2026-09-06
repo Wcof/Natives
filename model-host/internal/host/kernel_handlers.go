@@ -2,10 +2,13 @@ package host
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -13,23 +16,51 @@ import (
 	"github.com/ldh/natives/model-host/internal/domain"
 )
 
-const DefaultCLIProxyAPIPath = "/Volumes/UNTITLED/本人材料/project/CLIProxyAPI"
+const (
+	githubReleasesLatestAPI = "https://api.github.com/repos/router-for-me/CLIProxyAPI/releases/latest"
+	githubReleasesAtomURL   = "https://github.com/router-for-me/CLIProxyAPI/releases.atom"
+)
 
 var (
-	cachedLatestKernelVersion = "v7.2.151"
+	cachedLatestKernelVersion = "v7.2.152"
 	cachedLatestKernelMu      sync.RWMutex
 )
 
 func getCachedLatestKernelVersion() string {
 	cachedLatestKernelMu.RLock()
-	defer cachedLatestKernelMu.RUnlock()
-	return cachedLatestKernelVersion
+	v := cachedLatestKernelVersion
+	cachedLatestKernelMu.RUnlock()
+	local := getLocalKernelVersion()
+	if kernelVersionLess(v, local) {
+		return local
+	}
+	return v
 }
 
 func setCachedLatestKernelVersion(v string) {
 	cachedLatestKernelMu.Lock()
 	defer cachedLatestKernelMu.Unlock()
 	cachedLatestKernelVersion = v
+}
+
+func kernelVersionLess(current, latest string) bool {
+	parse := func(raw string) []int {
+		raw = strings.TrimPrefix(strings.TrimSpace(raw), "v")
+		parts := strings.Split(raw, ".")
+		values := make([]int, len(parts))
+		for i, part := range parts {
+			values[i], _ = strconv.Atoi(part)
+		}
+		return values
+	}
+	left, right := parse(current), parse(latest)
+	for i := 0; i < len(left) || i < len(right); i++ {
+		lv, rv := 0, 0
+		if i < len(left) { lv = left[i] }
+		if i < len(right) { rv = right[i] }
+		if lv != rv { return lv < rv }
+	}
+	return false
 }
 
 func findThirdPartyDir() string {
@@ -68,47 +99,77 @@ func getLocalKernelVersion() string {
 	return "v7.2.146"
 }
 
-func getLatestCLIProxyAPIVersion(projectPath string) (string, error) {
-	if projectPath == "" {
-		projectPath = DefaultCLIProxyAPIPath
-	}
-	if info, err := os.Stat(projectPath); err == nil && info.IsDir() {
-		cmd := exec.Command("git", "describe", "--tags", "--always")
-		cmd.Dir = projectPath
-		if out, err := cmd.Output(); err == nil {
-			v := strings.TrimSpace(string(out))
-			if v != "" {
-				if !strings.HasPrefix(v, "v") {
-					v = "v" + v
+// fetchOnlineLatestKernelVersion fetches the latest release tag from GitHub online
+func fetchOnlineLatestKernelVersion(ctx context.Context) (string, error) {
+	client := &http.Client{Timeout: 8 * time.Second}
+
+	// 1. Try GitHub Releases API
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, githubReleasesLatestAPI, nil)
+	if err == nil {
+		req.Header.Set("User-Agent", "Natives-Model-Host")
+		req.Header.Set("Accept", "application/vnd.github.v3+json")
+		if resp, err := client.Do(req); err == nil {
+			defer resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				body, _ := io.ReadAll(io.LimitReader(resp.Body, 512*1024))
+				var release struct {
+					TagName string `json:"tag_name"`
 				}
-				return v, nil
-			}
-		}
-		cmd2 := exec.Command("git", "tag", "-l", "--sort=-v:refname")
-		cmd2.Dir = projectPath
-		if out, err := cmd2.Output(); err == nil {
-			lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-			if len(lines) > 0 && strings.TrimSpace(lines[0]) != "" {
-				v := strings.TrimSpace(lines[0])
-				if !strings.HasPrefix(v, "v") {
-					v = "v" + v
+				if json.Unmarshal(body, &release) == nil && release.TagName != "" {
+					tag := strings.TrimSpace(release.TagName)
+					if !strings.HasPrefix(tag, "v") {
+						tag = "v" + tag
+					}
+					return tag, nil
 				}
-				return v, nil
 			}
 		}
 	}
-	return "v7.2.151", nil
+
+	// 2. Fallback to GitHub Releases Atom feed
+	atomReq, err := http.NewRequestWithContext(ctx, http.MethodGet, githubReleasesAtomURL, nil)
+	if err == nil {
+		atomReq.Header.Set("User-Agent", "Natives-Model-Host")
+		atomReq.Header.Set("Accept", "application/atom+xml,text/xml")
+		if resp, err := client.Do(atomReq); err == nil {
+			defer resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				body, _ := io.ReadAll(io.LimitReader(resp.Body, 512*1024))
+				content := string(body)
+				if idx := strings.Index(content, "/releases/tag/"); idx != -1 {
+					sub := content[idx+len("/releases/tag/"):]
+					end := strings.IndexAny(sub, "\"< \r\n")
+					if end != -1 {
+						tag := strings.TrimSpace(sub[:end])
+						if tag != "" {
+							if !strings.HasPrefix(tag, "v") {
+								tag = "v" + tag
+							}
+							return tag, nil
+						}
+					}
+				}
+			}
+		}
+	}
+
+	return getCachedLatestKernelVersion(), nil
 }
 
 func (e *Engine) checkKernelUpdate() (any, error) {
 	current := getLocalKernelVersion()
-	latest, _ := getLatestCLIProxyAPIVersion(DefaultCLIProxyAPIPath)
-	if latest != "" {
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	latest, err := fetchOnlineLatestKernelVersion(ctx)
+	if err == nil && latest != "" {
 		setCachedLatestKernelVersion(latest)
 	} else {
 		latest = getCachedLatestKernelVersion()
 	}
-	hasUpdate := current != latest
+
+	hasUpdate := latest != "" && kernelVersionLess(current, latest)
 
 	_, _ = e.repo.Update(nil, func(snapshot *domain.Snapshot) error {
 		snapshot.Gateway.KernelVersion = current
@@ -120,7 +181,7 @@ func (e *Engine) checkKernelUpdate() (any, error) {
 		"currentVersion": current,
 		"latestVersion":  latest,
 		"hasUpdate":      hasUpdate,
-		"source":         DefaultCLIProxyAPIPath,
+		"source":         "https://github.com/router-for-me/CLIProxyAPI",
 	}, nil
 }
 
@@ -128,44 +189,13 @@ func (e *Engine) updateKernel(ctx context.Context) (any, error) {
 	e.gatewayMu.Lock()
 	defer e.gatewayMu.Unlock()
 
-	latest, _ := getLatestCLIProxyAPIVersion(DefaultCLIProxyAPIPath)
-	targetDir := findThirdPartyDir()
-
-	if info, err := os.Stat(DefaultCLIProxyAPIPath); err == nil && info.IsDir() {
-		for _, sub := range []string{"internal", "sdk"} {
-			srcSub := filepath.Join(DefaultCLIProxyAPIPath, sub)
-			dstSub := filepath.Join(targetDir, sub)
-			if _, err := os.Stat(srcSub); err != nil {
-				continue
-			}
-			_ = filepath.Walk(srcSub, func(path string, info os.FileInfo, err error) error {
-				if err != nil {
-					return nil
-				}
-				baseName := filepath.Base(path)
-				if strings.HasPrefix(baseName, "._") {
-					if info.IsDir() {
-						return filepath.SkipDir
-					}
-					return nil
-				}
-				rel, err := filepath.Rel(srcSub, path)
-				if err != nil {
-					return nil
-				}
-				targetPath := filepath.Join(dstSub, rel)
-				if info.IsDir() {
-					return os.MkdirAll(targetPath, 0755)
-				}
-				data, err := os.ReadFile(path)
-				if err != nil {
-					return nil
-				}
-				return os.WriteFile(targetPath, data, info.Mode())
-			})
-		}
+	latest, _ := fetchOnlineLatestKernelVersion(ctx)
+	if latest == "" {
+		latest = getCachedLatestKernelVersion()
 	}
 
+	targetDir := findThirdPartyDir()
+	_ = os.MkdirAll(targetDir, 0755)
 	versionFile := filepath.Join(targetDir, "version.txt")
 	_ = os.WriteFile(versionFile, []byte(latest+"\n"), 0644)
 
@@ -190,6 +220,6 @@ func (e *Engine) updateKernel(ctx context.Context) (any, error) {
 	return map[string]any{
 		"ok":      true,
 		"version": latest,
-		"message": fmt.Sprintf("内核已成功更新至 %s", latest),
+		"message": fmt.Sprintf("内核版本记录已同步为 %s", latest),
 	}, nil
 }

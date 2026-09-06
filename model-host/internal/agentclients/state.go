@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -134,68 +135,86 @@ func CommitTransaction(clientID, primaryConfig, model string, changes []Change, 
 		return failure
 	}
 
-	for _, change := range changes {
-		if err := os.MkdirAll(filepath.Dir(change.Path), 0o755); err != nil {
-			return rollback(err)
-		}
-		record := BackupRecord{Path: change.Path, ExistedBefore: fileExists(change.Path)}
-		if record.ExistedBefore {
-			backupPath := datedBackupPath(change.Path)
-			if err := os.Rename(change.Path, backupPath); err != nil {
+		for _, change := range changes {
+			if err := os.MkdirAll(filepath.Dir(change.Path), 0o755); err != nil {
 				return rollback(err)
 			}
-			record.BackupPath = backupPath
+			record := BackupRecord{Path: change.Path, ExistedBefore: fileExists(change.Path)}
+			if record.ExistedBefore {
+				backupPath := datedBackupPath(change.Path)
+				if err := copyFile(change.Path, backupPath); err != nil {
+					return rollback(err)
+				}
+				record.BackupPath = backupPath
+			}
+			mode := change.Mode
+			if mode == 0 {
+				mode = 0o644
+			}
+			if err := os.WriteFile(change.Path, change.Content, mode); err != nil {
+				return rollback(err)
+			}
+			records = append(records, record)
 		}
-		mode := change.Mode
-		if mode == 0 {
-			mode = 0o644
+
+		state := ManagedState{
+			Version:                    4,
+			Client:                     clientID,
+			Model:                      model,
+			ConfigurationRevision:      1,
+			ClaudeDesktopModelMappings: mappings,
+			BackupFiles:                records,
+			UpdatedAtUnix:              time.Now().Unix(),
 		}
-		if err := os.WriteFile(change.Path, change.Content, mode); err != nil {
+		data, err := json.MarshalIndent(state, "", "  ")
+		if err != nil {
 			return rollback(err)
 		}
-		records = append(records, record)
+		if err := os.WriteFile(StatePath(primaryConfig), append(data, '\n'), 0o644); err != nil {
+			return rollback(err)
+		}
+		return nil
 	}
 
-	state := ManagedState{
-		Version:                    4,
-		Client:                     clientID,
-		Model:                      model,
-		ConfigurationRevision:      1,
-		ClaudeDesktopModelMappings: mappings,
-		BackupFiles:                records,
-		UpdatedAtUnix:              time.Now().Unix(),
+	func copyFile(src, dst string) error {
+		in, err := os.Open(src)
+		if err != nil {
+			return err
+		}
+		defer in.Close()
+		out, err := os.Create(dst)
+		if err != nil {
+			return err
+		}
+		defer out.Close()
+		if _, err = io.Copy(out, in); err != nil {
+			return err
+		}
+		return out.Sync()
 	}
-	data, err := json.MarshalIndent(state, "", "  ")
-	if err != nil {
-		return rollback(err)
-	}
-	if err := os.WriteFile(StatePath(primaryConfig), append(data, '\n'), 0o644); err != nil {
-		return rollback(err)
-	}
-	return nil
-}
 
-// CloseModification restores the dated backups and clears the journal.
-func CloseModification(primaryConfig string) (string, error) {
-	state, err := ReadStateFile(primaryConfig)
-	if err != nil {
-		return "", err
-	}
-	if state == nil {
-		return "", fmt.Errorf("该客户端当前没有已应用的配置修改")
-	}
-	var restored []string
-	for _, record := range state.BackupFiles {
-		if record.ExistedBefore && record.BackupPath != "" {
-			if err := os.Rename(record.BackupPath, record.Path); err == nil {
+	// CloseModification restores the dated backups and clears the journal.
+	func CloseModification(primaryConfig string) (string, error) {
+		state, err := ReadStateFile(primaryConfig)
+		if err != nil {
+			return "", err
+		}
+		if state == nil {
+			return "", fmt.Errorf("该客户端当前没有已应用的配置修改")
+		}
+		var restored []string
+		for _, record := range state.BackupFiles {
+			if record.ExistedBefore && record.BackupPath != "" {
+				if err := copyFile(record.BackupPath, record.Path); err == nil {
+					_ = os.Remove(record.BackupPath)
+					restored = append(restored, record.Path)
+				}
+				continue
+			}
+			if err := os.Remove(record.Path); err == nil {
 				restored = append(restored, record.Path)
 			}
-			continue
 		}
-		if err := os.Remove(record.Path); err == nil {
-			restored = append(restored, record.Path)
-		}
-	}
 	if err := os.Remove(StatePath(primaryConfig)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return "", err
 	}

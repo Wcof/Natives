@@ -112,3 +112,51 @@ func firstNumber(values ...json.Number) int64 {
 	}
 	return 0
 }
+
+func DefaultModelForClient(clientID string) string {
+	switch clientID {
+	case "claude-code", "claude-desktop":
+		return "claude-3-5-sonnet-20241022"
+	case "codex":
+		return "gpt-4o"
+	case "deepseek-harness":
+		return "deepseek-chat"
+	case "opencode", "openclaw":
+		return "gpt-4o"
+	case "kimi-code":
+		return "kimi-k1.5"
+	case "grok-build":
+		return "grok-beta"
+	case "hermes":
+		return "hermes-3-llama-3.1-405b"
+	case "pi", "zcode":
+		return "claude-3-5-sonnet-20241022"
+	default:
+		return "gpt-4o"
+	}
+}
+
+func FallbackModelsForClient(clientID string) []ModelOption {
+	switch clientID {
+	case "claude-code", "claude-desktop":
+		return []ModelOption{
+			{Name: "claude-3-5-sonnet-20241022", Alias: "Claude 3.5 Sonnet", ContextWindow: 200000},
+			{Name: "claude-3-5-haiku-20241022", Alias: "Claude 3.5 Haiku", ContextWindow: 200000},
+			{Name: "claude-3-opus-20240229", Alias: "Claude 3 Opus", ContextWindow: 200000},
+		}
+	case "codex":
+		return []ModelOption{
+			{Name: "gpt-4o", Alias: "GPT-4o", ContextWindow: 128000},
+			{Name: "gpt-4o-mini", Alias: "GPT-4o Mini", ContextWindow: 128000},
+			{Name: "o1", Alias: "OpenAI o1", ContextWindow: 128000},
+			{Name: "o1-mini", Alias: "OpenAI o1 Mini", ContextWindow: 128000},
+		}
+	default:
+		return []ModelOption{
+			{Name: "gpt-4o", Alias: "GPT-4o", ContextWindow: 128000},
+			{Name: "claude-3-5-sonnet-20241022", Alias: "Claude 3.5 Sonnet", ContextWindow: 200000},
+			{Name: "deepseek-chat", Alias: "DeepSeek V3", ContextWindow: 64000},
+		}
+	}
+}
+

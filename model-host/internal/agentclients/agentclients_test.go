@@ -118,6 +118,9 @@ func TestZCodeWritesBothVariants(t *testing.T) {
 	if !strings.Contains(string(data), "model.main") && !strings.Contains(string(data), `"main"`) {
 		t.Fatalf("cli config must set model.main: %s", data)
 	}
+	if strings.Contains(string(data), `"providers"`) || !strings.Contains(string(data), `"provider"`) {
+		t.Fatalf("zcode config must use provider (singular): %s", data)
+	}
 }
 
 func TestFetchModelsParsesGatewayPayload(t *testing.T) {

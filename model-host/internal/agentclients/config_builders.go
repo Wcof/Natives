@@ -90,7 +90,7 @@ func buildZCode(home, base, apiKey, model string) ([]Change, string, error) {
 		if err != nil {
 			return nil, "", err
 		}
-		providers := nestedMap(document, "providers")
+		providers := nestedMap(document, "provider")
 		providers[ProviderID] = map[string]any{
 			"enabled":   true,
 			"name":      ProviderName,
@@ -132,9 +132,9 @@ func buildCodex(home, base, apiKey, model string) ([]Change, string, error) {
 	document["model"] = model
 	document["model_providers"] = map[string]any{
 		ProviderID: map[string]any{
-			"name":                    ProviderName,
-			"base_url":                base + "/v1",
-			"wire_api":                "responses",
+			"name":                      ProviderName,
+			"base_url":                  base + "/v1",
+			"wire_api":                  "responses",
 			"experimental_bearer_token": apiKey,
 		},
 	}
@@ -223,11 +223,11 @@ func buildKimiCode(home, base, apiKey, model string) ([]Change, string, error) {
 		}
 	}
 	models[managed] = map[string]any{
-		"provider":        ProviderID,
-		"model":           model,
-		"display_name":    model,
+		"provider":         ProviderID,
+		"model":            model,
+		"display_name":     model,
 		"max_context_size": 200000,
-		"capabilities":    []string{"tool_use"},
+		"capabilities":     []string{"tool_use"},
 	}
 	document["models"] = models
 	content, err := toml.Marshal(document)

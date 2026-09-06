@@ -11,10 +11,35 @@ export function createModelSettingsView({ t, onAction }) {
   let activeOAuthTab = 'login'; // 'login' | 'authFiles' | 'quota'
   let activeUsageTab = 'overview';
   let activeAdvancedTab = 'basic';
+  let toastTimer = null;
 
   const dialog = document.createElement('dialog');
   dialog.className = 'model-settings-dialog';
   dialog.setAttribute('aria-labelledby', 'model-settings-title');
+
+  const triggerToast = (message) => {
+    if (!message) return;
+    try {
+      let toast = dialog.querySelector('.model-toast');
+      if (!toast) {
+        toast = document.createElement('div');
+        toast.className = 'model-toast';
+        toast.setAttribute('role', 'status');
+        toast.setAttribute('aria-live', 'polite');
+        dialog.append(toast);
+      }
+      toast.textContent = message;
+      toast.classList.add('visible');
+      clearTimeout(toastTimer);
+      toastTimer = setTimeout(() => toast.classList.remove('visible'), 2400);
+    } catch (e) {
+      console.warn('Toast display error:', e);
+    }
+  };
+
+  if (typeof globalThis.showToast !== 'function') {
+    globalThis.showToast = triggerToast;
+  }
   dialog.innerHTML = `
     <div class="model-settings-shell">
       <aside class="model-settings-nav">
@@ -146,19 +171,7 @@ export function createModelSettingsView({ t, onAction }) {
     showError(message) { roles.error.hidden = !message; roles.error.querySelector('p').textContent = message || ''; if (message) roles.notice.hidden = true; },
     showNotice(message) { roles.notice.hidden = !message; roles.notice.textContent = message || ''; },
     showToast(message) {
-      if (!message) return;
-      let toast = dialog.querySelector('.model-toast');
-      if (!toast) {
-        toast = document.createElement('div');
-        toast.className = 'model-toast';
-        toast.setAttribute('role', 'status');
-        toast.setAttribute('aria-live', 'polite');
-        dialog.append(toast);
-      }
-      toast.textContent = message;
-      toast.classList.add('visible');
-      clearTimeout(showToast._timer);
-      showToast._timer = setTimeout(() => toast.classList.remove('visible'), 2400);
+      triggerToast(message);
     },
     render(snapshot, selectedID, pendingOAuth, usageContext = {}, oauthContext = {}) {
       roles.refresh.textContent = t('modelRefresh', '刷新');

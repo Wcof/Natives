@@ -24,6 +24,7 @@ export function createModelSettingsAPI({ onEvent, onDisconnect } = {}) {
 
   return {
     snapshot: () => client.call('model_snapshot'),
+    loadSnapshot: () => client.call('model_snapshot'),
     createProvider: (params) => client.call('model_provider_create', params),
     updateProvider: (params) => client.call('model_provider_update', params),
     deleteProvider: (params) => client.call('model_provider_delete', params),
