@@ -1,0 +1,18 @@
+[package]
+name = "demo-host"
+version = "1.0.0"
+edition = "2021"
+description = "Minimal demo Native Messaging host for the Natives Apps Framework (ADR-0025 Phase A5/A6)."
+license = "MIT"
+
+[dependencies]
+# Pure std + serde_json: no HTTP, no TLS, no async — the smallest possible
+# app runtime that exercises the full install/sidecar/health lifecycle.
+serde_json = "1"
+
+[profile.release]
+strip = "symbols"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+opt-level = "z"

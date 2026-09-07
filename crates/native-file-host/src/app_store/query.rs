@@ -6,7 +6,7 @@ use super::types::{App, AppError, AppPackage, AppPermission, InstallTransaction}
 
 const APP_COLUMNS: &str = "app_id, kind, name, version, enabled, show_in_sidebar, \
      sidebar_order, runtime_spec_json, surface_json, manifest_json, \
-     installed_at, updated_at, revision";
+     installed_at, updated_at, revision, host_registered";
 
 fn map_app(row: &rusqlite::Row<'_>) -> rusqlite::Result<App> {
     Ok(App {
@@ -23,6 +23,7 @@ fn map_app(row: &rusqlite::Row<'_>) -> rusqlite::Result<App> {
         installed_at: row.get(10)?,
         updated_at: row.get(11)?,
         revision: row.get(12)?,
+        host_registered: row.get::<_, i64>(13)? != 0,
     })
 }
 

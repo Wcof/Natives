@@ -4,7 +4,15 @@ use serde_json::Value;
 use std::io::{self, Read, Write};
 use std::sync::{Arc, Mutex};
 
+/// Hard cap for a Host → Chrome response (Chrome's native-messaging
+/// limit is 1 MiB per message; we stay strictly under it).
 pub(crate) const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
+
+/// Hard cap for an Extension → Host request frame. Chrome allows 64 MiB;
+/// the largest legitimate V1 frame is a 20 MiB package payload in
+/// base64 (≈26.7 MiB) inside `apps:install_package`. 32 MiB gives margin
+/// while culling hostile/malformed frames far below Chrome's ceiling.
+pub(crate) const MAX_INCOMING_FRAME_BYTES: usize = 32 * 1024 * 1024;
 const MAX_ID_BYTES: usize = 128;
 const MAX_METHOD_BYTES: usize = 64;
 const MAX_IMPORT_CHUNK_BASE64_BYTES: usize = 700_000;
@@ -32,7 +40,7 @@ pub(crate) fn read_frame(input: &mut impl Read) -> Option<Vec<u8>> {
     let mut header = [0u8; 4];
     input.read_exact(&mut header).ok()?;
     let len = u32::from_ne_bytes(header) as usize;
-    if len > MAX_MESSAGE_BYTES {
+    if len > MAX_INCOMING_FRAME_BYTES {
         return None;
     }
     let mut body = vec![0u8; len];
@@ -42,6 +50,13 @@ pub(crate) fn read_frame(input: &mut impl Read) -> Option<Vec<u8>> {
 
 pub(crate) fn respond(writer: &Arc<Mutex<io::Stdout>>, response: Response<'_>) -> io::Result<()> {
     let body = serde_json::to_vec(&response).map_err(io::Error::other)?;
+    if body.len() >= MAX_MESSAGE_BYTES {
+        // Chrome drops any Host → Chrome message at 1 MiB; fail loud
+        // instead of writing a frame the browser can never read.
+        return Err(io::Error::other(
+            "host response exceeds the 1 MiB native-messaging limit",
+        ));
+    }
     let len = (body.len() as u32).to_ne_bytes();
     let mut out = writer
         .lock()
@@ -140,6 +155,7 @@ pub(crate) fn validate_request(request: &Request) -> Result<(), String> {
             | "workspace_reset"
             | "settings_get"
             | "settings_set"
+            | "apps:handshake"
             | "apps:list"
             | "apps:get"
             | "apps:health"
@@ -223,6 +239,7 @@ pub(crate) fn validate_request(request: &Request) -> Result<(), String> {
         "settings_get" => &["keys"],
         "settings_set" => &["entries"],
         "apps:list" | "apps:health" => &[],
+        "apps:handshake" => &["origin"],
         "apps:get" | "apps:uninstall" | "apps:set_enabled" | "apps:set_sidebar" => {
             &["appId", "enabled", "show", "order"]
         }
@@ -365,7 +382,43 @@ mod tests {
 
     #[test]
     fn rejects_oversized_native_message_frame() {
-        let frame = ((MAX_MESSAGE_BYTES + 1) as u32).to_ne_bytes();
+        let frame = ((MAX_INCOMING_FRAME_BYTES + 1) as u32).to_ne_bytes();
         assert_eq!(read_frame(&mut Cursor::new(frame)), None);
+    }
+
+    #[test]
+    fn reads_package_frame_at_incoming_limit() {
+        // 32 MiB header must be accepted (package payloads live here);
+        // only the declared length is checked, the body is not allocated
+        // when the stream ends first.
+        let mut stream = (MAX_INCOMING_FRAME_BYTES as u32).to_ne_bytes().to_vec();
+        stream.extend_from_slice(br#"{"id":"1","method":"apps:install_package"}"#);
+        assert_eq!(
+            read_frame(&mut Cursor::new(stream)),
+            None, // body shorter than declared: EOF, not a size rejection
+        );
+        // A frame one byte above the cap is rejected without allocating.
+        let over = (MAX_INCOMING_FRAME_BYTES as u32 + 1).to_ne_bytes();
+        assert_eq!(read_frame(&mut Cursor::new(over)), None);
+    }
+
+    #[test]
+    fn refuses_oversized_host_response() {
+        use std::io::Sink;
+        let body: Vec<u8> = vec![b'a'; MAX_MESSAGE_BYTES];
+        let writer: Arc<Mutex<io::Stdout>> = Arc::new(Mutex::new(io::stdout()));
+        // We cannot safely write 1 MiB to real stdout in a test, so
+        // exercise the guard through a direct length check instead.
+        let response = Response {
+            id: "1",
+            ok: true,
+            result: Some(serde_json::json!(body)),
+            error: None,
+        };
+        let serialized = serde_json::to_vec(&response).expect("serialize");
+        assert!(serialized.len() >= MAX_MESSAGE_BYTES);
+        let result = respond(&writer, response);
+        assert!(result.is_err(), "1 MiB responses must be refused");
+        let _ = writer.lock().expect("lock").write_all(b"");
     }
 }

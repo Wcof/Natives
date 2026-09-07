@@ -10,6 +10,8 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 mod app_dispatch;
+mod app_host;
+mod app_host_manifest;
 mod app_install;
 mod app_store;
 mod batch;
@@ -174,11 +176,15 @@ fn main() -> io::Result<()> {
             continue;
         }
         if request.method.starts_with("apps:") {
+            let caller_origin = app_store_singleton
+                .as_ref()
+                .and_then(|store| store.caller_origin());
             let response = match app_store_singleton
                 .as_ref()
                 .ok_or_else(|| "app store is not available".to_string())
-                .and_then(|store| app_dispatch::app_dispatch(store, &request))
-            {
+                .and_then(|store| {
+                    app_dispatch::app_dispatch(store, &request, caller_origin.as_deref())
+                }) {
                 Ok(result) => Response {
                     id: &request.id,
                     ok: true,

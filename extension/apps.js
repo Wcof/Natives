@@ -9,14 +9,23 @@
 
 import { createNativeClient } from './native-client.js';
 import { saveAppNavigation, projectionFromApps } from './app-navigation-projection.js';
+import {
+  CATALOG_PUBLIC_KEY_B64,
+  verifyCatalogSignature,
+  downloadNapPackage,
+  decompressNap,
+  payloadToBase64,
+} from './catalog-client.js';
 
 const NATIVE_HOST = 'com.natives.file_manager';
 
 // ADR-0025 D44: the catalog URL is build-time fixed, never user-configured.
-// V1 development ships a fake catalog inside the extension (Gate A4 uses
-// this; A5 switches the loader to signed remote catalog without changing
-// the App Center UI).
+// Dev ships the signed pair embedded in the extension: catalog-v1.json +
+// catalog-v1.sig (signed by the Natives-App-Catalog dev key; the public
+// key is compiled in via catalog-client.js). The release pipeline swaps in
+// the production pair without touching App Center code.
 const CATALOG_URL = new URL('apps/catalog-v1.json', import.meta.url).href;
+const CATALOG_SIG_URL = new URL('apps/catalog-v1.sig', import.meta.url).href;
 
 function base64EncodeUnicode(str) {
   const bytes = new TextEncoder().encode(str);
@@ -26,11 +35,44 @@ function base64EncodeUnicode(str) {
 }
 
 async function loadCatalog() {
-  const response = await fetch(CATALOG_URL, { cache: 'no-store' });
-  if (!response.ok) throw new Error(`catalog ${response.status}`);
-  const catalog = await response.json();
+  // Fetch raw bytes (signature verification needs the exact bytes, not the
+  // re-serialized JSON of response.json()).
+  const [catalogRes, sigRes] = await Promise.all([
+    fetch(CATALOG_URL, { cache: 'no-store' }),
+    fetch(CATALOG_SIG_URL, { cache: 'no-store' }),
+  ]);
+  if (!catalogRes.ok) throw new Error(`catalog ${catalogRes.status}`);
+  if (!sigRes.ok) throw new Error(`catalog signature ${sigRes.status}`);
+  const catalogBytes = new Uint8Array(await catalogRes.arrayBuffer());
+  const signatureB64 = await sigRes.text();
+  // D8: verify BEFORE parsing. A bad catalog is "catalog unavailable",
+  // never a fallback to an unverified source.
+  await verifyCatalogSignature({ catalogBytes, signatureB64, publicKeyB64: CATALOG_PUBLIC_KEY_B64 });
+  const catalog = JSON.parse(new TextDecoder().decode(catalogBytes));
   if (!Array.isArray(catalog.apps)) throw new Error('catalog: missing apps[]');
   return catalog;
+}
+
+// A5 package transfer (D3/D8/D10): fetch the .nap (streaming, 5 MiB wire
+// gate) → artifactSha256 → gzip decompress (20 MiB payload gate) →
+// payloadSha256 → base64. Runs in the page; the host re-verifies size +
+// payload hash independently (host-side trust boundary).
+async function transferPackage(pkg, { fetchImpl } = {}) {
+  const url = new URL(pkg.url, CATALOG_URL).href;
+  const { artifactBytes, wireSize, digest } = await downloadNapPackage({
+    url,
+    wireSize: pkg.wire_size,
+    fetchImpl,
+  });
+  const { payloadBytes, payloadSize } = await decompressNap(
+    { artifactBytes, digest },
+    {
+      artifactSha256: pkg.artifact_sha256,
+      payloadSha256: pkg.payload_sha256,
+      payloadSize: pkg.payload_size,
+    },
+  );
+  return { dataBase64: payloadToBase64(payloadBytes), wireSize, payloadSize };
 }
 
 export function createAppCenter({
@@ -288,15 +330,33 @@ export function createAppCenter({
       };
       const tx = await nativeClient.call('apps:install_begin', { request: base64EncodeUnicode(JSON.stringify(request)) });
 
-      // A5 stages (downloading/verifying/registering) are inserted here;
-      // A4 commits the metadata-only transaction directly.
-      state.busy.set(appId, { stage: 'committing', progress: 80 });
-      render();
+      // A5 package transfer (D10/D11): per package — download with the
+      // 5 MiB streaming wire gate, verify artifactSha256, gzip-decompress
+      // under the 20 MiB cap, verify payloadSha256, then hand the base64
+      // payload to the host, which re-checks size/hash and stages it.
+      // Any failure aborts the transaction (staging cleanup + failed
+      // state) so a retry starts clean.
+      const packages = entry.packages || [];
       try {
+        for (const pkg of packages) {
+          state.busy.set(appId, { stage: 'downloading', progress: 30 });
+          render();
+          const { dataBase64 } = await transferPackage(pkg);
+          state.busy.set(appId, { stage: 'verifying', progress: 55 });
+          render();
+          await nativeClient.call('apps:install_package', {
+            installId: tx.install_id,
+            packageId: pkg.package_id,
+            data: dataBase64,
+          });
+        }
+        state.busy.set(appId, { stage: 'committing', progress: 80 });
+        render();
         await nativeClient.call('apps:install_commit', { installId: tx.install_id });
       } catch (error) {
-        // best-effort rollback of the open transaction so a failed commit
-        // never blocks the next install attempt (APP_CONFLICT guard).
+        // best-effort rollback of the open transaction so a failed stage
+        // (download/hash/signature/commit) never blocks the next install
+        // attempt (APP_CONFLICT guard).
         try { await nativeClient.call('apps:install_abort', { installId: tx.install_id }); } catch { /* aborted or already gone */ }
         throw error;
       }
@@ -305,8 +365,6 @@ export function createAppCenter({
       setToast(t('appsInstalledToast', '应用已安装'));
       await refresh();
     } catch (error) {
-      // A4 metadata-only: a failed begin leaves no transaction to abort;
-      // A5 adds stage-aware abort (download/hash/signature faults).
       throw error;
     } finally {
       state.busy.delete(appId);

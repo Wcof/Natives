@@ -37,7 +37,8 @@ fn create_app_tables(conn: &Connection) -> Result<(), AppError> {
             manifest_json TEXT NOT NULL,
             installed_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL,
-            revision INTEGER NOT NULL DEFAULT 0
+            revision INTEGER NOT NULL DEFAULT 0,
+            host_registered INTEGER NOT NULL DEFAULT 0
         );
         CREATE TABLE IF NOT EXISTS app_packages (
             app_id TEXT NOT NULL,
@@ -114,6 +115,20 @@ fn migrate_app_columns(conn: &Connection) -> Result<(), AppError> {
     if !has_sidebar_order {
         conn.execute(
             "ALTER TABLE apps ADD COLUMN sidebar_order INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
+    // Phase A5: explicit host-registration state (1 = manifest written with
+    // a real caller origin; 0 = skipped, e.g. no origin). A2 rows predate
+    // the column and stay 0 — an explicit "not registered", not a guess.
+    let has_host_registered = match table_has_column(conn, "apps", "host_registered") {
+        Ok(has) => has,
+        Err(WorkspaceError::Sql(error)) => return Err(AppError::Sql(error)),
+        Err(error) => return Err(AppError::InvalidState(error.to_string())),
+    };
+    if !has_host_registered {
+        conn.execute(
+            "ALTER TABLE apps ADD COLUMN host_registered INTEGER NOT NULL DEFAULT 0",
             [],
         )?;
     }

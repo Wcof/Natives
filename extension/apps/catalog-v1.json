@@ -4,23 +4,37 @@
   "apps": [
     {
       "app_id": "com.natives.app.demo",
-      "name": "Demo",
-      "version": "0.1.0",
       "kind": "extension_app",
+      "name": "Demo",
+      "version": "1.0.0",
       "description": "Hello Demo 示例应用，用于验证应用中心安装链路。",
       "icon": "grid",
       "permissions": [],
-      "wireSize": 0,
-      "runtime_spec": { "host": "com.natives.app.demo", "version": "0.1.0" },
+      "wireSize": 160501,
+      "runtime_spec": { "host": "com.natives.app.demo", "version": "1.0.0" },
       "surface": { "icon": "grid", "route": "app.html?app=com.natives.app.demo" },
       "manifest": { "permissions": [] },
-      "packages": []
+      "packages": [
+        {
+          "package_id": "demo-host",
+          "kind": "runtime",
+          "version": "1.0.0",
+          "platform": "darwin",
+          "arch": "arm64",
+          "required": true,
+          "url": "packages/demo-host-darwin-arm64.nap",
+          "wire_size": 160501,
+          "payload_size": 319488,
+          "artifact_sha256": "297fdb41156ef32dba0d389ab6cfcf31bbfef1075afbaaef99a1d02a8b50c927",
+          "payload_sha256": "09c83519fd586f6b39591e45b86a840ee05f5be331fc3831f584bf2996ce9db6"
+        }
+      ]
     },
     {
       "app_id": "fund",
+      "kind": "extension_app",
       "name": "基金",
       "version": "0.1.0",
-      "kind": "extension_app",
       "description": "个人基金 / ETF / 股票资产管理与分析",
       "icon": "box",
       "permissions": ["keychain:com.natives.app.fund"],

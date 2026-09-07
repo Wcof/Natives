@@ -96,6 +96,64 @@
   后续 `Natives-App-Fund`（独立 crate，未创建）将包含
   `docs/reference/fundval-local-audit.md` 审计文档。
 
+### 4. Apps Framework 兄弟仓库（同目录，非本仓库）
+
+以下两个项目与 `Natives` 同处开发机目录
+`/Users/ldh/Downloads/project/AiNative/`，是 ADR-0025 的配套仓库，
+**不在本仓库内**，也未 vendored 进本仓库。它们与本仓库通过
+「编译进扩展的公钥 + build-time 固定 URL」单向引用，无源码共享。
+
+#### 4.1 Natives-App-Catalog
+
+- **位置**：`/Users/ldh/Downloads/project/AiNative/Natives-App-Catalog`
+- **定位**：App Catalog V1 的签名源（ADR-0025 D8/D43/D44）。只含
+  Catalog 本体与 Ed25519 签名，是 `extension/apps.js` 在线目录的
+  build-time 固定 URL 指向目标（开发阶段：GitHub + Releases）。
+- **文件**：
+  - `catalog-v1.json` — Catalog 本体（含 `apps[].packages[].url`，
+    必须指向本仓库 Release 或固定 CDN，禁止任意地址）。
+  - `catalog-v1.sig` — 对 `catalog-v1.json` 原始字节的 Ed25519 签名
+    （base64，64 字节）。
+  - `keys/catalog-key.pem` — 开发私钥（PKCS8，`natives-catalog-ed25519-seed
+    v1` 头）。**私钥仅本地开发使用，不得入库、不得进任何压缩包。**
+  - `keys/catalog-public-key.b64` — 公钥（raw 32 字节，base64）。
+  - `scripts/sign-catalog.mjs` — keygen / sign / verify（Node WebCrypto，
+    纯 ESM，零依赖）。
+- **本仓库引用点（单向）**：
+  - `extension/catalog-client.js` — 编译进扩展的公钥常量
+    `CATALOG_PUBLIC_KEY_B64`（dev 值 `1QP+08RLgHdsf1Y2Oiv2K1ON5MtAFtz5sRbt0IuD1Iw=`，
+    与 `keys/catalog-public-key.b64` 一致；生产由发布流水线换钥），
+    WebCrypto Ed25519 验签在解析 Catalog 之前执行。
+  - `extension/apps.js` — `loadCatalog()` 拉取 `catalog-v1.json` +
+    `catalog-v1.sig` 并先验签后解析。
+  - `scripts/apps/sign-dev-catalog.mjs` — 用兄弟仓库私钥为本仓库内嵌的
+    dev 副本 `extension/apps/catalog-v1.json` 生成 `catalog-v1.sig`。
+  - `extension/catalog-client.test.mjs` — 读 `extension/apps/catalog-v1.json`
+    / `.sig` 做验签 Gate（1 byte 改动、未知公钥、空签名均 FAIL）。
+  - `crates/demo-host/` — demo 运行时，`catalog-v1.json` 中
+    `packages[].url`（相对 `apps/` 路径）指向
+    `extension/apps/packages/demo-host-darwin-arm64.nap`。
+- **引用出处**：`docs/adr/0025-apps-packaging-and-extension-runtime.md`
+  §D8/D10/D43/D44。
+
+#### 4.2 Natives-App-Fund
+
+- **位置**：`/Users/ldh/Downloads/project/AiNative/Natives-App-Fund`
+- **定位**：基金应用独立工程（ADR-0025 第五十二节）。浏览器 UI
+  build-time 进 Natives Core（`extension/apps/fund-ui.js`，尚未实现），
+  Native 业务（`fund-host`）与本仓库分仓维护。**当前尚未创建 crate**，
+  仅有审计文档。
+- **文件**：
+  - `docs/reference/fundval-local-audit.md` — Phase R0 强制的
+    FundVal-Live 本地源码审计产出（参考文件 → 问题 → 输入/输出 →
+    异常 → 数据源 → Natives 如何重新实现）。
+- **本仓库引用点**：当前仅
+  `docs/adr/0025-apps-packaging-and-extension-runtime.md`（§Fund 节）。
+  后续 `fund-host` crate 与 `extension/apps/fund-ui.js` 落地后，本仓库
+  只认识 `appId = fund` 这个 App（Core 不知道基金业务，Fund 不知道
+  Natives Workspace 内部，保持解耦边界）。
+- **引用出处**：`docs/adr/0025-apps-packaging-and-extension-runtime.md`。
+
 ## 三、在线公共数据服务（浏览器侧 fetch）
 
 扩展仅在 `extension/manifest.json` 的 `host_permissions` 中声明的域名，

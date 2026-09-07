@@ -29,6 +29,16 @@ pub struct AppStore {
     /// Root of the app install directory (`~/.natives/apps`). Injected in
     /// tests; `default_app_root()` outside.
     app_root: std::path::PathBuf,
+    /// Real caller origin captured by `apps:handshake` (ADR-0025 D16).
+    /// Native Messaging is one process per port, so process-level state
+    /// IS connection-level state: this is the origin of THIS extension
+    /// connection. `None` until (or unless) the handshake succeeds —
+    /// host registration then explicitly skips, never fabricates.
+    caller_origin: Mutex<Option<String>>,
+    /// Native Messaging manifest directory. `None` = the browser's real
+    /// dir (production); Some(dir) = test injection (unit tests never
+    /// touch the real browser directory).
+    manifest_dir: Mutex<Option<std::path::PathBuf>>,
 }
 
 /// `uninstall` receipt. Personal data under
@@ -66,12 +76,45 @@ impl AppStore {
         Ok(Self {
             conn: Mutex::new(conn),
             app_root: app_root.into(),
+            caller_origin: Mutex::new(None),
+            manifest_dir: Mutex::new(None),
         })
     }
 
+    /// Test-only: redirect host manifests to an injected directory so
+    /// unit tests never write into the real browser directory.
+    #[cfg(test)]
+    pub(crate) fn set_manifest_dir(&self, dir: std::path::PathBuf) {
+        if let Ok(mut guard) = self.manifest_dir.lock() {
+            *guard = Some(dir);
+        }
+    }
+
+    fn manifest_dir(&self) -> Option<std::path::PathBuf> {
+        self.manifest_dir
+            .lock()
+            .ok()
+            .and_then(|guard| guard.clone())
+    }
+
     /// `~/.natives/apps` — the single install root for every app.
-    fn app_root(&self) -> &std::path::Path {
+    pub(crate) fn app_root(&self) -> &std::path::Path {
         &self.app_root
+    }
+
+    /// Record the handshake origin for this connection (dispatch layer).
+    pub fn set_caller_origin(&self, origin: Option<&str>) {
+        if let Ok(mut guard) = self.caller_origin.lock() {
+            *guard = origin.map(str::to_string);
+        }
+    }
+
+    /// The handshake origin, if any (used at commit time).
+    pub fn caller_origin(&self) -> Option<String> {
+        self.caller_origin
+            .lock()
+            .ok()
+            .and_then(|guard| guard.clone())
     }
 
     fn with_conn<F, T>(&self, f: F) -> Result<T, AppError>
@@ -178,14 +221,50 @@ impl AppStore {
         })
     }
 
-    /// Atomically apply the stored request: app row, package receipts,
-    /// permission grants, transaction → `installed`, revision bump.
+    /// Atomically apply the stored request (ADR-0025 D8/D11/D15, Phase A5):
+    ///
+    /// 1. runtime_registering — install every staged package to its
+    ///    Core-decided path, executable + `current` pointer + `--health`
+    ///    probe for runtimes, then write the host manifest (real caller
+    ///    origin only — V1 never fabricates origins);
+    /// 2. committing — app row, package receipts (with real paths),
+    ///    permission grants, transaction → `installed`, revision bump,
+    ///    staged tree removed — one transaction;
+    /// 3. any failure between 1 and 2 rolls back the registration
+    ///    (old binaries / manifest restored, staged bytes removed) and the
+    ///    transaction is marked `failed` with an explicit error code.
+    ///
     /// The commit is self-contained from `request_json`, so a crash
     /// between begin and commit never loses the catalog snapshot.
+    pub fn install_commit_with_origin(
+        &self,
+        install_id: &str,
+        caller_origin: Option<&str>,
+    ) -> Result<App, AppError> {
+        self.install_commit_impl(install_id, caller_origin)
+    }
+
+    /// `install_commit` without caller origin: host registration is
+    /// explicitly SKIPPED (`host_registered = 0`) — used by A2-style
+    /// metadata-only installs and tests.
     pub fn install_commit(&self, install_id: &str) -> Result<App, AppError> {
-        self.with_conn(|conn| {
-            let tx = conn.unchecked_transaction()?;
-            let record = query::transaction(&tx, install_id)?;
+        self.install_commit_impl(install_id, None)
+    }
+
+    fn install_commit_impl(
+        &self,
+        install_id: &str,
+        caller_origin: Option<&str>,
+    ) -> Result<App, AppError> {
+        use crate::app_host::{self, StagedPackage};
+
+        // ── prepare (registry guard #1, dropped before any public call) ──
+        let (request, host_name, staged_packages) = {
+            let conn = self
+                .conn
+                .lock()
+                .map_err(|error| AppError::InvalidState(error.to_string()))?;
+            let record = query::transaction(&conn, install_id)?;
             if record.state == install_state::INSTALLED {
                 return Err(AppError::Conflict(format!(
                     "install {install_id} already committed"
@@ -194,13 +273,123 @@ impl AppStore {
             let request: InstallRequest = serde_json::from_str(&record.request_json)
                 .map_err(|error| AppError::InvalidState(error.to_string()))?;
             request.app.validate()?;
+            // host name: runtime_spec.host, else the app_id itself.
+            let host_name = request
+                .app
+                .runtime_spec
+                .get("host")
+                .and_then(|value| value.as_str())
+                .map(str::to_string)
+                .unwrap_or_else(|| request.app.app_id.clone());
+            // staged set: kind/version from the signed catalog snapshot,
+            // staged path from `app_package_stages` (written by
+            // `install_package`). The `app_packages` receipt rows do not
+            // exist yet — they are created by the registry commit.
+            let staged: Vec<(String, String)> = if request.packages.is_empty() {
+                Vec::new()
+            } else {
+                let mut stmt = conn.prepare(
+                    "SELECT package_id, staged_path
+                     FROM app_package_stages
+                     WHERE install_id = ?1 AND state = 'staging'",
+                )?;
+                let rows = stmt.query_map([install_id], |row| {
+                    Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+                })?;
+                let mut out = Vec::new();
+                for row in rows {
+                    out.push(row?);
+                }
+                out
+            };
+            drop(conn); // guard released before the public calls below
+            let staged_packages: Vec<StagedPackage> = staged
+                .into_iter()
+                .filter_map(|(package_id, staged_path)| {
+                    request
+                        .packages
+                        .iter()
+                        .find(|p| p.package_id == package_id)
+                        .map(|declared| StagedPackage {
+                            package_id,
+                            kind: declared.kind.clone(),
+                            version: declared.version.clone(),
+                            staged: std::path::PathBuf::from(staged_path),
+                        })
+                })
+                .collect();
+            (request, host_name, staged_packages)
+        };
+        let app_id = &request.app.app_id;
+
+        // ── 1) runtime_registering (file side, no registry lock held) ──
+        let manifest_dir = self.manifest_dir(); // None = browser's real dir
+        if !staged_packages.is_empty() {
+            self.mark_state(install_id, install_state::RUNTIME_REGISTERING)?;
+        }
+        let outcome = if staged_packages.is_empty() {
+            None
+        } else {
+            match app_host::register_commit(
+                self.app_root(),
+                app_id,
+                &host_name,
+                caller_origin,
+                &staged_packages,
+                manifest_dir.as_deref(),
+            ) {
+                Ok(registered) => Some(registered),
+                Err(error) => {
+                    // Registration failed (health probe / io): the registry
+                    // transaction never opens — record `failed` and roll
+                    // back the file side before returning.
+                    self.record_commit_failure(install_id, &error);
+                    let _ = app_host::rollback_commit_registration(
+                        self.app_root(),
+                        app_id,
+                        &staged_packages,
+                        &host_name,
+                        manifest_dir.as_deref(),
+                    );
+                    if let Ok(dir) =
+                        crate::app_install::staging_dir(self.app_root(), app_id, install_id)
+                    {
+                        let _ = crate::app_install::remove_staging_dir(&dir);
+                    }
+                    return Err(error);
+                }
+            }
+        };
+
+        // ── 2) committing (registry rows, one transaction) ──
+        let commit = self.with_conn(|conn| {
+            let tx = conn.unchecked_transaction()?;
+            // Guard #2: a concurrent commit may have won between the
+            // prepare phase and now (same install_id re-committed).
+            let state: String = tx
+                .query_row(
+                    "SELECT state FROM app_install_transactions WHERE install_id = ?1",
+                    [install_id],
+                    |row| row.get(0),
+                )
+                .map_err(|error| AppError::Sql(error))?;
+            if state == install_state::INSTALLED {
+                return Err(AppError::Conflict(format!(
+                    "install {install_id} already committed"
+                )));
+            }
             let now = now_millis();
+            let host_registered = outcome.as_ref().is_some_and(|o| o.host_registered);
+            tx.execute(
+                "UPDATE app_install_transactions SET state = ?2 WHERE install_id = ?1",
+                params![install_id, install_state::COMMITTING],
+            )?;
             tx.execute(
                 "INSERT INTO apps (
                     app_id, kind, name, version, enabled, show_in_sidebar, sidebar_order,
                     runtime_spec_json, surface_json, manifest_json,
-                    installed_at, updated_at, revision
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11, 0)
+                    installed_at, updated_at, revision, host_registered
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11, 0, ?12)
                  ON CONFLICT(app_id) DO UPDATE SET
                     kind = excluded.kind,
                     name = excluded.name,
@@ -212,7 +401,8 @@ impl AppStore {
                     surface_json = excluded.surface_json,
                     manifest_json = excluded.manifest_json,
                     updated_at = excluded.updated_at,
-                    revision = revision + 1",
+                    revision = revision + 1,
+                    host_registered = excluded.host_registered",
                 params![
                     request.app.app_id,
                     request.app.kind,
@@ -224,10 +414,26 @@ impl AppStore {
                     value_to_string(&request.app.runtime_spec),
                     value_to_string(&request.app.surface),
                     value_to_string(&request.app.manifest),
-                    now
+                    now,
+                    host_registered as i64
                 ],
             )?;
             for package in &request.packages {
+                let installed_path = staged_packages
+                    .iter()
+                    .find(|entry| entry.package_id == package.package_id)
+                    .map(|entry| {
+                        crate::app_install::install_path_for(
+                            self.app_root(),
+                            app_id,
+                            &entry.kind,
+                            &entry.version,
+                            &entry.package_id,
+                        )
+                        .map(|path| path.to_string_lossy().into_owned())
+                    })
+                    .transpose()?
+                    .unwrap_or_default();
                 tx.execute(
                     "INSERT INTO app_packages (
                         app_id, package_id, kind, version, platform, arch,
@@ -256,10 +462,7 @@ impl AppStore {
                         package.payload_size,
                         package.artifact_sha256,
                         package.payload_sha256,
-                        // A2 metadata-only stage: the receipt lands with an
-                        // empty path; Phase A5 fills the Core-decided path
-                        // at atomic commit time (ADR-0025 D8).
-                        String::new(),
+                        installed_path,
                         now
                     ],
                 )?;
@@ -281,12 +484,94 @@ impl AppStore {
                 params![install_id, install_state::INSTALLED, now],
             )?;
             bump_revision(&tx)?;
-            // Read the committed row BEFORE committing: `commit` consumes
-            // the guard (AGENTS.md lock discipline), and the row is fully
-            // visible inside the open transaction.
-            let installed = query::app(&tx, &request.app.app_id)?;
+            // Read the committed row BEFORE committing: `commit`
+            // consumes the guard (AGENTS.md lock discipline).
+            let installed = query::app(&tx, app_id)?;
             tx.commit()?;
             Ok(installed)
+        });
+
+        match commit {
+            Ok(installed) => {
+                // Staged bytes are done — removed after the registry row is
+                // durable (ADR-0025 D16: staging cleared after commit).
+                if let Ok(dir) =
+                    crate::app_install::staging_dir(self.app_root(), app_id, install_id)
+                {
+                    let _ = crate::app_install::remove_staging_dir(&dir);
+                }
+                Ok(installed)
+            }
+            Err(error) => {
+                // ── rolling_back → failed ──
+                // The registry transaction above rolled back (no
+                // half-installed app row survives); record the failure
+                // durably, then roll back the file side.
+                self.record_commit_failure(install_id, &error);
+                let manifest_dir = self.manifest_dir();
+                let _ = app_host::rollback_commit_registration(
+                    self.app_root(),
+                    app_id,
+                    &staged_packages,
+                    &host_name,
+                    manifest_dir.as_deref(),
+                );
+                if let Ok(dir) =
+                    crate::app_install::staging_dir(self.app_root(), app_id, install_id)
+                {
+                    let _ = crate::app_install::remove_staging_dir(&dir);
+                }
+                Err(error)
+            }
+        }
+    }
+
+    /// Durably record a commit failure as `failed` (commit-rollback path).
+    /// Written directly — NOT through the public `install_abort` — because
+    /// the commit failure paths may hold context (and `install_abort`
+    /// re-validates a transaction that is already terminal by the second
+    /// call). The failure record is the ONLY write: the registry rows
+    /// (app row, receipts) were never committed on a failed commit.
+    fn record_commit_failure(&self, install_id: &str, error: &AppError) {
+        let result = self.with_conn(|conn| {
+            let tx = conn.unchecked_transaction()?;
+            let now = now_millis();
+            tx.execute(
+                "UPDATE app_install_transactions
+                 SET state = ?2, completed_at = ?3, error_code = ?4, error_message = ?5
+                 WHERE install_id = ?1",
+                params![
+                    install_id,
+                    install_state::FAILED,
+                    now,
+                    error.code(),
+                    error.to_string()
+                ],
+            )?;
+            bump_revision(&tx)?;
+            tx.commit()?;
+            Ok(())
+        });
+        // A failure of the failure record must not mask the original
+        // error; the transaction may stay non-terminal in that case, and
+        // the NEXT install attempt for the same app will surface it
+        // (APP_CONFLICT on begin is the explicit state).
+        if let Err(record_error) = result {
+            eprintln!("app store: failed to record install failure: {record_error}");
+        }
+    }
+
+    /// Advance the transaction to an intermediate state (own short
+    /// transaction; used by the commit state machine).
+    fn mark_state(&self, install_id: &str, state: &str) -> Result<(), AppError> {
+        self.with_conn(|conn| {
+            let tx = conn.unchecked_transaction()?;
+            tx.execute(
+                "UPDATE app_install_transactions SET state = ?2 WHERE install_id = ?1",
+                params![install_id, state],
+            )?;
+            tx.commit()?;
+            Ok(())
         })
     }
 
@@ -508,29 +793,60 @@ impl AppStore {
         })
     }
 
-    /// Remove registry rows only; personal data is preserved (ADR-0025
-    /// D32). Install history is retained for audit.
+    /// Remove registry rows, the host manifest, and install-owned dirs
+    /// (`runtime/`, `packages/`, `staging/`); personal data (`data/`,
+    /// `cache/`, `imports/`) is preserved (ADR-0025 D32). Install history
+    /// is retained for audit.
     pub fn uninstall(&self, app_id: &str) -> Result<UninstallReceipt, AppError> {
-        self.with_conn(|conn| {
+        let host_name = self.with_conn(|conn| {
             let tx = conn.unchecked_transaction()?;
-            let known: Option<String> = tx
-                .query_row("SELECT name FROM apps WHERE app_id = ?1", [app_id], |row| {
-                    row.get(0)
-                })
+            let runtime_spec_json: Option<String> = tx
+                .query_row(
+                    "SELECT runtime_spec_json FROM apps WHERE app_id = ?1",
+                    [app_id],
+                    |row| row.get(0),
+                )
                 .ok();
-            if known.is_none() {
+            let known = runtime_spec_json.is_some();
+            if !known {
                 return Err(AppError::NotFound(app_id.to_string()));
             }
             tx.execute("DELETE FROM apps WHERE app_id = ?1", [app_id])?;
             tx.execute("DELETE FROM app_packages WHERE app_id = ?1", [app_id])?;
             tx.execute("DELETE FROM app_permissions WHERE app_id = ?1", [app_id])?;
             let revision = bump_revision(&tx)?;
-            tx.commit()?;
-            Ok(UninstallReceipt {
-                app_id: app_id.to_string(),
-                revision,
-                data_preserved: true,
+            let host_name = serde_json::from_str::<serde_json::Value>(
+                runtime_spec_json.as_deref().unwrap_or("{}"),
+            )
+            .ok()
+            .and_then(|value| {
+                value
+                    .get("host")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string)
             })
+            .unwrap_or_else(|| app_id.to_string());
+            tx.commit()?;
+            Ok::<(i64, String), AppError>((revision, host_name))
+        })?;
+        let (revision, host_name) = host_name;
+        // File side: manifest + install-owned dirs (registry rows are
+        // already durable; a file-side failure surfaces but cannot
+        // resurrect the registry — the app is uninstalled either way).
+        let manifest_dir = self.manifest_dir();
+        match &manifest_dir {
+            Some(dir) => {
+                let _ = crate::app_host_manifest::remove_manifest_in(dir, &host_name);
+            }
+            None => {
+                let _ = crate::app_host_manifest::remove_manifest(&host_name);
+            }
+        }
+        let _ = crate::app_install::remove_app_install_dirs(self.app_root(), app_id);
+        Ok(UninstallReceipt {
+            app_id: app_id.to_string(),
+            revision,
+            data_preserved: true,
         })
     }
 

@@ -53,6 +53,10 @@ pub struct App {
     pub installed_at: i64,
     pub updated_at: i64,
     pub revision: i64,
+    /// 1 when the Native Messaging host manifest was written with a real
+    /// caller origin (Phase A5); 0 = registration explicitly skipped
+    /// (no origin / no runtime). Never fabricated.
+    pub host_registered: bool,
 }
 
 /// Installed package receipt row (`app_packages` table, ADR-0025 D7/D13).

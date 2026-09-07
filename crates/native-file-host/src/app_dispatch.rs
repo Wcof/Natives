@@ -13,7 +13,15 @@ use serde_json::Value;
 /// the 1 MiB incoming frame limit; package bytes never travel here).
 const MAX_INSTALL_REQUEST_BASE64: usize = 256 * 1024;
 
-pub(crate) fn app_dispatch(store: &AppStore, request: &Request) -> Result<Value, String> {
+/// `caller_origin`: the real extension origin captured by the
+/// `apps:handshake` of THIS port (ADR-0025 D16). `None` = no handshake on
+/// this connection, in which case host registration is explicitly skipped
+/// — the host never fabricates an origin.
+pub(crate) fn app_dispatch(
+    store: &AppStore,
+    request: &Request,
+    caller_origin: Option<&str>,
+) -> Result<Value, String> {
     let params = &request.params;
     macro_rules! handle_result {
         ($result:expr) => {
@@ -24,6 +32,20 @@ pub(crate) fn app_dispatch(store: &AppStore, request: &Request) -> Result<Value,
         };
     }
     match request.method.as_str() {
+        "apps:handshake" => {
+            // Record the caller origin for host-manifest registration.
+            // Validation: exactly chrome-extension://<32 hex> (the real
+            // origin Chrome hands the page). Anything else is rejected —
+            // an invalid handshake means the connection has NO origin.
+            let origin = params
+                .get("origin")
+                .and_then(Value::as_str)
+                .filter(|origin| crate::app_host_manifest::is_chrome_extension_origin(origin))
+                .map(str::to_string)
+                .ok_or_else(|| "origin must be a chrome-extension:// origin".to_string())?;
+            store.set_caller_origin(Some(&origin));
+            Ok(serde_json::json!({ "ok": true, "origin": origin }))
+        }
         "apps:list" => {
             let apps = store.apps().map_err(|error| error.to_string())?;
             let revision = store.global_revision().map_err(|error| error.to_string())?;
@@ -79,7 +101,7 @@ pub(crate) fn app_dispatch(store: &AppStore, request: &Request) -> Result<Value,
                 .get("installId")
                 .and_then(Value::as_str)
                 .ok_or("installId is required")?;
-            handle_result!(store.install_commit(install_id))
+            handle_result!(store.install_commit_with_origin(install_id, caller_origin))
         }
         "apps:install_abort" => {
             let install_id = params
