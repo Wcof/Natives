@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="archive">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title data-i18n="appName">Natives</title>
+    <link rel="stylesheet" href="app.css" />
+  </head>
+  <body>
+    <svg class="svg-sprite" aria-hidden="true" style="display:none">
+      <symbol id="i-back" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6" /></symbol>
+      <symbol id="i-bolt" viewBox="0 0 24 24"><path d="m13 2-8 12h6l-1 8 9-13h-6z" /></symbol>
+      <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1" /><rect x="14" y="3" width="7" height="7" rx="1" /><rect x="3" y="14" width="7" height="7" rx="1" /><rect x="14" y="14" width="7" height="7" rx="1" /></symbol>
+      <symbol id="i-box" viewBox="0 0 24 24"><path d="M21 8 12 3 3 8v8l9 5 9-5z" /><path d="M3 8l9 5 9-5" /><path d="M12 13v8" /></symbol>
+    </svg>
+
+    <nav class="app-shell-nav">
+      <div class="brand"><svg class="icon"><use href="#i-bolt" /></svg><span data-i18n="appName">Natives</span></div>
+      <div class="spacer"></div>
+      <button id="app-back" class="app-shell-nav-item back" type="button"><svg class="icon"><use href="#i-back" /></svg><span data-i18n="backToSpace">返回</span></button>
+    </nav>
+
+    <main class="app-shell-content">
+      <header class="app-shell-head">
+        <h1 id="app-title"></h1>
+        <span class="sub" id="app-sub"></span>
+      </header>
+      <div id="app-stage" class="app-stage"></div>
+    </main>
+
+    <div id="app-toast" class="app-toast" role="status" hidden></div>
+    <script type="module" src="app.js"></script>
+  </body>
+</html>

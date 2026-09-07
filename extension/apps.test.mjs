@@ -2,6 +2,9 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { setupTestDomEnvironment } from './test-dom-mock.js';
 import { createAppCenter } from './apps.js';
+import { createAppShell, parseAppId } from './app.js';
+import { APP_UI_MODULES, isKnownUiModule } from './app-module-registry.js';
+import { appHostFor } from './native-app-client.js';
 
 setupTestDomEnvironment();
 
@@ -193,4 +196,220 @@ const appsHtml = readFileSync(new URL('./apps.html', import.meta.url), 'utf8');
 assert.ok(appsHtml.includes('id="apps-list"'), 'apps.html 必须声明 #apps-list');
 assert.ok(appsHtml.includes('apps.js'), 'apps.html 必须加载 apps.js');
 
-console.log('apps: Gate A4 checks passed (catalog items, install cycle, D42, conflict, uninstall confirm, settings entry, locales)');
+// ─── Phase A6: App Surface (ADR-0025 D50) ───────────────────────────────────
+
+const DEMO_DETAIL = {
+  app: {
+    app_id: 'com.natives.app.demo',
+    kind: 'extension_app',
+    name: 'Demo',
+    version: '0.1.0',
+    enabled: true,
+    show_in_sidebar: true,
+    sidebar_order: 0,
+    runtime_spec_json: '{"host":"com.natives.app.demo"}',
+    surface_json: '{"icon":"grid","route":"app.html?app=com.natives.app.demo"}',
+    manifest_json: '{}',
+    installed_at: 1,
+    updated_at: 1,
+    revision: 1,
+  },
+  packages: [],
+  permissions: [],
+};
+
+function makeSurfaceDom() {
+  document.body.replaceChildren();
+  const stage = document.createElement('main');
+  stage.id = 'app-stage';
+  const title = document.createElement('h1');
+  title.id = 'app-title';
+  const sub = document.createElement('span');
+  sub.id = 'app-sub';
+  const toast = document.createElement('div');
+  toast.id = 'app-toast';
+  const back = document.createElement('button');
+  back.id = 'app-back';
+  document.body.append(stage, title, sub, toast, back);
+  return { stage, title, sub, toast, back };
+}
+
+function surfaceClient(detail) {
+  const calls = [];
+  let disconnected = 0;
+  return {
+    calls,
+    get disconnected() { return disconnected; },
+    async call(method, params = {}) {
+      calls.push({ method, params });
+      if (method === 'apps:get') {
+        if (!detail || detail.app.app_id !== params.app_id) return { app: null };
+        return detail;
+      }
+      return {};
+    },
+    disconnect() { disconnected += 1; },
+  };
+}
+
+function fakeHostClient() {
+  const calls = [];
+  return {
+    calls,
+    async call(method, params = {}) {
+      calls.push({ method, params });
+      if (method === 'ping') return { pong: true };
+      if (method === 'version') return { host: 'com.natives.app.demo', version: '0.1.0' };
+      if (method === 'health') return { ok: true };
+      return {};
+    },
+    disconnect() {},
+  };
+}
+
+// A6.1 parseAppId + host binding is host-agnostic (app.js never names a host)
+assert.equal(parseAppId('?app=com.natives.app.demo'), 'com.natives.app.demo');
+assert.equal(parseAppId('app=fund'), 'fund');
+assert.equal(parseAppId('?other=x'), '');
+assert.equal(parseAppId(''), '');
+assert.equal(appHostFor(DEMO_DETAIL.app), 'com.natives.app.demo', 'host 来自 runtime_spec.host');
+assert.equal(appHostFor({ app_id: 'fund' }), 'com.natives.app.fund', '缺省回退 com.natives.app.<appId>');
+
+// A6.2 installed + enabled → demo-ui mounts and talks to the app host
+{
+  const domA = makeSurfaceDom();
+  const hostA = fakeHostClient();
+  const shellA = createAppShell({
+    appId: 'com.natives.app.demo',
+    stage: domA.stage,
+    getNativeClient: () => surfaceClient(DEMO_DETAIL),
+    createHostClient: () => hostA,
+  });
+  await shellA.open();
+  await tick();
+  assert.equal(domA.title.textContent, 'Demo', 'Surface 标题来自权威 App 记录');
+  const badge = domA.stage.querySelectorAll('#demo-host-status');
+  assert.equal(badge.length, 1, 'demo UI 已挂载');
+  assert.ok(badge[0].classList.contains('ok'), 'host 在线徽标');
+  assert.equal(badge[0].textContent, '在线');
+  assert.ok(hostA.calls.some((c) => c.method === 'ping'), 'demo-ui 调用 ping');
+  assert.ok(hostA.calls.some((c) => c.method === 'version'), 'demo-ui 调用 version');
+  assert.ok(hostA.calls.some((c) => c.method === 'health'), 'demo-ui 调用 health');
+  await shellA.open(); // retry path: idempotent remount must not throw
+}
+
+// A6.3 unknown UI module → "需要更新 Natives" + no host port is opened
+{
+  const domB = makeSurfaceDom();
+  let hostCreated = 0;
+  const detailB = { ...DEMO_DETAIL, app: { ...DEMO_DETAIL.app, app_id: 'com.example.mystery' } };
+  const shellB = createAppShell({
+    appId: 'com.example.mystery',
+    stage: domB.stage,
+    getNativeClient: () => surfaceClient(detailB),
+    createHostClient: () => { hostCreated += 1; return fakeHostClient(); },
+  });
+  await shellB.open();
+  assert.ok(domB.stage.textContent.includes('需要更新 Natives'), '未知模块必须提示更新 Natives');
+  assert.equal(hostCreated, 0, '未知模块不得打开任何 app host');
+  assert.ok(domB.stage.textContent.includes('打开应用中心'), '提供打开应用中心入口');
+}
+
+// A6.4 disabled app → 已停用 state, no host port
+{
+  const domC = makeSurfaceDom();
+  let hostCreated = 0;
+  const detailC = { ...DEMO_DETAIL, app: { ...DEMO_DETAIL.app, enabled: false } };
+  const shellC = createAppShell({
+    appId: 'com.natives.app.demo',
+    stage: domC.stage,
+    getNativeClient: () => surfaceClient(detailC),
+    createHostClient: () => { hostCreated += 1; return fakeHostClient(); },
+  });
+  await shellC.open();
+  assert.ok(domC.stage.textContent.includes('应用已停用'), '停用应用必须显示停用状态');
+  assert.equal(hostCreated, 0, '停用应用不得打开 app host');
+}
+
+// A6.5 not installed / unknown app id → apps:get empty → 应用不存在
+{
+  const domD = makeSurfaceDom();
+  const shellD = createAppShell({
+    appId: 'com.natives.app.gone',
+    stage: domD.stage,
+    getNativeClient: () => surfaceClient(null),
+    createHostClient: () => fakeHostClient(),
+  });
+  await shellD.open();
+  assert.ok(domD.stage.textContent.includes('应用无法打开'), '未安装应用必须显示错误状态');
+  assert.ok(domD.toast.textContent.length > 0, '错误必须进 toast');
+}
+
+// A6.6 fund placeholder: mounted, zero host traffic
+{
+  const domE = makeSurfaceDom();
+  let hostCreated = 0;
+  const fundDetail = {
+    app: {
+      app_id: 'fund', kind: 'extension_app', name: '基金', version: '0.1.0',
+      enabled: true, runtime_spec_json: '{"host":"com.natives.app.fund"}',
+    },
+    packages: [],
+    permissions: [],
+  };
+  const shellE = createAppShell({
+    appId: 'fund',
+    stage: domE.stage,
+    getNativeClient: () => surfaceClient(fundDetail),
+    createHostClient: () => { hostCreated += 1; return fakeHostClient(); },
+  });
+  await shellE.open();
+  await tick();
+  assert.ok(domE.stage.textContent.includes('基金'), 'fund 占位 UI 已挂载');
+  assert.equal(hostCreated, 0, 'fund 占位不得打开 host（fund-host 尚未实现）');
+}
+
+// A6.7 D2: registry is build-time only — no remote code URL anywhere
+{
+  assert.ok(isKnownUiModule('com.natives.app.demo'), 'demo 模块必须 build-time 存在');
+  assert.ok(!isKnownUiModule('com.example.mystery'), '目录之外的 appId 必须未知');
+  const appJs = readFileSync(new URL('./app.js', import.meta.url), 'utf8');
+  for (const file of Object.values(APP_UI_MODULES)) {
+    const src = readFileSync(new URL(`./${file}`, import.meta.url), 'utf8');
+    assert.ok(src.includes('export function mountApp'), `${file} 必须导出 mountApp`);
+  }
+  // D2: every module path is a build-time RELATIVE path — no remote code URL.
+  for (const [appId, path] of Object.entries(APP_UI_MODULES)) {
+    assert.ok(path.startsWith('./apps/'), `${appId} 的模块路径必须是包内相对路径`);
+    assert.ok(!path.includes('http'), `${appId} 的模块路径不得是远程 URL（D2）`);
+  }
+  assert.ok(!appJs.includes('com.natives.app.demo'), 'app.js 不得点名 demo host（D50）');
+}
+
+// A6.8 app.html declares the Surface containers
+{
+  const appHtml = readFileSync(new URL('./app.html', import.meta.url), 'utf8');
+  for (const id of ['app-stage', 'app-title', 'app-toast', 'app-back']) {
+    assert.ok(appHtml.includes(`id="${id}"`), `app.html 必须声明 #${id}`);
+  }
+  assert.ok(appHtml.includes('app.js'), 'app.html 必须加载 app.js');
+}
+
+// A6.9 locales: A6 keys exist in both languages (sync requirement)
+{
+  const keys = [
+    'appSurfaceNotFound', 'appSurfaceOpenFailed', 'appSurfaceNeedsUpdate',
+    'appSurfaceNeedsUpdateBody', 'appSurfaceDisabled', 'appSurfaceDisabledBody',
+    'appSurfaceHostOffline', 'appSurfaceHostOfflineBody', 'appSurfaceOpenCenter',
+    'appSurfaceOpenCenterHint', 'demoHostOk', 'demoHostLost', 'demoConnecting',
+    'demoVersion', 'demoHost', 'demoPingTitle', 'fundEmpty',
+  ];
+  for (const loc of ['zh_CN', 'en']) {
+    const messages = JSON.parse(readFileSync(new URL(`./_locales/${loc}/messages.json`, import.meta.url), 'utf8'));
+    for (const key of keys) {
+      assert.equal(typeof messages[key]?.message, 'string', `${loc} 缺少 ${key}`);
+    }
+  }
+}
+
+console.log('apps: Gate A4+A6 checks passed (catalog items, install cycle, D42, conflict, uninstall confirm, settings entry, locales, App Surface, demo host, unknown module)');

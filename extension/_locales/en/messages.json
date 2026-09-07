@@ -2330,6 +2330,57 @@
   "appsCenterSub": {
     "message": "Manage optional Natives apps"
   },
+  "appSurfaceNotFound": {
+    "message": "App not found or uninstalled"
+  },
+  "appSurfaceOpenFailed": {
+    "message": "App cannot be opened"
+  },
+  "appSurfaceNeedsUpdate": {
+    "message": "Update Natives to open this app"
+  },
+  "appSurfaceNeedsUpdateBody": {
+    "message": "This version of Natives has no UI module for this app. Update Natives and retry."
+  },
+  "appSurfaceDisabled": {
+    "message": "App disabled"
+  },
+  "appSurfaceDisabledBody": {
+    "message": "Re-enable it in App Center to open it."
+  },
+  "appSurfaceHostOffline": {
+    "message": "Native Host not connected"
+  },
+  "appSurfaceHostOfflineBody": {
+    "message": "Make sure the Natives Host is running (dev mode: npm run dev)."
+  },
+  "appSurfaceOpenCenter": {
+    "message": "Open App Center"
+  },
+  "appSurfaceOpenCenterHint": {
+    "message": "Open App Center from Settings"
+  },
+  "demoHostOk": {
+    "message": "online"
+  },
+  "demoHostLost": {
+    "message": "disconnected"
+  },
+  "demoConnecting": {
+    "message": "Connecting to demo-host…"
+  },
+  "demoVersion": {
+    "message": "Version"
+  },
+  "demoHost": {
+    "message": "Host"
+  },
+  "demoPingTitle": {
+    "message": "Host communication"
+  },
+  "fundEmpty": {
+    "message": "Fund app installed — no assets yet."
+  },
   "backToSpace": {
     "message": "Back"
   },

@@ -2330,6 +2330,57 @@
   "appsCenterSub": {
     "message": "管理可选 Natives 应用"
   },
+  "appSurfaceNotFound": {
+    "message": "应用不存在或已卸载"
+  },
+  "appSurfaceOpenFailed": {
+    "message": "应用无法打开"
+  },
+  "appSurfaceNeedsUpdate": {
+    "message": "需要更新 Natives 后才能打开"
+  },
+  "appSurfaceNeedsUpdateBody": {
+    "message": "当前 Natives 不包含此应用的界面模块，请更新 Natives 后重试。"
+  },
+  "appSurfaceDisabled": {
+    "message": "应用已停用"
+  },
+  "appSurfaceDisabledBody": {
+    "message": "请在应用中心重新启用后打开。"
+  },
+  "appSurfaceHostOffline": {
+    "message": "Native Host 未连接"
+  },
+  "appSurfaceHostOfflineBody": {
+    "message": "请确认 Natives Host 正在运行（开发模式：npm run dev）。"
+  },
+  "appSurfaceOpenCenter": {
+    "message": "打开应用中心"
+  },
+  "appSurfaceOpenCenterHint": {
+    "message": "请在设置中打开应用中心"
+  },
+  "demoHostOk": {
+    "message": "在线"
+  },
+  "demoHostLost": {
+    "message": "已断开"
+  },
+  "demoConnecting": {
+    "message": "正在连接 demo-host…"
+  },
+  "demoVersion": {
+    "message": "版本"
+  },
+  "demoHost": {
+    "message": "Host"
+  },
+  "demoPingTitle": {
+    "message": "Host 通信"
+  },
+  "fundEmpty": {
+    "message": "基金应用已安装，暂无资产。"
+  },
   "backToSpace": {
     "message": "返回"
   },

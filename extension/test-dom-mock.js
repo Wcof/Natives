@@ -3,6 +3,8 @@
  */
 
 globalThis.Node = { ELEMENT_NODE: 1, ATTRIBUTE_NODE: 2, TEXT_NODE: 3 };
+// NOTE: do NOT override globalThis.Event — Node ≥18 ships a real Event with
+// stopPropagation()/preventDefault(); tests rely on those.
 
 export class MockElement {
   constructor(tagName = 'div') {
