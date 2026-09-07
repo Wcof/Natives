@@ -140,9 +140,10 @@
 
 - **位置**：`/Users/ldh/Downloads/project/AiNative/Natives-App-Fund`
 - **定位**：基金应用独立工程（ADR-0025 第五十二节）。浏览器 UI
-  build-time 进 Natives Core（`extension/apps/fund-ui.js`，尚未实现），
-  Native 业务（`fund-host`）与本仓库分仓维护。**当前尚未创建 crate**，
-  仅有审计文档。
+  build-time 进 Natives Core（`extension/apps/fund-ui.js`，A6 已落地为
+  占位模块：已安装无资产的提示态，打开 `app.html?app=fund` 即挂载，
+  不连接任何 host），Native 业务（`fund-host`）与本仓库分仓维护。
+  **fund-host crate 当前尚未创建**，仅有审计文档。
 - **文件**：
   - `docs/reference/fundval-local-audit.md` — Phase R0 强制的
     FundVal-Live 本地源码审计产出（参考文件 → 问题 → 输入/输出 →
