@@ -95,6 +95,8 @@ assert.match(pricingView, /model-filter-bar-price/, 'pricing form modifier class
 assert.match(pricingView, /model-col-model[\s\S]*model-col-num[\s\S]*model-col-actions/, 'pricing table must declare semantic column classes');
 assert.match(advancedView, /model-col-name[\s\S]*model-col-mask[\s\S]*model-col-actions/, 'keys table must declare semantic column classes');
 assert.match(gatewayView, /data-action=\"resident\"/, 'gateway overview must preserve the resident control');
+assert.match(view, /select\[data-action\], input\[type="checkbox"\]\[data-action\]/, 'settings checkboxes must commit through change events');
+assert.match(controller, /resident && snapshot\.gateway\.state !== 'running'[\s\S]*startGateway/, 'enabling resident mode must also ensure the gateway is running');
 assert.match(gatewayView, /data-action=\"(?:update-kernel|check-kernel-update)\"/, 'gateway overview must expose kernel update actions');
 assert.match(gatewayView, /#i-box[\s\S]*'i-link'/, 'gateway overview must reuse the shared SVG sprite');
 assert.doesNotMatch(gatewayView, /127\.0\.0\.1:8317|v7\.2\.139|v0\.2\.25/, 'gateway overview must not invent runtime values');

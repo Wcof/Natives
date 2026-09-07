@@ -1113,7 +1113,7 @@
     "message": "Automatic Request Retries (0-10)"
   },
   "modelResident": {
-    "message": "Keep running"
+    "message": "Keep running after the browser closes"
   },
   "modelRestarting": {
     "message": "Restarting"

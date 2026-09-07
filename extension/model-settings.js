@@ -180,6 +180,16 @@ class ModelSettings {
     }
   }
 
+  async setResident(resident, expectedRevision) {
+    return this.mutate(async () => {
+      let snapshot = await this.api.setResident({ resident, expectedRevision });
+      if (resident && snapshot.gateway.state !== 'running') {
+        snapshot = await this.api.startGateway({ expectedRevision: snapshot.revision });
+      }
+      return snapshot;
+    });
+  }
+
   async handleAction(action, target, event) {
     const revision = this.snapshot?.revision;
     if (action === 'close') return this.view.close();
@@ -256,7 +266,7 @@ class ModelSettings {
       }
       return;
     }
-    if (action === 'resident') return this.mutate(() => this.api.setResident({ resident: target.checked, expectedRevision: revision }));
+    if (action === 'resident') return this.setResident(target.checked, revision);
     if (action === 'copy-endpoint') {
       if (await this.copyText(target.dataset.endpoint, this.t('modelEndpointUnavailable', '代理地址当前不可用'))) this.view.showToast(this.t('copied', '已复制'));
       return;

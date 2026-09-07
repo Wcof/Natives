@@ -123,10 +123,10 @@ export function createModelSettingsView({ t, onAction }) {
 
   dialog.addEventListener('click', (event) => {
     const action = event.target.closest('[data-action]');
-    if (action) onAction(action.dataset.action, action, event);
+    if (action && !action.matches('select[data-action], input[type="checkbox"][data-action]')) onAction(action.dataset.action, action, event);
   });
   dialog.addEventListener('change', (event) => {
-    const action = event.target.matches('select[data-action]') ? event.target : null;
+    const action = event.target.matches('select[data-action], input[type="checkbox"][data-action]') ? event.target : null;
     if (action) onAction(action.dataset.action, action, event);
   });
 

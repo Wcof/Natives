@@ -92,13 +92,15 @@ func buildZCode(home, base, apiKey, model string) ([]Change, string, error) {
 		}
 		providers := nestedMap(document, "provider")
 		providers[ProviderID] = map[string]any{
-			"enabled":   true,
-			"name":      ProviderName,
-			"source":    "custom",
-			"kind":      "anthropic",
-			"apiFormat": "anthropic-messages",
-			"options":   map[string]any{"baseURL": base, "apiKey": apiKey},
-			"models":    map[string]any{model: map[string]any{"name": model}},
+			"enabled":     true,
+			"name":        ProviderName,
+			"source":      "custom",
+			"kind":        "anthropic",
+			"defaultKind": "anthropic",
+			"apiFormat":   "anthropic-messages",
+			"npm":         "@ai-sdk/anthropic",
+			"options":     map[string]any{"baseURL": base, "apiKey": apiKey},
+			"models":      map[string]any{model: map[string]any{"name": model}},
 		}
 		managed := ProviderID + "/" + model
 		if target.modelKey == "model" {

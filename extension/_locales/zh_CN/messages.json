@@ -1113,7 +1113,7 @@
     "message": "故障自动重试次数 (0-10)"
   },
   "modelResident": {
-    "message": "常驻"
+    "message": "常驻（关闭浏览器后继续运行）"
   },
   "modelRestarting": {
     "message": "重启中"

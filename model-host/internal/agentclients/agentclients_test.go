@@ -121,6 +121,16 @@ func TestZCodeWritesBothVariants(t *testing.T) {
 	if strings.Contains(string(data), `"providers"`) || !strings.Contains(string(data), `"provider"`) {
 		t.Fatalf("zcode config must use provider (singular): %s", data)
 	}
+	for _, change := range changes {
+		var document map[string]any
+		if err := json.Unmarshal(change.Content, &document); err != nil {
+			t.Fatalf("decode zcode config: %v", err)
+		}
+		provider := document["provider"].(map[string]any)[ProviderID].(map[string]any)
+		if provider["kind"] != "anthropic" || provider["defaultKind"] != "anthropic" || provider["apiFormat"] != "anthropic-messages" || provider["npm"] != "@ai-sdk/anthropic" {
+			t.Fatalf("zcode provider protocol fields are incomplete: %#v", provider)
+		}
+	}
 }
 
 func TestFetchModelsParsesGatewayPayload(t *testing.T) {

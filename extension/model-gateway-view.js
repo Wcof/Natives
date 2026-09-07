@@ -53,7 +53,7 @@ function renderRuntime(gateway, running, busy, t) {
   const footer = element('div', 'model-section-footer');
   const resident = document.createElement('label');
   resident.className = 'model-switch';
-  resident.innerHTML = `<input type="checkbox" data-action="resident" ${gateway.resident ? 'checked' : ''}><span>${escapeText(t('modelResident', '常驻'))}</span>`;
+  resident.innerHTML = `<input type="checkbox" data-action="resident" ${gateway.resident ? 'checked' : ''}><span>${escapeText(t('modelResident', '常驻（关闭浏览器后继续运行）'))}</span>`;
   const actions = element('div', 'model-form-actions');
   actions.append(
     actionButton('refresh-gateway', t('modelRefreshStatus', '刷新状态'), '', busy),
