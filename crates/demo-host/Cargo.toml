@@ -9,10 +9,3 @@ license = "MIT"
 # Pure std + serde_json: no HTTP, no TLS, no async — the smallest possible
 # app runtime that exercises the full install/sidecar/health lifecycle.
 serde_json = "1"
-
-[profile.release]
-strip = "symbols"
-lto = "fat"
-codegen-units = 1
-panic = "abort"
-opt-level = "z"

@@ -19,7 +19,7 @@ use super::schema;
 use super::types::{
     install_state, App, AppError, AppPackage, AppPermission, InstallPackageResult, InstallRequest,
     InstallTransaction, PACKAGE_DATA_MAX_BASE64_BYTES, PACKAGE_MAX_PAYLOAD_BYTES,
-    PACKAGE_MAX_WIRE_BYTES, REQUIRED_MAX_PACKAGES,
+    PACKAGE_MAX_WIRE_BYTES,
 };
 use crate::app_install;
 use crate::workspace_store::schema::uuid_v4;

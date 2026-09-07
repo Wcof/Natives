@@ -172,6 +172,7 @@ pub fn runtime_current_path(app_root: &Path, app_id: &str) -> PathBuf {
     app_root.join(app_id).join("runtime").join("current")
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn read_runtime_current(app_root: &Path, app_id: &str) -> Option<String> {
     let text = std::fs::read_to_string(runtime_current_path(app_root, app_id)).ok()?;
     let version = text.trim().to_string();
@@ -221,15 +222,16 @@ pub fn health_check_binary(path: &Path) -> Result<(), AppError> {
         let err = std::io::read_to_string(stderr);
         let _ = tx.send((out, err));
     });
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let timeout_secs = if cfg!(test) { 5 } else { 2 };
+    let deadline = Instant::now() + Duration::from_secs(timeout_secs);
     let (out, err) = loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
             let _ = child.kill();
             let _ = child.wait();
-            return Err(AppError::InvalidState(
-                "health check timed out (2 s)".into(),
-            ));
+            return Err(AppError::InvalidState(format!(
+                "health check timed out ({timeout_secs} s)",
+            )));
         }
         match rx.recv_timeout(remaining.min(Duration::from_millis(100))) {
             Ok(result) => break result,

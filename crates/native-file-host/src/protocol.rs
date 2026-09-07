@@ -404,7 +404,6 @@ mod tests {
 
     #[test]
     fn refuses_oversized_host_response() {
-        use std::io::Sink;
         let body: Vec<u8> = vec![b'a'; MAX_MESSAGE_BYTES];
         let writer: Arc<Mutex<io::Stdout>> = Arc::new(Mutex::new(io::stdout()));
         // We cannot safely write 1 MiB to real stdout in a test, so
