@@ -538,6 +538,28 @@ check-app-projection.mjs      Projection 字段白名单
 
 `package.json` 新增脚本：`apps:contract:check` / `apps:package:check` / `apps:catalog:check` / `apps:security:check` / `apps:check`。`perf:check` 必须包含现有 `perf:files` + `apps:check`。`perf:extension` 口径不变（Hard ≤ 307,200 bytes），增加 `deltaFromBaseline` 输出与 NEAR_BUDGET（≥290 KiB）警告。
 
+### D30 · DLC 形式分发托管与多源分发架构（DLC-Style Distribution & Artifact Hosting）
+
+针对扩展应用（Extension Apps）的源码管理、构建产物托管与分发渠道，正式确立**“源码内聚单体仓、分发产物托管在 GitHub Releases / 外部 CDN、按需下载即删”**的 DLC 架构规范：
+
+#### 1. 源码与二进制严格物理分离（防仓库膨胀）
+- **源码托管位置**：所有 Extension App 官方源码统一在主仓库 `apps/<app-id>/`（或独立子模块）维护，享受主项目的统一类型定义、协议契约与开发调试便利。
+- **严禁二进制入 Git**：编译生成的跨平台可执行二进制、压缩包（`.nap` / `.zip`）、临时构建产物**严禁提交入 Git 仓库**（由根目录 `.gitignore` 硬性阻断）。
+- **扩展包本体零负担**：Chrome 扩展包（Extension Bundle）中仅内置官方签名的轻量应用目录索引清单（`catalog-v1.json` + `catalog-v1.sig`），未安装的应用在扩展包与本地磁盘中**体积占用为 0**。
+
+#### 2. DLC 构建物托管与分发架构
+构建产物以 NAP（Natives App Package）格式打包，并上传至独立的对象存储 / Releases 资产库，不在主仓库存储：
+- **官方权威发布源**：GitHub Releases 资产附件（例如 `https://github.com/Wcof/Natives/releases/download/v<version>/<app-id>-<platform>-<arch>-<version>.nap`）。
+- **国内免梯镜像与加速源（Fallback CDN）**：Catalog 支持通过可配置的加速前缀（如 GitHub CDN / 镜像代理 / 对象存储镜像）进行多源容灾，保障无梯或弱网环境下的安装成功率。
+- **双重校验保证供应链安全**：
+  1. 扩展端内置 Ed25519 公钥验证 Catalog 清单防篡改；
+  2. 下载 DLC 时流式校验 `artifactSha256` 与解压后 `payloadSha256`，严格拦截未授权篡改文件。
+
+#### 3. 游戏 DLC 式生命周期（按需装卸与物理清理）
+- **安装（Mount / Install）**：用户在「应用中心」显式点击安装 ➔ 浏览器发起 HTTPS 下载 ➔ 本地 `native-file-host` 校验签名落盘至 `~/.natives/apps/<app-id>/runtime/<version>/` ➔ 自动向 Chrome 注册原生管道 Manifest ➔ 侧边栏点亮入口。
+- **卸载（Unmount / Uninstall）**：用户点击卸载 ➔ 优雅关停子应用后台进程 ➔ 抹除 Chrome Native Messaging Manifest ➔ 物理彻底删除 `~/.natives/apps/<app-id>/runtime/` 运行体目录 ➔ 侧边栏挂载点移除。
+- **个人数据选择性保留**：卸载时明确询问用户是否保留数据目录 `~/.natives/apps/<app-id>/data/`；若保留，下次重装该 DLC 时历史数据和配置无缝继承；若删除则全局彻底清零，不留任何磁盘残渣。
+
 ## 后果
 
 ### 正面
