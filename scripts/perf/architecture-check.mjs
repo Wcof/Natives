@@ -12,6 +12,8 @@ const IGNORED_DIRS = new Set([
 const ALLOWED_EXCEED_REASONS = new Map([
   ['crates/native-file-host/src/tests.rs', 'Aggregated host test suite containing extensive IPC scenarios'],
   ['crates/file-manager-core/src/file_manager/file_manager_tests.rs', 'Comprehensive core filesystem operations test suite'],
+  ['extension/files.js', 'Workspace shell controller: files.html surface, section routing and app-menu wiring'],
+  ['crates/native-file-host/src/app_store/mutation.rs', 'App Store mutation layer: install/commit/rollback state machine and runtime registration'],
 ]);
 
 async function scanFiles(dir) {
