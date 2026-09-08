@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { createHash, generateKeyPairSync } from 'node:crypto';
 import { platform } from 'node:os';
-import { basename, join, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { buildExtension } from '../scripts/extension-package.mjs';
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const extensionSource = join(root, 'extension');
@@ -83,14 +84,7 @@ async function loadDevKey() {
 
 async function prepareExtension() {
   const publicKey = await loadDevKey();
-  await rm(devExtension, { recursive: true, force: true });
-  await cp(extensionSource, devExtension, {
-    recursive: true,
-    filter: source => !new Set([
-      'README.md', 'check-lifecycle.mjs', 'dev.mjs', 'install-native-host.mjs',
-      'launch-workbench.mjs', 'native-host-manifest.json', 'folder-source.svg', 'native-client.test.mjs',
-    ]).has(basename(source)),
-  });
+  buildExtension(devExtension);
   const manifestPath = join(devExtension, 'manifest.json');
   const manifest = JSON.parse(await readFile(manifestPath, 'utf8'));
   manifest.key = publicKey.toString('base64');

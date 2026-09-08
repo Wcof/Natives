@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { distributableFiles } from '../scripts/extension-package.mjs';
 
 const [manifest, background, files, nativeClient, filesHtml, filesBootstrap, filesCss, launch, dev, en, zh, spaceHtml, spaceScript, filesIcons, filesDiskUsage, filesOperations, filesPreviewControllers, filesSearch, filesShortcuts, filesEntriesRenderer, filesContextMenu, filesPreferences, filesPreviewLayout, filesToolbar, filesWorkspaceBindings, filesEditorBindings, filesEntryEffects, filesHostConnection, filesFeedback, filesWatchController, filesPaths, protocol, mainRs, workspaceStore, workspaceSchema, spacePlugins, spaceDashboard, spaceWidgetTime, spaceWidgetGreeting, spaceCss, spaceTree, sidebarController, filesSidebar] = await Promise.all([
   readFile(new URL('./manifest.json', import.meta.url), 'utf8'),
@@ -348,14 +349,14 @@ for (const key of ['language', 'currentDirectorySearch', 'previewUnavailable', '
 assert.doesNotMatch(background, /connectNative|setTimeout|pending|nativePort/);
 assert.match(launch, /files\.html/);
 assert.match(dev, /fs\/promises/);
-assert.match(dev, /await cp\(extensionSource, devExtension/);
+assert.match(dev, /buildExtension\(devExtension\)/, 'dev must use the same distribution bytes as the release budget');
 assert.match(dev, /generateKeyPairSync/);
 assert.match(dev, /install-native-host\.mjs/);
 assert.match(dev, /Chrome will start the Host on demand/);
 assert.match(dev, /setInterval\(\(\) => \{\}, 2 \*\* 31 - 1\)/, 'dev must stay alive until explicitly stopped');
 assert.match(dev, /\['SIGINT', 'SIGTERM'\]/, 'dev must stop on Ctrl+C or termination');
 assert.doesNotMatch(dev, /cleanupManifest|process\.on\('exit'|NATIVES_OPEN_BROWSER|--load-extension|chrome:\/\/extensions/, 'dev must persist Host registration and never launch Chrome');
-assert.match(dev, /native-client\.test\.mjs/);
+assert.ok(!distributableFiles().includes('native-client.test.mjs'), 'test code must not enter the extension');
 // --- ADR-0024: workspace authority + shell ---
 assert.match(protocol, /"workspace_session"[\s\S]*"workspace_snapshot"[\s\S]*"workspace_create"[\s\S]*"workspace_delete"[\s\S]*"workspace_widget_upsert"[\s\S]*"workspace_save_from_tabliss"[\s\S]*"settings_get"[\s\S]*"settings_set"/, 'workspace method family must be whitelisted');
 assert.match(workspaceSchema, /CREATE TABLE IF NOT EXISTS settings/, 'settings table must exist');

@@ -343,9 +343,11 @@ runtime/
 └── current          # 内容 = active 版本号
 ```
 
-升级流程：当前 1.0.0 → 安装 1.1.0 到 `staging/` → 验证（hash/size）→ 移入 `runtime/1.1.0/` → 更新 Host Manifest 指向新版本路径 → health check → `current` 写入 `1.1.0` → commit。**任何一步失败，`current` 继续指向 1.0.0**，新版本 staging/半成品删除。
+升级流程：当前 1.0.0 → 安装 1.1.0 到 `staging/` → 验证（hash/size）→ 移入 `runtime/1.1.0/` → health check → 获取 Runtime 排他锁 → 更新 Host Manifest 和 `current` → commit。提交前持久化原 Manifest 和 `current` 的恢复记录；提交前失败恢复 1.0.0，提交后清理失败保留 1.1.0 与待清理记录，重试只完成清理。`current` 是原子写入的版本文本文件。激活及回滚未完成时禁止从 App Shell 打开 Runtime。
 
 ### D16 · 卸载：默认保留个人数据
+
+**2026-09-08 Host Manifest 契约修订**：Chrome 的 Native Messaging Manifest 必须包含静态 `description`。允许字段明确为 `name/description/path/type/allowed_origins`，其中 `description` 固定为产品说明，不承载用户数据。同步 R-S14 的字段白名单；caller origin、路径、Secret 限制继续有效。
 
 默认卸载：
 
@@ -453,13 +455,14 @@ Catalog 出现注册表之外的 `appId` → UI 显示「需要更新 Natives �
 
 ### D24 · Fund App 分仓与浏览器 UI 归属
 
+- **2026-09-07 修订**：下述独立仓库布局是早期开发方案；官方 App 源码及 Catalog 的维护位置由 D30 取代。浏览器 UI build-time 集成与业务域隔离继续有效，迁移已有源码时保留历史与行为验收。
 - Native 业务在独立仓库 **`Natives-App-Fund`**（与 Natives Core 分仓维护）：`src/{protocol,domain,storage,sources,sync,portfolio,analysis}/`、`migrations/`、`fixtures/`、`docs/reference/`、`packaging/`、独立 CI（`cargo fmt` / `cargo test` / `fund:package` / `fund:package:size` / `fund:protocol:test` / `fund:lifecycle:test` / `fund:source:fixture:test`）。
 - 浏览器 Fund UI 在 **Natives Core** `extension/apps/fund-ui.js`——因为浏览器 UI 必须 build-time 集成进扩展包，Native Runtime 可以独立发布。这是 D2 的直接推论。
 - Fund 领域模型（不按 FundVal-Live Django Model 照搬）：`Account / Asset / Position / Transaction / Portfolio / Fund / FundHolding / Security / Quote / SourceConnection / SyncRun`。
 
 ### D25 · Catalog 分发与 Public Store Gate
 
-- Catalog 第一阶段为独立仓库 `Natives-App-Catalog`，内容 `catalog-v1.json` + `catalog-v1.sig`。
+- Catalog 第一阶段曾位于独立仓库 `Natives-App-Catalog`；D30 取代源码维护位置，签名文件对 `catalog-v1.json` + `catalog-v1.sig` 与下列分发约束继续有效。
 - 开发阶段：GitHub + GitHub Releases 托管即可；生产建议切自有域名 + CDN（R2）。客户端协议不变，换取更窄 host permission 与更稳定 URL。
 - **Catalog URL 是 build-time 固定常量**，禁止开放用户配置任意 Catalog URL（供应链入口不得变成任意地址）。
 - **Public Chrome Web Store Gate**：开发/私有阶段可完成 Native Runtime 在线安装机制；正式提交 Chrome Web Store 前必须单独完成「在线下载 Native executable」政策审计。若公共商店认定此分发模式不合适，生产发行切换为「Natives 原生 Installer 负责 Native Runtime 分发」，App Center 保留安装/激活/卸载语义。**不得为赶上线规避审核**。
@@ -540,25 +543,27 @@ check-app-projection.mjs      Projection 字段白名单
 
 ### D30 · DLC 形式分发托管与多源分发架构（DLC-Style Distribution & Artifact Hosting）
 
+**2026-09-07 一致性修订**：D30 取代 D24/D25 的分仓维护位置，不取代 D2/R-S14 的浏览器代码规则、D8 的验证分工、D15 的版本文件与回滚、D16 的数据保留及二次确认。运行时下载的是 Native Runtime 与数据，浏览器 UI 必须随扩展构建。
+
 针对扩展应用（Extension Apps）的源码管理、构建产物托管与分发渠道，正式确立**“源码内聚单体仓、分发产物托管在 GitHub Releases / 外部 CDN、按需下载即删”**的 DLC 架构规范：
 
 #### 1. 源码与二进制严格物理分离（防仓库膨胀）
 - **源码托管位置**：所有 Extension App 官方源码统一在主仓库 `apps/<app-id>/`（或独立子模块）维护，享受主项目的统一类型定义、协议契约与开发调试便利。
 - **严禁二进制入 Git**：编译生成的跨平台可执行二进制、压缩包（`.nap` / `.zip`）、临时构建产物**严禁提交入 Git 仓库**（由根目录 `.gitignore` 硬性阻断）。
-- **扩展包本体零负担**：Chrome 扩展包（Extension Bundle）中仅内置官方签名的轻量应用目录索引清单（`catalog-v1.json` + `catalog-v1.sig`），未安装的应用在扩展包与本地磁盘中**体积占用为 0**。
+- **原生运行体零预装**：Chrome 扩展包内包含官方签名的轻量目录（`catalog-v1.json` + `catalog-v1.sig`）和 build-time App UI，禁止包含 `.nap` 或 Native 可执行体。未安装 App 的 UI 零执行，Native Runtime 下载量与落盘占用为 0；UI 文件计入 300 KiB 扩展预算。默认卸载保留的个人数据不属于零占用承诺。
 
 #### 2. DLC 构建物托管与分发架构
 构建产物以 NAP（Natives App Package）格式打包，并上传至独立的对象存储 / Releases 资产库，不在主仓库存储：
 - **官方权威发布源**：GitHub Releases 资产附件（例如 `https://github.com/Wcof/Natives/releases/download/v<version>/<app-id>-<platform>-<arch>-<version>.nap`）。
-- **国内免梯镜像与加速源（Fallback CDN）**：Catalog 支持通过可配置的加速前缀（如 GitHub CDN / 镜像代理 / 对象存储镜像）进行多源容灾，保障无梯或弱网环境下的安装成功率。
+- **镜像与加速源（Fallback CDN）**：使用发布时固定的 HTTPS 来源白名单；不开放任意用户 URL 或任意代理前缀。镜像必须提供同一版本、相同字节的签名目录与资产。网络失败可有限换源重试，验签、hash 或预算失败必须终止安装。目录与签名成对获取，错误不降级到未验证内容；镜像不可用必须有可重试错误状态。
 - **双重校验保证供应链安全**：
   1. 扩展端内置 Ed25519 公钥验证 Catalog 清单防篡改；
   2. 下载 DLC 时流式校验 `artifactSha256` 与解压后 `payloadSha256`，严格拦截未授权篡改文件。
 
 #### 3. 游戏 DLC 式生命周期（按需装卸与物理清理）
-- **安装（Mount / Install）**：用户在「应用中心」显式点击安装 ➔ 浏览器发起 HTTPS 下载 ➔ 本地 `native-file-host` 校验签名落盘至 `~/.natives/apps/<app-id>/runtime/<version>/` ➔ 自动向 Chrome 注册原生管道 Manifest ➔ 侧边栏点亮入口。
+- **安装（Mount / Install）**：用户在「应用中心」显式点击安装 ➔ 浏览器按 D8 验签、下载、校验 artifact hash 并有界解压 ➔ `native-file-host` 重新校验 payload 大小和 hash，落盘至 `~/.natives/apps/<app-id>/runtime/<version>/` ➔ 使用 Chrome 启动参数中的 caller origin 注册 Native Messaging Manifest ➔ 健康检查与事务提交完成后更新侧边栏。页面握手只能核对该 origin，不能另行授予来源权限。
 - **卸载（Unmount / Uninstall）**：用户点击卸载 ➔ 优雅关停子应用后台进程 ➔ 抹除 Chrome Native Messaging Manifest ➔ 物理彻底删除 `~/.natives/apps/<app-id>/runtime/` 运行体目录 ➔ 侧边栏挂载点移除。
-- **个人数据选择性保留**：卸载时明确询问用户是否保留数据目录 `~/.natives/apps/<app-id>/data/`；若保留，下次重装该 DLC 时历史数据和配置无缝继承；若删除则全局彻底清零，不留任何磁盘残渣。
+- **个人数据选择性保留**：默认保留 `data/`、`cache/`、`imports/`；删除数据需要显式选择及二次确认，普通卸载后仍可单独清理。彻底清理覆盖该 App 目录、专属日志与其声明的 OS Keychain namespace，绝不删除其他域的数据。失败必须保留可重试的清理记录，只有所有步骤完成才报告清理成功；文件删除不承诺存储介质安全擦除或删除用户的外部备份。
 
 ## 后果
 

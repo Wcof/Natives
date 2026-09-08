@@ -11,7 +11,7 @@
 use serde_json::Value;
 use std::io::{self, Read, Write};
 
-const VERSION: &str = "1.0.0";
+const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn main() {
     if std::env::args().any(|arg| arg == "--health") {
@@ -21,6 +21,13 @@ fn main() {
         );
         return;
     }
+    let _runtime = match runtime_lock() {
+        Ok(lock) => lock,
+        Err(_) => {
+            eprintln!("app runtime unavailable during maintenance");
+            return;
+        }
+    };
     let stdin = io::stdin();
     let stdout = io::stdout();
     let mut input = stdin.lock();
@@ -36,6 +43,42 @@ fn main() {
             None => break, // stdin EOF: Chrome closed the port → exit.
         }
     }
+}
+
+fn runtime_lock() -> io::Result<std::fs::File> {
+    let binary = std::env::current_exe()?;
+    let runtime = binary
+        .parent()
+        .and_then(std::path::Path::parent)
+        .filter(|path| path.file_name().is_some_and(|name| name == "runtime"))
+        .ok_or_else(|| io::Error::other("runtime must be installed"))?;
+    let app = runtime
+        .parent()
+        .ok_or_else(|| io::Error::other("app directory missing"))?;
+    let root = app
+        .parent()
+        .ok_or_else(|| io::Error::other("app root missing"))?;
+    let id = app
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| io::Error::other("invalid app id"))?;
+    if !matches!(id, "demo" | "com.natives.app.demo") {
+        return Err(io::Error::other("wrong app directory"));
+    }
+    let path = root.join(".locks/demo.runtime.lock");
+    // The installer creates this file; runtime never creates or replaces it.
+    if std::fs::symlink_metadata(&path)?.file_type().is_symlink() {
+        return Err(io::Error::other("linked runtime lock"));
+    }
+    let lock = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)?;
+    lock.try_lock_shared().map_err(io::Error::other)?;
+    if std::fs::read_to_string(runtime.join("current"))?.trim() != VERSION {
+        return Err(io::Error::other("runtime version is not active"));
+    }
+    Ok(lock)
 }
 
 fn handle(body: &[u8]) -> Vec<u8> {

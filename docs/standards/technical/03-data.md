@@ -131,6 +131,9 @@
 | 表 | 用途 |
 |----|------|
 | `modules` | 模块注册表 |
+| `apps` / `app_packages` / `app_permissions` | App 安装权威、包收据与权限 |
+| `app_install_transactions` / `app_package_stages` | 安装事务、恢复日志与包暂存状态 |
+| `app_meta` / `app_retained_data` | 导航版本与可重试的卸载、个人数据清理记录 |
 | `module_permissions` | 模块权限声明 |
 | `settings` | 用户设置（KV） |
 | `module_data` | 插件数据（按 module_id 隔离） |

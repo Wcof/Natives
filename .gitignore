@@ -111,3 +111,9 @@ credentials.json
 !third_party/**/testdata/**/*.json
 
 Natives-source-clean.zip
+
+# ADR-0025 D30: build artifacts and Native App packages never belong in Git.
+*.nap
+*.exe
+*.dll
+*.dylib

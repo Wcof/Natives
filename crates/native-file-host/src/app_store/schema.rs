@@ -15,7 +15,9 @@ use crate::workspace_store::WorkspaceError;
 
 /// Idempotent App Store migration.
 pub fn migrate_apps(conn: &Connection) -> Result<(), AppError> {
-    let tx = conn.unchecked_transaction()?;
+    // Acquire the writer before schema reads; concurrent Host connections must wait,
+    // not try to upgrade a stale read snapshot into a write transaction.
+    let tx = rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)?;
     create_app_tables(&tx)?;
     migrate_app_columns(&tx)?;
     tx.commit()?;
@@ -105,6 +107,18 @@ fn create_app_tables(conn: &Connection) -> Result<(), AppError> {
 }
 
 fn migrate_app_columns(conn: &Connection) -> Result<(), AppError> {
+    if !table_has_column(conn, "app_install_transactions", "rollback_json")
+        .map_err(|error| AppError::InvalidState(error.to_string()))?
+    {
+        conn.execute("ALTER TABLE app_install_transactions ADD COLUMN rollback_json TEXT NOT NULL DEFAULT ''", [])?;
+    }
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS app_retained_data (
+        app_id TEXT PRIMARY KEY NOT NULL, name TEXT NOT NULL, host TEXT NOT NULL,
+        permissions_json TEXT NOT NULL, cleanup_pending INTEGER NOT NULL DEFAULT 0,
+        purge_data INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL
+    );",
+    )?;
     // ADR-0025 D13 ships the full V1 column set; this hook keeps later App
     // Store schema growth capability-based without touching user_version.
     let has_sidebar_order = match table_has_column(conn, "apps", "sidebar_order") {

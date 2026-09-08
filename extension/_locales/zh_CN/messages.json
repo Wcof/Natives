@@ -2445,12 +2445,78 @@
     "message": "卸载应用？"
   },
   "appsUninstallBody": {
-    "message": "将删除程序、运行时与注册信息，保留个人数据。如需清除个人数据，请另行执行「删除应用及全部数据」。"
+    "message": "将删除程序和注册信息，默认保留个人数据。保留的数据可稍后单独清除。"
   },
   "appsUpdateHint": {
     "message": "V1 更新：先卸载当前版本，再安装新版本（个人数据保留）"
   },
   "appsNoPermissions": {
     "message": "无权限需求"
+  },
+  "appsNeedsUpdate": {
+    "message": "需要更新 Natives"
+  },
+  "appsNotReleased": {
+    "message": "尚未发布安装包"
+  },
+  "appsUnsupportedPlatform": {
+    "message": "暂无适用于此设备的安装包"
+  },
+  "appsNetworkError": {
+    "message": "网络连接失败"
+  },
+  "appsBusy": {
+    "message": "应用仍在使用中，请关闭后重试"
+  },
+  "appsVerificationFailed": {
+    "message": "安全校验失败，已停止安装"
+  },
+  "appsOperationFailed": {
+    "message": "操作未完成，请重试"
+  },
+  "appsCancelled": {
+    "message": "已取消安装"
+  },
+  "appsEmbeddedCatalog": {
+    "message": "远端目录不可用，正在显示随扩展发布的目录"
+  },
+  "appsCatalogLoading": {
+    "message": "正在加载应用目录"
+  },
+  "appsCleanupPending": {
+    "message": "清理未完成，可重试"
+  },
+  "appsDataRetained": {
+    "message": "已卸载，个人数据已保留"
+  },
+  "appsClearData": {
+    "message": "删除全部个人数据"
+  },
+  "appsEnabled": {
+    "message": "启用应用"
+  },
+  "appsShowInSidebar": {
+    "message": "在侧边栏显示"
+  },
+  "appsDataDeleted": {
+    "message": "应用及其个人数据已删除"
+  },
+  "appsPurgeChoice": {
+    "message": "同时删除全部个人数据、配置和凭据"
+  },
+  "appsPurgeWarning": {
+    "message": "此操作会删除该应用的个人数据、配置、日志和凭据，无法恢复。"
+  },
+  "appsPurgeConfirmTitle": {
+    "message": "确认永久删除个人数据？"
+  },
+  "appsRecoveryPending": {
+    "message": "安装中断，待恢复后重试"
+  },
+  "appSurfacePaused": {
+    "message": "应用已暂停"
+  },
+  "appSurfaceRepairRequired": {
+    "message": "应用运行时需要重新安装"
   }
 }

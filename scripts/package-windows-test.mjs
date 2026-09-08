@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process';
 import { cp, mkdir, readFile, rm, writeFile, stat, readdir } from 'node:fs/promises';
+import { buildExtension } from './extension-package.mjs';
 import { existsSync, readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join, resolve, basename, relative } from 'node:path';
@@ -138,14 +139,7 @@ async function main() {
     'folder-source.svg', 'test-dom-mock.js',
   ]);
 
-  await cp(EXTENSION_SRC, join(STAGING_DIR, 'Extension'), {
-    recursive: true,
-    filter: (src) => {
-      const name = basename(src);
-      if (excludedNames.has(name) || name.includes('.test.')) return false;
-      return true;
-    },
-  });
+  buildExtension(join(STAGING_DIR, 'Extension'));
 
   // Inject fixed public key into manifest.json
   const manifestPath = join(STAGING_DIR, 'Extension', 'manifest.json');

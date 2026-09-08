@@ -16,6 +16,8 @@
 //! yet; dead code is allowed explicitly for that staged window.
 #![allow(dead_code)]
 
+mod cleanup;
+mod install;
 pub mod mutation;
 pub mod query;
 pub mod schema;

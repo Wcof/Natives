@@ -1,6 +1,6 @@
 [package]
 name = "demo-host"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2021"
 description = "Minimal demo Native Messaging host for the Natives Apps Framework (ADR-0025 Phase A5/A6)."
 license = "MIT"

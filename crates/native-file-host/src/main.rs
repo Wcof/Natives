@@ -10,9 +10,12 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 
 mod app_dispatch;
+#[cfg(debug_assertions)]
+mod app_fixture;
 mod app_host;
 mod app_host_manifest;
 mod app_install;
+mod app_secrets;
 mod app_store;
 mod batch;
 mod dispatch;
@@ -47,6 +50,10 @@ fn workspace_dispatch(store: &WorkspaceStore, request: &Request) -> Result<Value
 }
 
 fn main() -> io::Result<()> {
+    #[cfg(debug_assertions)]
+    if std::env::args().nth(1).as_deref() == Some("--app-fixture") {
+        return app_fixture::run();
+    }
     let mut input = io::stdin().lock();
     let writer = Arc::new(Mutex::new(io::stdout()));
     let mut watchers = WatchManager::default();
@@ -62,7 +69,13 @@ fn main() -> io::Result<()> {
         }
     };
     let app_store_singleton = match AppStore::open(&workspace_store::default_db_path()) {
-        Ok(store) => Some(store),
+        Ok(store) => {
+            store.set_caller_origin(std::env::args().nth(1).as_deref());
+            if let Err(error) = store.recover_interrupted() {
+                eprintln!("app install recovery pending: {}", error.code());
+            }
+            Some(store)
+        }
         Err(error) => {
             eprintln!("app store initialization failed: {error}");
             None

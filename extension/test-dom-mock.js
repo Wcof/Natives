@@ -23,6 +23,11 @@ export class MockElement {
       add(...cls) { cls.forEach((c) => this._classes.add(c)); },
       remove(...cls) { cls.forEach((c) => this._classes.delete(c)); },
       contains(c) { return this._classes.has(c); },
+      toggle(c, force) {
+        const add = force === undefined ? !this._classes.has(c) : Boolean(force);
+        if (add) this._classes.add(c); else this._classes.delete(c);
+        return add;
+      },
     };
     this._textContent = '';
   }

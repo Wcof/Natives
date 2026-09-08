@@ -11,6 +11,7 @@ import { gzipSync } from 'node:zlib';
 
 import {
   CATALOG_PUBLIC_KEY_B64,
+  loadVerifiedCatalog,
   verifyCatalogSignature,
   downloadNapPackage,
   decompressNap,
@@ -25,6 +26,7 @@ const sha256Hex = (bytes) =>
     b.toString(16).padStart(2, '0'),
   ).join('');
 
+const ASSET_URL = 'https://github.com/Wcof/Natives/releases/download/apps-demo-v1.1.0/demo.nap';
 const digest = async (bytes) => globalThis.crypto.subtle.digest('SHA-256', bytes);
 
 // ── fetch mock ─────────────────────────────────────────────────────────
@@ -98,19 +100,19 @@ function mockResponse(bytes, { status = 200, chunkSize = 256 * 1024 } = {}) {
   for (const size of [near, near + 1]) {
     const bytes = new Uint8Array(size); // zero-filled: fine, gate is on size
     const fetchImpl = async () => mockResponse(bytes, { chunkSize: 1024 * 1024 });
-    const result = await downloadNapPackage({ url: 'mock', wireSize: size, fetchImpl });
+    const result = await downloadNapPackage({ url: ASSET_URL, wireSize: size, fetchImpl });
     assert.equal(result.wireSize, size, `wire ${size} must pass`);
   }
   const over = new Uint8Array(near + 2);
   const fetchImplOver = async () => mockResponse(over, { chunkSize: 1024 * 1024 });
   await assert.rejects(
-    () => downloadNapPackage({ url: 'mock', wireSize: near + 2, fetchImpl: fetchImplOver }),
+    () => downloadNapPackage({ url: ASSET_URL, wireSize: near + 2, fetchImpl: fetchImplOver }),
     (e) => e.message.includes('5 MiB'),
     '5,242,881 bytes must FAIL',
   );
   // catalog-declared wire_size above the gate fails before any download
   await assert.rejects(
-    () => downloadNapPackage({ url: 'mock', wireSize: near + 2, fetchImpl: async () => { throw new Error('must not fetch'); } }),
+    () => downloadNapPackage({ url: ASSET_URL, wireSize: near + 2, fetchImpl: async () => { throw new Error('must not fetch'); } }),
     (e) => e.message.includes('5 MiB'),
   );
   console.log('wire gate: 5242879 PASS / 5242880 PASS / 5242881 FAIL');
@@ -118,15 +120,14 @@ function mockResponse(bytes, { status = 200, chunkSize = 256 * 1024 } = {}) {
 
 // ── 3. Real .nap end-to-end (artifact hash → gzip → payload hash) ─────
 {
-  const nap = readFileSync(new URL('./apps/packages/demo-host-darwin-arm64.nap', import.meta.url));
+  const payload = Uint8Array.from({ length: 64 * 1024 }, (_, i) => (i * 17 + (i >> 8)) & 255);
+  const nap = gzipSync(payload, { level: 9 });
   const artifactSha256 = sha256Hex(nap);
-  const { gunzipSync } = await import('node:zlib');
-  const payload = gunzipSync(nap);
   const payloadSha256 = sha256Hex(payload);
 
   const fetchImpl = async () => mockResponse(nap, { chunkSize: 64 * 1024 });
   const { artifactBytes, wireSize, digest: d } = await downloadNapPackage({
-    url: 'mock.nap',
+    url: ASSET_URL,
     wireSize: nap.byteLength,
     fetchImpl,
   });
@@ -146,7 +147,7 @@ function mockResponse(bytes, { status = 200, chunkSize = 256 * 1024 } = {}) {
   const badNap = new Uint8Array(nap);
   badNap[200] ^= 1;
   const badResult = await downloadNapPackage({
-    url: 'mock.nap', wireSize: badNap.byteLength,
+    url: ASSET_URL, wireSize: badNap.byteLength,
     fetchImpl: async () => mockResponse(badNap),
   });
   await assert.rejects(
@@ -156,7 +157,7 @@ function mockResponse(bytes, { status = 200, chunkSize = 256 * 1024 } = {}) {
   console.log('hash gate: artifact 1-byte tamper rejected');
 
   // declared payload hash mismatch → FAIL
-  const out2 = await downloadNapPackage({ url: 'm', wireSize: nap.byteLength, fetchImpl });
+  const out2 = await downloadNapPackage({ url: ASSET_URL, wireSize: nap.byteLength, fetchImpl });
   await assert.rejects(
     () => decompressNap({ artifactBytes: out2.artifactBytes, digest: out2.digest }, {
       artifactSha256,
@@ -184,7 +185,7 @@ function mockResponse(bytes, { status = 200, chunkSize = 256 * 1024 } = {}) {
   const bombNap = new Uint8Array(gzipSync(bombPayload, { level: 9 }));
   assert.ok(bombNap.byteLength < 1024 * 1024, `bomb wire ${bombNap.byteLength} < 1 MiB`);
   const { artifactBytes, digest: d } = await downloadNapPackage({
-    url: 'bomb.nap', wireSize: bombNap.byteLength,
+    url: ASSET_URL, wireSize: bombNap.byteLength,
     fetchImpl: async () => mockResponse(bombNap, { chunkSize: 32 * 1024 }),
   });
   await assert.rejects(

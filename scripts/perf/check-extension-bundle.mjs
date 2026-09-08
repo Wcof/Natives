@@ -1,51 +1,27 @@
 #!/usr/bin/env node
+import { distributableFiles, extensionFileBytes } from '../extension-package.mjs';
 /** ADR-0023: estimate the Chrome extension's distributable ZIP. */
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { gzipSync } from 'node:zlib';
-import { basename, join, relative, resolve } from 'node:path';
+import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ROOT = resolve(fileURLToPath(new URL('../..', import.meta.url)));
 export const BUDGET = 300 * 1024;
 
-const DEV_NAMES = new Set(['node_modules', '.git', 'fixtures', 'test', 'tests', '__pycache__']);
-// Runtime files plus Chrome's localized message catalogs. Installer helpers,
-// manifests and READMEs intentionally stay outside the extension ZIP.
-// ui-harness.js, test-dom-mock.js and files-preview.js (standalone offline fallback preview) stay outside.
-// icons/folder-source.svg is a packaging source asset: dev.mjs strips it when
-// producing the loadable extension, so it never ships in the distributable ZIP.
-const DISTRIBUTABLE = /^(manifest\.json|(?!(?:ui-harness|test-dom-mock|files-preview)\.js$)(?:[^/]+|plugins\/.+)\.(?:html|css|js)|icons\/(?!folder-source\.svg$)[^/]+|_locales\/[^/]+\/messages\.json)$/;
-
-export function distributableFiles(root = ROOT) {
-  const dir = join(root, 'extension');
-  if (!existsSync(dir)) return [];
-  const files = [];
-  const walk = (current) => {
-    for (const name of readdirSync(current)) {
-      if (DEV_NAMES.has(name) || name.endsWith('.map') || name.endsWith('.md')) continue;
-      const path = join(current, name);
-      const stat = statSync(path);
-      if (stat.isDirectory()) walk(path);
-      else {
-        const rel = relative(dir, path).split('\\').join('/');
-        if (DISTRIBUTABLE.test(rel) && !basename(rel).startsWith('.')) files.push(rel);
-      }
-    }
-  };
-  walk(dir);
-  return files.sort();
-}
+export { distributableFiles };
 
 export function runExtensionBundleCheck(root = ROOT) {
   const files = distributableFiles(root);
   const rows = files.map((file) => {
-    const bytes = readFileSync(join(root, 'extension', file));
+    const bytes = extensionFileBytes(file, root);
     return { file, bytes: bytes.byteLength, gzipBytes: gzipSync(bytes).byteLength };
   });
   // ZIP headers/central-directory entries are deliberately included; this is an
   // estimate, not a claim that gzip is a ZIP implementation.
   const estimate = rows.reduce((sum, row) => sum + row.gzipBytes + 76 + row.file.length, 0);
-  return { ok: files.length > 0 && estimate <= BUDGET, budget: BUDGET, estimate, rawBytes: rows.reduce((s, r) => s + r.bytes, 0), files, rows };
+  return { ok: files.length > 0 && estimate <= BUDGET && estimate - 283245 <= 20480, budget: BUDGET,
+    current: estimate, headroom: BUDGET - estimate, deltaFromBaseline: estimate - 283245,
+    warning: estimate >= 290 * 1024 ? 'NEAR_BUDGET' : null, estimate, rawBytes: rows.reduce((s, r) => s + r.bytes, 0), files, rows };
 }
 
 if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) {

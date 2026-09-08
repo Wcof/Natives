@@ -1,3 +1,4 @@
+import { CATALOG_SOURCES, artifactSources, fetchBytes, fetchFromSources } from './app-download.js';
 // ADR-0025 D8/D43/D44: signed catalog client (browser side).
 //
 // The catalog pair (catalog-v1.json + catalog-v1.sig) is fetched from a
@@ -12,18 +13,14 @@
 //   - unknown public key        → rejected
 //   - empty signature           → rejected
 
-// Raw 32-byte Ed25519 public key (base64). Dev key from the
-// Natives-App-Catalog repository; production key is swapped at build
-// time by the release pipeline. Never user-configurable.
+// Raw 32-byte Ed25519 public key (base64). The release signer must match
+// this compiled key. Key rotation requires an extension update.
 export const CATALOG_PUBLIC_KEY_B64 =
   '1QP+08RLgHdsf1Y2Oiv2K1ON5MtAFtz5sRbt0IuD1Iw=';
 
-// Build-time fixed catalog URL (D44). Dev: GitHub Releases; production:
-// own domain + CDN. Changing this is a build change, not a user setting.
-export const CATALOG_URL =
-  'https://raw.githubusercontent.com/Wcof/Natives-App-Catalog/main/catalog-v1.json';
-export const CATALOG_SIG_URL =
-  'https://raw.githubusercontent.com/Wcof/Natives-App-Catalog/main/catalog-v1.sig';
+// Build-time fixed catalog URL (D44). Changing it requires an extension update.
+export const CATALOG_URL = `${CATALOG_SOURCES[0]}catalog-v1.json`;
+export const CATALOG_SIG_URL = `${CATALOG_SOURCES[0]}catalog-v1.sig`;
 
 const CATALOG_MAX_BYTES = 1024 * 1024; // catalog is metadata; 1 MiB is generous
 
@@ -35,9 +32,12 @@ function b64ToBytes(b64) {
 }
 
 function bytesToB64(bytes) {
-  let bin = '';
-  for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
-  return btoa(bin);
+  const parts = [];
+  const chunk = 3 * 8192;
+  for (let offset = 0; offset < bytes.length; offset += chunk) {
+    parts.push(btoa(String.fromCharCode(...bytes.subarray(offset, offset + chunk))));
+  }
+  return parts.join('');
 }
 
 function requireCrypto() {
@@ -95,27 +95,35 @@ export async function verifyCatalogSignature({
 // the caller (App Center) treats a bad catalog as "catalog unavailable",
 // never as a reason to install from an unverified source.
 export async function loadVerifiedCatalog({
-  catalogUrl = CATALOG_URL,
-  sigUrl = CATALOG_SIG_URL,
-  publicKeyB64 = CATALOG_PUBLIC_KEY_B64,
-  fetchImpl = (url) => fetch(url, { cache: 'no-store' }),
+  catalogUrl, sigUrl, publicKeyB64 = CATALOG_PUBLIC_KEY_B64, fetchImpl = globalThis.fetch,
+  signal, allowEmbedded = false,
 } = {}) {
-  const [catalogRes, sigRes] = await Promise.all([fetchImpl(catalogUrl), fetchImpl(sigUrl)]);
-  if (!catalogRes.ok) throw newSignatureError(`catalog HTTP ${catalogRes.status}`);
-  if (!sigRes.ok) throw newSignatureError(`signature HTTP ${sigRes.status}`);
-  const catalogBytes = new Uint8Array(await catalogRes.arrayBuffer());
-  const signatureB64 = await sigRes.text();
-  await verifyCatalogSignature({ catalogBytes, signatureB64, publicKeyB64 });
-  let catalog;
-  try {
-    catalog = JSON.parse(new TextDecoder().decode(catalogBytes));
-  } catch {
-    throw newSignatureError('catalog is not valid JSON');
+  const sources = catalogUrl ? [[catalogUrl, sigUrl]] : CATALOG_SOURCES.map((base) => [
+    base + 'catalog-v1.json', base + 'catalog-v1.sig',
+  ]);
+  if (allowEmbedded) sources.push([
+    new URL('apps/catalog-v1.json', import.meta.url).href,
+    new URL('apps/catalog-v1.sig', import.meta.url).href,
+  ]);
+  let failure;
+  for (const [jsonUrl, signatureUrl] of sources) {
+    try {
+      const catalogBytes = await fetchBytes(jsonUrl, { limit: CATALOG_MAX_BYTES, fetchImpl, signal });
+      const signature = await fetchBytes(signatureUrl, { limit: 256, fetchImpl, signal });
+      await verifyCatalogSignature({ catalogBytes, signatureB64: new TextDecoder().decode(signature), publicKeyB64 });
+      let catalog;
+      try { catalog = JSON.parse(new TextDecoder().decode(catalogBytes)); }
+      catch { throw newSignatureError('catalog is not valid JSON'); }
+      if (catalog?.catalogVersion !== 1 || !Array.isArray(catalog.apps) || catalog.apps.length > 128) {
+        throw newSignatureError('unsupported catalog structure');
+      }
+      return { ...catalog, source: jsonUrl, embedded: !jsonUrl.startsWith('https:') };
+    } catch (error) {
+      if (error.code !== 'APP_NETWORK') throw error;
+      failure = error;
+    }
   }
-  if (!catalog || !Array.isArray(catalog.apps)) {
-    throw newSignatureError('catalog: missing apps[]');
-  }
-  return catalog;
+  throw failure;
 }
 
 // ── Package transfer (D3/D8/D10) ─────────────────────────────────────
@@ -138,64 +146,23 @@ export function newPackageError(message) {
 // chunks (capped at 5 MiB — a hard budget, not a growth loop) and hash
 // once. Memory stays bounded by the wire gate.
 export async function downloadNapPackage({
-  url,
-  wireSize,
-  fetchImpl = (u) => fetch(u, { cache: 'no-store' }),
+  url, wireSize, fetchImpl = globalThis.fetch, signal, onProgress,
   digest = (bytes) => globalThis.crypto.subtle.digest('SHA-256', bytes),
-  decompress = null,
 } = {}) {
-  if (typeof wireSize === 'number' && wireSize > PACKAGE_MAX_WIRE_BYTES) {
-    throw newPackageError(
-      `wire size ${wireSize} exceeds the ${PACKAGE_MAX_WIRE_BYTES} byte (5 MiB) gate`,
-    );
+  if (!Number.isSafeInteger(wireSize) || wireSize <= 0 || wireSize > PACKAGE_MAX_WIRE_BYTES) {
+    throw newPackageError('wire size exceeds the 5 MiB gate');
   }
-  const response = await fetchImpl(url);
-  if (!response.ok) throw newPackageError(`download HTTP ${response.status}`);
-  // Stream the body so an over-budget file aborts mid-download instead
-  // of allocating the whole thing.
-  const chunks = [];
-  let total = 0;
-  if (response.body && typeof response.body.getReader === 'function') {
-    const reader = response.body.getReader();
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (value) {
-        total += value.byteLength;
-        if (total > PACKAGE_MAX_WIRE_BYTES) {
-          await reader.cancel().catch(() => {});
-          throw newPackageError(
-            `download exceeded the ${PACKAGE_MAX_WIRE_BYTES} byte (5 MiB) wire gate`,
-          );
-        }
-        chunks.push(value);
-      }
-    }
-  } else {
-    const bytes = new Uint8Array(await response.arrayBuffer());
-    total = bytes.byteLength;
-    if (total > PACKAGE_MAX_WIRE_BYTES) {
-      throw newPackageError(
-        `download exceeded the ${PACKAGE_MAX_WIRE_BYTES} byte (5 MiB) wire gate`,
-      );
-    }
-    chunks.push(bytes);
-  }
-  const artifact = new Uint8Array(total);
-  {
-    let offset = 0;
-    for (const chunk of chunks) {
-      artifact.set(chunk, offset);
-      offset += chunk.byteLength;
-    }
-  }
-  return { artifactBytes: artifact, wireSize: total, digest, decompress };
+  const artifact = await fetchFromSources(artifactSources(url), {
+    limit: PACKAGE_MAX_WIRE_BYTES, fetchImpl, signal, onProgress,
+  });
+  if (artifact.byteLength !== wireSize) throw newPackageError('wire size does not match catalog');
+  return { artifactBytes: artifact, wireSize: artifact.byteLength, digest };
 }
 
 // gzip → payload with the 20 MiB decompression-bomb cap. Uses the native
 // DecompressionStream (D15: no gzip library in the bundle).
 export async function decompressNap(
-  { artifactBytes, digest, decompress: decompressImpl },
+  { artifactBytes, digest },
   {
     artifactSha256,
     payloadSha256,
@@ -245,6 +212,7 @@ export async function decompressNap(
   } else {
     throw newPackageError('DecompressionStream unavailable');
   }
+  if (payload.byteLength > PACKAGE_MAX_PAYLOAD_BYTES) throw newPackageError('payload exceeds the 20 MiB gate');
   if (typeof payloadSize === 'number' && payload.byteLength !== payloadSize) {
     throw newPackageError(
       `payload size ${payload.byteLength} != catalog payloadSize ${payloadSize}`,

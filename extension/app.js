@@ -14,6 +14,8 @@
 import { isKnownUiModule, resolveUiModule } from './app-module-registry.js';
 import { appHostFor, createAppNativeClient } from './native-app-client.js';
 import { createNativeClient } from './native-client.js';
+import { classifyAppError } from './app-catalog-policy.js';
+import { appLifecycle } from './app-lifecycle.js';
 
 const CORE_HOST = 'com.natives.file_manager';
 
@@ -46,7 +48,7 @@ export function parseAppId(search, locationHref = '') {
 
 export function createAppShell({
   appId,
-  stage,
+  stage = el('app-stage'),
   title,
   sub,
   toast,
@@ -56,7 +58,7 @@ export function createAppShell({
     createAppNativeClient({ app, onDisconnect: handlers?.onDisconnect }),
   t = makeT(),
 } = {}) {
-  const missing = [appId && 'appId', stage && 'stage'].filter((x) => !x);
+  const missing = Object.entries({ appId, stage }).filter(([, value]) => !value).map(([key]) => key);
   if (missing.length) {
     throw new Error(`createAppShell: missing ${missing.join(', ')}`);
   }
@@ -64,6 +66,43 @@ export function createAppShell({
   const titleEl = title || el('app-title');
   const subEl = sub || el('app-sub');
   const backBtn = back || el('app-back');
+  let generation = 0;
+  let coreClient;
+  let unmount;
+  let idleTimer;
+  const hosts = new Set();
+  const stop = () => {
+    generation++;
+    clearTimeout(idleTimer);
+    try { unmount?.(); } finally {
+      unmount = null;
+      for (const host of hosts) host.disconnect();
+      hosts.clear();
+      coreClient?.disconnect();
+    }
+  };
+  const scheduleIdle = () => {
+    clearTimeout(idleTimer);
+    if (document.visibilityState !== 'hidden') return;
+    idleTimer = setTimeout(() => {
+      if (coreClient?.inFlight || [...hosts].some((host) => host.inFlight)) { scheduleIdle(); return; }
+      stop();
+      renderStatus({ icon: 'box', heading: t('appSurfacePaused'), actionLabel: t('retry'), onAction: open });
+    }, 60_000);
+  };
+  const listen = () => appLifecycle(({ type, appId: changedId }) => {
+    if (changedId !== appId) return;
+    if (type === 'maintenance') {
+      stop();
+      renderStatus({ icon: 'box', heading: t('appsCommitting') });
+    } else void open();
+  });
+  let lifecycle = listen();
+  const pagehide = () => { stop(); lifecycle.close(); };
+  const pageshow = (event) => { if (event.persisted) { lifecycle = listen(); void open(); } };
+  globalThis.window?.addEventListener('pagehide', pagehide);
+  globalThis.window?.addEventListener('pageshow', pageshow);
+  document.addEventListener?.('visibilitychange', scheduleIdle);
 
   function setToast(message, isError = false) {
     if (!toastEl) return;
@@ -110,13 +149,15 @@ export function createAppShell({
   }
 
   const open = async () => {
+    stop();
+    setToast('');
+    const current = generation;
     const client = getNativeClient();
-    if (backBtn) backBtn.addEventListener('click', () => {
-      openPage('files.html');
-      client.disconnect();
-    });
+    coreClient = client;
+    if (backBtn) backBtn.onclick = () => { stop(); openPage('apps.html'); };
     try {
-      const detail = await client.call('apps:get', { app_id: appId });
+      const detail = await client.call('apps:get', { appId });
+      if (current !== generation) return;
       const app = detail?.app;
       if (!app) throw Object.assign(new Error(t('appSurfaceNotFound', '应用不存在或已卸载')), { code: 'APP_NOT_FOUND' });
       if (titleEl) titleEl.textContent = app.name;
@@ -143,10 +184,16 @@ export function createAppShell({
         });
         return;
       }
+      if (!app.host_registered || app.recovery_pending) {
+        renderStatus({ icon: 'box', heading: t('appSurfaceRepairRequired'),
+          actionLabel: t('appSurfaceOpenCenter'), onAction: () => openAppCenter(client) });
+        return;
+      }
 
       // D9: build-time present, imported only now that install is confirmed.
       const moduleUrl = resolveUiModule(appId);
       const ui = await import(/* @vite-ignore */ moduleUrl);
+      if (current !== generation) return;
       const ctx = {
         app,
         detail,
@@ -154,31 +201,30 @@ export function createAppShell({
         hostName: appHostFor(app),
         stage,
         t,
-        setToast,
-        createHostClient: (handlers) => createHostClient(app, handlers),
+        setToast: (...args) => { if (current === generation) setToast(...args); },
+        createHostClient: (handlers) => {
+          const host = createHostClient(app, handlers);
+          hosts.add(host);
+          return host;
+        },
         disconnectHost: (client) => client?.disconnect(),
       };
       if (typeof ui.mountApp !== 'function') {
         throw new Error(`UI module for ${appId} does not export mountApp`);
       }
-      const unmount = ui.mountApp(ctx);
-      // page unload: close the host port so the runtime exits (D49)
-      const cleanup = () => {
-        if (unmount && typeof unmount === 'function') {
-          try { unmount(); } catch { /* already unmounted */ }
-        }
-        client.disconnect();
-      };
-      window?.addEventListener?.('pagehide', cleanup);
-      return cleanup;
+      unmount = ui.mountApp(ctx);
+      scheduleIdle();
+      return stop;
     } catch (error) {
-      setToast(error?.message || String(error), true);
+      if (current !== generation) return;
+      stop();
+      setToast(t(classifyAppError(error)), true);
       const code = error?.code || '';
       if (code === 'host_disconnected') {
         renderStatus({
           icon: 'box',
           heading: t('appSurfaceHostOffline', 'Native Host 未连接'),
-          body: t('appSurfaceHostOfflineBody', '请确认 Natives Host 正在运行（开发模式：npm run dev）。'),
+          body: t('appsHostOffline'),
           actionLabel: t('retry', '重试'),
           onAction: open,
           error: true,
@@ -187,13 +233,15 @@ export function createAppShell({
         renderStatus({
           icon: 'box',
           heading: t('appSurfaceOpenFailed', '应用无法打开'),
-          body: error?.message || String(error),
+          body: t(classifyAppError(error)),
           actionLabel: t('retry', '重试'),
           onAction: open,
           error: true,
         });
       }
       return undefined;
+    } finally {
+      client.disconnect();
     }
   };
 
@@ -203,7 +251,13 @@ export function createAppShell({
     client.disconnect();
   }
 
-  return { open, setToast, renderStatus };
+  const dispose = () => {
+    pagehide();
+    document.removeEventListener?.('visibilitychange', scheduleIdle);
+    globalThis.window?.removeEventListener('pagehide', pagehide);
+    globalThis.window?.removeEventListener('pageshow', pageshow);
+  };
+  return { open, setToast, renderStatus, dispose };
 }
 
 // Boot only when this is the real page (guarded for Node tests).
@@ -214,6 +268,5 @@ if (typeof document !== 'undefined' && typeof window !== 'undefined'
   document.querySelectorAll('[data-i18n]').forEach((node) => {
     node.textContent = t(node.dataset.i18n, node.textContent);
   });
-  createAppShell({ appId: parseAppId(globalThis.location?.search || '') })
-    .then((shell) => shell.open());
+  createAppShell({ appId: parseAppId(globalThis.location?.search || '') }).open();
 }

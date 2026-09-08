@@ -2445,12 +2445,78 @@
     "message": "Uninstall app?"
   },
   "appsUninstallBody": {
-    "message": "Removes the program, runtime and registration. Personal data is preserved; use “Delete app and all data” to wipe it."
+    "message": "Removes the runtime and registration. Personal data is kept by default and can be deleted separately later."
   },
   "appsUpdateHint": {
     "message": "V1 update: uninstall the current version, then install the new one (personal data preserved)"
   },
   "appsNoPermissions": {
     "message": "No permissions required"
+  },
+  "appsNeedsUpdate": {
+    "message": "Update Natives to install"
+  },
+  "appsNotReleased": {
+    "message": "Package not released"
+  },
+  "appsUnsupportedPlatform": {
+    "message": "No package for this device"
+  },
+  "appsNetworkError": {
+    "message": "Network connection failed"
+  },
+  "appsBusy": {
+    "message": "App is in use. Close it and retry."
+  },
+  "appsVerificationFailed": {
+    "message": "Security verification failed. Installation stopped."
+  },
+  "appsOperationFailed": {
+    "message": "Operation failed. Please retry."
+  },
+  "appsCancelled": {
+    "message": "Installation cancelled"
+  },
+  "appsEmbeddedCatalog": {
+    "message": "Remote catalog unavailable. Showing the bundled catalog."
+  },
+  "appsCatalogLoading": {
+    "message": "Loading app catalog"
+  },
+  "appsCleanupPending": {
+    "message": "Cleanup incomplete. Retry available."
+  },
+  "appsDataRetained": {
+    "message": "Uninstalled. Personal data retained."
+  },
+  "appsClearData": {
+    "message": "Delete all personal data"
+  },
+  "appsEnabled": {
+    "message": "Enable app"
+  },
+  "appsShowInSidebar": {
+    "message": "Show in sidebar"
+  },
+  "appsDataDeleted": {
+    "message": "App and personal data deleted"
+  },
+  "appsPurgeChoice": {
+    "message": "Also delete all personal data, settings and credentials"
+  },
+  "appsPurgeWarning": {
+    "message": "This deletes the app's personal data, settings, logs and credentials. This cannot be undone."
+  },
+  "appsPurgeConfirmTitle": {
+    "message": "Permanently delete personal data?"
+  },
+  "appsRecoveryPending": {
+    "message": "Installation interrupted. Recovery is pending."
+  },
+  "appSurfacePaused": {
+    "message": "App paused"
+  },
+  "appSurfaceRepairRequired": {
+    "message": "App runtime needs reinstallation"
   }
 }

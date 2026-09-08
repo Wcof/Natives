@@ -7,6 +7,7 @@
 //! them, hashes them, and health-probes runtime binaries.
 
 use sha2::{Digest, Sha256};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::mpsc;
@@ -22,7 +23,7 @@ pub fn default_app_root() -> PathBuf {
 
 /// Reject anything that could escape the app root: separators, `.`/`..`,
 /// absolute or `~`-relative prefixes (path-security CI gate, ADR-0025 §95).
-fn validate_identifier(id: &str, kind: &str) -> Result<(), AppError> {
+pub(crate) fn validate_identifier(id: &str, kind: &str) -> Result<(), AppError> {
     if id.is_empty()
         || id.len() > 128
         || id.contains('/')
@@ -31,6 +32,9 @@ fn validate_identifier(id: &str, kind: &str) -> Result<(), AppError> {
         || id == "."
         || id == ".."
         || id.starts_with('~')
+        || !id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'-' | b'_' | b'+'))
         || id.starts_with('/')
         || (id.len() >= 2 && id.as_bytes()[1] == b':')
     {
@@ -39,18 +43,125 @@ fn validate_identifier(id: &str, kind: &str) -> Result<(), AppError> {
     Ok(())
 }
 
+/// Reject linked components before operating on a Core-owned app path.
+pub(crate) fn validate_app_path(root: &Path, path: &Path) -> Result<(), AppError> {
+    let relative = path
+        .strip_prefix(root)
+        .map_err(|_| AppError::InvalidState("path outside app root".into()))?;
+    let mut current = root.to_path_buf();
+    let mut paths = vec![current.clone()];
+    for component in relative.components() {
+        let std::path::Component::Normal(name) = component else {
+            return Err(AppError::InvalidState("invalid app path component".into()));
+        };
+        current.push(name);
+        paths.push(current.clone());
+    }
+    for path in paths {
+        match std::fs::symlink_metadata(&path) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(AppError::InvalidState(
+                    "symlinks are not allowed in app paths".into(),
+                ));
+            }
+            Ok(_) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), AppError> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| AppError::InvalidState("missing file parent".into()))?;
+    std::fs::create_dir_all(parent)?;
+    let temp = path.with_extension(format!("{}.tmp", crate::workspace_store::schema::uuid_v4()));
+    let result = (|| {
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&temp)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        drop(file);
+        std::fs::rename(&temp, path)?;
+        #[cfg(unix)]
+        std::fs::File::open(parent)?.sync_all()?;
+        Ok::<(), AppError>(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(temp);
+    }
+    result
+}
+
 /// Stage directory for one install transaction:
 /// `~/.natives/apps/<app_id>/staging/<install_id>/`.
 pub fn staging_dir(app_root: &Path, app_id: &str, install_id: &str) -> Result<PathBuf, AppError> {
     validate_identifier(app_id, "app_id")?;
     validate_identifier(install_id, "install_id")?;
-    Ok(app_root.join(app_id).join("staging").join(install_id))
+    let path = app_root.join(app_id).join("staging").join(install_id);
+    validate_app_path(app_root, &path)?;
+    Ok(path)
 }
 
 /// Staged payload file: `<staging_dir>/<package_id>.payload`.
 pub fn staged_payload_path(staging: &Path, package_id: &str) -> Result<PathBuf, AppError> {
     validate_identifier(package_id, "package_id")?;
-    Ok(staging.join(format!("{package_id}.payload")))
+    let path = staging.join(format!("{package_id}.payload"));
+    validate_app_path(staging, &path)?;
+    Ok(path)
+}
+
+/// Lock files stay outside the removable app tree, so their inode cannot
+/// change during uninstall. OS ownership ends automatically on process exit.
+pub(crate) fn acquire_app_lock(
+    root: &Path,
+    app_id: &str,
+    runtime: bool,
+) -> Result<std::fs::File, AppError> {
+    validate_identifier(app_id, "app id")?;
+    let suffix = if runtime { "runtime" } else { "install" };
+    let id = app_id.strip_prefix("com.natives.app.").unwrap_or(app_id);
+    let path = root.join(".locks").join(format!("{id}.{suffix}.lock"));
+    validate_app_path(root, &path)?;
+    std::fs::create_dir_all(root.join(".locks"))?;
+    let file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&path)?;
+    let deadline = Instant::now() + Duration::from_secs(if runtime { 2 } else { 0 });
+    loop {
+        match file.try_lock() {
+            Ok(()) => break,
+            Err(std::fs::TryLockError::WouldBlock) if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            Err(std::fs::TryLockError::WouldBlock) => {
+                return Err(AppError::Conflict(
+                    "APP_BUSY: app is in use by another operation or runtime".into(),
+                ))
+            }
+            Err(std::fs::TryLockError::Error(error)) => return Err(error.into()),
+        }
+    }
+    Ok(file)
+}
+
+pub(crate) fn remove_file_if_present(path: &Path) -> Result<(), AppError> {
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error.into()),
+    }
 }
 
 /// Core-decided final install path from `kind` (ADR-0025 D9: the catalog
@@ -68,7 +179,7 @@ pub fn install_path_for(
     validate_identifier(kind, "package kind")?;
     validate_identifier(version, "version")?;
     validate_identifier(package_id, "package_id")?;
-    Ok(match kind {
+    let path = match kind {
         "runtime" => app_root
             .join(app_id)
             .join("runtime")
@@ -84,20 +195,17 @@ pub fn install_path_for(
                 "unknown package kind: {other}"
             )))
         }
-    })
+    };
+    validate_app_path(app_root, &path)?;
+    Ok(path)
 }
 
 /// Write staged bytes and return (size, sha256 hex). Written to a temp
 /// name then renamed, so a crash never leaves a partial payload that a
 /// later stage check could hash.
 pub fn write_staged_payload(path: &Path, bytes: &[u8]) -> Result<(u64, String), AppError> {
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let temp = path.with_extension("payload.tmp");
-    std::fs::write(&temp, bytes)?;
+    atomic_write(path, bytes)?;
     let hash = hex_sha256(bytes);
-    std::fs::rename(&temp, path)?;
     Ok((bytes.len() as u64, hash))
 }
 
@@ -115,6 +223,9 @@ pub fn remove_staging_dir(dir: &Path) -> Result<(), AppError> {
 pub fn remove_app_install_dirs(app_root: &Path, app_id: &str) -> Result<(), AppError> {
     validate_identifier(app_id, "app_id")?;
     let base = app_root.join(app_id);
+    for name in ["runtime", "packages", "staging"] {
+        validate_app_path(app_root, &base.join(name))?;
+    }
     for name in ["runtime", "packages", "staging"] {
         let dir = base.join(name);
         if dir.exists() {
@@ -185,86 +296,83 @@ pub fn read_runtime_current(app_root: &Path, app_id: &str) -> Option<String> {
 
 /// Atomically point `current` at `version` (temp file + rename).
 pub fn set_runtime_current(app_root: &Path, app_id: &str, version: &str) -> Result<(), AppError> {
+    validate_identifier(app_id, "app_id")?;
     validate_identifier(version, "version")?;
     let path = runtime_current_path(app_root, app_id);
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let temp = path.with_extension("current.tmp");
-    std::fs::write(&temp, format!("{version}\n"))?;
-    std::fs::rename(&temp, &path)?;
-    Ok(())
+    validate_app_path(app_root, &path)?;
+    atomic_write(&path, format!("{version}\n").as_bytes())
 }
 
 /// Spawn `<binary> --health` and require exit 0 + `{"status":"ok"}` on
-/// stdout within 2 s (ADR-0025 D11 health_check stage; the same probe
-/// backs the ≤2 s shutdown budget for runtime hosts).
-pub fn health_check_binary(path: &Path) -> Result<(), AppError> {
+/// stdout within 2 s. The health probe and runtime EOF exit are separate checks.
+pub fn health_check_binary(path: &Path, version: &str) -> Result<(), AppError> {
+    use std::io::Read;
+    // macOS serializes inspection of newly created executables. Keep test
+    // fixtures from consuming each other's production probe deadline.
+    #[cfg(test)]
+    static PROBES: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    #[cfg(test)]
+    let _probe = PROBES
+        .lock()
+        .map_err(|_| AppError::InvalidState("test probe lock poisoned".into()))?;
     let mut child = std::process::Command::new(path)
         .arg("--health")
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|error| AppError::InvalidState(format!("health probe spawn failed: {error}")))?;
-    let stdout = child
-        .stdout
-        .take()
-        .ok_or_else(|| AppError::InvalidState("health probe: stdout not piped".into()))?;
-    let stderr = child
-        .stderr
-        .take()
-        .ok_or_else(|| AppError::InvalidState("health probe: stderr not piped".into()))?;
-    // The reader thread owns the handles; the main thread keeps `child`
-    // so a timeout can kill + reap it.
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let out = std::io::read_to_string(stdout);
-        let err = std::io::read_to_string(stderr);
-        let _ = tx.send((out, err));
-    });
-    let timeout_secs = if cfg!(test) { 5 } else { 2 };
-    let deadline = Instant::now() + Duration::from_secs(timeout_secs);
-    let (out, err) = loop {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
+        .stderr(Stdio::null())
+        .spawn()?;
+    let stdout = match child.stdout.take() {
+        Some(stdout) => stdout,
+        None => {
             let _ = child.kill();
             let _ = child.wait();
-            return Err(AppError::InvalidState(format!(
-                "health check timed out ({timeout_secs} s)",
-            )));
+            return Err(AppError::InvalidState(
+                "health probe output unavailable".into(),
+            ));
         }
-        match rx.recv_timeout(remaining.min(Duration::from_millis(100))) {
-            Ok(result) => break result,
-            Err(mpsc::RecvTimeoutError::Timeout) => continue,
-            Err(mpsc::RecvTimeoutError::Disconnected) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(AppError::InvalidState(
-                    "health probe thread exited unexpectedly".into(),
-                ));
+    };
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut out = Vec::new();
+        let result = stdout.take(4097).read_to_end(&mut out).map(|_| out);
+        let _ = tx.send(result);
+    });
+    let deadline = Instant::now() + Duration::from_secs(2);
+    let result = (|| {
+        let status = loop {
+            if let Some(status) = child.try_wait()? {
+                break status;
             }
+            if Instant::now() >= deadline {
+                return Err(AppError::InvalidState("health check timed out".into()));
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        if !status.success() {
+            return Err(AppError::InvalidState("health check failed".into()));
         }
-    };
-    let status = child.wait().map_err(AppError::Io)?;
-    let (stdout_text, stderr_text) = match (out, err) {
-        (Ok(out), Ok(err)) => (out, err),
-        (Err(error), _) | (_, Err(error)) => return Err(AppError::Io(error)),
-    };
-    if !status.success() {
-        return Err(AppError::InvalidState(format!(
-            "health check failed: exit {:?} stderr={}",
-            status.code(),
-            &stderr_text
-        )));
+        let bytes = rx
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .map_err(|_| AppError::InvalidState("health check output timed out".into()))??;
+        if bytes.len() > 4096 {
+            return Err(AppError::InvalidState(
+                "health check output too large".into(),
+            ));
+        }
+        let value: serde_json::Value = serde_json::from_slice(&bytes)
+            .map_err(|_| AppError::InvalidState("invalid health check response".into()))?;
+        if value["status"] != "ok" || value["version"] != version {
+            return Err(AppError::InvalidState(
+                "health check status or version mismatch".into(),
+            ));
+        }
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = child.kill();
     }
-    let value: serde_json::Value = serde_json::from_str(&stdout_text)
-        .map_err(|error| AppError::InvalidState(format!("health check: invalid JSON: {error}")))?;
-    if value.get("status").and_then(serde_json::Value::as_str) != Some("ok") {
-        return Err(AppError::InvalidState(
-            "health check: status is not ok".into(),
-        ));
-    }
-    Ok(())
+    let _ = child.wait();
+    result
 }
 
 #[cfg(test)]
@@ -379,5 +487,39 @@ mod tests {
         assert!(app.join("cache").exists());
         assert!(app.join("imports").exists());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn app_directory_symlinks_cannot_escape_during_install_or_uninstall() {
+        let dir = temp_root("symlink-escape");
+        let root = dir.join("apps");
+        let external = dir.join("external");
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::create_dir_all(external.join("runtime")).unwrap();
+        std::fs::write(external.join("runtime/keep"), b"external data").unwrap();
+        std::os::unix::fs::symlink(&external, root.join("fund")).unwrap();
+        assert!(staging_dir(&root, "fund", "tx").is_err());
+        assert!(install_path_for(&root, "fund", "runtime", "1.0.0", "host").is_err());
+        assert!(remove_app_install_dirs(&root, "fund").is_err());
+        assert_eq!(
+            std::fs::read(external.join("runtime/keep")).unwrap(),
+            b"external data"
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn current_version_rejects_symlink_parent_and_invalid_app_id() {
+        let dir = temp_root("current-escape");
+        let external = dir.join("external");
+        std::fs::create_dir_all(&external).unwrap();
+        std::fs::create_dir_all(dir.join("fund")).unwrap();
+        std::os::unix::fs::symlink(&external, dir.join("fund/runtime")).unwrap();
+        assert!(set_runtime_current(&dir, "fund", "1.0.0").is_err());
+        assert!(set_runtime_current(&dir, "../escaped", "1.0.0").is_err());
+        assert!(!external.join("current").exists());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

@@ -22,6 +22,7 @@ impl StoreEnv {
     }
 
     fn drop(self) {
+        drop(self.store);
         let _ = std::fs::remove_dir_all(&self.base);
     }
 }
@@ -34,6 +35,8 @@ fn temp_store(tag: &str) -> StoreEnv {
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(base.join("apps")).expect("create temp store base");
     let store = AppStore::open_at(&base.join("natives.db"), base.join("apps")).expect("open store");
+    store.set_caller_origin(Some("chrome-extension://abcdefghijklmnopabcdefghijklmnop/"));
+    store.set_manifest_dir(base.join("nm-hosts"));
     StoreEnv { store, base }
 }
 
@@ -45,6 +48,14 @@ fn err_code<T>(result: Result<T, AppError>) -> &'static str {
 }
 
 fn demo_request() -> InstallRequest {
+    let bytes = HEALTH_OK_STUB.as_bytes();
+    let runtime = runtime_request(
+        "com.natives.app.demo",
+        "com.natives.app.demo",
+        "1.0.0",
+        bytes.len() as u64,
+        &crate::app_install::hex_sha256(bytes),
+    );
     InstallRequest {
         app: super::types::AppMeta {
             app_id: "com.natives.app.demo".to_string(),
@@ -54,11 +65,11 @@ fn demo_request() -> InstallRequest {
             enabled: true,
             show_in_sidebar: true,
             sidebar_order: 0,
-            runtime_spec: serde_json::json!({ "hostId": "com.natives.app.demo" }),
+            runtime_spec: serde_json::json!({ "host": "com.natives.app.demo" }),
             surface: serde_json::json!({ "route": "app.html?app=com.natives.app.demo" }),
             manifest: serde_json::json!({ "schemaVersion": 1 }),
         },
-        packages: vec![],
+        packages: runtime.packages,
         permissions: vec!["app.lifecycle".to_string()],
     }
 }
@@ -82,6 +93,7 @@ fn demo_install_query_enable_sidebar_uninstall_cycle() {
     assert_eq!(tx.state, install_state::CATALOG_RESOLVED);
     assert!(!tx.install_id.is_empty());
 
+    stage_fake_binary(&env, &tx.install_id, HEALTH_OK_STUB.as_bytes());
     // commit → installed app row
     let app = store.install_commit(&tx.install_id).expect("commit");
     assert_eq!(app.app_id, "com.natives.app.demo");
@@ -89,8 +101,7 @@ fn demo_install_query_enable_sidebar_uninstall_cycle() {
     assert!(app.enabled);
     assert!(app.show_in_sidebar);
     assert_eq!(app.sidebar_order, 0);
-    // metadata-only install: no host registration, explicitly false
-    assert!(!app.host_registered);
+    assert!(app.host_registered);
 
     // query
     let apps = store.apps().expect("list apps");
@@ -99,7 +110,7 @@ fn demo_install_query_enable_sidebar_uninstall_cycle() {
     assert_eq!(detail.app.name, "Demo");
     assert_eq!(detail.permissions.len(), 1);
     assert_eq!(detail.permissions[0].permission, "app.lifecycle");
-    assert!(detail.packages.is_empty());
+    assert_eq!(detail.packages.len(), 1);
 
     // enable toggle
     let disabled = store.set_enabled(&app.app_id, false).expect("disable");
@@ -170,6 +181,7 @@ fn double_install_is_a_conflict() {
     let env = temp_store("conflict");
     let store = &env.store;
     let tx = store.install_begin(&demo_request()).expect("begin");
+    stage_fake_binary(&env, &tx.install_id, HEALTH_OK_STUB.as_bytes());
     store.install_commit(&tx.install_id).expect("commit");
     assert_eq!(
         err_code(store.install_begin(&demo_request())),
@@ -241,7 +253,7 @@ fn runtime_request(
             app_id: app_id.to_string(),
             kind: "extension_app".to_string(),
             name: "A5 Test".to_string(),
-            version: "1.0.0".to_string(),
+            version: version.to_string(),
             enabled: true,
             show_in_sidebar: false,
             sidebar_order: 0,
@@ -253,18 +265,180 @@ fn runtime_request(
             package_id: "host".to_string(),
             kind: "runtime".to_string(),
             version: version.to_string(),
-            platform: "darwin".to_string(),
-            arch: "arm64".to_string(),
+            platform: super::types::platform().to_string(),
+            arch: super::types::architecture().to_string(),
             wire_size: payload_size as i64,
             payload_size: payload_size as i64,
             artifact_sha256: "ab".repeat(32),
             payload_sha256: payload_sha256.to_string(),
+            required: true,
         }],
         permissions: vec![],
     }
 }
 
-const HEALTH_OK_STUB: &str = "#!/bin/sh\nprintf '{\"status\":\"ok\"}'\n";
+const HEALTH_OK_STUB: &str = "#!/bin/sh\nprintf '{\"status\":\"ok\",\"version\":\"1.0.0\"}'\n";
+
+#[test]
+fn install_cannot_commit_missing_packages_or_an_aborted_transaction() {
+    let env = a5_env("incomplete");
+    let bytes = HEALTH_OK_STUB.as_bytes();
+    let request = runtime_request(
+        "demo",
+        "com.natives.app.demo",
+        "1.0.0",
+        bytes.len() as u64,
+        &crate::app_install::hex_sha256(bytes),
+    );
+    let tx = env.store.install_begin(&request).unwrap();
+    assert!(env.store.install_commit(&tx.install_id).is_err());
+    env.store
+        .install_abort(&tx.install_id, "APP_CANCELLED", "cancelled")
+        .unwrap();
+    assert!(env.store.install_commit(&tx.install_id).is_err());
+    assert!(env.store.apps().unwrap().is_empty());
+    env.drop();
+}
+
+#[test]
+fn update_can_begin_without_removing_the_installed_app() {
+    let env = a5_env("update-begin");
+    let bytes = HEALTH_OK_STUB.as_bytes();
+    let mut request = runtime_request(
+        "demo",
+        "com.natives.app.demo",
+        "1.0.0",
+        bytes.len() as u64,
+        &crate::app_install::hex_sha256(bytes),
+    );
+    let tx = env.store.install_begin(&request).unwrap();
+    stage_fake_binary(&env, &tx.install_id, bytes);
+    env.store.install_commit(&tx.install_id).unwrap();
+    request.app.version = "1.1.0".into();
+    request.packages[0].version = "1.1.0".into();
+    let update = env
+        .store
+        .install_begin(&request)
+        .expect("an update preserves the old app");
+    assert_eq!(update.from_version, "1.0.0");
+    assert_eq!(env.store.app("demo").unwrap().version, "1.0.0");
+    env.store
+        .install_abort(&update.install_id, "APP_CANCELLED", "cancelled")
+        .unwrap();
+    assert_eq!(env.store.app("demo").unwrap().version, "1.0.0");
+    env.drop();
+}
+
+fn version_request(version: &str) -> (InstallRequest, Vec<u8>) {
+    let bytes = HEALTH_OK_STUB.replace("1.0.0", version).into_bytes();
+    (
+        runtime_request(
+            "demo",
+            "com.natives.app.demo",
+            version,
+            bytes.len() as u64,
+            &crate::app_install::hex_sha256(&bytes),
+        ),
+        bytes,
+    )
+}
+
+fn install_version(env: &StoreEnv, version: &str) {
+    let (request, bytes) = version_request(version);
+    let tx = env.store.install_begin(&request).unwrap();
+    stage_fake_binary(env, &tx.install_id, &bytes);
+    env.store.install_commit(&tx.install_id).unwrap();
+}
+
+mod updates;
+
+#[test]
+fn install_owner_blocks_other_connections_and_abort_removes_staging() {
+    let env = a5_env("install-owner");
+    let (request, bytes) = version_request("1.0.0");
+    let tx = env.store.install_begin(&request).unwrap();
+    stage_fake_binary(&env, &tx.install_id, &bytes);
+    let other = AppStore::open_at(&env.db(), env.app_root()).unwrap();
+    other.set_caller_origin(env.store.caller_origin().as_deref());
+    other.set_manifest_dir(env.base.join("nm-hosts"));
+    assert!(other.install_begin(&request).is_err());
+    assert!(other.install_commit(&tx.install_id).is_err());
+    assert!(other
+        .install_abort(&tx.install_id, "cancel", "other port")
+        .is_err());
+    env.store
+        .install_abort(&tx.install_id, "APP_CANCELLED", "cancelled")
+        .unwrap();
+    assert!(
+        !crate::app_install::staging_dir(env.app_root(), "demo", &tx.install_id)
+            .unwrap()
+            .exists()
+    );
+    assert!(other.install_begin(&request).is_ok());
+    drop(other);
+    env.drop();
+}
+
+#[test]
+fn uninstall_preserves_data_by_default_and_later_purge_wipes_only_owned_data() {
+    let env = a5_env("purge-data");
+    install_version(&env, "1.0.0");
+    for sub in ["data", "cache", "imports"] {
+        let dir = env.app_root().join("demo").join(sub);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("personal"), b"personal").unwrap();
+    }
+    let logs = env.base.join("logs/apps/demo");
+    std::fs::create_dir_all(&logs).unwrap();
+    std::fs::write(logs.join("runtime.log"), b"log").unwrap();
+    std::fs::create_dir_all(env.app_root().join("other/data")).unwrap();
+    std::fs::write(env.app_root().join("other/data/keep"), b"other").unwrap();
+    env.store.uninstall("demo").unwrap();
+    assert!(env.app_root().join("demo/data/personal").exists());
+    assert!(logs.exists());
+    assert_eq!(env.store.retained_data().unwrap().len(), 1);
+    let receipt = env.store.uninstall_with_data("demo", true).unwrap();
+    assert!(!receipt.data_preserved);
+    assert!(!env.app_root().join("demo").exists());
+    assert!(!logs.exists());
+    assert!(env.store.retained_data().unwrap().is_empty());
+    assert_eq!(
+        std::fs::read(env.app_root().join("other/data/keep")).unwrap(),
+        b"other"
+    );
+    env.drop();
+}
+
+#[cfg(unix)]
+#[test]
+fn failed_cleanup_is_visible_and_retryable_without_following_symlinks() {
+    let env = a5_env("cleanup-retry");
+    install_version(&env, "1.0.0");
+    let logs = env.base.join("logs/apps");
+    std::fs::create_dir_all(&logs).unwrap();
+    let outside = env.base.join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(outside.join("keep"), b"outside").unwrap();
+    std::os::unix::fs::symlink(&outside, logs.join("demo")).unwrap();
+    assert!(env.store.uninstall_with_data("demo", true).is_err());
+    assert!(env.store.retained_data().unwrap()[0].cleanup_pending);
+    assert_eq!(std::fs::read(outside.join("keep")).unwrap(), b"outside");
+    std::fs::remove_file(logs.join("demo")).unwrap();
+    env.store.uninstall_with_data("demo", true).unwrap();
+    assert!(env.store.retained_data().unwrap().is_empty());
+    env.drop();
+}
+
+#[test]
+fn metadata_only_and_incompatible_package_sets_are_rejected() {
+    let env = a5_env("package-contract");
+    let (mut request, _) = version_request("1.0.0");
+    request.packages[0].arch = "unsupported".into();
+    assert!(env.store.install_begin(&request).is_err());
+    request.packages.clear();
+    assert!(env.store.install_begin(&request).is_err());
+    env.drop();
+}
 
 /// Isolated store with its manifest dir redirected into `base/nm-hosts`.
 fn a5_env(tag: &str) -> StoreEnv {
@@ -298,7 +472,7 @@ fn a5_commit_registers_runtime_with_real_origin() {
     let manifest_dir = env.base.join("nm-hosts");
     let app_id = "com.natives.app.a5";
     let host = "com.natives.app.a5.host";
-    let origin = "chrome-extension://a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6";
+    let origin = "chrome-extension://abcdefghijklmnopabcdefghijklmnop/";
 
     let stub = HEALTH_OK_STUB.as_bytes();
     let tx = env
@@ -369,7 +543,7 @@ fn a5_commit_registers_runtime_with_real_origin() {
 }
 
 #[test]
-fn a5_commit_without_origin_skips_registration_explicitly() {
+fn a5_commit_without_origin_refuses_registration() {
     let env = a5_env("a5-skip");
     let manifest_dir = env.base.join("nm-hosts");
     let app_id = "com.natives.app.a5skip";
@@ -389,13 +563,10 @@ fn a5_commit_without_origin_skips_registration_explicitly() {
     stage_fake_binary(&env, &tx.install_id, stub);
 
     // No handshake on this connection → registration explicitly skipped.
-    let app = env
-        .store
-        .install_commit_with_origin(&tx.install_id, None)
-        .expect("commit without origin");
+    let result = env.store.install_commit_with_origin(&tx.install_id, None);
     assert!(
-        !app.host_registered,
-        "no origin → explicit host_registered = 0"
+        result.is_err(),
+        "missing origin must not produce an installed app"
     );
     // The runtime binary IS installed (the app works in-process); only the
     // manifest is missing — an explicit state, never fabricated.
@@ -405,7 +576,7 @@ fn a5_commit_without_origin_skips_registration_explicitly() {
         .join("runtime")
         .join("1.0.0")
         .join("host");
-    assert!(installed.is_file());
+    assert!(!installed.exists());
     assert!(
         !manifest_dir.join(format!("{host}.json")).exists(),
         "manifest must NOT be fabricated"
@@ -419,7 +590,8 @@ fn a5_bad_health_rolls_back_to_failed_without_app_row() {
     let manifest_dir = env.base.join("nm-hosts");
     let app_id = "com.natives.app.a5bad";
     let host = "com.natives.app.a5bad.host";
-    let origin = "chrome-extension://b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6";
+    let origin = "chrome-extension://bcdefghijklmnopabcdefghijklmnopa/";
+    env.store.set_caller_origin(Some(origin));
 
     // A binary that FAILS --health (exit 1): the whole commit must roll
     // back to `failed` — no app row, no runtime dir, no manifest.
@@ -469,7 +641,8 @@ fn a5_uninstall_removes_manifest_and_runtime_keeps_data() {
     let manifest_dir = env.base.join("nm-hosts");
     let app_id = "com.natives.app.a5un";
     let host = "com.natives.app.a5un.host";
-    let origin = "chrome-extension://c3d4e5f6a7b8c9d0e1f2a3b4c5d6ef00";
+    let origin = "chrome-extension://cdefghijklmnopabcdefghijklmnopab/";
+    env.store.set_caller_origin(Some(origin));
 
     let stub = HEALTH_OK_STUB.as_bytes();
     let tx = env

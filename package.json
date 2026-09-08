@@ -16,16 +16,29 @@
     "perf:model-host": "npm run model:host:build && node scripts/perf/check-model-host.mjs",
     "perf:extension:test": "node --test scripts/perf/check-extension-host.test.mjs",
     "perf:files": "npm run extension:check && node scripts/perf/architecture-check.mjs && npm run perf:extension && npm run perf:extension:test && npm run perf:native-host && npm run perf:model-host",
-    "perf:check": "npm run perf:files",
+    "perf:check": "npm run perf:files && npm run apps:check",
     "start": "npm run extension:launch",
-    "extension:check": "node extension/check-syntax.mjs && node extension/files-session.test.mjs && node extension/files-paths.test.mjs && node extension/files-markdown.test.mjs && node extension/native-client.test.mjs && node extension/model-settings.test.mjs && node extension/model-oauth-subviews.test.mjs && node extension/model-agent-view.test.mjs && node extension/plugins-cache.test.mjs && node extension/app-navigation-projection.test.mjs && node extension/apps.test.mjs && node extension/catalog-client.test.mjs && node extension/space-modals.test.mjs && node extension/space-plugins-smoke.test.mjs && node extension/space-deep-verify.test.mjs && node extension/space-widgets-structural.test.mjs && node extension/space-inspector.test.mjs && node extension/space.test.mjs && node extension/check-lifecycle.mjs && node extension/dev.mjs --self-test",
+    "extension:check": "node extension/check-syntax.mjs && node extension/files-session.test.mjs && node extension/files-paths.test.mjs && node extension/files-markdown.test.mjs && node extension/native-client.test.mjs && node extension/model-settings.test.mjs && node extension/model-oauth-subviews.test.mjs && node extension/model-agent-view.test.mjs && node extension/plugins-cache.test.mjs && node extension/app-navigation-projection.test.mjs && node extension/apps.test.mjs && node extension/app-boot.test.mjs && node extension/app-download.test.mjs && node extension/catalog-client.test.mjs && node extension/space-modals.test.mjs && node extension/space-plugins-smoke.test.mjs && node extension/space-deep-verify.test.mjs && node extension/space-widgets-structural.test.mjs && node extension/space-inspector.test.mjs && node extension/space.test.mjs && node extension/check-lifecycle.mjs && node extension/dev.mjs --self-test",
     "extension:host:build": "rtk env -u CARGO_TARGET_DIR cargo build -p native-file-host",
     "extension:host:build:release": "rtk env -u CARGO_TARGET_DIR cargo build -p native-file-host --release",
     "model:host:check": "cd model-host && rtk go test ./...",
     "model:host:build": "mkdir -p target/debug && cd model-host && rtk go build -o ../target/debug/model-host .",
     "model:host:build:release": "mkdir -p target/release && cd model-host && rtk go build -trimpath -ldflags=-s -o ../target/release/model-host .",
     "extension:launch": "node extension/launch-workbench.mjs",
-    "extension:release": "npm run extension:host:build:release && npm run model:host:build:release && npm run extension:check && npm run perf:files",
-    "package:windows:test": "node scripts/package-windows-test.mjs"
+    "extension:release": "npm run extension:host:build:release && npm run model:host:build:release && npm run extension:package && npm run perf:check",
+    "package:windows:test": "node scripts/package-windows-test.mjs",
+    "extension:package": "node scripts/extension-package.mjs",
+    "apps:contract:check": "node scripts/apps/check-app-manifest.mjs && node scripts/apps/check-app-projection.mjs",
+    "apps:package:check": "node scripts/apps/check-package-budget.mjs",
+    "apps:catalog:check": "node scripts/apps/check-catalog-signature.mjs",
+    "apps:security:check": "node scripts/apps/check-app-security.mjs",
+    "apps:check": "npm run apps:contract:check && npm run apps:package:check && npm run apps:catalog:check && npm run apps:security:check && node --test scripts/apps/release.test.mjs",
+    "apps:integration": "node scripts/apps/check-app-integration.mjs",
+    "apps:browser": "node scripts/apps/check-app-browser.mjs",
+    "apps:chrome-native": "node scripts/apps/check-chrome-native.mjs",
+    "apps:package": "rtk env -u CARGO_TARGET_DIR cargo build -p demo-host --release && node scripts/apps/package-demo.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
   }
 }

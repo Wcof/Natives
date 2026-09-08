@@ -79,3 +79,15 @@ button.action.primary { background:var(--accent); border-color:var(--accent); co
   box-shadow:var(--shadow); padding:9px 16px; z-index:50; max-width:560px;
 }
 .app-toast.error { border-color:var(--danger); color:var(--danger); }
+.app-shell-head, .app-card, .app-status, .app-toast { overflow-wrap:anywhere; }
+.app-shell-head { flex-wrap:wrap; }
+.app-card .meta span { min-width:0; }
+.app-toast { box-sizing:border-box; width:max-content; max-width:calc(100vw - 32px); }
+.action:focus-visible, .app-shell-nav-item:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
+@media (max-width:640px) {
+  .app-shell-nav { width:48px; padding:12px 6px; }
+  .app-shell-nav .brand span, .app-shell-nav-item span { display:none; }
+  .app-shell-head { padding:16px; }
+  .app-stage { padding:12px; }
+  .app-card { padding:12px; }
+}

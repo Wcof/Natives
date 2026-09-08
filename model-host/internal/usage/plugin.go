@@ -53,9 +53,10 @@ func (p *NativesUsagePlugin) Close() {
 }
 
 func (p *NativesUsagePlugin) HandleUsage(ctx context.Context, record cliproxyusage.Record) {
+	// A usage record represents an actual completed request. Do not drop it
+	// if the downstream HTTP context was cancelled on client disconnect.
 	select {
 	case p.queue <- record:
-	case <-ctx.Done():
 	case <-p.stopCh:
 	}
 }

@@ -160,9 +160,12 @@ pub(crate) fn validate_request(request: &Request) -> Result<(), String> {
             | "apps:get"
             | "apps:health"
             | "apps:install_begin"
+            | "apps:install_package"
             | "apps:install_commit"
             | "apps:install_abort"
             | "apps:uninstall"
+            | "apps:clear_data"
+            | "apps:recover"
             | "apps:set_enabled"
             | "apps:set_sidebar"
     ) {
@@ -240,9 +243,11 @@ pub(crate) fn validate_request(request: &Request) -> Result<(), String> {
         "settings_set" => &["entries"],
         "apps:list" | "apps:health" => &[],
         "apps:handshake" => &["origin"],
-        "apps:get" | "apps:uninstall" | "apps:set_enabled" | "apps:set_sidebar" => {
-            &["appId", "enabled", "show", "order"]
-        }
+        "apps:get" | "apps:recover" => &["appId"],
+        "apps:uninstall" => &["appId", "purgeData", "confirmPurge"],
+        "apps:clear_data" => &["appId", "confirmPurge"],
+        "apps:set_enabled" => &["appId", "enabled"],
+        "apps:set_sidebar" => &["appId", "show", "order"],
         "apps:install_begin" => &["request"],
         "apps:install_package" => &["installId", "packageId", "data"],
         "apps:install_commit" => &["installId"],
@@ -289,7 +294,12 @@ pub(crate) fn validate_request(request: &Request) -> Result<(), String> {
             let Some(text) = value.as_str() else {
                 return Err("parameter must be a string".into());
             };
-            if text.len() > 4 * 1024 * 1024 {
+            let maximum = if request.method == "apps:install_package" && key == "data" {
+                crate::app_store::types::PACKAGE_DATA_MAX_BASE64_BYTES
+            } else {
+                4 * 1024 * 1024
+            };
+            if text.len() > maximum {
                 return Err("parameter is too long".into());
             }
             if request.method == "import_chunk"
@@ -316,7 +326,15 @@ pub(crate) fn validate_request(request: &Request) -> Result<(), String> {
             }
         }
     }
-    for key in ["showHidden", "probeProjects", "recursive"] {
+    for key in [
+        "showHidden",
+        "probeProjects",
+        "recursive",
+        "purgeData",
+        "confirmPurge",
+        "enabled",
+        "show",
+    ] {
         if let Some(value) = params.get(key) {
             if !value.is_boolean() {
                 return Err("parameter must be a boolean".into());
@@ -370,6 +388,27 @@ pub(crate) fn validate_request(request: &Request) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn app_package_request_accepts_full_payload_budget_without_relaxing_file_limits() {
+        let mut request: Request = serde_json::from_value(serde_json::json!({
+            "id": "package", "method": "apps:install_package",
+            "params": { "installId": "tx", "packageId": "host", "data": "AAAA" }
+        }))
+        .unwrap();
+        assert!(
+            validate_request(&request).is_ok(),
+            "package method must reach dispatch"
+        );
+        let maximum = crate::app_store::types::PACKAGE_DATA_MAX_BASE64_BYTES;
+        request.params["data"] = Value::String("A".repeat(maximum));
+        assert!(validate_request(&request).is_ok());
+        request.params["data"] = Value::String("A".repeat(maximum + 1));
+        assert!(validate_request(&request).is_err());
+        request.method = "write_file".into();
+        request.params = serde_json::json!({ "parent": ".", "name": "a", "data": "A".repeat(4 * 1024 * 1024 + 1) });
+        assert!(validate_request(&request).is_err());
+    }
     use std::io::Cursor;
 
     #[test]

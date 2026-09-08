@@ -32,6 +32,23 @@ pub const REQUIRED_MAX_TOTAL_WIRE_BYTES: u64 = 15 * 1024 * 1024;
 
 /// Total package count per app (required + optional): 16.
 pub const MAX_TOTAL_PACKAGES: u64 = 16;
+pub const APP_MAX_INSTALLED_BYTES: u64 = 50 * 1024 * 1024;
+
+pub fn platform() -> &'static str {
+    if cfg!(target_os = "macos") {
+        "darwin"
+    } else {
+        std::env::consts::OS
+    }
+}
+
+pub fn architecture() -> &'static str {
+    match std::env::consts::ARCH {
+        "aarch64" => "arm64",
+        "x86_64" => "x64",
+        other => other,
+    }
+}
 
 /// Maximum base64 length of one `apps:install_package` payload parameter
 /// (base64 of a ≤20 MiB payload, plus margin): 28 MiB.
@@ -57,6 +74,7 @@ pub struct App {
     /// caller origin (Phase A5); 0 = registration explicitly skipped
     /// (no origin / no runtime). Never fabricated.
     pub host_registered: bool,
+    pub recovery_pending: bool,
 }
 
 /// Installed package receipt row (`app_packages` table, ADR-0025 D7/D13).
@@ -137,12 +155,105 @@ pub struct InstallTransaction {
 /// after `apps:install_commit` (ADR-0025 D11/D42). Package bytes are not
 /// part of this call; they arrive via `apps:install_package` (Phase A5).
 #[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct InstallRequest {
     pub app: AppMeta,
     #[serde(default)]
     pub packages: Vec<PackageMeta>,
     #[serde(default)]
     pub permissions: Vec<String>,
+}
+
+impl InstallRequest {
+    pub fn validate(&self) -> Result<(), AppError> {
+        self.app.validate()?;
+        let host = self.host_name()?;
+        crate::app_host_manifest::manifest_path_in(std::path::Path::new("."), host)?;
+        if self.packages.is_empty() || self.packages.len() as u64 > MAX_TOTAL_PACKAGES {
+            return Err(AppError::InvalidState("invalid package count".into()));
+        }
+        let mut ids = std::collections::BTreeSet::new();
+        let mut required = 0;
+        let mut wire = 0;
+        let mut payload = 0;
+        let mut runtimes = 0;
+        for package in &self.packages {
+            crate::app_install::validate_identifier(&package.package_id, "package id")?;
+            if !ids.insert(&package.package_id) || package.version != self.app.version {
+                return Err(AppError::InvalidState(
+                    "duplicate package or inconsistent version".into(),
+                ));
+            }
+            if package.wire_size <= 0
+                || package.wire_size as u64 > PACKAGE_MAX_WIRE_BYTES
+                || package.payload_size <= 0
+                || package.payload_size as u64 > PACKAGE_MAX_PAYLOAD_BYTES
+            {
+                return Err(AppError::InvalidState("package size outside budget".into()));
+            }
+            for hash in [&package.artifact_sha256, &package.payload_sha256] {
+                if hash.len() != 64 || !hash.bytes().all(|b| b.is_ascii_hexdigit()) {
+                    return Err(AppError::InvalidState("invalid package digest".into()));
+                }
+            }
+            match package.kind.as_str() {
+                "runtime"
+                    if package.required
+                        && package.platform == platform()
+                        && package.arch == architecture() =>
+                {
+                    runtimes += 1;
+                }
+                "data"
+                    if (package.platform == "any" || package.platform == platform())
+                        && (package.arch == "any" || package.arch == architecture()) => {}
+                _ => {
+                    return Err(AppError::InvalidState(
+                        "unsupported package kind or platform".into(),
+                    ))
+                }
+            }
+            if package.required {
+                required += 1;
+                wire += package.wire_size as u64;
+            }
+            payload += package.payload_size as u64;
+        }
+        if runtimes != 1
+            || required > REQUIRED_MAX_PACKAGES
+            || wire > REQUIRED_MAX_TOTAL_WIRE_BYTES
+            || payload > APP_MAX_INSTALLED_BYTES
+        {
+            return Err(AppError::InvalidState(
+                "app package set outside budget".into(),
+            ));
+        }
+        let namespace = self.app.namespace();
+        if self.permissions.len() > 16
+            || self.permissions.iter().any(|permission| {
+                permission != "app.lifecycle" && permission != &format!("keychain:{namespace}")
+            })
+        {
+            return Err(AppError::InvalidState("unsupported app permission".into()));
+        }
+        Ok(())
+    }
+
+    pub fn host_name(&self) -> Result<&str, AppError> {
+        let host = self
+            .app
+            .runtime_spec
+            .get("host")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| AppError::InvalidState("runtime host is required".into()))?;
+        let namespace = self.app.namespace();
+        if host != namespace && host != format!("{namespace}.host") {
+            return Err(AppError::InvalidState(
+                "runtime host must belong to the app namespace".into(),
+            ));
+        }
+        Ok(host)
+    }
 }
 
 /// Per-package staged state, one row per `app_package_stages` entry
@@ -174,6 +285,7 @@ pub struct InstallPackageResult {
 
 /// Catalog-derived app metadata.
 #[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AppMeta {
     pub app_id: String,
     pub kind: String,
@@ -194,10 +306,18 @@ pub struct AppMeta {
 }
 
 impl AppMeta {
+    pub fn namespace(&self) -> String {
+        if self.app_id.starts_with("com.natives.app.") {
+            self.app_id.clone()
+        } else {
+            format!("com.natives.app.{}", self.app_id)
+        }
+    }
     /// Core-side validation before anything is persisted (ADR-0025 D13:
     /// `kind` V1 only allows `extension_app`; catalog must not smuggle
     /// paths or scripts).
     pub fn validate(&self) -> Result<(), AppError> {
+        crate::app_install::validate_identifier(&self.app_id, "app id")?;
         if self.app_id.is_empty() || self.app_id.len() > APP_ID_MAX_LEN {
             return Err(AppError::InvalidState(format!(
                 "invalid app_id: {:?}",
@@ -218,13 +338,42 @@ impl AppMeta {
                 self.kind, KIND_EXTENSION_APP
             )));
         }
-        if self.name.trim().is_empty() {
+        if self.name.trim().is_empty() || self.name.len() > 128 {
             return Err(AppError::InvalidState("app name must not be empty".into()));
         }
-        if self.version.trim().is_empty() {
+        crate::app_install::validate_identifier(&self.version, "app version")?;
+        semver::Version::parse(&self.version)
+            .map_err(|_| AppError::InvalidState("app version must be SemVer".into()))?;
+        for (value, allowed) in [
+            (&self.runtime_spec, &["host", "version"][..]),
+            (&self.surface, &["route", "icon"][..]),
+            (&self.manifest, &["permissions", "schemaVersion"][..]),
+        ] {
+            let object = value
+                .as_object()
+                .ok_or_else(|| AppError::InvalidState("app metadata must be an object".into()))?;
+            if object.keys().any(|key| !allowed.contains(&key.as_str())) {
+                return Err(AppError::InvalidState(
+                    "unsupported app metadata field".into(),
+                ));
+            }
+        }
+        if self
+            .surface
+            .get("route")
+            .and_then(serde_json::Value::as_str)
+            != Some(format!("app.html?app={}", self.app_id).as_str())
+        {
             return Err(AppError::InvalidState(
-                "app version must not be empty".into(),
+                "surface route must belong to the app".into(),
             ));
+        }
+        if self
+            .runtime_spec
+            .get("version")
+            .is_some_and(|version| version.as_str() != Some(self.version.as_str()))
+        {
+            return Err(AppError::InvalidState("runtime version mismatch".into()));
         }
         Ok(())
     }
@@ -233,6 +382,7 @@ impl AppMeta {
 /// Catalog-derived package descriptor (ADR-0025 D7). Describes the target;
 /// the install path is decided by Core from `kind`, never by the catalog.
 #[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PackageMeta {
     pub package_id: String,
     pub kind: String,
@@ -243,6 +393,12 @@ pub struct PackageMeta {
     pub payload_size: i64,
     pub artifact_sha256: String,
     pub payload_sha256: String,
+    #[serde(default = "required_by_default")]
+    pub required: bool,
+}
+
+fn required_by_default() -> bool {
+    true
 }
 
 // NOTE (ADR-0025 D8): the commit-time package receipt (PackageReceipt) is

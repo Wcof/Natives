@@ -104,6 +104,31 @@ button.action.danger:hover { border-color:var(--danger); color:var(--danger); }
   box-shadow:var(--shadow); padding:20px 22px; width:400px; max-width:90vw;
 }
 .apps-dialog h2 { margin:0 0 8px; font-size:15px; }
-.apps-dialog p { margin:0 0 16px; color:var(--muted); font-size:13px; }
+.apps-dialog p { margin:0 0 16px; color:var(--muted); font-size:13px; white-space:pre-line; }
 .apps-dialog .actions { display:flex; justify-content:flex-end; gap:8px; }
 .apps-empty { color:var(--muted); padding:40px 0; text-align:center; }
+.apps-notice { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px 0; border-bottom:1px solid var(--line); color:var(--muted); }
+.apps-inline-error { margin-top:8px; color:var(--danger); }
+.apps-toggle, .apps-purge-choice { display:flex; align-items:flex-start; gap:8px; margin-top:8px; }
+.apps-purge-choice { margin-bottom:16px; color:var(--danger); }
+.apps-toggle input, .apps-purge-choice input { accent-color:var(--accent); flex:none; }
+.apps-progress { width:140px; height:4px; accent-color:var(--accent); }
+.apps-dialog, .app-card, .apps-list { box-sizing:border-box; }
+.app-card .name, .app-card .desc, .apps-notice, .apps-dialog { overflow-wrap:anywhere; }
+.app-card .actions { max-width:220px; }
+.app-card .actions .action { white-space:normal; }
+.action:focus-visible, input:focus-visible { outline:2px solid var(--accent); outline-offset:3px; }
+.action.danger { color:var(--danger); }
+.apps-toast { box-sizing:border-box; width:max-content; max-width:calc(100vw - 32px); }
+@media (max-width:640px) {
+  .apps-nav { width:48px; padding:12px 6px; }
+  .apps-nav .brand span, .apps-nav-item span { display:none; }
+  .apps-content-head { padding:16px; flex-wrap:wrap; }
+  .apps-content-head .sub { display:none; }
+  .apps-list { padding:12px; }
+  .app-card { flex-wrap:wrap; gap:10px; padding:12px; }
+  .app-card .body { min-width:calc(100% - 54px); }
+  .app-card .actions { width:100%; max-width:none; flex-direction:row; flex-wrap:wrap; align-items:center; }
+  .app-card .actions .status { width:100%; }
+  .apps-notice { flex-wrap:wrap; }
+}
