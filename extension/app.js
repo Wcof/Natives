@@ -1,4 +1,4 @@
-// App Surface shell (ADR-0025 D50).
+// App Surface shell (ADR-0026).
 //
 // app.html?app=<appId> — the ONLY browser entry point for an installed app:
 //   1. read the authoritative App (apps:get via the Core host port)
@@ -7,9 +7,8 @@
 //      catalog — D2: no online executable download)
 //   4. lazy import the module and let it mount into #app-stage
 //
-// The app's own runtime host is opened by the UI module through
-// native-app-client.js (D49: page owns the port; page closed → EOF →
-// host exits ≤2 s). 0 Native Port until the app actually needs it.
+// App modules share native-file-host through a page-owned port; page close
+// drives stdin EOF. There is no per-App Native Host or downloaded runtime.
 
 import { isKnownUiModule, resolveUiModule } from './app-module-registry.js';
 import { appHostFor, createAppNativeClient } from './native-app-client.js';
@@ -184,9 +183,23 @@ export function createAppShell({
         });
         return;
       }
-      if (!app.host_registered || app.recovery_pending) {
-        renderStatus({ icon: 'box', heading: t('appSurfaceRepairRequired'),
-          actionLabel: t('appSurfaceOpenCenter'), onAction: () => openAppCenter(client) });
+      if (app.needs_migration) {
+        renderStatus({
+          icon: 'box',
+          heading: t('appSurfaceNeedsMigration', '应用需要升级迁移'),
+          body: t('appSurfaceNeedsMigrationBody', '此应用来自旧版本架构，请在应用中心完成资源升级迁移后使用。'),
+          actionLabel: t('appSurfaceOpenCenter', '打开应用中心'),
+          onAction: () => openAppCenter(client),
+        });
+        return;
+      }
+      if (app.recovery_pending) {
+        renderStatus({
+          icon: 'box',
+          heading: t('appSurfaceRepairRequired', '应用需要修复'),
+          actionLabel: t('appSurfaceOpenCenter', '打开应用中心'),
+          onAction: () => openAppCenter(client),
+        });
         return;
       }
 

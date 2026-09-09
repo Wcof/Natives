@@ -347,6 +347,25 @@ for (const key of ['language', 'currentDirectorySearch', 'previewUnavailable', '
   assert.ok(JSON.parse(zh)[key]?.message);
 }
 assert.doesNotMatch(background, /connectNative|setTimeout|pending|nativePort/);
+// --- file:// Markdown takeover lifecycle ---
+assert.ok(Array.isArray(manifestData.content_scripts), 'content_scripts must be declared in manifest');
+const fileScript = manifestData.content_scripts.find((cs) => cs.matches?.includes('file:///*'));
+assert.ok(fileScript, 'content script for file:///* must be registered');
+assert.equal(fileScript.run_at, 'document_start', 'file content script must run at document_start');
+assert.equal(fileScript.all_frames, false, 'file content script must execute only in top-level frame');
+assert.deepEqual(fileScript.js, ['content-file-handler.js'], 'file content script must reference content-file-handler.js');
+assert.match(background, /sender\?\.tab\?\.id/, 'background must verify sender tab id');
+assert.match(background, /protocol\s*!==\s*'file:'|protocol\s*===\s*'file:'/, 'background must verify file: protocol');
+assert.match(background, /\(md\|markdown\|mdx\)/, 'background must re-verify markdown extension');
+assert.match(background, /files\.html\?open=/, 'background must build files.html?open= URL');
+assert.match(background, /chrome\.tabs\.update\(\s*sender\.tab\.id,\s*\{[\s\S]*url:/, 'background must redirect sender tab');
+const openParamOffset = files.indexOf("location.search).get('open')");
+const storedPathOffset = files.indexOf("storageGet('natives-last-path'");
+assert.ok(openParamOffset >= 0, 'files.js must check open parameter');
+assert.ok(storedPathOffset >= 0, 'files.js must check stored path');
+assert.ok(openParamOffset < storedPathOffset, 'files.js must prioritize open parameter over stored path');
+assert.match(filesBundle, /parseOpenMarkdownUrl/, 'files.js must validate open parameter via parseOpenMarkdownUrl');
+
 assert.match(launch, /files\.html/);
 assert.match(dev, /fs\/promises/);
 assert.match(dev, /buildExtension\(devExtension\)/, 'dev must use the same distribution bytes as the release budget');

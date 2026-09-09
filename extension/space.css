@@ -14,10 +14,8 @@ body.space-page.sidebar-collapsed .space-shell { grid-column:1 / -1; width:100%;
 .space-empty-card p { margin:0 0 18px 0; font-size:13px; opacity:0.8; line-height:1.5; }
 .space-empty-card button { min-height:36px; padding:0 20px; font-weight:bold; }
 body.space-widgets-hidden #dashboard-host .slot { display:none !important; }
-.inspector-backdrop { position:fixed; inset:0; z-index:45; background:transparent; backdrop-filter:none; -webkit-backdrop-filter:none; pointer-events:none; }
-@media (max-width:760px) {
-  .inspector-backdrop { pointer-events:auto; }
-}
+.inspector-backdrop { position:fixed; inset:0; z-index:45; background:transparent; backdrop-filter:none; -webkit-backdrop-filter:none; pointer-events:auto; }
+body.free-pos-active .inspector-backdrop { pointer-events:none !important; }
 .app-menu-section-title { display:flex; align-items:center; justify-content:space-between; min-height:32px; padding:0 4px 0 10px; color:var(--muted); font:700 11px/1.4 var(--display-font); letter-spacing:.06em; text-transform:uppercase; }
 .workspace-create-icon,.ws-more-btn { display:grid; flex:0 0 auto; place-items:center; width:28px; min-height:28px; padding:0; border:0; border-radius:50%; background:transparent; color:var(--muted); cursor:pointer; }
 .workspace-create-icon:hover,.ws-more-btn:hover { background:var(--hover); color:var(--text); }
@@ -76,10 +74,16 @@ body.space-widgets-hidden #dashboard-host .slot { display:none !important; }
 .inspector-card-clickable .icon { width:15px; height:15px; color:var(--muted); flex:0 0 auto; }
 .inspector-card-clickable .chev { opacity:0.4; width:14px; height:14px; }
 .inspector-widget-list { display:grid; gap:2px; }
-.inspector-row { display:flex; align-items:center; gap:10px; min-height:36px; padding:0 9px; border:1px solid transparent; border-radius:var(--radius); background:transparent; color:var(--muted); cursor:pointer; transition:all 0.15s ease; box-sizing:border-box; }
+.inspector-row { display:flex; align-items:center; gap:10px; min-height:36px; padding:0 9px; border:1px solid transparent; border-radius:var(--radius); background:transparent; color:var(--muted); cursor:grab; transition:background 0.15s ease, border-color 0.15s ease; box-sizing:border-box; user-select:none; }
+.inspector-row:active { cursor:grabbing; }
 .inspector-row:hover { color:var(--text); background:var(--hover); }
+.inspector-row.dragging { opacity:0.4; background:var(--surface-2); }
+.inspector-row.drag-over-top { border-top-color:var(--accent) !important; }
+.inspector-row.drag-over-bottom { border-bottom-color:var(--accent) !important; }
 .inspector-row.disabled { opacity:0.55; }
 .inspector-row.disabled span { color:var(--muted); }
+.inspector-row .inspector-row-order { flex:0 0 auto; display:inline-flex; align-items:center; justify-content:center; min-width:18px; height:18px; padding:0 4px; font-size:11px; font-weight:600; font-variant-numeric:tabular-nums; color:var(--muted); border-radius:4px; background:var(--surface-2); transition:all 0.15s ease; }
+.inspector-row:hover .inspector-row-order { color:var(--text); background:var(--border); }
 .inspector-row .icon { flex:0 0 auto; width:15px; height:15px; color:var(--muted); }
 .inspector-row span { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; font-weight:500; color:var(--text); }
 .inspector-row .row-action-toggle { display:grid; place-items:center; width:28px; height:28px; min-height:28px; padding:0; border:0; border-radius:var(--radius); background:transparent; color:var(--muted); cursor:pointer; }
@@ -171,7 +175,3 @@ body.space-widgets-hidden #dashboard-host .slot { display:none !important; }
   .catalog-card,
   .inspector-row { transition:none !important; }
 }
-
-.bing-wallpaper-info { position:fixed; right:18px; bottom:18px; z-index:5; max-width:min(480px,80vw); padding:5px 12px; border:1px solid rgba(255,255,255,0.14); border-radius:999px; background:rgba(0,0,0,0.5); backdrop-filter:blur(10px); color:rgba(255,255,255,0.9); font-size:11.5px; line-height:1.4; pointer-events:none; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; opacity:0.75; transition:opacity .2s ease; }
-.bing-wallpaper-info:hover { opacity:1; }
-

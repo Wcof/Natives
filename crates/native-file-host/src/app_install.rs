@@ -9,8 +9,6 @@
 use sha2::{Digest, Sha256};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
-use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use crate::app_store::types::AppError;
@@ -156,18 +154,7 @@ pub(crate) fn acquire_app_lock(
     Ok(file)
 }
 
-pub(crate) fn remove_file_if_present(path: &Path) -> Result<(), AppError> {
-    match std::fs::remove_file(path) {
-        Ok(()) => Ok(()),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-        Err(error) => Err(error.into()),
-    }
-}
-
-/// Core-decided final install path from `kind` (ADR-0025 D9: the catalog
-/// describes the target, the Core decides the path). V1 kinds:
-/// - `runtime` → `apps/<app_id>/runtime/<version>/<package_id>` (binary)
-/// - `data`    → `apps/<app_id>/packages/<version>/<package_id>`
+/// Core-decided final install path from `kind` (ADR-0026 D2: only data and resource packages).
 pub fn install_path_for(
     app_root: &Path,
     app_id: &str,
@@ -180,12 +167,7 @@ pub fn install_path_for(
     validate_identifier(version, "version")?;
     validate_identifier(package_id, "package_id")?;
     let path = match kind {
-        "runtime" => app_root
-            .join(app_id)
-            .join("runtime")
-            .join(version)
-            .join(package_id),
-        "data" => app_root
+        "data" | "resource" => app_root
             .join(app_id)
             .join("packages")
             .join(version)
@@ -198,6 +180,76 @@ pub fn install_path_for(
     };
     validate_app_path(app_root, &path)?;
     Ok(path)
+}
+
+/// Validate resource/data payload content (ADR-0026 D2).
+/// Rejects executable binaries, scripts, HTML, and validates JSON or image magic.
+pub fn validate_resource_payload(kind: &str, bytes: &[u8]) -> Result<&'static str, AppError> {
+    if bytes.is_empty() {
+        return Err(AppError::InvalidState("package payload is empty".into()));
+    }
+    // Reject binary executables:
+    // ELF: \x7fELF
+    // Mach-O: \xfe\xed\xfa\xce, \xfe\xed\xfa\xcf, \xce\xfa\xed\xfe, \xcf\xfa\xed\xfe, \xca\xfe\xba\xbe
+    // Windows PE: MZ (\x4d\x5a)
+    if bytes.len() >= 4 {
+        let magic4 = &bytes[..4];
+        if magic4 == b"\x7fELF"
+            || magic4 == b"\xfe\xed\xfa\xce"
+            || magic4 == b"\xfe\xed\xfa\xcf"
+            || magic4 == b"\xce\xfa\xed\xfe"
+            || magic4 == b"\xcf\xfa\xed\xfe"
+            || magic4 == b"\xca\xfe\xba\xbe"
+        {
+            return Err(AppError::InvalidState(
+                "executable binaries are forbidden in resource packages".into(),
+            ));
+        }
+    }
+    if bytes.len() >= 2 && &bytes[..2] == b"MZ" {
+        return Err(AppError::InvalidState(
+            "executable binaries are forbidden in resource packages".into(),
+        ));
+    }
+    // Reject scripts or HTML:
+    let check_len = std::cmp::min(bytes.len(), 512);
+    let leading_str = String::from_utf8_lossy(&bytes[..check_len]).to_ascii_lowercase();
+    if leading_str.starts_with("#!")
+        || leading_str.contains("<html")
+        || leading_str.contains("<!doctype")
+        || leading_str.contains("<script")
+    {
+        return Err(AppError::InvalidState(
+            "scripts and HTML are forbidden in resource packages".into(),
+        ));
+    }
+
+    match kind {
+        "data" => {
+            serde_json::from_slice::<serde_json::Value>(bytes).map_err(|_| {
+                AppError::InvalidState("data package payload must be valid JSON".into())
+            })?;
+            Ok("json")
+        }
+        "resource" => {
+            if bytes.len() >= 8 && &bytes[..8] == b"\x89PNG\r\n\x1a\n" {
+                Ok("png")
+            } else if bytes.len() >= 3 && &bytes[..3] == b"\xff\xd8\xff" {
+                Ok("jpeg")
+            } else if bytes.len() >= 12 && &bytes[..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+                Ok("webp")
+            } else if serde_json::from_slice::<serde_json::Value>(bytes).is_ok() {
+                Ok("json")
+            } else {
+                Err(AppError::InvalidState(
+                    "resource payload must be a valid PNG, JPEG, WebP or JSON".into(),
+                ))
+            }
+        }
+        other => Err(AppError::InvalidState(format!(
+            "unsupported package kind: {other}"
+        ))),
+    }
 }
 
 /// Write staged bytes and return (size, sha256 hex). Written to a temp
@@ -261,120 +313,6 @@ pub fn install_staged_payload(staged: &Path, target: &Path) -> Result<u64, AppEr
     Ok(size)
 }
 
-/// Mark a runtime binary executable (V1 targets macOS/Linux; no-op on
-/// Windows where the extension bit is meaningless for .exe).
-pub fn mark_executable(path: &Path) -> Result<(), AppError> {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let meta = std::fs::metadata(path)?;
-        let mut perms = meta.permissions();
-        perms.set_mode(0o755);
-        std::fs::set_permissions(path, perms)?;
-    }
-    let _ = path;
-    Ok(())
-}
-
-/// Active runtime version file: `apps/<app_id>/runtime/current` holds the
-/// plain version string. A file (not a symlink) so the switch is a
-/// portable atomic rename and the reader needs no OS-specific handling.
-pub fn runtime_current_path(app_root: &Path, app_id: &str) -> PathBuf {
-    app_root.join(app_id).join("runtime").join("current")
-}
-
-#[cfg_attr(not(test), allow(dead_code))]
-pub fn read_runtime_current(app_root: &Path, app_id: &str) -> Option<String> {
-    let text = std::fs::read_to_string(runtime_current_path(app_root, app_id)).ok()?;
-    let version = text.trim().to_string();
-    if version.is_empty() {
-        None
-    } else {
-        Some(version)
-    }
-}
-
-/// Atomically point `current` at `version` (temp file + rename).
-pub fn set_runtime_current(app_root: &Path, app_id: &str, version: &str) -> Result<(), AppError> {
-    validate_identifier(app_id, "app_id")?;
-    validate_identifier(version, "version")?;
-    let path = runtime_current_path(app_root, app_id);
-    validate_app_path(app_root, &path)?;
-    atomic_write(&path, format!("{version}\n").as_bytes())
-}
-
-/// Spawn `<binary> --health` and require exit 0 + `{"status":"ok"}` on
-/// stdout within 2 s. The health probe and runtime EOF exit are separate checks.
-pub fn health_check_binary(path: &Path, version: &str) -> Result<(), AppError> {
-    use std::io::Read;
-    // macOS serializes inspection of newly created executables. Keep test
-    // fixtures from consuming each other's production probe deadline.
-    #[cfg(test)]
-    static PROBES: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    #[cfg(test)]
-    let _probe = PROBES
-        .lock()
-        .map_err(|_| AppError::InvalidState("test probe lock poisoned".into()))?;
-    let mut child = std::process::Command::new(path)
-        .arg("--health")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()?;
-    let stdout = match child.stdout.take() {
-        Some(stdout) => stdout,
-        None => {
-            let _ = child.kill();
-            let _ = child.wait();
-            return Err(AppError::InvalidState(
-                "health probe output unavailable".into(),
-            ));
-        }
-    };
-    let (tx, rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let mut out = Vec::new();
-        let result = stdout.take(4097).read_to_end(&mut out).map(|_| out);
-        let _ = tx.send(result);
-    });
-    let deadline = Instant::now() + Duration::from_secs(2);
-    let result = (|| {
-        let status = loop {
-            if let Some(status) = child.try_wait()? {
-                break status;
-            }
-            if Instant::now() >= deadline {
-                return Err(AppError::InvalidState("health check timed out".into()));
-            }
-            std::thread::sleep(Duration::from_millis(10));
-        };
-        if !status.success() {
-            return Err(AppError::InvalidState("health check failed".into()));
-        }
-        let bytes = rx
-            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-            .map_err(|_| AppError::InvalidState("health check output timed out".into()))??;
-        if bytes.len() > 4096 {
-            return Err(AppError::InvalidState(
-                "health check output too large".into(),
-            ));
-        }
-        let value: serde_json::Value = serde_json::from_slice(&bytes)
-            .map_err(|_| AppError::InvalidState("invalid health check response".into()))?;
-        if value["status"] != "ok" || value["version"] != version {
-            return Err(AppError::InvalidState(
-                "health check status or version mismatch".into(),
-            ));
-        }
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = child.kill();
-    }
-    let _ = child.wait();
-    result
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -409,15 +347,15 @@ mod tests {
     #[test]
     fn install_paths_are_core_decided() {
         let root = PathBuf::from("/tmp/natives-app-root");
-        let runtime =
-            install_path_for(&root, "fund", "runtime", "1.0.0", "fund-host").expect("runtime");
-        assert!(runtime
+        let resource =
+            install_path_for(&root, "fund", "resource", "1.0.0", "fund-icon").expect("resource");
+        assert!(resource
             .to_string_lossy()
-            .ends_with("/fund/runtime/1.0.0/fund-host"));
+            .ends_with("/fund/packages/1.0.0/fund-icon"));
         let data = install_path_for(&root, "fund", "data", "1", "map").expect("data");
         assert!(data.to_string_lossy().ends_with("/fund/packages/1/map"));
         assert!(install_path_for(&root, "fund", "evil", "1", "x").is_err());
-        assert!(install_path_for(&root, "../fund", "runtime", "1", "x").is_err());
+        assert!(install_path_for(&root, "../fund", "resource", "1", "x").is_err());
     }
 
     #[test]
@@ -450,15 +388,25 @@ mod tests {
     }
 
     #[test]
-    fn current_version_switch_is_persisted() {
-        let dir = temp_root("current");
-        let root = &dir;
-        assert_eq!(read_runtime_current(root, "fund"), None);
-        set_runtime_current(root, "fund", "1.0.0").expect("set 1.0.0");
-        assert_eq!(read_runtime_current(root, "fund").as_deref(), Some("1.0.0"));
-        set_runtime_current(root, "fund", "1.1.0").expect("set 1.1.0");
-        assert_eq!(read_runtime_current(root, "fund").as_deref(), Some("1.1.0"));
-        let _ = std::fs::remove_dir_all(root);
+    fn payload_validation_accepts_json_and_images_rejects_binaries_and_scripts() {
+        assert_eq!(
+            validate_resource_payload("data", b"{\"key\":\"val\"}").unwrap(),
+            "json"
+        );
+        assert!(validate_resource_payload("data", b"not-json").is_err());
+        assert!(validate_resource_payload("data", b"\x7fELFsomething").is_err());
+        assert!(validate_resource_payload("data", b"#!/bin/sh\nexit 0").is_err());
+        assert!(validate_resource_payload("data", b"<html><body>evil</body></html>").is_err());
+
+        assert_eq!(
+            validate_resource_payload("resource", b"\x89PNG\r\n\x1a\nfakeimage").unwrap(),
+            "png"
+        );
+        assert_eq!(
+            validate_resource_payload("resource", b"\xff\xd8\xfffakeimage").unwrap(),
+            "jpeg"
+        );
+        assert!(validate_resource_payload("resource", b"\x7fELFsomething").is_err());
     }
 
     #[test]
@@ -500,26 +448,12 @@ mod tests {
         std::fs::write(external.join("runtime/keep"), b"external data").unwrap();
         std::os::unix::fs::symlink(&external, root.join("fund")).unwrap();
         assert!(staging_dir(&root, "fund", "tx").is_err());
-        assert!(install_path_for(&root, "fund", "runtime", "1.0.0", "host").is_err());
+        assert!(install_path_for(&root, "fund", "data", "1.0.0", "host").is_err());
         assert!(remove_app_install_dirs(&root, "fund").is_err());
         assert_eq!(
             std::fs::read(external.join("runtime/keep")).unwrap(),
             b"external data"
         );
-        std::fs::remove_dir_all(dir).unwrap();
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn current_version_rejects_symlink_parent_and_invalid_app_id() {
-        let dir = temp_root("current-escape");
-        let external = dir.join("external");
-        std::fs::create_dir_all(&external).unwrap();
-        std::fs::create_dir_all(dir.join("fund")).unwrap();
-        std::os::unix::fs::symlink(&external, dir.join("fund/runtime")).unwrap();
-        assert!(set_runtime_current(&dir, "fund", "1.0.0").is_err());
-        assert!(set_runtime_current(&dir, "../escaped", "1.0.0").is_err());
-        assert!(!external.join("current").exists());
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

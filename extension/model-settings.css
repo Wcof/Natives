@@ -471,3 +471,38 @@
 .model-account-model-row small { font-size:11px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--text-muted, #888); }
 .model-account-models-actions { justify-content:flex-end; border-top:1px solid var(--border); border-bottom:0; }
 .model-account-models-actions button { min-height:30px; height:30px; padding:0 16px; font-size:12.5px; display:inline-flex; align-items:center; justify-content:center; border-radius:var(--radius-sm, 6px); cursor:pointer; }
+
+/* Apps Center in settings */
+.model-apps-container { min-width:0; min-height:0; }
+.model-apps-container .apps-list { display:flex; flex-direction:column; gap:12px; padding:8px 0 24px; }
+.model-settings-dialog .app-card { border:1px solid var(--border); border-radius:var(--radius); background:var(--surface-2); padding:14px 16px; display:flex; gap:14px; align-items:flex-start; box-sizing:border-box; }
+.model-settings-dialog .app-card .thumb { width:44px; height:44px; flex:none; border-radius:var(--radius); background:var(--selected); color:var(--accent); display:flex; align-items:center; justify-content:center; }
+.model-settings-dialog .app-card .thumb .icon { width:22px; height:22px; }
+.model-settings-dialog .app-card .body { flex:1; min-width:0; }
+.model-settings-dialog .app-card .name { font-weight:600; font-size:14px; }
+.model-settings-dialog .app-card .desc { color:var(--muted); margin:2px 0 8px; }
+.model-settings-dialog .app-card .meta { display:flex; flex-wrap:wrap; gap:6px 14px; color:var(--muted); font-size:12px; }
+.model-settings-dialog .app-card .meta span { display:inline-flex; align-items:center; gap:5px; }
+.model-settings-dialog .app-card .actions { display:flex; flex-direction:column; gap:6px; flex:none; max-width:220px; }
+.model-settings-dialog .app-card .actions .action { white-space:normal; }
+.model-settings-dialog .app-card .status { font-size:12px; color:var(--muted); }
+.model-settings-dialog .app-card .status .error { color:var(--danger); }
+.model-settings-dialog .app-card .name, .model-settings-dialog .app-card .desc, .model-settings-dialog .apps-notice, .model-settings-dialog .apps-dialog { overflow-wrap:anywhere; }
+.model-settings-dialog button.action { display:inline-flex; align-items:center; gap:6px; padding:6px 14px; border-radius:var(--radius); border:1px solid var(--border); background:transparent; color:var(--text); font:inherit; cursor:pointer; white-space:nowrap; }
+.model-settings-dialog button.action:hover { background:var(--hover); }
+.model-settings-dialog button.action:disabled { opacity:0.45; cursor:default; }
+.model-settings-dialog button.action.primary { background:var(--accent); border-color:var(--accent); color:var(--on-accent); font-weight:600; }
+.model-settings-dialog button.action.primary:hover { background:var(--accent-strong); }
+.model-settings-dialog button.action.danger:hover { border-color:var(--danger); color:var(--danger); }
+.model-settings-dialog .apps-empty { color:var(--muted); padding:40px 0; text-align:center; }
+.model-settings-dialog .apps-notice { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px 0; border-bottom:1px solid var(--border); color:var(--muted); }
+.model-settings-dialog .apps-inline-error { margin-top:8px; color:var(--danger); }
+.model-settings-dialog .apps-toggle, .model-settings-dialog .apps-purge-choice { display:flex; align-items:flex-start; gap:8px; margin-top:8px; }
+.model-settings-dialog .apps-purge-choice { margin-bottom:16px; color:var(--danger); }
+.model-settings-dialog .apps-toggle input, .model-settings-dialog .apps-purge-choice input { accent-color:var(--accent); flex:none; }
+.model-settings-dialog .apps-progress { width:140px; height:4px; accent-color:var(--accent); }
+.model-settings-dialog .apps-dialog-backdrop { position:fixed; inset:0; background:var(--backdrop); z-index:40; display:flex; align-items:center; justify-content:center; }
+.model-settings-dialog .apps-dialog { background:var(--surface-2); border:1px solid var(--border); border-radius:var(--radius); box-shadow:var(--shadow); padding:20px 22px; width:400px; max-width:90vw; }
+.model-settings-dialog .apps-dialog h2 { margin:0 0 8px; font-size:15px; }
+.model-settings-dialog .apps-dialog p { margin:0 0 16px; color:var(--muted); font-size:13px; white-space:pre-line; }
+.model-settings-dialog .apps-dialog .actions { display:flex; justify-content:flex-end; gap:8px; }

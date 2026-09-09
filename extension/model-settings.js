@@ -11,6 +11,7 @@ let instance;
 export async function openModelSettings(options) {
   if (!instance) instance = new ModelSettings(options);
   instance.setLocale(options);
+  if (options?.initialPage) instance.setInitialPage(options.initialPage);
   await instance.open();
 }
 
@@ -23,6 +24,8 @@ class ModelSettings {
     this.selectedID = 'codex';
     this.pendingOAuth = null;
     this.oauthResults = {};
+    this.appCenter = null;
+    this.initialPage = null;
 
     
     this.agentStatuses = null;
@@ -53,29 +56,70 @@ class ModelSettings {
       onDisconnect: (_error, intentional) => { if (!intentional && this.view?.dialog.open) this.showError(this.t('modelHostDisconnected', '模型 Host 已断开')); },
     });
     this.view = createModelSettingsView({ t: (...args) => this.t(...args), onAction: (...args) => this.handleAction(...args) });
-    this.view.dialog.addEventListener('close', () => { this.api.disconnect(); this.returnFocus?.focus?.(); });
+    this.view.dialog.addEventListener('close', () => {
+      this.api.disconnect();
+      this.appCenter?.dispose();
+      this.appCenter = null;
+      this.returnFocus?.focus?.();
+    });
     this.view.dialog.addEventListener('submit', (event) => this.handleSubmit(event));
     this.view.dialog.addEventListener('model-provider-submit', (event) => this.saveProvider(event));
   }
   setLocale({ t, language, returnFocus }) { this.t = t; this.language = language; this.returnFocus = returnFocus; }
+  setInitialPage(page) { this.initialPage = page; }
   async open() {
     this.view.open();
+    if (this.initialPage) {
+      this.view.setPage(this.initialPage);
+      this.initialPage = null;
+    }
     await this.refresh();
+  }
+  async ensureAppCenter() {
+    if (this.appCenter) {
+      await this.appCenter.refresh();
+      return;
+    }
+    this.view.setLoading(true);
+    try {
+      const { createAppCenter } = await import('./apps.js');
+      const appsList = this.view.dialog.querySelector('[data-role="appsList"]');
+      this.appCenter = createAppCenter({
+        list: appsList,
+        t: (...args) => this.t(...args),
+      });
+      await this.appCenter.ready;
+    } catch (err) {
+      this.showError(err);
+    } finally {
+      this.view.setLoading(false);
+    }
   }
   async refresh() {
     this.view.setLoading(true);
     this.view.showError('');
     try {
-      this.snapshot = await this.api.snapshot();
-      if (!this.snapshot.providers.some((provider) => provider.id === this.selectedID)) this.selectedID = this.snapshot.providers[0]?.id;
-      if (this.view.activePage === 'usage') {
-        await this.loadUsageData();
-      } else if (this.view.activePage === 'oauth') {
-        await this.loadAuthFiles();
-      } else if (this.view.activePage === 'agent') {
-        await loadAgentClients(this, { force: true });
+      if (this.view.activePage === 'apps') {
+        await this.ensureAppCenter();
       }
-      this.render();
+      try {
+        this.snapshot = await this.api.snapshot();
+        if (['stopped', 'failed'].includes(this.snapshot.gateway.state)) {
+          this.snapshot = await this.api.startGateway({ expectedRevision: this.snapshot.revision });
+        }
+        if (!this.snapshot.providers.some((provider) => provider.id === this.selectedID)) this.selectedID = this.snapshot.providers[0]?.id;
+        if (this.view.activePage === 'usage') {
+          await this.loadUsageData();
+        } else if (this.view.activePage === 'oauth') {
+          await this.loadAuthFiles();
+        } else if (this.view.activePage === 'agent') {
+          await loadAgentClients(this, { force: true });
+        }
+        this.render();
+        if (this.snapshot.gateway.state === 'running') await this.api.syncAgentClientConfigs();
+      } catch (error) {
+        if (this.view.activePage !== 'apps') throw error;
+      }
     } catch (error) {
       this.showError(error);
     } finally {
@@ -193,15 +237,32 @@ class ModelSettings {
   async handleAction(action, target, event) {
     const revision = this.snapshot?.revision;
     if (action === 'close') return this.view.close();
-    if (action === 'refresh') return this.refresh();
+    if (action === 'refresh') {
+      if (this.view.activePage === 'apps') {
+        this.view.setLoading(true);
+        try {
+          if (this.appCenter) {
+            await Promise.all([this.appCenter.reloadCatalog(), this.appCenter.refresh()]);
+          }
+        } finally {
+          this.view.setLoading(false);
+        }
+        return;
+      }
+      return this.refresh();
+    }
     if (action === 'select-model-page') {
       this.view.showError('');
       const page = target.dataset.page;
       const kind = page === 'custom' ? 'custom' : page === 'oauth' ? 'oauth' : '';
-      if (kind && !this.snapshot.providers.some((provider) => provider.id === this.selectedID && provider.kind === kind)) {
-        this.selectedID = this.snapshot.providers.find((provider) => provider.kind === kind)?.id;
+      if (kind && !this.snapshot?.providers?.some((provider) => provider.id === this.selectedID && provider.kind === kind)) {
+        this.selectedID = this.snapshot?.providers?.find((provider) => provider.kind === kind)?.id;
       }
       this.view.setPage(page);
+      if (page === 'apps') {
+        await this.ensureAppCenter();
+        return;
+      }
       if (page === 'usage') {
         this.view.setLoading(true);
         try {

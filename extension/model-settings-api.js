@@ -11,6 +11,7 @@ const WRITE_METHODS = new Set([
   'model_usage_price_upsert', 'model_usage_price_delete', 'model_usage_price_sync',
   'model_usage_import_begin', 'model_usage_import_chunk', 'model_usage_import_commit', 'model_usage_import_cancel',
   'model_account_models_update',
+  'model_agent_clients_sync',
 ]);
 
 export function createModelSettingsAPI({ onEvent, onDisconnect } = {}) {
@@ -81,6 +82,7 @@ export function createModelSettingsAPI({ onEvent, onDisconnect } = {}) {
 
     
     listAgentClients: () => client.call('model_agent_clients_list'),
+    syncAgentClientConfigs: () => client.call('model_agent_clients_sync'),
     getAgentClientModels: (params) => client.call('model_agent_client_models', params),
     applyAgentClientConfig: (params) => client.call('model_agent_client_apply', params),
     defaultAgentClientConfig: (params) => client.call('model_agent_client_default', params),

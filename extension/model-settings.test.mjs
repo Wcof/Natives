@@ -73,10 +73,14 @@ for (const [, role] of view.matchAll(/\broles\.([A-Za-z]\w*)/g)) {
 assert.match(view, /showModal\(\)/);
 assert.match(view, /aria-live="polite"/);
 assert.match(view, /data-action="test-new-provider"/);
-for (const page of ['custom', 'oauth', 'gateway', 'usage', 'advanced']) {
+for (const page of ['custom', 'oauth', 'gateway', 'usage', 'advanced', 'apps']) {
   assert.match(view, new RegExp(`data-action="select-model-page" data-page="${page}"`), `model settings must expose the ${page} second-level page`);
   assert.match(view, new RegExp(`data-page-panel="${page}"`), `model settings must render the ${page} page`);
 }
+assert.match(view, /data-role="appsNavGroup"/, 'primary nav group for apps center must exist');
+assert.match(view, /data-role="appsListNav"/, 'secondary nav item for app list must exist');
+assert.match(view, /data-role="appsList"/, 'apps list container must exist');
+assert.match(controller, /import\('\.\/apps\.js'\)/, 'apps center module must stay lazy-loaded');
 assert.match(controller, /action === 'select-model-page'/, 'controller must switch model settings subpages');
 assert.match(controller, /model_catalog_changed/);
 assert.match(controller, /model_usage_updated/);
@@ -97,6 +101,8 @@ assert.match(advancedView, /model-col-name[\s\S]*model-col-mask[\s\S]*model-col-
 assert.match(gatewayView, /data-action=\"resident\"/, 'gateway overview must preserve the resident control');
 assert.match(view, /select\[data-action\], input\[type="checkbox"\]\[data-action\]/, 'settings checkboxes must commit through change events');
 assert.match(controller, /resident && snapshot\.gateway\.state !== 'running'[\s\S]*startGateway/, 'enabling resident mode must also ensure the gateway is running');
+assert.match(controller, /\['stopped', 'failed'\]\.includes\(this\.snapshot\.gateway\.state\)[\s\S]*startGateway/, 'opening model settings must start a stopped gateway');
+assert.match(controller, /gateway\.state === 'running'[\s\S]*syncAgentClientConfigs/, 'a running gateway must refresh managed client endpoints');
 assert.match(gatewayView, /data-action=\"(?:update-kernel|check-kernel-update)\"/, 'gateway overview must expose kernel update actions');
 assert.match(gatewayView, /#i-box[\s\S]*'i-link'/, 'gateway overview must reuse the shared SVG sprite');
 assert.doesNotMatch(gatewayView, /127\.0\.0\.1:8317|v7\.2\.139|v0\.2\.25/, 'gateway overview must not invent runtime values');
@@ -113,11 +119,11 @@ assert.match(view, /showToast\(message\)/, 'model settings view must expose show
 assert.doesNotMatch(view, /showToast\._timer/, 'showToast must not reference undefined showToast identifier internally');
 assert.match(view, /toastTimer = setTimeout/, 'showToast must manage toastTimer safely');
 assert.match(advancedController, /view\.showToast\(controller\.t\(key, fallback\)\)/, 'key copy and rotate actions must surface a toast on success');
-for (const [page, icon] of [['custom', 'i-pen'], ['oauth', 'i-globe'], ['gateway', 'i-bolt'], ['usage', 'i-list'], ['advanced', 'i-gear']]) {
+for (const [page, icon] of [['custom', 'i-pen'], ['oauth', 'i-globe'], ['gateway', 'i-bolt'], ['usage', 'i-list'], ['advanced', 'i-gear'], ['apps', 'i-grid']]) {
   assert.match(view, new RegExp(`data-page="${page}"[^>]*><svg class="icon"[^>]*><use href="#${icon}"`), `subnav ${page} must declare its ${icon} icon inline`);
 }
 assert.doesNotMatch(usageView, /data-action="search-events"/, 'usage UI must not expose a fake search action');
-for (const key of ['modelSettings', 'modelCustomModels', 'modelOAuthModels', 'modelLocalProxy', 'modelUsageRecords', 'modelAdvancedSettings', 'modelGatewaySummary', 'modelTestConnection', 'modelAccountNeedsReauth', 'modelOAuthModelsHint', 'modelAccounts']) {
+for (const key of ['modelSettings', 'modelCustomModels', 'modelOAuthModels', 'modelLocalProxy', 'modelUsageRecords', 'modelAdvancedSettings', 'modelGatewaySummary', 'modelTestConnection', 'modelAccountNeedsReauth', 'modelOAuthModelsHint', 'modelAccounts', 'appsCenter', 'appsList']) {
   assert.ok(JSON.parse(zh)[key] && JSON.parse(en)[key], `locale key ${key} must exist in zh_CN and en`);
 }
 for (const key of new Set(controller.match(/modelError[A-Za-z]+/g))) {

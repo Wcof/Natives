@@ -129,7 +129,7 @@ function renderQuotaWindows(quota, file, t) {
   return quota.windows.map((w) => {
     const pct = w.remainingPercent != null ? Math.max(0, Math.min(100, Math.round(w.remainingPercent))) : null;
     const pctStr = pct != null ? `${t('remaining', '剩余')} ${pct}%` : '';
-    const resetTime = w.resetTime ? formatResetTime(w.resetTime) : '';
+    const resetTime = w.resetTime ? formatResetLabel(w.resetTime, t) : '';
     const modelsStr = (w.models || []).length ? `${t('modelsWithinGroup', 'Models within this group')}: ${w.models.join(', ')}` : '';
 
     return `
@@ -150,12 +150,17 @@ function renderQuotaWindows(quota, file, t) {
   }).join('');
 }
 
-function formatResetTime(isoStr) {
-  try {
-    const d = new Date(isoStr);
-    if (isNaN(d.getTime())) return isoStr;
-    return d.toLocaleDateString(undefined, { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
-  } catch {
-    return isoStr;
-  }
+export function formatResetLabel(value, t, now = Date.now()) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return String(value);
+  const minutes = Math.max(0, Math.ceil((date.getTime() - now) / 60_000));
+  const hours = Math.floor(minutes / 60);
+  const remainder = minutes % 60;
+  const duration = [
+    hours ? `${hours} ${t('quotaHours', '小时')}` : '',
+    remainder || !hours ? `${remainder} ${t('quotaMinutes', '分钟')}` : '',
+  ].filter(Boolean).join(' ');
+  const relative = t('quotaResetsIn', '$1 后重置').replace('$1', duration);
+  const absolute = date.toLocaleString(undefined, { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' });
+  return `${relative} · ${absolute}`;
 }

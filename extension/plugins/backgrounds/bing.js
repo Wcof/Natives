@@ -1,10 +1,6 @@
 
 
-import { fetchDedup, setMemCache, loadCachedBackground } from '../plugins-cache.js';
-
-function escapeHtml(value) {
-  return String(value ?? '').replace(/[&<>"']/g, (match) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[match]);
-}
+import { fetchDedup, loadCachedBackground } from '../plugins-cache.js';
 
 const MARKETS = [
   { code: 'random', name: '全球地区随机 (All Markets - 推荐)' },
@@ -37,7 +33,10 @@ export const bingBackground = {
     const mkt = data.mkt || 'random';
     const resolution = data.resolution || '1920';
     const mode = data.mode || 'random';
+    const interval = data.interval || 'everyTab';
     let currentIndex = Number(data.index) || 0;
+
+    const isManualNext = Boolean(data._refresh);
 
     function resolveMarket() {
       if (mkt === 'random') {
@@ -47,19 +46,13 @@ export const bingBackground = {
       return mkt;
     }
 
-    function applyWallpaper(rawUrl, meta = null) {
+    function applyWallpaper(rawUrl) {
       if (!rawUrl) return;
       container.replaceChildren();
       container.style.backgroundColor = 'transparent';
       container.style.backgroundImage = `url("${rawUrl}")`;
       container.style.backgroundSize = 'cover';
       container.style.backgroundPosition = 'center';
-      if (meta?.copyright) {
-        const info = document.createElement('div');
-        info.className = 'bing-wallpaper-info';
-        info.innerHTML = `<span class="bing-wallpaper-title">${escapeHtml(meta.copyright)}</span>`;
-        container.append(info);
-      }
       loadCachedBackground(rawUrl, { category: 'bing' }).then((url) => {
         if (url && url !== rawUrl && container.style.backgroundImage.includes(rawUrl)) {
           container.style.backgroundImage = `url("${url}")`;
@@ -70,26 +63,39 @@ export const bingBackground = {
     async function loadWallpaper(idx, forceFresh = false) {
       const targetMkt = resolveMarket();
       const isRandom = mode === 'random';
-      const indexParam = isRandom ? 'random' : (mode === 'today' ? 0 : (idx % 8));
-      const cacheKey = isRandom
-        ? `bing_wall_rnd_${targetMkt}_${forceFresh ? Date.now() : (idx % 50)}`
-        : `bing_wall_${targetMkt}_${indexParam}`;
+      const indexParam = (mode === 'today' && !forceFresh) ? 0 : (idx % 8);
+      const cacheKey = forceFresh
+        ? `bing_wall_fresh_${targetMkt}_${indexParam}_${Date.now()}`
+        : (isRandom
+          ? `bing_wall_rnd_${targetMkt}_${indexParam}`
+          : `bing_wall_${targetMkt}_${indexParam}`);
 
       return fetchDedup(
         cacheKey,
         async () => {
-          const bust = isRandom ? `&_t=${Date.now()}_${Math.random().toString(36).slice(2, 7)}` : '';
-          const res = await fetch(`https://bing.biturl.top/?resolution=${resolution}&format=json&index=${indexParam}&mkt=${encodeURIComponent(targetMkt)}${bust}`);
+          const res = await fetch(`https://www.bing.com/HPImageArchive.aspx?format=js&idx=${indexParam}&n=1&mkt=${encodeURIComponent(targetMkt)}`);
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
           const json = await res.json();
-          return json?.url ? { url: json.url, copyright: json.copyright } : null;
+          const image = json?.images?.[0];
+          if (!image?.url) return null;
+          const path = resolution === '3840' && image.urlbase
+            ? `${image.urlbase}_UHD.jpg`
+            : image.url;
+          return {
+            url: new URL(path, 'https://www.bing.com').href,
+          };
         },
         isRandom ? 2 * 60 * 1000 : 4 * 60 * 60 * 1000,
       );
     }
 
     // Determine starting index based on carousel policy with cross-tab persistence (localStorage)
-    if (data.interval === 'everyTab') {
-      const storageKey = 'natives_bing_tab_idx';
+    const storageKey = 'natives_bing_tab_idx';
+    if (isManualNext) {
+      try {
+        globalThis.localStorage?.setItem(storageKey, String(currentIndex));
+      } catch {}
+    } else if (interval === 'everyTab') {
       try {
         const storedIdx = Number(globalThis.localStorage?.getItem(storageKey)) || 0;
         currentIndex = (storedIdx + 1) % 1000;
@@ -99,10 +105,10 @@ export const bingBackground = {
       }
     }
 
-    loadWallpaper(currentIndex)
+    loadWallpaper(currentIndex, isManualNext)
       .then((cached) => {
         if (cached?.url) {
-          applyWallpaper(cached.url, cached);
+          applyWallpaper(cached.url);
         }
       })
       .catch(() => {
@@ -117,13 +123,13 @@ export const bingBackground = {
       '15m': 15 * 60 * 1000,
       '1h': 60 * 60 * 1000,
     };
-    const periodMs = intervalMap[data.interval];
+    const periodMs = intervalMap[interval];
     if (periodMs) {
       activeTimer = setInterval(async () => {
         currentIndex = (currentIndex + 1) % 1000;
         try {
           const next = await loadWallpaper(currentIndex, true);
-          if (next?.url) applyWallpaper(next.url, next);
+          if (next?.url) applyWallpaper(next.url);
         } catch (e) {}
       }, periodMs);
     }
@@ -139,7 +145,7 @@ export const bingBackground = {
         <label class="inspector-field">
           <span>${t ? t('bingMode', '壁纸内容库') : '壁纸内容库'}</span>
           <select id="b-mode">
-            <option value="random" ${curMode === 'random' ? 'selected' : ''}>海量历史精选图库 (成千上万张，每次不重样 - 推荐)</option>
+            <option value="random" ${curMode === 'random' ? 'selected' : ''}>随机地区最近 8 天壁纸 (推荐)</option>
             <option value="recent" ${curMode === 'recent' ? 'selected' : ''}>最近 8 天官方归档轮播 (Past 8 Days)</option>
             <option value="today" ${curMode === 'today' ? 'selected' : ''}>固定今日官方主推 (Today Only)</option>
           </select>
@@ -189,10 +195,11 @@ export const bingBackground = {
     container.querySelector('#b-interval').onchange = update;
     container.querySelector('#b-res').onchange = update;
 
+    let currentIndex = Number(data.index) || 0;
     const nextBtn = container.querySelector('#b-next-btn');
     nextBtn.onclick = () => {
-      const nextIdx = ((Number(data.index) || 0) + 1) % 1000;
-      onChange({ ...data, index: nextIdx, _refresh: Date.now() });
+      currentIndex = (currentIndex + 1) % 8;
+      onChange({ ...data, index: currentIndex, _refresh: Date.now() });
     };
   },
   dispose() {
@@ -202,5 +209,3 @@ export const bingBackground = {
     }
   },
 };
-
-

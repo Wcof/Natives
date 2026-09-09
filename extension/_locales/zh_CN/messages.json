@@ -92,6 +92,9 @@
   "confirm": {
     "message": "确认"
   },
+  "confirmDiscardChanges": {
+    "message": "有未保存的修改，确定放弃吗？"
+  },
   "confirmImport": {
     "message": "确认导入并覆盖"
   },
@@ -103,6 +106,9 @@
   },
   "connecting": {
     "message": "正在连接本地文件系统…"
+  },
+  "continueEditing": {
+    "message": "继续编辑"
   },
   "contentSearchUnavailable": {
     "message": "PDF 文本搜索不可用"
@@ -1028,6 +1034,15 @@
   "remaining": {
     "message": "剩余"
   },
+  "quotaHours": {
+    "message": "小时"
+  },
+  "quotaMinutes": {
+    "message": "分钟"
+  },
+  "quotaResetsIn": {
+    "message": "$1 后重置"
+  },
   "queryingQuota": {
     "message": "正在查询配额..."
   },
@@ -1349,6 +1364,9 @@
   "paste": {
     "message": "粘贴"
   },
+  "pasteChecklist": {
+    "message": "粘贴任务清单（支持 Markdown - [ ] 或 1. 列表）..."
+  },
   "pasted": {
     "message": "项已粘贴"
   },
@@ -1526,6 +1544,9 @@
   "saved": {
     "message": "已保存"
   },
+  "saving": {
+    "message": "正在保存…"
+  },
   "search": {
     "message": "搜索文件"
   },
@@ -1663,6 +1684,9 @@
   },
   "useAccentColor": {
     "message": "使用强调色"
+  },
+  "validationFailed": {
+    "message": "请检查输入格式或数值范围"
   },
   "visualEffects": {
     "message": "视觉效果"
@@ -2330,6 +2354,9 @@
   "appsCenterSub": {
     "message": "管理可选 Natives 应用"
   },
+  "appsList": {
+    "message": "应用列表"
+  },
   "appSurfaceNotFound": {
     "message": "应用不存在或已卸载"
   },
@@ -2374,6 +2401,30 @@
   },
   "demoHost": {
     "message": "Host"
+  },
+  "demoResourceTitle": {
+    "message": "已下载资源内容"
+  },
+  "demoLoadingResource": {
+    "message": "正在读取资源…"
+  },
+  "demoResourceData": {
+    "message": "数据载荷"
+  },
+  "demoNoData": {
+    "message": "纯扩展应用，无外部数据包"
+  },
+  "demoDisconnected": {
+    "message": "Host 已断开"
+  },
+  "demoPackageMissing": {
+    "message": "资源包缺失"
+  },
+  "demoPackageCorrupt": {
+    "message": "资源包损坏或版本不一致"
+  },
+  "demoResourceImageAlt": {
+    "message": "Demo 资源图片"
   },
   "demoPingTitle": {
     "message": "Host 通信"
@@ -2518,5 +2569,71 @@
   },
   "appSurfaceRepairRequired": {
     "message": "应用运行时需要重新安装"
+  },
+  "captureCommandDescription": {
+    "message": "截取当前网页完整滚动内容"
+  },
+  "captureContextMenu": {
+    "message": "截取完整网页"
+  },
+  "captureTitle": {
+    "message": "网页截图"
+  },
+  "captureProgress": {
+    "message": "正在截取网页..."
+  },
+  "captureStitching": {
+    "message": "正在拼接入画布..."
+  },
+  "captureComplete": {
+    "message": "截图完成"
+  },
+  "captureSavePng": {
+    "message": "保存 PNG"
+  },
+  "captureSavePdf": {
+    "message": "另存为 PDF"
+  },
+  "captureCopyImage": {
+    "message": "复制图片"
+  },
+  "captureCopied": {
+    "message": "已复制到剪贴板"
+  },
+  "captureCopyFailed": {
+    "message": "复制失败，请右键图片选择“复制图片”"
+  },
+  "captureErrorProtected": {
+    "message": "受保护页面无法截图"
+  },
+  "captureErrorFileAccess": {
+    "message": "未开启 file URL 访问权限"
+  },
+  "captureErrorTabSwitched": {
+    "message": "标签已切换或关闭，截图已中止"
+  },
+  "captureErrorPageNavigated": {
+    "message": "页面发生跳转，截图已中止"
+  },
+  "captureErrorCanvasLimit": {
+    "message": "超出最大截图尺寸限制"
+  },
+  "captureErrorAlreadyRunning": {
+    "message": "已有截图任务正在进行中"
+  },
+  "captureErrorFailed": {
+    "message": "截图失败"
+  },
+  "captureSegment": {
+    "message": "第 $1 分段（共 $2 段）"
+  },
+  "todoCompleted": {
+    "message": "已完成"
+  },
+  "pomodoroCompleted": {
+    "message": "已完成!"
+  },
+  "dragToReorder": {
+    "message": "按住拖拽排序"
   }
 }

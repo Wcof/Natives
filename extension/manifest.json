@@ -4,8 +4,17 @@
   "version": "0.1.0",
   "description": "在 Chrome 中安全访问本机文件管理器",
   "default_locale": "zh_CN",
-  "permissions": ["nativeMessaging", "storage", "tabs"],
+  "permissions": ["nativeMessaging", "storage", "tabs", "activeTab", "scripting", "contextMenus"],
   "optional_permissions": ["bookmarks", "topSites"],
+  "commands": {
+    "capture-full-page": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+Y",
+        "mac": "Command+Shift+Y"
+      },
+      "description": "__MSG_captureCommandDescription__"
+    }
+  },
   "host_permissions": [
     "https://github.com/*",
     "https://release-assets.githubusercontent.com/*",
@@ -14,7 +23,7 @@
     "https://ghproxy.net/*",
     "https://api.open-meteo.com/*",
     "https://geocoding-api.open-meteo.com/*",
-    "https://bing.biturl.top/*",
+    "https://www.bing.com/*",
     "https://api.unsplash.com/*",
     "https://images.unsplash.com/*",
     "https://api.nasa.gov/*",
@@ -40,5 +49,13 @@
     }
   },
   "background": { "service_worker": "background.js", "type": "module" },
+  "content_scripts": [
+    {
+      "matches": ["file:///*"],
+      "js": ["content-file-handler.js"],
+      "run_at": "document_start",
+      "all_frames": false
+    }
+  ],
   "icons": { "16": "icons/folder-16.png", "32": "icons/folder-32.png", "128": "icons/folder-128.png" }
 }

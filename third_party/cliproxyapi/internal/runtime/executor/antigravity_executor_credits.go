@@ -333,7 +333,10 @@ func antigravityHasExplicitCreditsBalanceExhaustedReason(body []byte) bool {
 	return false
 }
 
-func newAntigravityStatusErr(statusCode int, body []byte) statusErr {
+func newAntigravityStatusErr(statusCode int, body []byte) error {
+	if statusCode == http.StatusBadRequest && bytes.Contains(bytes.ToLower(body), []byte("user location is not supported")) {
+		return &cliproxyauth.Error{Message: string(body), Retryable: true, HTTPStatus: http.StatusServiceUnavailable}
+	}
 	err := statusErr{code: statusCode, msg: string(body)}
 	if statusCode == http.StatusTooManyRequests {
 		if retryAfter, parseErr := helps.ParseRetryDelay(body); parseErr == nil && retryAfter != nil {

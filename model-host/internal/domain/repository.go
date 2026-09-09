@@ -85,7 +85,7 @@ func (r *Repository) loadUnlocked() (Snapshot, error) {
 		if snapshot.Revision < 1 {
 			return Snapshot{}, errors.New("unsupported model state schema")
 		}
-		// Migrate SchemaVersion 1 -> 2
+		// Migrate old snapshots to the current gateway defaults.
 		if snapshot.SchemaVersion == 1 {
 			now := time.Now().UTC().Format(time.RFC3339Nano)
 			if len(snapshot.Gateway.AccessKeys) == 0 {
@@ -103,6 +103,10 @@ func (r *Repository) loadUnlocked() (Snapshot, error) {
 			if snapshot.Gateway.PreferredPort > 0 && snapshot.Gateway.Settings.PreferredPort == 0 {
 				snapshot.Gateway.Settings.PreferredPort = snapshot.Gateway.PreferredPort
 			}
+		}
+		if snapshot.SchemaVersion == 1 || snapshot.SchemaVersion == 2 {
+			snapshot.Gateway.Settings.RequestRetry = DefaultRequestRetry
+			snapshot.Gateway.Settings.MaxRetryIntervalSeconds = DefaultMaxRetryIntervalSeconds
 			snapshot.SchemaVersion = SchemaVersion
 			_ = r.saveUnlocked(snapshot)
 		} else if snapshot.SchemaVersion != SchemaVersion {

@@ -8,6 +8,7 @@ export const customTextWidget = {
   defaultData: { text: 'Custom Text' },
   render(container, data) {
     container.className = 'Widget CustomText';
+    container.replaceChildren();
     const h3 = document.createElement('h3');
     h3.textContent = data.text || '';
     container.append(h3);

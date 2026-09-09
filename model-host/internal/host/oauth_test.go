@@ -3,6 +3,7 @@ package host
 import (
 	"context"
 	"encoding/json"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -229,6 +230,15 @@ func TestCredentialRefreshUpdatesAccountStatusAndAccountMutations(t *testing.T) 
 		t.Fatalf("refresh did not update safe account metadata: %#v", snapshot.Accounts[0])
 	}
 	credential.Status = coreauth.StatusError
+	credential.LastError = &coreauth.Error{HTTPStatus: http.StatusServiceUnavailable, Retryable: true}
+	if _, err = engine.authStore.Save(context.Background(), credential); err != nil {
+		t.Fatal(err)
+	}
+	snapshot = (<-events).Result.(map[string]any)["snapshot"].(domain.Snapshot)
+	if snapshot.Accounts[0].Status != "active" {
+		t.Fatalf("transient upstream failure required reauthorization: %#v", snapshot.Accounts[0])
+	}
+	credential.LastError.Retryable = false
 	if _, err = engine.authStore.Save(context.Background(), credential); err != nil {
 		t.Fatal(err)
 	}

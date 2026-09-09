@@ -1,5 +1,21 @@
 # T12 发布门禁报告（PASS/BLOCKED）
 
+## 2026-09-08 子应用资源包整改补充
+
+| 验收项 | 结果 | 本次证据 |
+|---|---|---|
+| Catalog v2 / Apps 协议 3 / data-resource 包 | **PASS** | `rtk npm run apps:check` |
+| 真实 Native Messaging 安装、分段读取、卸载保留数据、明确清除数据 | **PASS** | `rtk npm run apps:integration`；Demo 2.0.0，2 个资源包，读取内容与版本均断言 |
+| Rust 迁移、崩溃恢复、跨应用/符号链接/版本防护 | **PASS** | `rtk env -u CARGO_TARGET_DIR cargo test --workspace`；133 tests passed |
+| Extension、i18n、资源 Demo、Bing 背景回归 | **PASS** | `rtk npm run extension:check` |
+| 性能 | **PASS** | 最终 `rtk npm run perf:check` 全绿；model-host 快照 692.21 ms / 1500 ms |
+| Model Host | **PASS** | `rtk go test ./...`；64 tests passed |
+| 候选产物与发布 dry-run | **PASS** | `dist/app-release/`；2 个不可变 `.nap`、签名 `catalog-v2.json`；`rtk node scripts/apps/publish-release.mjs` 验证通过 |
+| 真实 Chrome/macOS UI：Demo + 第二应用、更新、离线重开 | **BLOCKED** | 本机 Chrome 存在，但 `apps:chrome-native` 缺少 Playwright；受控浏览器安全策略禁止打开 `chrome-extension://`，未绕过 |
+| 正式发布 | **NOT RUN** | 本次未获上传/发布授权；只执行 dry-run，不得声明已发布 |
+
+**本次发布判定仍为 BLOCKED。** 自动门禁和真实 Native Messaging 链路已完成；真实 Chrome UI 矩阵及正式发布未完成，不以绿色状态或旧记录替代。
+
 > 日期：2026-08-07
 > 分支：`codex/integration-20260806`
 > 集成分支 HEAD：`98d4456a`（`fix(t12): green release gates — clippy clean + hermetic daemon/web_search/provider tests`）

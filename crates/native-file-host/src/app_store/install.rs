@@ -31,10 +31,6 @@ impl AppStore {
                 let next = semver::Version::parse(&request.app.version).map_err(|_| AppError::InvalidState("new version is invalid".into()))?;
                 if next <= current { return Err(AppError::Conflict("update must increase the installed version".into())); }
             }
-            let host = request.host_name()?;
-            let collision: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM apps WHERE app_id != ?1 AND json_extract(runtime_spec_json, '$.host') = ?2)",
-                params![request.app.app_id, host], |row| row.get(0))?;
-            if collision { return Err(AppError::Conflict("runtime host already belongs to another app".into())); }
             let request_json = serde_json::to_string(request).map_err(|_| AppError::InvalidState("invalid install request".into()))?;
             tx.execute("INSERT INTO app_install_transactions
                 (install_id, app_id, from_version, to_version, request_json, state, staging_path, started_at)
@@ -112,6 +108,7 @@ impl AppStore {
                     "package payload hash or size mismatch".into(),
                 ));
             }
+            app_install::validate_resource_payload(&package.kind, &data)?;
             let dir = app_install::staging_dir(self.app_root(), &record.app_id, install_id)?;
             let path = app_install::staged_payload_path(&dir, package_id)?;
             app_install::write_staged_payload(&path, &data)?;
@@ -167,40 +164,49 @@ impl AppStore {
         }
         let request = decode_request(&record)?;
         request.validate()?;
-        let count = self.with_conn(|conn| Ok(conn.query_row("SELECT COUNT(*) FROM app_package_stages WHERE install_id = ?1 AND state = 'staging'",
-            [install_id], |row| row.get::<_, usize>(0))?))?;
-        if record.state != install_state::STAGING || count != request.packages.len() {
-            return Err(AppError::InvalidState(
-                "all packages must be staged before commit".into(),
-            ));
+        if !request.packages.is_empty() {
+            let count = self.with_conn(|conn| Ok(conn.query_row("SELECT COUNT(*) FROM app_package_stages WHERE install_id = ?1 AND state = 'staging'",
+                [install_id], |row| row.get::<_, usize>(0))?))?;
+            if record.state != install_state::STAGING || count != request.packages.len() {
+                return Err(AppError::InvalidState(
+                    "all packages must be staged before commit".into(),
+                ));
+            }
         }
-        let manifests = self.manifest_dir()?;
-        let saved = app_host::snapshot(self.app_root(), &request, &manifests)?;
         self.with_conn(|conn| {
-            let journal = serde_json::to_string(&saved).map_err(|_| AppError::InvalidState("invalid rollback record".into()))?;
-            conn.execute("UPDATE app_install_transactions SET rollback_json = ?2, state = 'runtime_registering' WHERE install_id = ?1",
-                params![install_id, journal])?;
+            conn.execute("UPDATE app_install_transactions SET rollback_json = 'commit_done' WHERE install_id = ?1",
+                [install_id])?;
             Ok(())
         })?;
         let result = (|| {
-            self.set_install_state(install_id, install_state::HEALTH_CHECK)?;
-            let runtime = app_host::prepare(self.app_root(), &request, install_id)?;
-            let _runtime = app_install::acquire_app_lock(self.app_root(), &record.app_id, true)?;
             self.set_install_state(install_id, install_state::COMMITTING)?;
-            app_host::activate(self.app_root(), &request, &runtime, &trusted, &manifests)?;
-            self.sync_registration(request.host_name()?, true)?;
+            for pkg in &request.packages {
+                let staged = app_install::staged_payload_path(
+                    std::path::Path::new(&record.staging_path),
+                    &pkg.package_id,
+                )?;
+                let target = app_install::install_path_for(
+                    self.app_root(),
+                    &record.app_id,
+                    &pkg.kind,
+                    &request.app.version,
+                    &pkg.package_id,
+                )?;
+                app_install::install_staged_payload(&staged, &target)?;
+            }
             self.commit_registry(&record, &request)
         })();
         match result {
             Ok(_) => {
-                // Keep the journal until staging and the superseded version are gone.
                 let cleanup = self.finish_committed(&record);
                 self.installs.lock().map_err(lock_error)?.remove(install_id);
-                cleanup?;
+                if let Err(e) = cleanup {
+                    return Err(e);
+                }
                 self.app(&record.app_id)
             }
             Err(error) => {
-                self.abort_owned(&record, error.code(), "runtime install failed")?;
+                self.abort_owned(&record, error.code(), "package install failed")?;
                 Err(error)
             }
         }
@@ -216,11 +222,11 @@ impl AppStore {
             let now = now_millis();
             tx.execute("INSERT INTO apps
                 (app_id, kind, name, version, enabled, show_in_sidebar, sidebar_order, runtime_spec_json, surface_json, manifest_json,
-                 installed_at, updated_at, revision, host_registered)
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11, 0, 1)
+                 installed_at, updated_at, revision, host_registered, needs_migration)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11, 0, 0, 0)
                 ON CONFLICT(app_id) DO UPDATE SET kind = excluded.kind, name = excluded.name, version = excluded.version,
                 runtime_spec_json = excluded.runtime_spec_json, surface_json = excluded.surface_json, manifest_json = excluded.manifest_json,
-                updated_at = excluded.updated_at, revision = apps.revision + 1, host_registered = 1",
+                updated_at = excluded.updated_at, revision = apps.revision + 1, host_registered = 0, needs_migration = 0",
                 params![request.app.app_id, request.app.kind, request.app.name, request.app.version, request.app.enabled,
                     request.app.show_in_sidebar, request.app.sidebar_order, request.app.runtime_spec.to_string(),
                     request.app.surface.to_string(), request.app.manifest.to_string(), now])?;
@@ -238,7 +244,7 @@ impl AppStore {
                     params![record.app_id, permission, now])?;
             }
             tx.execute("DELETE FROM app_retained_data WHERE app_id = ?1", [&record.app_id])?;
-            tx.execute("UPDATE app_install_transactions SET state = 'installed', completed_at = ?2, error_code = NULL, error_message = NULL WHERE install_id = ?1",
+            tx.execute("UPDATE app_install_transactions SET state = 'installed', rollback_json = 'installed', completed_at = ?2, error_code = NULL, error_message = NULL WHERE install_id = ?1",
                 params![record.install_id, now])?;
             bump_revision(&tx)?;
             let app = query::app(&tx, &record.app_id)?;
@@ -302,21 +308,8 @@ impl AppStore {
         })?;
         let phase = self.transaction(&record.install_id)?.state;
         if !journal.is_empty() {
-            let request = decode_request(record)?;
-            let saved: app_host::Rollback = serde_json::from_str(&journal)
-                .map_err(|_| AppError::InvalidState("invalid rollback journal".into()))?;
-            if matches!(
-                phase.as_str(),
-                install_state::RUNTIME_REGISTERING | install_state::HEALTH_CHECK
-            ) {
-                app_host::remove_version(self.app_root(), &record.app_id, &record.to_version)?;
-            } else {
-                let _runtime =
-                    app_install::acquire_app_lock(self.app_root(), &record.app_id, true)?;
-                self.set_install_state(&record.install_id, install_state::ROLLING_BACK)?;
-                app_host::rollback(self.app_root(), &request, &saved, &self.manifest_dir()?)?;
-                self.sync_registration(request.host_name()?, saved.manifest.is_some())?;
-            }
+            let _ = phase;
+            app_host::remove_version(self.app_root(), &record.app_id, &record.to_version)?;
         }
         let staging =
             app_install::staging_dir(self.app_root(), &record.app_id, &record.install_id)?;

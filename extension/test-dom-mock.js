@@ -97,6 +97,14 @@ export class MockElement {
       const valMatch = attrs.match(/value="([^"]*)"/);
       if (valMatch) child.value = valMatch[1];
       if (/checked/i.test(attrs)) child.checked = true;
+      const minMatch = attrs.match(/min="([^"]*)"/);
+      if (minMatch) child.min = minMatch[1];
+      const maxMatch = attrs.match(/max="([^"]*)"/);
+      if (maxMatch) child.max = maxMatch[1];
+      const stepMatch = attrs.match(/step="([^"]*)"/);
+      if (stepMatch) child.step = stepMatch[1];
+      if (/\brequired\b/i.test(attrs)) child.required = true;
+      if (/\bdisabled\b/i.test(attrs)) child.disabled = true;
 
       for (const dMatch of attrs.matchAll(/data-([a-zA-Z0-9-]+)="([^"]*)"/g)) {
         child.dataset[dMatch[1]] = dMatch[2];
@@ -130,6 +138,19 @@ export class MockElement {
     this.append(...nodes);
     this._textContent = '';
   }
+  prepend(...nodes) {
+    // Insert at the beginning, mirroring DOM Element.prepend
+    for (const n of nodes.reverse()) {
+      if (typeof n === 'string' || typeof n === 'number') {
+        const textNode = new MockElement('#text');
+        textNode.nodeType = globalThis.Node.TEXT_NODE;
+        textNode._textContent = String(n);
+        n = textNode;
+      }
+      n.parentNode = this;
+      this.childNodes.unshift(n);
+    }
+  }
   setAttribute(k, v) {
     const existing = this.attributes.find((a) => a.name === k);
     if (existing) existing.value = String(v);
@@ -155,6 +176,27 @@ export class MockElement {
     handlers.forEach((h) => h(evt));
   }
   focus() {}
+  checkValidity() {
+    if (this.required && !this.value) return false;
+    if (this.type === 'number' && this.value !== '') {
+      const num = Number(this.value);
+      if (Number.isNaN(num)) return false;
+      if (this.min !== undefined && this.min !== '' && num < Number(this.min)) return false;
+      if (this.max !== undefined && this.max !== '' && num > Number(this.max)) return false;
+    }
+    if (this.type === 'url' && this.value !== '') {
+      try {
+        const u = new URL(this.value);
+        if (!['http:', 'https:'].includes(u.protocol)) return false;
+      } catch {
+        return false;
+      }
+    }
+    return true;
+  }
+  reportValidity() {
+    return this.checkValidity();
+  }
   remove() {
     if (this.parentNode) {
       this.parentNode.childNodes = this.parentNode.childNodes.filter((c) => c !== this);
@@ -172,6 +214,18 @@ export class MockElement {
   }
   querySelector(sel) { return this.querySelectorAll(sel)[0] || null; }
   querySelectorAll(sel) {
+    // Support comma-separated selector lists (dedup, document order)
+    const groups = String(sel).split(',').map((s) => s.trim()).filter(Boolean);
+    if (groups.length > 1) {
+      const seen = new Set();
+      const results = [];
+      for (const group of groups) {
+        for (const el of this.querySelectorAll(group)) {
+          if (!seen.has(el)) { seen.add(el); results.push(el); }
+        }
+      }
+      return results;
+    }
     const parts = sel.trim().split(/\s+/).map(parseCompoundSelector);
     const results = [];
     const walk = (node, index) => {

@@ -9,8 +9,8 @@ import { checkPackageBudget } from './check-package-budget.mjs';
 import { verifyCatalogSignature, PACKAGE_MAX_PAYLOAD_BYTES } from '../../extension/catalog-client.js';
 
 const directory = resolve('dist/app-release');
-const bytes = readFileSync(join(directory, 'catalog-v1.json'));
-await verifyCatalogSignature({ catalogBytes: bytes, signatureB64: readFileSync(join(directory, 'catalog-v1.sig'), 'utf8') });
+const bytes = readFileSync(join(directory, 'catalog-v2.json'));
+await verifyCatalogSignature({ catalogBytes: bytes, signatureB64: readFileSync(join(directory, 'catalog-v2.sig'), 'utf8') });
 const catalog = JSON.parse(bytes);
 checkCatalog(catalog);
 checkPackageBudget(catalog);
@@ -46,11 +46,10 @@ if (process.argv.includes('--publish')) {
     try { return api(`releases/tags/${tag}`); }
     catch (error) {
       if (!String(error.stderr).includes('HTTP 404')) throw error;
-      return api('releases', 'POST', { tag_name: tag, name: tag, draft: true, make_latest: 'false',
-        target_commitish: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim() });
+      return api('releases', 'POST', { tag_name: tag, name: tag, draft: true, make_latest: 'false' });
     }
   }
-  // Runtime artifacts are immutable. A retry may only reuse byte-identical assets.
+  // Resource artifacts are immutable. A retry may only reuse byte-identical assets.
   for (const [tag, assets] of releases) {
     const published = release(tag);
     for (const asset of assets) {
@@ -61,10 +60,27 @@ if (process.argv.includes('--publish')) {
       } else gh(['release', 'upload', tag, asset.file, '--repo', repository]);
     }
     api(`releases/${published.id}`, 'PATCH', { draft: false, make_latest: 'false' });
+    const verified = release(tag);
+    for (const asset of assets) {
+      const remoteAsset = verified.assets.find((item) => item.name === asset.name);
+      assert.ok(remoteAsset, `published asset missing: ${asset.name}`);
+      const remote = gh(['api', `repos/${repository}/releases/assets/${remoteAsset.id}`, '-H', 'Accept: application/octet-stream'], { encoding: null });
+      assert.equal(digest(remote), asset.digest, `published asset digest mismatch: ${asset.name}`);
+    }
   }
-  // Publish the catalog only after every referenced runtime release exists.
-  const catalogRelease = release('app-catalog-v1');
-  gh(['release', 'upload', 'app-catalog-v1', join(directory, 'catalog-v1.json'), join(directory, 'catalog-v1.sig'), '--clobber', '--repo', repository]);
+  // Publish the catalog only after every referenced resource release verifies.
+  const catalogRelease = release('app-catalog-v2');
+  gh(['release', 'upload', 'app-catalog-v2', join(directory, 'catalog-v2.json'), join(directory, 'catalog-v2.sig'), '--clobber', '--repo', repository]);
   api(`releases/${catalogRelease.id}`, 'PATCH', { draft: false, make_latest: 'false' });
-  console.log('App runtime artifacts and signed catalog published');
+  const publishedCatalog = release('app-catalog-v2');
+  const download = (name) => {
+    const asset = publishedCatalog.assets.find((item) => item.name === name);
+    assert.ok(asset, `published catalog asset missing: ${name}`);
+    return gh(['api', `repos/${repository}/releases/assets/${asset.id}`, '-H', 'Accept: application/octet-stream'], { encoding: null });
+  };
+  const remoteCatalog = download('catalog-v2.json');
+  const remoteSignature = download('catalog-v2.sig').toString('utf8');
+  await verifyCatalogSignature({ catalogBytes: remoteCatalog, signatureB64: remoteSignature });
+  assert.equal(digest(remoteCatalog), digest(bytes), 'published catalog bytes changed');
+  console.log('App resource artifacts and signed catalog-v2 published and reverified');
 }

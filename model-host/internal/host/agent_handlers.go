@@ -21,11 +21,11 @@ func homeDir() string {
 }
 
 type agentClientParams struct {
-	Client   string          `json:"client"`
-	Model    string          `json:"model"`
-	Target   string          `json:"target"`
-	WorkingDirectory string   `json:"workingDirectory"`
-	Mappings *agentclients.ClaudeMappings `json:"claudeCodeModelMappings"`
+	Client           string                       `json:"client"`
+	Model            string                       `json:"model"`
+	Target           string                       `json:"target"`
+	WorkingDirectory string                       `json:"workingDirectory"`
+	Mappings         *agentclients.ClaudeMappings `json:"claudeCodeModelMappings"`
 }
 
 type agentSessionParams struct {
@@ -80,6 +80,19 @@ func (e *Engine) listAgentClients() (any, error) {
 	return map[string]any{"clients": agentclients.DetectAll(4)}, nil
 }
 
+func (e *Engine) syncAgentClientConfigs(ctx context.Context) (any, error) {
+	baseURL, apiKey, err := e.agentGatewayContext()
+	if err != nil {
+		return nil, err
+	}
+	models, _ := agentclients.FetchModels(ctx, baseURL, apiKey)
+	refreshed, err := agentclients.RefreshManagedWithModels(homeDir(), baseURL, apiKey, models)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"refreshed": refreshed}, nil
+}
+
 func (e *Engine) agentClientModels(ctx context.Context, raw json.RawMessage) (any, error) {
 	var params agentClientParams
 	_ = json.Unmarshal(raw, &params)
@@ -94,7 +107,7 @@ func (e *Engine) agentClientModels(ctx context.Context, raw json.RawMessage) (an
 	return map[string]any{"models": agentclients.FallbackModelsForClient(params.Client)}, nil
 }
 
-func (e *Engine) applyAgentClientConfig(raw json.RawMessage, mode string) (any, error) {
+func (e *Engine) applyAgentClientConfig(ctx context.Context, raw json.RawMessage, mode string) (any, error) {
 	var params agentClientParams
 	if err := json.Unmarshal(raw, &params); err != nil || strings.TrimSpace(params.Client) == "" {
 		return nil, invalid("参数无效: client 不能为空")
@@ -117,7 +130,8 @@ func (e *Engine) applyAgentClientConfig(raw json.RawMessage, mode string) (any, 
 		if err != nil {
 			return nil, err
 		}
-		changes, primaryPath, err := agentclients.BuildChanges(params.Client, home, baseURL, apiKey, targetModel, params.Mappings)
+		models, _ := agentclients.FetchModels(ctx, baseURL, apiKey)
+		changes, primaryPath, err := agentclients.BuildChangesWithModels(params.Client, home, baseURL, apiKey, targetModel, models, params.Mappings)
 		if err != nil {
 			return nil, err
 		}

@@ -92,6 +92,9 @@
   "confirm": {
     "message": "Confirm"
   },
+  "confirmDiscardChanges": {
+    "message": "You have unsaved changes. Discard them?"
+  },
   "confirmImport": {
     "message": "Confirm import & overwrite"
   },
@@ -103,6 +106,9 @@
   },
   "connecting": {
     "message": "Connecting to local file system…"
+  },
+  "continueEditing": {
+    "message": "Continue editing"
   },
   "contentSearchUnavailable": {
     "message": "PDF text search unavailable"
@@ -1028,6 +1034,15 @@
   "remaining": {
     "message": "Remaining"
   },
+  "quotaHours": {
+    "message": "hr"
+  },
+  "quotaMinutes": {
+    "message": "min"
+  },
+  "quotaResetsIn": {
+    "message": "Resets in $1"
+  },
   "queryingQuota": {
     "message": "Querying quota..."
   },
@@ -1349,6 +1364,9 @@
   "paste": {
     "message": "Paste"
   },
+  "pasteChecklist": {
+    "message": "Paste a task list (Markdown - [ ] or 1. list supported)..."
+  },
   "pasted": {
     "message": "items pasted"
   },
@@ -1526,6 +1544,9 @@
   "saved": {
     "message": "Saved"
   },
+  "saving": {
+    "message": "Saving…"
+  },
   "search": {
     "message": "Search files"
   },
@@ -1663,6 +1684,9 @@
   },
   "useAccentColor": {
     "message": "Use accent color"
+  },
+  "validationFailed": {
+    "message": "Please check input values or format"
   },
   "visualEffects": {
     "message": "Visual effects"
@@ -2330,6 +2354,9 @@
   "appsCenterSub": {
     "message": "Manage optional Natives apps"
   },
+  "appsList": {
+    "message": "App List"
+  },
   "appSurfaceNotFound": {
     "message": "App not found or uninstalled"
   },
@@ -2374,6 +2401,30 @@
   },
   "demoHost": {
     "message": "Host"
+  },
+  "demoResourceTitle": {
+    "message": "Downloaded Resources"
+  },
+  "demoLoadingResource": {
+    "message": "Loading resource…"
+  },
+  "demoResourceData": {
+    "message": "Data Payload"
+  },
+  "demoNoData": {
+    "message": "Pure extension app without external packages"
+  },
+  "demoDisconnected": {
+    "message": "Host disconnected"
+  },
+  "demoPackageMissing": {
+    "message": "Resource package is missing"
+  },
+  "demoPackageCorrupt": {
+    "message": "Resource package is corrupt or has the wrong version"
+  },
+  "demoResourceImageAlt": {
+    "message": "Demo resource image"
   },
   "demoPingTitle": {
     "message": "Host communication"
@@ -2518,5 +2569,71 @@
   },
   "appSurfaceRepairRequired": {
     "message": "App runtime needs reinstallation"
+  },
+  "captureCommandDescription": {
+    "message": "Capture full page screenshot"
+  },
+  "captureContextMenu": {
+    "message": "Capture full page"
+  },
+  "captureTitle": {
+    "message": "Web Screenshot"
+  },
+  "captureProgress": {
+    "message": "Capturing page..."
+  },
+  "captureStitching": {
+    "message": "Stitching screenshot..."
+  },
+  "captureComplete": {
+    "message": "Screenshot complete"
+  },
+  "captureSavePng": {
+    "message": "Save PNG"
+  },
+  "captureSavePdf": {
+    "message": "Save as PDF"
+  },
+  "captureCopyImage": {
+    "message": "Copy image"
+  },
+  "captureCopied": {
+    "message": "Copied to clipboard"
+  },
+  "captureCopyFailed": {
+    "message": "Copy failed. Please right-click the image and select 'Copy image'."
+  },
+  "captureErrorProtected": {
+    "message": "Protected pages cannot be captured"
+  },
+  "captureErrorFileAccess": {
+    "message": "File URL access not enabled in extension settings"
+  },
+  "captureErrorTabSwitched": {
+    "message": "Tab switched or closed, capture aborted"
+  },
+  "captureErrorPageNavigated": {
+    "message": "Page navigated, capture aborted"
+  },
+  "captureErrorCanvasLimit": {
+    "message": "Maximum screenshot size limit exceeded"
+  },
+  "captureErrorAlreadyRunning": {
+    "message": "Another screenshot is already in progress"
+  },
+  "captureErrorFailed": {
+    "message": "Screenshot failed"
+  },
+  "captureSegment": {
+    "message": "Part $1 of $2"
+  },
+  "todoCompleted": {
+    "message": "Completed"
+  },
+  "pomodoroCompleted": {
+    "message": "Completed!"
+  },
+  "dragToReorder": {
+    "message": "Drag to reorder"
   }
 }

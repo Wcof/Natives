@@ -113,6 +113,37 @@ func firstNumber(values ...json.Number) int64 {
 	return 0
 }
 
+// OrderedModels publishes the selected model first, followed by the remaining
+// gateway catalog without case-insensitive duplicates.
+func OrderedModels(models []ModelOption, selected string) []ModelOption {
+	ordered := make([]ModelOption, 0, max(len(models), 1))
+	for _, model := range models {
+		if strings.EqualFold(model.Name, selected) {
+			ordered = append(ordered, model)
+			break
+		}
+	}
+	if len(ordered) == 0 {
+		ordered = append(ordered, ModelOption{Name: selected})
+	}
+	for _, model := range models {
+		if model.Name == "" {
+			continue
+		}
+		duplicate := false
+		for _, existing := range ordered {
+			if strings.EqualFold(existing.Name, model.Name) {
+				duplicate = true
+				break
+			}
+		}
+		if !duplicate {
+			ordered = append(ordered, model)
+		}
+	}
+	return ordered
+}
+
 func DefaultModelForClient(clientID string) string {
 	switch clientID {
 	case "claude-code", "claude-desktop":
@@ -159,4 +190,3 @@ func FallbackModelsForClient(clientID string) []ModelOption {
 		}
 	}
 }
-

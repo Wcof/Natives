@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs';
 import { compareAppVersions } from '../../extension/app-catalog-policy.js';
 
 export function checkCatalog(catalog) {
-  assert.equal(catalog.catalogVersion, 1);
+  assert.equal(catalog.catalogVersion, 2);
   assert.ok(Array.isArray(catalog.apps) && catalog.apps.length <= 128);
   const ids = new Set();
   function noExecutableFields(value) {
@@ -18,9 +18,14 @@ export function checkCatalog(catalog) {
     assert.ok(!ids.has(entry.app_id)); ids.add(entry.app_id);
     assert.equal(entry.kind, 'extension_app');
     assert.ok(typeof entry.name === 'string' && entry.name.length > 0 && entry.name.length <= 128);
-    assert.equal(compareAppVersions(entry.version, entry.version), 0, 'V1 catalog uses stable SemVer');
+    assert.equal(compareAppVersions(entry.version, entry.version), 0, 'Catalog uses stable SemVer');
     const namespace = entry.app_id.startsWith('com.natives.app.') ? entry.app_id : `com.natives.app.${entry.app_id}`;
-    assert.equal(entry.runtime_spec.host, namespace);
+    assert.ok(!entry.runtime_spec?.host, 'v2 catalog must not declare runtime_spec.host');
+    assert.equal(compareAppVersions(entry.minExtensionVersion, entry.minExtensionVersion), 0, 'minExtensionVersion is required');
+    assert.equal(compareAppVersions(entry.minHostVersion, entry.minHostVersion), 0, 'minHostVersion is required');
+    if (entry.packages) {
+      assert.ok(entry.packages.every((pkg) => ['data', 'resource'].includes(pkg.kind)), 'v2 packages must only be data or resource');
+    }
     assert.equal(entry.surface.route, `app.html?app=${encodeURIComponent(entry.app_id)}`);
     assert.ok(Array.isArray(entry.permissions) && entry.permissions.length <= 16);
     assert.ok(entry.permissions.every((permission) => ['app.lifecycle', `keychain:${namespace}`].includes(permission)));
@@ -29,6 +34,7 @@ export function checkCatalog(catalog) {
   }
 }
 if (process.argv[1] && import.meta.url === new URL('file://' + process.argv[1]).href) {
-  checkCatalog(JSON.parse(readFileSync(new URL('../../extension/apps/catalog-v1.json', import.meta.url))));
+  const catalogPath = process.argv[2] ? resolve(process.argv[2]) : new URL('../../extension/apps/catalog-v2.json', import.meta.url);
+  checkCatalog(JSON.parse(readFileSync(catalogPath)));
   console.log('app manifest contract passed');
 }

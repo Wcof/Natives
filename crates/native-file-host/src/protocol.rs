@@ -159,6 +159,7 @@ pub(crate) fn validate_request(request: &Request) -> Result<(), String> {
             | "apps:list"
             | "apps:get"
             | "apps:health"
+            | "apps:read_resource"
             | "apps:install_begin"
             | "apps:install_package"
             | "apps:install_commit"
@@ -244,6 +245,7 @@ pub(crate) fn validate_request(request: &Request) -> Result<(), String> {
         "apps:list" | "apps:health" => &[],
         "apps:handshake" => &["origin"],
         "apps:get" | "apps:recover" => &["appId"],
+        "apps:read_resource" => &["appId", "packageId", "offset", "length"],
         "apps:uninstall" => &["appId", "purgeData", "confirmPurge"],
         "apps:clear_data" => &["appId", "confirmPurge"],
         "apps:set_enabled" => &["appId", "enabled"],
@@ -318,12 +320,32 @@ pub(crate) fn validate_request(request: &Request) -> Result<(), String> {
             if key == "limit" && (number == 0 || number > 2_000) {
                 return Err("invalid limit".into());
             }
-            if key == "offset" && number > 100_000 {
-                return Err("invalid offset".into());
+            if key == "offset" {
+                let max_offset = if request.method == "apps:read_resource" {
+                    crate::app_store::types::PACKAGE_MAX_PAYLOAD_BYTES
+                } else {
+                    100_000
+                };
+                if number > max_offset {
+                    return Err("invalid offset".into());
+                }
             }
             if key == "size" && number > file_manager::MAX_IMPORT_BYTES {
                 return Err("import is too large".into());
             }
+        }
+    }
+    if let Some(value) = params.get("length") {
+        let Some(number) = value.as_u64() else {
+            return Err("parameter must be a number".into());
+        };
+        let max_len = if request.method == "apps:read_resource" {
+            512 * 1024
+        } else {
+            crate::app_store::types::PACKAGE_MAX_PAYLOAD_BYTES
+        };
+        if number == 0 || number > max_len {
+            return Err("invalid length".into());
         }
     }
     for key in [

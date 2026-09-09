@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       publish:
-        description: Publish verified runtime artifacts and the signed catalog
+        description: Publish verified resource artifacts and the signed catalog
         type: boolean
         default: false
 
@@ -17,28 +17,21 @@ concurrency:
 
 jobs:
   packages:
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 20
           cache: npm
-      - uses: dtolnay/rust-toolchain@stable
       - run: npm ci
-      - run: cargo build -p demo-host --release
-      - run: cargo build -p native-file-host
       - run: node scripts/apps/package-demo.mjs
-      - run: node scripts/apps/check-app-integration.mjs --fixture-catalog
       - uses: actions/upload-artifact@v4
         with:
-          name: app-package-${{ matrix.os }}
+          name: app-package-artifacts
           path: |
             dist/app-release/*.nap
-            dist/app-release/catalog-*.json
+            dist/app-release/catalog-v2.json
           if-no-files-found: error
 
   catalog:
@@ -53,20 +46,18 @@ jobs:
       - run: npm ci
       - uses: actions/download-artifact@v4
         with:
-          pattern: app-package-*
-          merge-multiple: true
+          name: app-package-artifacts
           path: dist/app-release
-      - run: node scripts/apps/merge-catalog.mjs
+      - run: node scripts/apps/catalog-signing.mjs dist/app-release/catalog-v2.json
         env:
           NATIVES_CATALOG_SIGNING_KEY: ${{ secrets.NATIVES_CATALOG_SIGNING_KEY }}
-      - run: node scripts/apps/publish-release.mjs
       - uses: actions/upload-artifact@v4
         with:
           name: signed-app-release-candidate
           path: |
             dist/app-release/*.nap
-            dist/app-release/catalog-v1.json
-            dist/app-release/catalog-v1.sig
+            dist/app-release/catalog-v2.json
+            dist/app-release/catalog-v2.sig
           if-no-files-found: error
 
   publish:

@@ -269,9 +269,10 @@ function renderModifySection(client, selection, busy, t, onAction) {
   const section = document.createElement('div');
   section.className = 'model-section model-agent-action-card';
   const applied = client.modificationState === 'applied';
-  const primaryLabel = !applied
-    ? t('agentApply', '应用配置修改')
-    : selection[client.id] && selection[client.id] !== client.appliedModel ? t('agentUpdate', '更新配置') : t('agentCloseConfig', '关闭配置修改');
+  const updating = applied && selection[client.id] && selection[client.id] !== client.appliedModel;
+  const primaryAction = applied && !updating ? 'agent-close-config' : 'agent-apply';
+  const primaryLabel = !applied ? t('agentApply', '应用配置修改')
+    : updating ? t('agentUpdate', '更新配置') : t('agentCloseConfig', '关闭配置修改');
   section.innerHTML = `
     <div class="model-agent-card-header">
       <div class="model-agent-card-title-group">
@@ -280,7 +281,7 @@ function renderModifySection(client, selection, busy, t, onAction) {
       </div>
     </div>
     <div class="model-agent-actions">
-      <button type="button" class="primary model-agent-primary-btn" data-action="agent-apply" data-client="${escapeHtml(client.id)}" ${busy ? 'disabled' : ''}>
+      <button type="button" class="primary model-agent-primary-btn" data-action="${primaryAction}" data-client="${escapeHtml(client.id)}" ${busy ? 'disabled' : ''}>
         <svg class="icon" aria-hidden="true" style="width:14px;height:14px;margin-right:6px;"><path d="M20 6L9 17l-5-5" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
         <span>${escapeHtml(primaryLabel)}</span>
       </button>
@@ -389,4 +390,3 @@ function emptyState(title, hint) {
   node.innerHTML = `<strong>${escapeHtml(title)}</strong>${hint ? `<p class="muted">${escapeHtml(hint)}</p>` : ''}`;
   return node;
 }
-

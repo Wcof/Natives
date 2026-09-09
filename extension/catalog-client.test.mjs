@@ -55,8 +55,8 @@ function mockResponse(bytes, { status = 200, chunkSize = 256 * 1024 } = {}) {
 // ── 1. Signature gate (check-catalog-signature mirror) ─────────────────
 // Official dev catalog pair embedded in the extension must verify.
 {
-  const catalog = readFileSync(new URL('./apps/catalog-v1.json', import.meta.url));
-  const sig = readFileSync(new URL('./apps/catalog-v1.sig', import.meta.url), 'utf8').trim();
+  const catalog = readFileSync(new URL('./apps/catalog-v2.json', import.meta.url));
+  const sig = readFileSync(new URL('./apps/catalog-v2.sig', import.meta.url), 'utf8').trim();
   const catalogBytes = new Uint8Array(catalog);
   await verifyCatalogSignature({ catalogBytes, signatureB64: sig });
   console.log('catalog: official dev catalog verified');
@@ -124,12 +124,15 @@ function mockResponse(bytes, { status = 200, chunkSize = 256 * 1024 } = {}) {
   const nap = gzipSync(payload, { level: 9 });
   const artifactSha256 = sha256Hex(nap);
   const payloadSha256 = sha256Hex(payload);
+  let digestCalls = 0;
+  const countedDigest = async (bytes) => { digestCalls++; return digest(bytes); };
 
   const fetchImpl = async () => mockResponse(nap, { chunkSize: 64 * 1024 });
   const { artifactBytes, wireSize, digest: d } = await downloadNapPackage({
     url: ASSET_URL,
     wireSize: nap.byteLength,
     fetchImpl,
+    digest: countedDigest,
   });
   const out = await decompressNap(
     { artifactBytes, digest: d },
@@ -137,6 +140,7 @@ function mockResponse(bytes, { status = 200, chunkSize = 256 * 1024 } = {}) {
   );
   assert.equal(out.payloadSize, payload.byteLength);
   assert.equal(out.payloadSha256, payloadSha256);
+  assert.equal(digestCalls, 2, 'artifact and payload are each hashed once');
   const b64 = payloadToBase64(out.payloadBytes);
   assert.equal(b64.length, Math.ceil(payload.byteLength / 3) * 4, 'base64 length');
   assert.equal(wireSize, nap.byteLength);

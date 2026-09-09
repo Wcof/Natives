@@ -7,7 +7,10 @@ import { APP_UI_MODULES, isKnownUiModule } from './app-module-registry.js';
 import { appHostFor } from './native-app-client.js';
 
 setupTestDomEnvironment();
-globalThis.chrome = { runtime: { getURL: (path) => 'chrome-extension://abcdefghijklmnopabcdefghijklmnop/' + path } };
+globalThis.chrome = { runtime: {
+  getURL: (path) => 'chrome-extension://abcdefghijklmnopabcdefghijklmnop/' + path,
+  getManifest: () => ({ version: '0.1.0' }),
+} };
 const messages = JSON.parse(readFileSync(new URL('./_locales/zh_CN/messages.json', import.meta.url)));
 const t = (key, fallback) => messages[key]?.message || fallback || key;
 const tick = () => new Promise((resolve) => setTimeout(resolve, 25));
@@ -15,12 +18,12 @@ const shells = [];
 const makeShell = (options) => { const shell = createAppShell({ t, ...options }); shells.push(shell); return shell; };
 const demo = {
   app_id: 'com.natives.app.demo', name: 'Demo', version: '1.0.0', icon: 'grid', permissions: [],
-  runtime_spec: { host: 'com.natives.app.demo' }, surface: { icon: 'grid' },
-  packages: [{ package_id: 'demo-host', kind: 'runtime', version: '1.0.0', platform: 'darwin', arch: 'arm64',
+  runtime_spec: {}, surface: { icon: 'grid' },
+  packages: [{ package_id: 'demo-data', kind: 'data', version: '1.0.0', platform: 'any', arch: 'any',
     wire_size: 10, payload_size: 10, artifact_sha256: 'a'.repeat(64), payload_sha256: 'b'.repeat(64), required: true,
     url: 'https://github.com/Wcof/Natives/releases/download/apps-demo-v1.0.0/demo.nap' }],
 };
-const catalog = { catalogVersion: 1, apps: [demo, { app_id: 'fund', name: '基金', version: '0.1.0', packages: [] }] };
+const catalog = { catalogVersion: 2, apps: [demo, { app_id: 'fund', name: '基金', version: '0.1.0', published: false, packages: [] }] };
 function clientFixture({ failCommit = false } = {}) {
   const calls = [], apps = [];
   let request, staged = false;
@@ -28,7 +31,7 @@ function clientFixture({ failCommit = false } = {}) {
     disconnect() { this.disconnected = true; },
     async call(method, params = {}) {
       calls.push({ method, params });
-      if (method === 'apps:handshake') return { platform: 'darwin', arch: 'arm64', version: '0.1.0', appsProtocolVersion: 2 };
+      if (method === 'apps:handshake') return { platform: 'darwin', arch: 'arm64', version: '0.1.0', appsProtocolVersion: 3 };
       if (method === 'apps:list') return { apps: [...apps], revision: calls.length, retainedData: [] };
       if (method === 'apps:install_begin') {
         request = JSON.parse(Buffer.from(params.request, 'base64'));
@@ -41,7 +44,7 @@ function clientFixture({ failCommit = false } = {}) {
       if (method === 'apps:install_commit') {
         assert.ok(staged, 'commit must follow package transfer');
         if (failCommit) throw Object.assign(new Error('private backend detail'), { code: 'APP_INVALID_STATE' });
-        const app = { ...request.app, host_registered: true, runtime_spec_json: JSON.stringify(request.app.runtime_spec) };
+        const app = { ...request.app, host_registered: false, runtime_spec_json: JSON.stringify(request.app.runtime_spec) };
         const index = apps.findIndex((entry) => entry.app_id === app.app_id);
         if (index < 0) apps.push(app); else apps[index] = app;
         return app;
@@ -164,19 +167,19 @@ const DEMO_DETAIL = {
     app_id: 'com.natives.app.demo',
     kind: 'extension_app',
     name: 'Demo',
-    version: '0.1.0',
+    version: '2.0.0',
     enabled: true,
-    host_registered: true,
+    host_registered: false,
     show_in_sidebar: true,
     sidebar_order: 0,
-    runtime_spec_json: '{"host":"com.natives.app.demo"}',
+    runtime_spec_json: '{"version":"2.0.0"}',
     surface_json: '{"icon":"grid","route":"app.html?app=com.natives.app.demo"}',
     manifest_json: '{}',
     installed_at: 1,
     updated_at: 1,
     revision: 1,
   },
-  packages: [],
+  packages: [{ package_id: 'demo-data' }, { package_id: 'demo-image' }],
   permissions: [],
 };
 
@@ -221,9 +224,22 @@ function fakeHostClient() {
     calls,
     async call(method, params = {}) {
       calls.push({ method, params });
-      if (method === 'ping') return { pong: true };
-      if (method === 'version') return { host: 'com.natives.app.demo', version: '0.1.0' };
-      if (method === 'health') return { ok: true };
+      if (method === 'apps:read_resource') {
+        const bytes = params.packageId === 'demo-image'
+          ? Buffer.from('89504e470d0a1a0a', 'hex')
+          : Buffer.from('{"demo":"中文"}');
+        return {
+          ok: true,
+          app_id: params.appId,
+          package_id: params.packageId,
+          version: '2.0.0',
+          format: params.packageId === 'demo-image' ? 'png' : 'json',
+          total_size: bytes.length,
+          offset: params.offset,
+          length: bytes.length,
+          data: bytes.toString('base64'),
+        };
+      }
       return {};
     },
     disconnect() {},
@@ -235,10 +251,10 @@ assert.equal(parseAppId('?app=com.natives.app.demo'), 'com.natives.app.demo');
 assert.equal(parseAppId('app=fund'), 'fund');
 assert.equal(parseAppId('?other=x'), '');
 assert.equal(parseAppId(''), '');
-assert.equal(appHostFor(DEMO_DETAIL.app), 'com.natives.app.demo', 'host 来自 runtime_spec.host');
-assert.equal(appHostFor({ app_id: 'fund' }), 'com.natives.app.fund', '缺省回退 com.natives.app.<appId>');
+assert.equal(appHostFor(DEMO_DETAIL.app), 'com.natives.file_manager', 'apps share native-file-host');
+assert.equal(appHostFor({ app_id: 'fund' }), 'com.natives.file_manager', 'apps share native-file-host');
 
-// A6.2 installed + enabled → demo-ui mounts and talks to the app host
+// A6.2 installed + enabled → demo-ui mounts and reads resource via shared host
 {
   const domA = makeSurfaceDom();
   const hostA = fakeHostClient();
@@ -255,9 +271,7 @@ assert.equal(appHostFor({ app_id: 'fund' }), 'com.natives.app.fund', '缺省回�
   assert.equal(badge.length, 1, 'demo UI 已挂载');
   assert.ok(badge[0].classList.contains('ok'), 'host 在线徽标');
   assert.equal(badge[0].textContent, '在线');
-  assert.ok(hostA.calls.some((c) => c.method === 'ping'), 'demo-ui 调用 ping');
-  assert.ok(hostA.calls.some((c) => c.method === 'version'), 'demo-ui 调用 version');
-  assert.ok(hostA.calls.some((c) => c.method === 'health'), 'demo-ui 调用 health');
+  assert.ok(hostA.calls.some((c) => c.method === 'apps:read_resource'), 'demo-ui 调用 apps:read_resource');
   await shellA.open(); // retry path: idempotent remount must not throw
 }
 
@@ -315,7 +329,7 @@ assert.equal(appHostFor({ app_id: 'fund' }), 'com.natives.app.fund', '缺省回�
   const fundDetail = {
     app: {
       app_id: 'fund', kind: 'extension_app', name: '基金', version: '0.1.0',
-      enabled: true, runtime_spec_json: '{"host":"com.natives.app.fund"}',
+      enabled: true, runtime_spec_json: '{"version":"0.1.0"}',
     },
     packages: [],
     permissions: [],
@@ -328,8 +342,8 @@ assert.equal(appHostFor({ app_id: 'fund' }), 'com.natives.app.fund', '缺省回�
   });
   await shellE.open();
   await tick();
-  assert.ok(domE.stage.textContent.includes('需要重新安装'), 'metadata-only legacy rows cannot open a runtime');
-  assert.equal(hostCreated, 0, 'fund 占位不得打开 host（fund-host 尚未实现）');
+  assert.ok(domE.stage.textContent.includes('基金应用已安装'), 'explicit zero-package apps mount without external resources');
+  assert.equal(hostCreated, 0, 'zero-package fund app must not open a Host port');
 }
 
 // A6.7 D2: registry is build-time only — no remote code URL anywhere

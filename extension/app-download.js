@@ -2,8 +2,8 @@
 export const RELEASE_ROOT = 'https://github.com/Wcof/Natives/releases/';
 export const MIRROR_ROOT = 'https://ghproxy.net/';
 export const CATALOG_SOURCES = Object.freeze([
-  `${RELEASE_ROOT}download/app-catalog-v1/`,
-  `${MIRROR_ROOT}${RELEASE_ROOT}download/app-catalog-v1/`,
+  `${RELEASE_ROOT}download/app-catalog-v2/`,
+  `${MIRROR_ROOT}${RELEASE_ROOT}download/app-catalog-v2/`,
 ]);
 
 export function transferError(code, message) { return Object.assign(new Error(message), { code }); }

@@ -18,9 +18,11 @@ export function createAppCenter({
   t = (key, fallback) => globalThis.chrome?.i18n?.getMessage?.(key) || fallback || key,
   client, catalogLoader = loadVerifiedCatalog, packageTransfer = transferPackage,
   storage = globalThis.chrome?.storage,
+  list: customList,
+  toast: customToast,
 } = {}) {
-  const list = document.getElementById('apps-list');
-  const toast = document.getElementById('apps-toast');
+  const list = customList || (typeof document !== 'undefined' ? document.getElementById('apps-list') : null);
+  const toast = customToast || (typeof document !== 'undefined' ? document.getElementById('apps-toast') : null);
   const state = { catalog: [], apps: [], retained: [], revision: 0, host: null,
     loading: true, catalogError: null, error: null, embedded: false, busy: new Map(), failures: new Map() };
   let toastTimer, idleTimer, progressFrame, disposed = false, suspended = false;
@@ -38,12 +40,16 @@ export function createAppCenter({
   });
 
   function setToast(message, error = false) {
-    if (disposed || !toast) return;
-    clearTimeout(toastTimer);
-    toast.textContent = message;
-    toast.className = error ? 'apps-toast error' : 'apps-toast';
-    toast.hidden = false;
-    toastTimer = setTimeout(() => { toast.hidden = true; }, 4000);
+    if (disposed) return;
+    if (toast) {
+      clearTimeout(toastTimer);
+      toast.textContent = message;
+      toast.className = error ? 'apps-toast error' : 'apps-toast';
+      toast.hidden = false;
+      toastTimer = setTimeout(() => { toast.hidden = true; }, 4000);
+    } else if (typeof globalThis.showToast === 'function') {
+      globalThis.showToast(message);
+    }
   }
   function node(tag, className, text) {
     const el = document.createElement(tag);
@@ -78,7 +84,7 @@ export function createAppCenter({
     state.host = null;
     const origin = globalThis.chrome?.runtime?.getURL?.('') || globalThis.location?.origin;
     const host = await native.call('apps:handshake', { origin });
-    if (host.appsProtocolVersion !== 2) {
+    if (host.appsProtocolVersion !== 3) {
       throw Object.assign(new Error('app host update required'), { code: 'APP_HOST_UPDATE_REQUIRED' });
     }
     state.host = host;
@@ -126,7 +132,8 @@ export function createAppCenter({
     for (const app of state.apps) {
       const entry = entries.get(app.app_id) || { app_id: app.app_id, name: app.name, version: app.version };
       Object.assign(entry, { installed: true, installedVersion: app.version, enabled: app.enabled,
-        showInSidebar: app.show_in_sidebar, hostRegistered: app.host_registered, recoveryPending: app.recovery_pending });
+        showInSidebar: app.show_in_sidebar, recoveryPending: app.recovery_pending,
+        needsMigration: app.needs_migration, sidebarOrder: app.sidebar_order });
       entries.set(app.app_id, entry);
     }
     for (const retained of state.retained) {
@@ -137,8 +144,10 @@ export function createAppCenter({
     return [...entries.values()].sort((a, b) => String(a.name).localeCompare(String(b.name)));
   }
   function available(entry) {
-    try { return resolveAppPackages(entry, state.host); }
-    catch { return { reason: 'appsVerificationFailed', packages: [] }; }
+    try {
+      const extensionVersion = globalThis.chrome?.runtime?.getManifest?.()?.version;
+      return resolveAppPackages(entry, state.host, extensionVersion);
+    } catch { return { reason: 'appsVerificationFailed', packages: [] }; }
   }
   function statusRow(message, retry) {
     const row = node('div', 'apps-notice');
@@ -208,6 +217,7 @@ export function createAppCenter({
       if (!entry.installed && readiness.reason) status = readiness.reason;
       if (entry.cleanupPending) status = 'appsCleanupPending';
       else if (entry.recoveryPending) status = 'appsRecoveryPending';
+      else if (entry.needsMigration) status = 'appsNeedsMigration';
       else if (entry.retained && !entry.installed) status = 'appsDataRetained';
       actions.append(node('span', 'status', t(status)));
       if (entry.recoveryPending) {
@@ -217,8 +227,9 @@ export function createAppCenter({
           finally { lifecycle.notify('changed', entry.app_id); await refresh(); }
         }, { disabled }));
       } else if (entry.installed && !entry.cleanupPending) {
-        actions.append(action('open', t('appsOpen'), () => openApp(entry), { disabled: disabled || !entry.enabled || !entry.hostRegistered }));
-        if (compareAppVersions(entry.version, entry.installedVersion) === 1 && !readiness.reason) {
+        actions.append(action('open', t('appsOpen'), () => openApp(entry), { disabled: disabled || !entry.enabled || Boolean(entry.needsMigration) || Boolean(entry.recoveryPending) }));
+        const canUpdate = (entry.needsMigration || compareAppVersions(entry.version, entry.installedVersion) === 1) && !readiness.reason;
+        if (canUpdate) {
           actions.append(action('up', t('appsUpdate'), () => install(entry), { primary: true, disabled }));
         }
         body.append(toggle(t('appsEnabled'), entry.enabled, async (enabled) => {
@@ -253,17 +264,23 @@ export function createAppCenter({
     let installId, committed = false;
     try {
       await handshake();
-      const { packages, reason } = resolveAppPackages(entry, state.host);
+      const extensionVersion = globalThis.chrome?.runtime?.getManifest?.()?.version;
+      const { packages, reason } = resolveAppPackages(entry, state.host, extensionVersion);
       if (reason) throw Object.assign(new Error(reason), { code: 'APP_PACKAGE_INVALID' });
+      const existingApp = state.apps.find((a) => a.app_id === entry.app_id);
+      const enabled = existingApp ? existingApp.enabled : true;
+      const show_in_sidebar = existingApp ? existingApp.show_in_sidebar : true;
+      const sidebar_order = existingApp ? (Number(existingApp.sidebar_order) || 0) : 0;
       const request = {
         app: { app_id: entry.app_id, kind: 'extension_app', name: entry.name, version: entry.version,
-          enabled: true, show_in_sidebar: true, sidebar_order: 0, runtime_spec: entry.runtime_spec,
+          enabled, show_in_sidebar, sidebar_order, runtime_spec: entry.runtime_spec || {},
           surface: entry.surface, manifest: entry.manifest || {} },
         packages: packages.map(({ package_id, kind, version, platform, arch, wire_size, payload_size,
           artifact_sha256, payload_sha256, required = true }) => ({
           package_id, kind, version, platform, arch, wire_size, payload_size, artifact_sha256, payload_sha256, required,
         })),
         permissions: entry.permissions || [],
+        min_host_version: entry.minHostVersion || entry.minNativesVersion || null,
       };
       controller.signal.throwIfAborted();
       const tx = await native.call('apps:install_begin', {
@@ -370,7 +387,8 @@ export function createAppCenter({
           event.preventDefault(); focusable[next]?.focus();
         }
       };
-      document.body.append(backdrop);
+      const container = list?.closest?.('dialog') || document.body;
+      container.append(backdrop);
       cancel.focus();
     });
   }

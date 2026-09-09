@@ -12,24 +12,24 @@ import (
 // Status is the per-client detection snapshot surfaced to the settings page.
 // Field names follow the reference GUI's camelCase contract.
 type Status struct {
-	ID                 string         `json:"id"`
-	Name               string         `json:"name"`
-	SupportedPlatform  bool           `json:"supportedPlatform"`
-	Installed          bool           `json:"installed"`
-	LaunchTargets      []LaunchTarget `json:"launchTargets"`
-	Version            string         `json:"version"`
-	AppVersion         string         `json:"appVersion,omitempty"`
-	PluginVersion      string         `json:"pluginVersion,omitempty"`
-	ConfigPaths        []string       `json:"configPaths"`
-	ConfigExists       bool           `json:"configExists"`
-	Configured         bool           `json:"configured"`
-	ModificationState  string         `json:"modificationState"`
-	AppliedModel       string         `json:"appliedModel,omitempty"`
-	CurrentModel       string         `json:"currentModel,omitempty"`
-	ModelPicker        bool           `json:"modelPicker"`
-	BackupAvailable    bool           `json:"backupAvailable"`
-	Warnings           []string       `json:"warnings"`
-	Error              string         `json:"error,omitempty"`
+	ID                string         `json:"id"`
+	Name              string         `json:"name"`
+	SupportedPlatform bool           `json:"supportedPlatform"`
+	Installed         bool           `json:"installed"`
+	LaunchTargets     []LaunchTarget `json:"launchTargets"`
+	Version           string         `json:"version"`
+	AppVersion        string         `json:"appVersion,omitempty"`
+	PluginVersion     string         `json:"pluginVersion,omitempty"`
+	ConfigPaths       []string       `json:"configPaths"`
+	ConfigExists      bool           `json:"configExists"`
+	Configured        bool           `json:"configured"`
+	ModificationState string         `json:"modificationState"`
+	AppliedModel      string         `json:"appliedModel,omitempty"`
+	CurrentModel      string         `json:"currentModel,omitempty"`
+	ModelPicker       bool           `json:"modelPicker"`
+	BackupAvailable   bool           `json:"backupAvailable"`
+	Warnings          []string       `json:"warnings"`
+	Error             string         `json:"error,omitempty"`
 }
 
 const versionProbeTimeout = 5 * time.Second
@@ -71,11 +71,6 @@ func DetectStatus(definition Definition) Status {
 				break
 			}
 		}
-	}
-	if !status.Installed && status.ConfigExists {
-		// Config present without a runnable binary still counts as installed
-		// so the user can manage leftover configuration explicitly.
-		status.Installed = true
 	}
 	if versionErr != "" && !status.Installed {
 		status.Error = versionErr

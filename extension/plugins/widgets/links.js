@@ -110,7 +110,7 @@ export const linksWidget = {
 
     const emitChange = (nextLinks) => onChange({ ...data, links: nextLinks });
 
-    wrap.querySelector('#l-cols').onchange = (e) => onChange({ ...data, columns: Number(e.target.value) || 2 });
+    wrap.querySelector('#l-cols').onchange = (e) => { const n = Number(e.target.value); onChange({ ...data, columns: Number.isFinite(n) ? Math.max(1, Math.min(6, n)) : 2 }); };
     wrap.querySelector('#l-icons').onchange = (e) => onChange({ ...data, showIcons: e.target.checked });
     wrap.querySelector('#l-newtab').onchange = (e) => onChange({ ...data, newTab: e.target.checked });
 

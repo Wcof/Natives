@@ -184,7 +184,9 @@ function renderQuotaPills(quota, t) {
   const pills = quota.windows.slice(0, 3).map((w) => {
     const pct = w.remainingPercent != null ? `${Math.round(w.remainingPercent)}%` : '--';
     const name = w.name.split('·')[0].trim();
-    return `<span class="model-af-quota-pill">${escapeHtml(name)} · ${escapeHtml(pct)}</span>`;
+    const reset = w.resetTime ? ` · ${formatResetLabel(w.resetTime, t)}` : '';
+    return `<span class="model-af-quota-pill">${escapeHtml(name)} · ${escapeHtml(pct + reset)}</span>`;
   });
   return `<div class="model-af-quota-pills">${pills.join('')}</div>`;
 }
+import { formatResetLabel } from './model-quota-view.js';

@@ -98,6 +98,9 @@ func TestRuntimeConfigMapsGatewayKeysRoutingAndRetrySettings(t *testing.T) {
 	if cfg.RequestRetry != 2 || cfg.MaxRetryCredentials != 3 || cfg.MaxRetryInterval != 20 || cfg.Streaming.BootstrapRetries != 1 {
 		t.Fatalf("gateway retry config = %+v", cfg)
 	}
+	if cfg.TransientErrorCooldownSeconds != 2 {
+		t.Fatalf("transient error cooldown = %d, want 2", cfg.TransientErrorCooldownSeconds)
+	}
 }
 
 func TestRuntimeStreamsToolsUsageAndPropagatesCancellation(t *testing.T) {
@@ -223,6 +226,7 @@ func TestRuntimeReturnsPromptlyWhenUpstreamStreamEndsUnexpectedly(t *testing.T) 
 	secretStore.Values["eof-key"] = "upstream-secret"
 	secretStore.Values["gateway:access-key"] = "gateway-secret"
 	snapshot := domain.NewSnapshot()
+	snapshot.Gateway.Settings.RequestRetry = 0
 	snapshot.Providers = append(snapshot.Providers, domain.Provider{ID: "eof", Kind: "custom", Name: "EOF", BaseURL: upstream.URL + "/v1", Protocol: domain.ProtocolOpenAIChat, Enabled: true, SecretRef: "eof-key", Models: []domain.Model{{ID: "eof-model", Enabled: true}}})
 	runtime := &Runtime{}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

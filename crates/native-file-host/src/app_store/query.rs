@@ -9,7 +9,8 @@ const APP_COLUMNS: &str = "app_id, kind, name, version, enabled, show_in_sidebar
      installed_at, updated_at, revision, host_registered, \
      EXISTS(SELECT 1 FROM app_install_transactions AS recovery WHERE recovery.app_id = apps.app_id \
      AND (recovery.state IN ('committing', 'rolling_back') \
-     OR (recovery.state = 'installed' AND recovery.rollback_json != '')))";
+     OR (recovery.state = 'installed' AND recovery.rollback_json != ''))), \
+     needs_migration";
 
 fn map_app(row: &rusqlite::Row<'_>) -> rusqlite::Result<App> {
     Ok(App {
@@ -28,6 +29,7 @@ fn map_app(row: &rusqlite::Row<'_>) -> rusqlite::Result<App> {
         revision: row.get(12)?,
         host_registered: row.get::<_, i64>(13)? != 0,
         recovery_pending: row.get::<_, i64>(14)? != 0,
+        needs_migration: row.get::<_, i64>(15)? != 0,
     })
 }
 

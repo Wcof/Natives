@@ -216,6 +216,7 @@ func runtimeConfig(snapshot domain.Snapshot, secretStore secrets.Store, gatewayK
 	configMap["request-retry"] = settings.RequestRetry
 	configMap["max-retry-credentials"] = settings.MaxRetryCredentials
 	configMap["max-retry-interval"] = settings.MaxRetryIntervalSeconds
+	configMap["transient-error-cooldown-seconds"] = 2
 	configMap["streaming"] = map[string]any{"bootstrap-retries": settings.StreamingBootstrapRetries}
 	if settings.ProxyURL != "" {
 		configMap["proxy-url"] = settings.ProxyURL

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { renderAuthFilesView } from './model-auth-files-view.js';
-import { renderQuotaView } from './model-quota-view.js';
+import { formatResetLabel, renderQuotaView } from './model-quota-view.js';
 import { renderOAuthLoginView } from './model-oauth-login-view.js';
 
 console.log('--- Model OAuth Sub-Views Test ---');
@@ -45,6 +45,12 @@ globalThis.document = {
 
 const t = (k, f) => f || k;
 
+assert.match(
+  formatResetLabel('2026-09-08T08:12:00Z', t, Date.parse('2026-09-08T06:29:00Z')),
+  /1 小时 43 分钟 后重置.*09\/08/,
+  'quota reset label must include relative duration and absolute time',
+);
+
 // 1. Test OAuth Login View
 {
   const c = mockElement();
@@ -76,13 +82,14 @@ const t = (k, f) => f || k;
       status: 'success',
       plan: 'Pro',
       windows: [
-        { name: 'Gemini Models · Weekly Limit Remaining', remainingPercent: 98, models: ['Gemini Flash', 'Gemini Pro'] },
+        { name: 'Gemini Models · Weekly Limit Remaining', remainingPercent: 98, resetTime: '2026-09-08T08:12:00Z', models: ['Gemini Flash', 'Gemini Pro'] },
         { name: 'Gemini Models · Five Hour Limit Remaining', remainingPercent: 100, models: ['Gemini Flash', 'Gemini Pro'] },
       ],
     },
   };
   renderQuotaView(c, { files: testFiles, quotaMap, t, onAction: () => {} });
   assert.ok(c.children.length >= 2, 'Quota view must render topbar and content');
+  assert.match(c.children[1].children[0].children[1].innerHTML, /后重置/, 'quota card must show reset duration');
   console.log('✓ Quota View rendered successfully');
 }
 

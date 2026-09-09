@@ -159,6 +159,12 @@ assert.equal(inspectorEl.hidden, true);
 assert.equal(closedFocusCalled, true);
 console.log('✓ Close and focus anchor restoration verified');
 
+// 6b. Clicking outside the sidebar closes it without requiring the header button
+inspector.open('overview');
+backdropEl.onclick();
+assert.equal(inspector.isOpen, false);
+console.log('✓ Backdrop click closes the inspector');
+
 // 7. Toolbar shortcuts & state sync
 let toolbarSettingsToggled = false;
 let toolbarWidgetsToggled = false;
@@ -218,6 +224,8 @@ assert.match(spaceCss, /\.inspector-row\s*\.row-action-toggle\[aria-pressed="tru
 assert.match(spaceCss, /\.inspector-section-header\s*\{[^}]*justify-content:space-between;/, 'Section header must space title and add button');
 assert.match(spaceCss, /\.catalog-search-wrap input\.catalog-search\s*\{[^}]*border:0 !important;/, 'Search input must not have double borders');
 assert.match(spaceCss, /\.inspector select\s*\{[^}]*appearance:none;/, 'Select must use unified custom arrow');
+assert.match(spaceCss, /\.inspector-row-order/, 'Inspector row order badge must be styled in CSS');
+assert.match(spaceCss, /\.inspector-row\.dragging/, 'Inspector row dragging state must be styled in CSS');
 
 // C. Verify all 24 widget and 9 background renderSettings without inline style attributes
 const { widgetPlugins, backgroundPlugins } = await import('./space-plugins.js');

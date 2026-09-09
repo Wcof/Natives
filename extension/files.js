@@ -19,7 +19,7 @@ import { createFilesHostConnection } from './files-host-connection.js';
 import { loadAppNavigation, saveAppNavigation, projectionFromApps, isStaleProjection, mountAppMenu } from './app-navigation-projection.js';
 import { createFilesFeedback } from './files-feedback.js';
 import { createFilesWatchController } from './files-watch-controller.js';
-import { fileUri, normalizePathInput, parentAndName, pathParts, renderFilesBreadcrumb } from './files-paths.js';
+import { fileUri, normalizePathInput, parentAndName, parseOpenMarkdownUrl, pathParts, renderFilesBreadcrumb } from './files-paths.js';
 
 const PAGE_SIZE = 100;
 const nativeHost = 'com.natives.file_manager';
@@ -90,13 +90,8 @@ async function openModelSettings(returnFocus) {
 }
 
 async function openAppsCenter(returnFocus) {
-  // ADR-0025 D40: App Center is a settings-level surface on its own tab,
-  // so the files page never hosts a second port just to manage apps.
-  const url = chrome.runtime.getURL('apps.html');
-  const existing = (await chrome.tabs.query({ url: `${location.origin}/apps.html` })) || [];
-  if (existing[0]) chrome.tabs.update(existing[0].id, { active: true });
-  else chrome.tabs.create({ url });
-  returnFocus?.focus?.();
+  const module = await import('./model-settings.js');
+  await module.openModelSettings({ t, language: filesLocale.language, returnFocus, initialPage: 'apps' });
 }
 
 chrome.storage?.onChanged?.addListener((changes, area) => {
@@ -590,6 +585,31 @@ async function init() {
     const roots = await call('roots');
     rootPaths = roots.map((root) => root.path);
     bindAppMenu(roots);
+    const openParam = new URLSearchParams(location.search).get('open');
+    if (openParam !== null) {
+      const openPath = parseOpenMarkdownUrl(openParam);
+      if (!openPath) {
+        setStatus(t('invalidPath', '路径无效或不在允许范围内'), 'error');
+        renderHomeWelcome();
+        return;
+      }
+      try {
+        const statResult = await call('stat', { path: openPath });
+        if (!statResult?.found || statResult.isDir || !statResult.path) {
+          setStatus(t('invalidPath', '路径无效或不在允许范围内'), 'error');
+          renderHomeWelcome();
+          return;
+        }
+        pendingSelectionPath = statResult.path;
+        const parent = parentAndName(statResult.path).parent;
+        navigate(parent, false);
+        return;
+      } catch (error) {
+        setStatus(error.message || t('invalidPath', '路径无效或不在允许范围内'), 'error');
+        renderHomeWelcome();
+        return;
+      }
+    }
     const stored = await storageGet('natives-last-path', '');
     const result = stored ? await call('stat', { path: stored }).catch(() => ({})) : {};
     const hasHarness = new URLSearchParams(location.search).has('ui-harness') || new URLSearchParams(location.search).has('self-test');

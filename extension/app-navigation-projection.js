@@ -51,7 +51,7 @@ export function isStaleProjection(projection, hostRevision) {
 export function projectionFromApps(apps, revision) {
   const items = Array.isArray(apps)
     ? apps
-        .filter((app) => app && typeof app.app_id === 'string' && app.enabled !== false && app.show_in_sidebar !== false)
+        .filter((app) => app && typeof app.app_id === 'string' && app.enabled !== false && app.show_in_sidebar !== false && !app.needs_migration)
         .map((app) => ({
           appId: app.app_id,
           label: typeof app.name === 'string' && app.name ? app.name : app.app_id,

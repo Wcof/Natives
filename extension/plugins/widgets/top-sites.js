@@ -104,7 +104,7 @@ export const topSitesWidget = {
         <input type="number" id="ts-limit" min="1" max="18" value="${data.limit || 6}" />
       </label>
     `;
-    wrap.querySelector('#ts-limit').onchange = (e) => onChange({ ...data, limit: Number(e.target.value) || 6 });
+    wrap.querySelector('#ts-limit').onchange = (e) => { const n = Number(e.target.value); onChange({ ...data, limit: Number.isFinite(n) ? Math.max(1, Math.min(18, n)) : 6 }); };
     container.append(wrap);
   },
   styles: `

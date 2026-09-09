@@ -8,6 +8,7 @@ export const messageWidget = {
   defaultData: { message: 'Hello World' },
   render(container, data) {
     container.className = 'Widget Message';
+    container.replaceChildren();
     const h3 = document.createElement('h3');
     h3.style.whiteSpace = 'pre';
     h3.textContent = data.message || '';

@@ -99,15 +99,15 @@
   - 安装、启动和更新不得引入 Electron/Tauri 壳、daemon、托盘常驻进程或后台更新轮询。
 - **为什么**：Natives 复用用户已有 Chrome，增量成本必须限制在当前文件 Surface，而不是复制浏览器或常驻运行时。
 
-#### R-P13 · App Package 与 Extension App Host 预算
+#### R-P13 · App 纯资源包与共享 Host 预算
 - **等级**：MUST
 - **分类**：性能、分发、Apps
-- **规则**（详见 ADR-0025 D3/D19/D21）：
+- **规则**（详见 ADR-0026）：
   - 单个下载 Package（`.nap`）wire 大小 ≤ 5 MiB（5,242,880 bytes），精确到字节；Required Packages ≤ 3 个且总量 ≤ 15 MiB；全部 Package ≤ 16 个；单包解压 payload ≤ 20 MiB；应用安装代码+静态资源总体 ≤ 50 MiB（不含用户个人数据）。
   - 超过 Gate 的 CI 必须直接失败；禁止 `ALLOW_OVERSIZE`/`SKIP_APP_SIZE_CHECK`/baseline waiver 等豁免；修改 Gate 数字本身必须新增 ADR。
-  - Extension App Host（如 `fund-host`）：EOF 退出 ≤ 2s、Idle CPU ≤ 0.5%、Idle RSS 目标 ≤ 24 MiB / 硬 Gate ≤ 32 MiB、GPU 0、background timer 0；与 `native-file-host` 预算完全分开，禁止把 App 业务编进 Core Host。
+  - 禁止创建 Extension App Host 或 App 子进程；页面复用 `native-file-host` 的受限领域接口，其端口、EOF、CPU、RSS、GPU 与后台计时器继续受 R-P12 同一预算约束。
   - Apps Framework 相对 A1 baseline 的扩展增量 ≤ 20 KiB（gzip 估算）；扩展估算 ≥ 290 KiB 时 CI 必须输出 NEAR_BUDGET 警告。
-- **为什么**：在线分发的 App 包是供应链与体积的双重风险点；Core 与 App 的预算必须分账，防止一个 App 拖垮 Core Gate。
+- **为什么**：在线分发的 App 包是供应链与体积的双重风险点；资源包与扩展代码必须分账，但不得以独立进程逃逸 Core Gate。
 
 ## 提交前清单
 

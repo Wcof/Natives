@@ -37,6 +37,45 @@
 - **历史迁移**：使用记录页可分块导入 EasyCLIProxyAPI V3 `usage.db`；Host 以只读模式
   识别源 schema，限制单文件 2 GiB、最多两个并发会话，按源事件稳定生成去重 ID。
 
+### Native Messaging 常驻生命周期（2026-09-07）
+
+Chromium 在销毁 Native Messaging 通道时会回收它直接启动的进程，macOS 的
+`EnsureProcessTerminated` 只等待 2 秒。因此原来的「同一进程在 stdin EOF 后检查
+resident 并继续运行」无法保证常驻；只模拟 EOF 的测试遗漏了浏览器随后终止进程的行为。
+参考 EasyCLIProxyAPI 将界面关闭与内核运行分开的职责划分，当前实现为：
+
+- Chrome 启动的 `model-host` 只转发 Native Messaging；已有 worker 时连接原有的
+  Unix socket / Windows named pipe，没有 worker 时启动同一可执行文件的
+  `--model-host-worker` 模式。
+- worker 在独立进程组中运行，Windows 同时脱离父 Job；启动连接使用私有管道，
+  stderr 不继承浏览器管道，Unix 的断管写入返回错误而不以 SIGPIPE 终止内核。
+- Engine、Keychain、网关及单实例锁仍由唯一 worker 持有。连接 EOF 后转发进程退出；
+  worker 仅在已开启常驻或仍有其它页面连接时继续存活。关闭常驻并断开最后一个连接
+  会回收 worker；显式停止网关仍通过既有命令执行。没有新增 Service Worker 保活、
+  登录启动项、通用 daemon 或管理 HTTP 端点。
+- `process_unix_test.go` 通过实际子进程验证 SIGTERM/SIGKILL 后网关 PID 不变、
+  进行中的 HTTP/SSE 流完整结束、重新连接复用、非驻留多页签的最后连接回收，以及
+  EOF 前已收到请求的响应能够送达。测试使用隔离状态目录、内存 Secret 和本地模拟上游。
+
+同机 macOS arm64、debug 构建、空状态目录的生命周期门禁证据：
+
+| 指标 | 修复前 | 修复后 | 预算 |
+|---|---:|---:|---:|
+| 已运行构建的首次 snapshot | 165.97 ms | 193.54 ms | 1,500 ms |
+| 页面连接期间 Host 总 RSS | 33,392 KiB | 64,784 KiB（转发进程 + worker） | 262,144 KiB |
+| 空闲 CPU | 0% | 0% | 5% |
+| Native Messaging 进程 EOF 退出 | 5.50 ms | 3.17 ms | 1,000 ms |
+| 浏览器回收原进程后网关可用 | 失败 | 通过 | 必须通过 |
+
+新构建第一次执行的 snapshot 为 1,252.57 ms，也在预算内。性能脚本同时检查转发进程
+退出、同一 worker 复用和关闭常驻后 worker 退出，RSS/CPU 包含转发进程与 worker。
+`go test -race ./...` 的 60 项测试及 `npm run perf:check`（含扩展检查）通过，
+Windows amd64 / Linux amd64 交叉编译通过。当前 macOS 安装替换旧 Host 后，断开
+Native Messaging 连接并等待 3 秒，再次连接确认网关 PID 与 8317 端口不变，
+鉴权后的 `/v1/models` 仍返回 HTTP 200。
+实际 Chrome 页签点击验证本轮被浏览器自动化 URL 安全策略阻止；以上生命周期结果来自
+真实 Native Messaging 管道和操作系统进程终止测试，不等同于完成了浏览器点击验收。
+
 下文第 2 节起保留的是删除前系统的迁移审计证据，不是当前生产结构；其中
 `src-tauri`、Agent Daemon、Provider crates、LAN gateway 等描述不得作为新实现入口。
 

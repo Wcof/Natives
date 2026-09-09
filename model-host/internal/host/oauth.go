@@ -292,7 +292,7 @@ func syncAccountFromCredential(repo *domain.Repository, emit func(nativeio.Respo
 			return findErr
 		}
 		account.Status = "active"
-		if credential.Status == coreauth.StatusError || credential.LastError != nil {
+		if credential.Status == coreauth.StatusError && (credential.LastError == nil || !credential.LastError.Retryable) {
 			account.Status = "needs_reauth"
 		}
 		if token, ok := credential.Metadata["access_token"].(string); ok {

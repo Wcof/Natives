@@ -19,16 +19,25 @@ type Instance struct {
 	socketPath string
 }
 
+func controlSocketPath(dir string) string {
+	path := filepath.Join(dir, "control.sock")
+	if len(path) > 90 {
+		digest := sha256.Sum256([]byte(dir))
+		path = filepath.Join(os.TempDir(), fmt.Sprintf("natives-model-%d-%x.sock", os.Getuid(), digest[:8]))
+	}
+	return path
+}
+
+func Connect(dir string) (net.Conn, error) {
+	return net.DialTimeout("unix", controlSocketPath(dir), 150*time.Millisecond)
+}
+
 func Acquire(dir string) (*Instance, net.Conn, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, nil, err
 	}
-	socketPath := filepath.Join(dir, "control.sock")
-	if len(socketPath) > 90 {
-		digest := sha256.Sum256([]byte(dir))
-		socketPath = filepath.Join(os.TempDir(), fmt.Sprintf("natives-model-%d-%x.sock", os.Getuid(), digest[:8]))
-	}
-	if connection, err := net.DialTimeout("unix", socketPath, 150*time.Millisecond); err == nil {
+	socketPath := controlSocketPath(dir)
+	if connection, err := Connect(dir); err == nil {
 		return nil, connection, nil
 	}
 	lock, err := os.OpenFile(filepath.Join(dir, "instance.lock"), os.O_CREATE|os.O_RDWR, 0o600)

@@ -21,6 +21,8 @@ export function createSpaceDashboard({
   widgetPlugins,
   nativeCall,
   broadcastRevision,
+  queueWorkspaceMutation,
+  toast,
 }) {
   let dashboardShadow = null;
   let dashboardRoot = null;
@@ -32,6 +34,7 @@ export function createSpaceDashboard({
 
   const slotContainers = {};
   const widgetRegistry = new Map();
+  const confirmedConfigs = new Map();
 
   let staticStyleContent = '';
   function getCompiledStyleSheet() {
@@ -106,6 +109,9 @@ export function createSpaceDashboard({
       currentBgDisplayStr = bgDisplayStr;
       const bgPlugin = backgroundPlugins[bgKey] || backgroundPlugins['background/colour'];
       if (bgPlugin && bgLayerEl) {
+        bgLayerEl.replaceChildren();
+        bgLayerEl.style.backgroundImage = 'none';
+        bgLayerEl.style.backgroundColor = 'transparent';
         let isNight = false;
         if (bgDisplay.nightDim) {
           const h = new Date().getHours();
@@ -117,6 +123,8 @@ export function createSpaceDashboard({
         const maybeBgDisposer = bgPlugin.render(bgLayerEl, bgDisplay, { t, lang: selectedLanguage });
         if (typeof maybeBgDisposer === 'function') {
           currentBgDisposer = maybeBgDisposer;
+        } else if (typeof bgPlugin.dispose === 'function') {
+          currentBgDisposer = () => bgPlugin.dispose();
         }
       }
     }
@@ -144,6 +152,52 @@ export function createSpaceDashboard({
     }
   }
 
+  function createDataChangeHandler(widget, container, shadowRoot, activeWorkspaceId, snapshot, updateSnapshot) {
+    return async (nextData) => {
+      const prevConfig = confirmedConfigs.get(widget.id) || widget.configJson || {};
+      try {
+        if (queueWorkspaceMutation) {
+          await queueWorkspaceMutation(activeWorkspaceId, async (latestSnapshot) => {
+            const latestWidget = (latestSnapshot.widgets || []).find((w) => w.id === widget.id);
+            return nativeCall('workspace_widget_upsert', {
+              workspaceId: activeWorkspaceId,
+              widget: { ...(latestWidget || widget), configJson: nextData },
+              expectedRevision: latestSnapshot.revision,
+            });
+          });
+        } else {
+          const result = await nativeCall('workspace_widget_upsert', {
+            workspaceId: activeWorkspaceId,
+            widget: { ...widget, configJson: nextData },
+            expectedRevision: snapshot?.revision ?? 0,
+          });
+          updateSnapshot?.(result);
+        }
+        broadcastRevision?.();
+        confirmedConfigs.set(widget.id, JSON.parse(JSON.stringify(nextData)));
+      } catch (err) {
+        const plugin = widgetPlugins[widget.key];
+        if (plugin && typeof plugin.render === 'function') {
+          try {
+            const entry = widgetRegistry.get(widget.id);
+            entry?.disposer?.();
+            const handler = createDataChangeHandler(widget, container, shadowRoot, activeWorkspaceId, snapshot, updateSnapshot);
+            const nextDisposer = plugin.render(container, prevConfig, widget.displayJson || {}, {
+              t,
+              lang: selectedLanguage,
+              shadowRoot,
+              onDataChange: handler,
+            });
+            if (entry) entry.disposer = typeof nextDisposer === 'function' ? nextDisposer : null;
+          } catch {}
+        }
+        if (typeof toast === 'function') {
+          toast(`${t('saveFailed', '保存失败')}: ${err?.message || ''}`, 'error');
+        }
+      }
+    };
+  }
+
   function mountWidget(widget, pos, shadowRoot, root, snapshot, activeWorkspaceId, updateSnapshot) {
     const plugin = widgetPlugins[widget.key];
     if (!plugin) return;
@@ -151,6 +205,7 @@ export function createSpaceDashboard({
     const container = document.createElement('div');
     const keyClass = widget.key.replace('widget/', '');
     container.dataset.widgetId = widget.id;
+    confirmedConfigs.set(widget.id, JSON.parse(JSON.stringify(widget.configJson || {})));
 
     let disposer = null;
     try {
@@ -158,17 +213,7 @@ export function createSpaceDashboard({
         t,
         lang: selectedLanguage,
         shadowRoot,
-        onDataChange: async (nextData) => {
-          try {
-            const result = await nativeCall('workspace_widget_upsert', {
-              workspaceId: activeWorkspaceId,
-              widget: { ...widget, configJson: nextData },
-              expectedRevision: snapshot.revision,
-            });
-            updateSnapshot(result);
-            broadcastRevision();
-          } catch (err) {}
-        },
+        onDataChange: createDataChangeHandler(widget, container, shadowRoot, activeWorkspaceId, snapshot, updateSnapshot),
       });
       if (typeof maybeDisposer === 'function') {
         disposer = maybeDisposer;
@@ -207,6 +252,7 @@ export function createSpaceDashboard({
   function patchWidget(entry, nextWidget, nextPos, shadowRoot, root, snapshot, activeWorkspaceId, updateSnapshot) {
     const prevWidget = entry.widget;
     entry.widget = nextWidget;
+    confirmedConfigs.set(nextWidget.id, JSON.parse(JSON.stringify(nextWidget.configJson || {})));
 
     if (entry.pos !== nextPos) {
       entry.disposer?.();
@@ -223,17 +269,7 @@ export function createSpaceDashboard({
         t,
         lang: selectedLanguage,
         shadowRoot,
-        onDataChange: async (nextData) => {
-          try {
-            const result = await nativeCall('workspace_widget_upsert', {
-              workspaceId: activeWorkspaceId,
-              widget: { ...nextWidget, configJson: nextData },
-              expectedRevision: snapshot.revision,
-            });
-            updateSnapshot(result);
-            broadcastRevision();
-          } catch (err) {}
-        },
+        onDataChange: createDataChangeHandler(nextWidget, entry.element, shadowRoot, activeWorkspaceId, snapshot, updateSnapshot),
       });
       entry.disposer = typeof nextDisposer === 'function' ? nextDisposer : null;
     }
@@ -287,6 +323,10 @@ export function createSpaceDashboard({
 
   function setEditingWidget(widgetId, snapshot, activeWorkspaceId, updateSnapshot) {
     currentEditingWidgetId = widgetId;
+    // 位置调整期间临时关闭遮罩拦截，让画布可拖动（Escape 先结束调整）
+    if (typeof document !== 'undefined' && document.body?.classList) {
+      document.body.classList.toggle('free-pos-active', Boolean(widgetId));
+    }
     const { shadow, root } = ensureShadowShell();
     if (!shadow || !root) return;
 
@@ -433,12 +473,23 @@ export function createSpaceDashboard({
           scale: finalScale,
           rotation: finalRot,
         };
-        const result = await nativeCall('workspace_widget_upsert', {
-          workspaceId: activeWorkspaceId,
-          widget: { ...widget, displayJson: nextDisplay },
-          expectedRevision: snapshot.revision,
-        });
-        updateSnapshot(result);
+        if (queueWorkspaceMutation) {
+          await queueWorkspaceMutation(activeWorkspaceId, async (latestSnapshot) => {
+            const latestWidget = (latestSnapshot.widgets || []).find((item) => item.id === widget.id) || widget;
+            return nativeCall('workspace_widget_upsert', {
+              workspaceId: activeWorkspaceId,
+              widget: { ...latestWidget, displayJson: { ...(latestWidget.displayJson || {}), ...nextDisplay } },
+              expectedRevision: latestSnapshot.revision,
+            });
+          });
+        } else {
+          const result = await nativeCall('workspace_widget_upsert', {
+            workspaceId: activeWorkspaceId,
+            widget: { ...widget, displayJson: nextDisplay },
+            expectedRevision: snapshot.revision,
+          });
+          updateSnapshot(result);
+        }
         broadcastRevision();
       } catch (err) {}
     };

@@ -1,7 +1,7 @@
 import { CATALOG_SOURCES, artifactSources, fetchBytes, fetchFromSources } from './app-download.js';
 // ADR-0025 D8/D43/D44: signed catalog client (browser side).
 //
-// The catalog pair (catalog-v1.json + catalog-v1.sig) is fetched from a
+// The catalog-v2 pair is fetched from a
 // BUILD-TIME fixed URL, the Ed25519 signature is verified with WebCrypto
 // against a COMPILED-IN public key, and only then is the catalog parsed.
 // No user-configurable URL, no user-configurable key, no network code
@@ -19,8 +19,8 @@ export const CATALOG_PUBLIC_KEY_B64 =
   '1QP+08RLgHdsf1Y2Oiv2K1ON5MtAFtz5sRbt0IuD1Iw=';
 
 // Build-time fixed catalog URL (D44). Changing it requires an extension update.
-export const CATALOG_URL = `${CATALOG_SOURCES[0]}catalog-v1.json`;
-export const CATALOG_SIG_URL = `${CATALOG_SOURCES[0]}catalog-v1.sig`;
+export const CATALOG_URL = `${CATALOG_SOURCES[0]}catalog-v2.json`;
+export const CATALOG_SIG_URL = `${CATALOG_SOURCES[0]}catalog-v2.sig`;
 
 const CATALOG_MAX_BYTES = 1024 * 1024; // catalog is metadata; 1 MiB is generous
 
@@ -99,11 +99,11 @@ export async function loadVerifiedCatalog({
   signal, allowEmbedded = false,
 } = {}) {
   const sources = catalogUrl ? [[catalogUrl, sigUrl]] : CATALOG_SOURCES.map((base) => [
-    base + 'catalog-v1.json', base + 'catalog-v1.sig',
+    base + 'catalog-v2.json', base + 'catalog-v2.sig',
   ]);
   if (allowEmbedded) sources.push([
-    new URL('apps/catalog-v1.json', import.meta.url).href,
-    new URL('apps/catalog-v1.sig', import.meta.url).href,
+    new URL('apps/catalog-v2.json', import.meta.url).href,
+    new URL('apps/catalog-v2.sig', import.meta.url).href,
   ]);
   let failure;
   for (const [jsonUrl, signatureUrl] of sources) {
@@ -114,7 +114,7 @@ export async function loadVerifiedCatalog({
       let catalog;
       try { catalog = JSON.parse(new TextDecoder().decode(catalogBytes)); }
       catch { throw newSignatureError('catalog is not valid JSON'); }
-      if (catalog?.catalogVersion !== 1 || !Array.isArray(catalog.apps) || catalog.apps.length > 128) {
+      if (catalog?.catalogVersion !== 2 || !Array.isArray(catalog.apps) || catalog.apps.length > 128) {
         throw newSignatureError('unsupported catalog structure');
       }
       return { ...catalog, source: jsonUrl, embedded: !jsonUrl.startsWith('https:') };
@@ -218,13 +218,11 @@ export async function decompressNap(
       `payload size ${payload.byteLength} != catalog payloadSize ${payloadSize}`,
     );
   }
-  if (payloadSha256) {
-    const payloadHash = hex(await digest(payload));
-    if (payloadHash !== payloadSha256.toLowerCase()) {
-      throw newPackageError('payloadSha256 mismatch');
-    }
+  const payloadHash = hex(await digest(payload));
+  if (payloadSha256 && payloadHash !== payloadSha256.toLowerCase()) {
+    throw newPackageError('payloadSha256 mismatch');
   }
-  return { payloadBytes: payload, payloadSize: payload.byteLength, payloadSha256: hex(await digest(payload)) };
+  return { payloadBytes: payload, payloadSize: payload.byteLength, payloadSha256: payloadHash };
 }
 
 export function payloadToBase64(payloadBytes) {

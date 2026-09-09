@@ -8,13 +8,16 @@ const CRYPTO_IDS = new Set([
 ]);
 function normalizePairs(data) {
   if (Array.isArray(data.pairs) && data.pairs.length) {
-    return data.pairs.map((pair, index) => ({
-      id: pair.id || `pair-${index}`,
-      from: String(pair.from || '').toLowerCase(),
-      to: String(pair.to || '').toLowerCase(),
-      amount: Number(pair.amount) || 1,
-      showChange: pair.showChange !== false,
-    })).filter((pair) => pair.from && pair.to);
+    return data.pairs.map((pair, index) => {
+      const amt = Number(pair.amount);
+      return {
+        id: pair.id || `pair-${index}`,
+        from: String(pair.from || '').toLowerCase(),
+        to: String(pair.to || '').toLowerCase(),
+        amount: Number.isFinite(amt) ? amt : 1,
+        showChange: pair.showChange !== false,
+      };
+    }).filter((pair) => pair.from && pair.to);
   }
   const base = String(data.base || '').trim().toLowerCase();
   const targets = String(data.target || data.targets || '')
@@ -87,7 +90,8 @@ export const currencyRatesWidget = {
   },
   render(container, data = {}, display = {}, { t = (key, fallback) => fallback || key } = {}) {
     const pairs = normalizePairs(data) || this.defaultData.pairs;
-    const decimals = Math.max(0, Math.min(8, Number(data.decimals) || 4));
+    const rawDecimals = Number(data.decimals);
+    const decimals = Number.isFinite(rawDecimals) ? Math.max(0, Math.min(8, rawDecimals)) : 4;
     const formatter = new Intl.NumberFormat(undefined, { maximumFractionDigits: decimals });
     container.className = 'Widget CurrencyRates';
     container.replaceChildren();
@@ -143,25 +147,35 @@ export const currencyRatesWidget = {
         `).join('')}
       </div>
       <button type="button" class="primary pair-add">${t('addPair', '添加货币对')}</button>
-      <label class="inspector-field"><span>${t('rateDecimals', '小数位数')}</span><input id="c-decimals" type="number" min="0" max="8" value="${escapeHtml(String(Math.max(0, Math.min(8, Number(data.decimals) || 4))))}" /></label>
+      <label class="inspector-field"><span>${t('rateDecimals', '小数位数')}</span><input id="c-decimals" type="number" min="0" max="8" value="${escapeHtml(String(Number.isFinite(Number(data.decimals)) ? Math.max(0, Math.min(8, Number(data.decimals))) : 4))}" /></label>
     `;
-    const emit = (nextPairs) => onChange({
-      ...data,
-      pairs: nextPairs,
-      decimals: Number(container.querySelector('#c-decimals').value) || 4,
-    });
+    const emit = (nextPairs) => {
+      const rawDec = Number(wrap.querySelector('#c-decimals')?.value);
+      const nextDecimals = Number.isFinite(rawDec) ? Math.max(0, Math.min(8, rawDec)) : 4;
+      onChange({
+        ...data,
+        pairs: nextPairs,
+        decimals: nextDecimals,
+      });
+    };
     wrap.querySelectorAll('.pair-from, .pair-to, .pair-amount').forEach((input) => {
       input.onchange = () => {
         const index = Number(input.dataset.index);
-        const next = pairs.map((pair, i) => (i === index ? {
-          ...pair,
-          from: (wrap.querySelector(`.pair-from[data-index="${index}"]`).value || pair.from).trim().toLowerCase(),
-          to: (wrap.querySelector(`.pair-to[data-index="${index}"]`).value || pair.to).trim().toLowerCase(),
-          amount: Number(wrap.querySelector(`.pair-amount[data-index="${index}"]`).value) || 1,
-        } : pair));
+        const next = pairs.map((pair, i) => {
+          if (i !== index) return pair;
+          const rawAmt = Number(wrap.querySelector(`.pair-amount[data-index="${index}"]`)?.value);
+          return {
+            ...pair,
+            from: (wrap.querySelector(`.pair-from[data-index="${index}"]`).value || pair.from).trim().toLowerCase(),
+            to: (wrap.querySelector(`.pair-to[data-index="${index}"]`).value || pair.to).trim().toLowerCase(),
+            amount: Number.isFinite(rawAmt) ? rawAmt : 1,
+          };
+        });
         emit(next);
       };
     });
+    const decimalsInput = wrap.querySelector('#c-decimals');
+    if (decimalsInput) decimalsInput.onchange = () => emit(pairs);
     wrap.querySelectorAll('.pair-del').forEach((button) => {
       button.onclick = () => emit(pairs.filter((_, i) => i !== Number(button.dataset.index)));
     });

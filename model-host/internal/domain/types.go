@@ -2,7 +2,12 @@ package domain
 
 import "time"
 
-const SchemaVersion = 2
+const SchemaVersion = 3
+
+const (
+	DefaultRequestRetry            = 3
+	DefaultMaxRetryIntervalSeconds = 30
+)
 
 var OAuthProviders = []string{"codex", "claude", "antigravity", "kimi", "xai"}
 
@@ -126,7 +131,9 @@ func NewSnapshot() Snapshot {
 			State:      "stopped",
 			AccessKeys: []GatewayAccessKey{defaultKey},
 			Settings: GatewaySettings{
-				RoutingStrategy: "round_robin",
+				RoutingStrategy:         "round_robin",
+				RequestRetry:            DefaultRequestRetry,
+				MaxRetryIntervalSeconds: DefaultMaxRetryIntervalSeconds,
 			},
 		},
 		UpdatedAt: now,

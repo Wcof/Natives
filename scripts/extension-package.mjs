@@ -6,7 +6,7 @@ import { transformSync } from 'esbuild';
 
 export const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const OMIT = new Set(['node_modules', '.git', 'fixtures', 'test', 'tests', '__pycache__']);
-const FILES = /^(manifest\.json|(?!(?:ui-harness|test-dom-mock|files-preview)\.js$)(?:[^/]+|plugins\/.+|apps\/.+)\.(?:html|css|js)|apps\/catalog-v1\.(?:json|sig)|icons\/(?!folder-source\.svg$)[^/]+|_locales\/[^/]+\/messages\.json)$/;
+const FILES = /^(manifest\.json|(?!(?:ui-harness|test-dom-mock|files-preview)\.js$)(?:[^/]+|plugins\/.+|apps\/.+)\.(?:html|css|js)|apps\/catalog-v[12]\.(?:json|sig)|icons\/(?!folder-source\.svg$)[^/]+|_locales\/[^/]+\/messages\.json)$/;
 const EXECUTABLE_MAGIC = new Set(['7f454c46', 'cffaedfe', 'cefaedfe', 'feedfacf', 'feedface', 'cafebabe', 'bebafeca']);
 
 export function distributableFiles(root = ROOT) {

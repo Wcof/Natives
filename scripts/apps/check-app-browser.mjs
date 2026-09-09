@@ -10,8 +10,8 @@ import { CATALOG_URL, CATALOG_SIG_URL, verifyCatalogSignature } from '../../exte
 const { chromium } = await import(process.env.NATIVES_PLAYWRIGHT_MODULE || 'playwright');
 const output = resolve('dist/app-browser-evidence');
 mkdirSync(output, { recursive: true });
-const catalogBytes = readFileSync('dist/app-release/catalog-v1.json');
-const signature = readFileSync('dist/app-release/catalog-v1.sig', 'utf8');
+const catalogBytes = readFileSync('dist/app-release/catalog-v2.json');
+const signature = readFileSync('dist/app-release/catalog-v2.sig', 'utf8');
 await verifyCatalogSignature({ catalogBytes, signatureB64: signature });
 const entry = JSON.parse(catalogBytes).apps[0];
 const fixture = appFixture();
@@ -62,7 +62,10 @@ try {
       i18n: { getMessage: (key) => messages[key]?.message || '', getUILanguage: () => 'zh-CN' },
       storage: { local: { get: async (key) => ({ [key]: local[key] }), set: async (value) => Object.assign(local, value) } },
       tabs: { create: ({ url }) => window.open(new URL(url, base).href) },
-      runtime: { getURL: (path) => `chrome-extension://abcdefghijklmnopabcdefghijklmnop/${path}` },
+      runtime: {
+        getURL: (path) => `chrome-extension://abcdefghijklmnopabcdefghijklmnop/${path}`,
+        getManifest: () => ({ version: '0.1.0' }),
+      },
     };
     globalThis.__NATIVES_DEV_NATIVE_CONNECT__ = (host) => {
       const key = crypto.randomUUID(), messages = [], disconnects = [];

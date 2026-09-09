@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"sync"
 	"syscall"
 
@@ -25,6 +26,10 @@ type clientHub struct {
 }
 
 func main() {
+	run(secrets.KeyringStore{})
+}
+
+func run(secretStore secrets.Store) {
 	log.SetOutput(os.Stderr)
 	log.SetLevel(log.WarnLevel)
 	nativeOutput := os.Stdout
@@ -33,6 +38,13 @@ func main() {
 	if err != nil {
 		return
 	}
+	if !slices.Contains(os.Args[1:], workerArgument) {
+		if err = bridgeModelHost(filepath.Dir(statePath), os.Stdin, nativeOutput); err != nil {
+			log.Warn("model host connection failed")
+		}
+		return
+	}
+	prepareWorker()
 	instance, relay, err := singleinstance.Acquire(filepath.Dir(statePath))
 	if relay != nil {
 		relayNativeMessages(relay, os.Stdin, nativeOutput)
@@ -42,14 +54,14 @@ func main() {
 		return
 	}
 	hub := &clientHub{writers: make(map[*nativeio.Writer]bool), idle: make(chan struct{}, 1)}
-	engine, err := host.NewEngine(domain.NewRepository(statePath), secrets.KeyringStore{}, hub.broadcast)
+	engine, err := host.NewEngine(domain.NewRepository(statePath), secretStore, hub.broadcast)
 	if err != nil {
 		_ = instance.Close()
 		return
 	}
 	defer func() {
-		_ = instance.Close()
 		engine.Close()
+		_ = instance.Close()
 	}()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -65,7 +77,7 @@ func main() {
 			accepted <- connection
 		}
 	}()
-	hub.serve(ctx, engine, os.Stdin, nativeOutput, nil)
+	hub.serve(ctx, engine, os.Stdin, nativeOutput, nativeOutput.Close)
 	for {
 		select {
 		case connection, ok := <-accepted:
@@ -133,16 +145,13 @@ func (h *clientHub) empty() bool {
 
 func relayNativeMessages(connection net.Conn, input io.Reader, output io.Writer) {
 	defer connection.Close()
-	done := make(chan struct{}, 2)
 	go func() {
 		_, _ = io.Copy(connection, input)
-		if unix, ok := connection.(*net.UnixConn); ok {
-			_ = unix.CloseWrite()
+		if stream, ok := connection.(interface{ CloseWrite() error }); ok {
+			_ = stream.CloseWrite()
+		} else {
+			_ = connection.Close()
 		}
-		done <- struct{}{}
 	}()
-	go func() { _, _ = io.Copy(output, connection); done <- struct{}{} }()
-	<-done
-	_ = connection.Close()
-	<-done
+	_, _ = io.Copy(output, connection)
 }

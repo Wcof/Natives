@@ -20,9 +20,9 @@ assert.match(settingsView, /renderAgentView\(roles\.agentContainer/, 'agent view
 assert.match(settingsView, /data-role="agentNav"/, 'agent nav must declare its data-role for locale sync');
 assert.match(settings, /handleAgentAction/, 'controller must dispatch agent actions');
 assert.match(settings, /loadAgentClients\(this/, 'controller must load agent statuses when opening the page');
-assert.match(view, /data-action="agent-apply"/, 'agent view must expose the apply action');
 assert.match(view, /data-action="agent-default"/, 'agent view must expose the default action');
 assert.match(view, /data-action="agent-close-config"/, 'agent view must expose the close action');
+assert.match(view, /primaryAction = applied && !updating \? 'agent-close-config' : 'agent-apply'/, 'applied primary button must dispatch close instead of apply');
 assert.match(view, /agent-launch/, 'agent view must expose the launch action');
 assert.match(view, /data-action="agent-refresh"/, 'agent view must expose the re-detect action');
 assert.match(view, /agent-tab/, 'codex sessions tab must exist in the detail view');

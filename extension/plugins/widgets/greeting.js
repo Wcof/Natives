@@ -8,6 +8,7 @@ export const greetingWidget = {
   defaultData: { name: '' },
   render(container, data, display, { t } = {}) {
     container.classList.add('Greeting');
+    container.replaceChildren();
     const hour = new Date().getHours();
     const prefix = hour < 12
       ? (t ? t('greetingMorning', '早上好') : '早上好')

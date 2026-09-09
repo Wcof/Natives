@@ -63,7 +63,7 @@ export const todoWidget = {
               clearInterval(timerInterval);
               timerRunning = false;
               renderToggleContent();
-              timeDisplay.textContent = t('completed', '已完成!');
+              timeDisplay.textContent = t('pomodoroCompleted', '已完成!');
             }
           }, 1000);
         } else {
@@ -94,7 +94,7 @@ export const todoWidget = {
         <div class="todo-filter-tabs">
           <button type="button" class="todo-filter-tab active" data-filter="all">${t('all', '全部')} (${items.length})</button>
           <button type="button" class="todo-filter-tab" data-filter="pending">${t('pending', '待办')} (${pendingItems.length})</button>
-          <button type="button" class="todo-filter-tab" data-filter="completed">${t('completed', '完成')} (${completedCount})</button>
+          <button type="button" class="todo-filter-tab" data-filter="completed">${t('todoCompleted', '已完成')} (${completedCount})</button>
         </div>
         ${completedCount > 0 ? `<button type="button" class="todo-clear-done" title="${t('clearCompleted', '清除已完成')}">${t('clear', '清完成')}</button>` : ''}
       `;
@@ -157,20 +157,59 @@ export const todoWidget = {
 
         const textSpan = document.createElement('span');
         textSpan.className = 'todo-text';
-        textSpan.textContent = item.contents ?? item.text ?? '';
+        const originalText = item.contents ?? item.text ?? '';
+        textSpan.textContent = originalText;
+
+        const editInput = document.createElement('input');
+        editInput.className = 'todo-edit-input';
+        editInput.type = 'text';
+        editInput.value = originalText;
+        editInput.hidden = true;
+        let editing = false;
+        const finishEdit = (save) => {
+          if (!editing) return;
+          editing = false;
+          const nextText = editInput.value.trim();
+          editInput.hidden = true;
+          textSpan.hidden = false;
+          if (!save || !nextText || nextText === originalText) {
+            editInput.value = originalText;
+            return;
+          }
+          textSpan.textContent = nextText;
+          const next = [...items];
+          next[index] = { ...next[index], ...('contents' in next[index] ? { contents: nextText } : { text: nextText }) };
+          onDataChange?.({ ...data, items: next });
+        };
+        row.ondblclick = (e) => {
+          if (e.target?.closest?.('button, input')) return;
+          e.stopPropagation();
+          if (editing) return;
+          editing = true;
+          textSpan.hidden = true;
+          editInput.hidden = false;
+          editInput.focus?.();
+          editInput.select?.();
+        };
+        editInput.onkeydown = (e) => {
+          if (e.key === 'Enter') finishEdit(true);
+          else if (e.key === 'Escape') finishEdit(false);
+        };
+        editInput.onblur = () => finishEdit(true);
 
         const delBtn = document.createElement('button');
         delBtn.className = 'todo-del-btn';
         delBtn.type = 'button';
-        delBtn.innerHTML = `<svg class="icon" aria-hidden="true" style="width:11px;height:11px;"><use href="#i-close" /></svg>`;
+        delBtn.innerHTML = `<svg class="icon" aria-hidden="true" style="width:11px;height:11px;"><use href="#i-trash" /></svg>`;
         delBtn.title = t('delete', '删除');
+        delBtn.setAttribute('aria-label', t('delete', '删除'));
         delBtn.onclick = (e) => {
           e.stopPropagation();
           const next = items.filter((_, i) => i !== index);
           onDataChange?.({ ...data, items: next });
         };
 
-        row.append(priBtn, cb, textSpan, delBtn);
+        row.append(priBtn, cb, textSpan, editInput, delBtn);
         list.append(row);
       });
     }
@@ -178,24 +217,72 @@ export const todoWidget = {
     renderItems();
     root.append(list);
 
+    const addTrigger = document.createElement('button');
+    addTrigger.type = 'button';
+    addTrigger.className = 'todo-add-trigger';
+    addTrigger.textContent = `+ ${t('addTodo', '添加待办事项...')}`;
+    root.append(addTrigger);
+
+    const footer = document.createElement('div');
+    footer.className = 'todo-footer';
+    footer.hidden = true;
+
     const addInput = document.createElement('input');
     addInput.className = 'todo-add-input';
     addInput.type = 'text';
     addInput.placeholder = `+ ${t('addTodo', '添加待办事项...')}`;
+
+    function expandFooter(focusInput = true) {
+      if (!footer.hidden) return;
+      footer.hidden = false;
+      addTrigger.hidden = true;
+      if (focusInput && typeof addInput.focus === 'function') {
+        addInput.focus();
+      }
+    }
+
+    function collapseFooter() {
+      if (footer.hidden) return;
+      if (addInput.value.trim() || !batchBox.hidden) return;
+      footer.hidden = true;
+      addTrigger.hidden = false;
+    }
+
+    addTrigger.onclick = (e) => {
+      e.stopPropagation();
+      expandFooter(true);
+    };
+
+    container.addEventListener('click', () => {
+      expandFooter(false);
+    });
+
+    const onWindowPointerDown = (e) => {
+      const path = e.composedPath ? e.composedPath() : [];
+      const inside = path.includes(container) || (typeof container.contains === 'function' && container.contains(e.target));
+      if (!inside) {
+        collapseFooter();
+      }
+    };
+    window.addEventListener('pointerdown', onWindowPointerDown);
+
     addInput.onkeydown = (e) => {
       if (e.key === 'Enter' && addInput.value.trim()) {
         const next = [...items, { id: crypto.randomUUID(), contents: addInput.value.trim(), completed: false }];
         addInput.value = '';
         onDataChange?.({ ...data, items: next });
+      } else if (e.key === 'Escape') {
+        addInput.value = '';
+        collapseFooter();
       }
     };
-    root.append(addInput);
+    footer.append(addInput);
 
     const batchBox = document.createElement('div');
     batchBox.className = 'todo-batch-box';
     batchBox.hidden = true;
     batchBox.innerHTML = `
-      <textarea class="todo-batch-textarea" placeholder="${t('pasteAiChecklist', '粘贴 AI 规划的任务清单（支持 Markdown - [ ] 或 1. 列表）...')}"></textarea>
+      <textarea class="todo-batch-textarea" placeholder="${t('pasteChecklist', '粘贴任务清单（支持 Markdown - [ ] 或 1. 列表）...')}"></textarea>
       <div class="todo-batch-actions">
         <button type="button" class="todo-chip-btn batch-confirm">${t('confirmImport', '确认导入')}</button>
         <button type="button" class="todo-chip-btn batch-cancel">${t('cancel', '取消')}</button>
@@ -214,16 +301,12 @@ export const todoWidget = {
       }
       batchBox.hidden = true;
     };
-    root.append(batchBox);
+    footer.append(batchBox);
 
     const quickBar = document.createElement('div');
     quickBar.className = 'todo-quick-bar';
     quickBar.innerHTML = `
-      <button type="button" class="todo-chip-btn" data-act="ai-plan" title="一键将未完成待办生成为 AI 任务规划 Prompt">
-        <svg class="icon" aria-hidden="true" style="width:11px;height:11px;"><use href="#i-bolt" /></svg>
-        <span>AI 规划 Prompt</span>
-      </button>
-      <button type="button" class="todo-chip-btn" data-act="batch-import" title="粘贴 AI 规划的 Markdown 清单批量导入">
+      <button type="button" class="todo-chip-btn" data-act="batch-import" title="粘贴任务清单批量导入">
         <svg class="icon" aria-hidden="true" style="width:11px;height:11px;"><use href="#i-plus" /></svg>
         <span>批量导入</span>
       </button>
@@ -232,30 +315,20 @@ export const todoWidget = {
       const btn = e.target.closest('.todo-chip-btn');
       if (!btn) return;
       const act = btn.dataset.act;
-      if (act === 'ai-plan') {
-        const pending = items.filter((it) => !(it.completed ?? it.done));
-        if (!pending.length) return;
-        const lines = pending.map((it) => {
-          const pri = it.priority ? `[${it.priority.toUpperCase()}] ` : '';
-          return `- [ ] ${pri}${it.contents ?? it.text ?? ''}`;
-        });
-        const promptText = `## 待办任务清单\n${lines.join('\n')}\n\n请作为我的个人时间效能教练，帮我：\n1. 按照优先级与四象限重要度（Eisenhower 矩阵）优化任务执行排期；\n2. 预估每个任务的合理耗时与突破策略；\n3. 制定高效的心流执行节奏建议。`;
-        navigator.clipboard?.writeText(promptText);
-        const span = btn.querySelector('span');
-        if (span) span.textContent = '已复制 Prompt!';
-        setTimeout(() => { if (span) span.textContent = 'AI 规划 Prompt'; }, 1500);
-      } else if (act === 'batch-import') {
+      if (act === 'batch-import') {
         batchBox.hidden = !batchBox.hidden;
         if (!batchBox.hidden) {
           batchBox.querySelector('.todo-batch-textarea').focus();
         }
       }
     };
-    root.append(quickBar);
+    footer.append(quickBar);
+    root.append(footer);
     container.append(root);
 
     return () => {
       if (timerInterval) clearInterval(timerInterval);
+      window.removeEventListener('pointerdown', onWindowPointerDown);
       container.replaceChildren();
     };
   },
@@ -276,13 +349,13 @@ export const todoWidget = {
         ${t('todoNotice', '待办事项支持在 Dashboard 上直接勾选完成、回车新增与悬停删除。')}
       </div>
     `;
+    container.append(wrap);
     const update = () => onChange({
       ...data,
-      showPomodoro: container.querySelector('#td-pomodoro').checked,
-      focusDuration: Number(container.querySelector('#td-pomodoro-dur').value) || 25,
+      showPomodoro: Boolean(wrap.querySelector('#td-pomodoro')?.checked),
+      focusDuration: (() => { const n = Number(wrap.querySelector('#td-pomodoro-dur')?.value); return Number.isFinite(n) ? Math.max(5, Math.min(120, n)) : 25; })(),
     });
-    container.querySelectorAll('input').forEach((el) => { el.onchange = update; });
-    container.append(wrap);
+    wrap.querySelectorAll('input').forEach((el) => { el.onchange = update; });
   },
   styles: `
     .Todo .todo-content {
@@ -354,8 +427,20 @@ export const todoWidget = {
     .Todo .TodoList:hover { overflow-y:auto; }
     .Todo .TodoItem { white-space:nowrap; border-top:2px solid transparent; border-bottom:2px solid transparent; }
     .Todo .TodoItem > * { display:inline-block; margin:.25em .5em; }
+    .Todo .TodoItem > [hidden] { display: none !important; }
     .Todo .todo-checkbox { cursor:pointer; }
     .Todo .todo-text { min-width:8em; text-align:left; }
+    .Todo .todo-edit-input {
+      min-width: 8em;
+      max-width: 18em;
+      background: transparent;
+      border: 0;
+      border-bottom: 1px solid currentColor;
+      color: inherit;
+      font: inherit;
+      outline: none;
+    }
+    .Todo .todo-edit-input:focus { border-bottom-color: rgba(255,255,255,0.7); }
     .Todo .TodoItem.done .todo-text, .Todo .TodoItem:has(.todo-checkbox:checked) .todo-text {
       text-decoration: line-through;
       opacity: 0.55;
@@ -368,6 +453,33 @@ export const todoWidget = {
       cursor: pointer;
     }
     .Todo .TodoItem:hover .todo-del-btn { visibility:visible; }
+    .Todo .todo-add-trigger {
+      display: inline-block;
+      width: 100%;
+      background: transparent;
+      border: 0;
+      color: inherit;
+      font: inherit;
+      font-size: 12px;
+      text-align: left;
+      opacity: 0.55;
+      cursor: pointer;
+      padding: 4px 6px;
+      border-radius: 4px;
+      margin-top: 4px;
+      transition: opacity 0.15s, background 0.15s;
+    }
+    .Todo .todo-add-trigger:hover {
+      opacity: 0.9;
+      background: rgba(255, 255, 255, 0.08);
+    }
+    .Todo .todo-footer {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      margin-top: 4px;
+    }
+    .Todo .todo-footer[hidden], .Todo .todo-batch-box[hidden] { display: none; }
     .Todo .todo-add-input {
       width: 100%;
       background:transparent;
@@ -379,7 +491,6 @@ export const todoWidget = {
     .Todo .todo-filter-bar {
       display: flex;
       align-items: center;
-      justify-content: space-between;
       gap: 6px;
       margin-bottom: 4px;
       font-size: 11px;

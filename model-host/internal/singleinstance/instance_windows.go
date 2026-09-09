@@ -11,9 +11,14 @@ import (
 
 type Instance struct{ Listener net.Listener }
 
+const pipe = `\\.\pipe\natives-model-host`
+
+func Connect(string) (net.Conn, error) {
+	return winio.DialPipe(pipe, ptr(150*time.Millisecond))
+}
+
 func Acquire(string) (*Instance, net.Conn, error) {
-	const pipe = `\\.\pipe\natives-model-host`
-	if connection, err := winio.DialPipe(pipe, ptr(150*time.Millisecond)); err == nil {
+	if connection, err := Connect(""); err == nil {
 		return nil, connection, nil
 	}
 	listener, err := winio.ListenPipe(pipe, &winio.PipeConfig{

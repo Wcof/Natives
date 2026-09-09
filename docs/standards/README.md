@@ -18,7 +18,8 @@ docs/standards/
 │   ├── 02-security.md           process / surface defenses / OS Keychain secrets
 │   ├── 03-data.md               SQLite / migration / atomic writes
 │   ├── 04-performance.md        budgets / lifecycle / bounded growth
-│   └── 05-backend.md            Rust errors / logs / deep shared modules / supervisor
+│   ├── 05-backend.md            Rust errors / logs / deep shared modules / supervisor
+│   └── 06-sub-apps.md           sub-apps code ownership / resource contracts / shared host
 ├── frontend/
 │   ├── 01-structure.md
 │   ├── 02-state-and-data.md

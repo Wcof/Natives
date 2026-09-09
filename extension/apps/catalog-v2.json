@@ -1,0 +1,90 @@
+{
+  "catalogVersion": 2,
+  "publishedAt": "2026-09-08T00:00:00Z",
+  "apps": [
+    {
+      "app_id": "com.natives.app.demo",
+      "kind": "extension_app",
+      "name": "Demo",
+      "version": "2.0.0",
+      "minExtensionVersion": "0.1.0",
+      "minHostVersion": "0.1.0",
+      "description": {
+        "zh_CN": "静态资源与数据读取示例",
+        "en": "Static resource and data demo"
+      },
+      "icon": "grid",
+      "permissions": [],
+      "runtime_spec": {
+        "version": "2.0.0"
+      },
+      "surface": {
+        "icon": "grid",
+        "route": "app.html?app=com.natives.app.demo"
+      },
+      "manifest": {
+        "permissions": []
+      },
+      "packages": [
+        {
+          "package_id": "demo-data",
+          "kind": "data",
+          "version": "2.0.0",
+          "platform": "any",
+          "arch": "any",
+          "required": true,
+          "url": "https://github.com/Wcof/Natives/releases/download/apps-demo-v2.0.0/demo-data-2.0.0.nap",
+          "wire_size": 187,
+          "payload_size": 264,
+          "artifact_sha256": "964df53e23268ba115b88d5b21fc433a5f3c976d22c25561c9e428d588e7406b",
+          "payload_sha256": "e92651e89faa6a46c474153b3db1187dce729962456c4a5d144e78453b7a26b1"
+        },
+        {
+          "package_id": "demo-image",
+          "kind": "resource",
+          "version": "2.0.0",
+          "platform": "any",
+          "arch": "any",
+          "required": true,
+          "url": "https://github.com/Wcof/Natives/releases/download/apps-demo-v2.0.0/demo-image-2.0.0.nap",
+          "wire_size": 1156,
+          "payload_size": 1223,
+          "artifact_sha256": "74a33f554e353b467d1698c50eddda64f284d280ff2bb6342891db1f1cfa6324",
+          "payload_sha256": "21454bd9d7bf44e412bbcff81528f401d068c01a36b7789c910c7030d3794308"
+        }
+      ],
+      "published": true
+    },
+    {
+      "app_id": "fund",
+      "kind": "extension_app",
+      "name": "基金",
+      "version": "0.1.0",
+      "minExtensionVersion": "0.1.0",
+      "minHostVersion": "0.1.0",
+      "description": {
+        "zh_CN": "个人基金资产管理",
+        "en": "Personal fund portfolio"
+      },
+      "icon": "box",
+      "permissions": [
+        "keychain:com.natives.app.fund"
+      ],
+      "wireSize": 0,
+      "runtime_spec": {
+        "version": "0.1.0"
+      },
+      "surface": {
+        "icon": "box",
+        "route": "app.html?app=fund"
+      },
+      "manifest": {
+        "permissions": [
+          "keychain:com.natives.app.fund"
+        ]
+      },
+      "packages": [],
+      "published": false
+    }
+  ]
+}

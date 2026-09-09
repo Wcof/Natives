@@ -8,10 +8,93 @@
 //! the whole database).
 
 use rusqlite::Connection;
+use rusqlite::OptionalExtension;
 
 use super::types::AppError;
 use crate::workspace_store::schema::table_has_column;
 use crate::workspace_store::WorkspaceError;
+
+use std::path::Path;
+
+/// Clean up legacy child host manifests verified against recorded apps and app root.
+/// Operates exclusively within the injected manifest_dir (ADR-0026 D5).
+pub fn clean_legacy_child_manifests_in(
+    manifest_dir: &Path,
+    app_root: &Path,
+    conn: &Connection,
+) -> Result<(), AppError> {
+    if !manifest_dir.is_dir() {
+        return Ok(());
+    }
+    let entries = match std::fs::read_dir(manifest_dir) {
+        Ok(entries) => entries,
+        Err(error) => {
+            let _ = conn.execute(
+                "INSERT INTO app_meta (key, value, revision) VALUES ('manifest_cleanup_error', ?1, 0)
+                 ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                [format!("read_dir failed: {error}")],
+            );
+            return Ok(());
+        }
+    };
+
+    let mut failed = false;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let file_name = entry.file_name().to_string_lossy().to_string();
+        if !file_name.starts_with("com.natives.app.") || !file_name.ends_with(".json") {
+            continue;
+        }
+        if file_name == "com.natives.file_manager.json"
+            || file_name == "com.natives.model_host.json"
+        {
+            continue;
+        }
+
+        // Read manifest and verify attribution before removal
+        let content = match std::fs::read_to_string(&path) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+        let parsed: serde_json::Value = match serde_json::from_str(&content) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        let name = parsed.get("name").and_then(|v| v.as_str()).unwrap_or("");
+        if name != file_name.trim_end_matches(".json") {
+            continue;
+        }
+
+        let binary_path = parsed.get("path").and_then(|v| v.as_str()).unwrap_or("");
+        let path_obj = Path::new(binary_path);
+        let app_id: Option<String> = conn
+            .query_row(
+                "SELECT app_id FROM apps WHERE json_extract(runtime_spec_json, '$.host') = ?1",
+                [name],
+                |row| row.get(0),
+            )
+            .optional()?;
+
+        if app_id.is_some_and(|id| path_obj.starts_with(app_root.join(id))) {
+            if let Err(err) = std::fs::remove_file(&path) {
+                failed = true;
+                let _ = conn.execute(
+                    "INSERT INTO app_meta (key, value, revision) VALUES ('manifest_cleanup_retry', ?1, 0)
+                     ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                    [format!("failed to remove {}: {err}", path.display())],
+                );
+            }
+        }
+    }
+    if !failed {
+        conn.execute(
+            "DELETE FROM app_meta WHERE key = 'manifest_cleanup_retry'",
+            [],
+        )?;
+    }
+    Ok(())
+}
 
 /// Idempotent App Store migration.
 pub fn migrate_apps(conn: &Connection) -> Result<(), AppError> {
@@ -20,6 +103,7 @@ pub fn migrate_apps(conn: &Connection) -> Result<(), AppError> {
     let tx = rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)?;
     create_app_tables(&tx)?;
     migrate_app_columns(&tx)?;
+    migrate_v2_apps(&tx)?;
     tx.commit()?;
     Ok(())
 }
@@ -143,6 +227,41 @@ fn migrate_app_columns(conn: &Connection) -> Result<(), AppError> {
     if !has_host_registered {
         conn.execute(
             "ALTER TABLE apps ADD COLUMN host_registered INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
+    Ok(())
+}
+
+fn migrate_v2_apps(conn: &Connection) -> Result<(), AppError> {
+    let has_needs_migration = match table_has_column(conn, "apps", "needs_migration") {
+        Ok(has) => has,
+        Err(WorkspaceError::Sql(error)) => return Err(AppError::Sql(error)),
+        Err(error) => return Err(AppError::InvalidState(error.to_string())),
+    };
+    if !has_needs_migration {
+        conn.execute(
+            "ALTER TABLE apps ADD COLUMN needs_migration INTEGER NOT NULL DEFAULT 0",
+            [],
+        )?;
+    }
+
+    let v2_applied: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM app_meta WHERE key = 'v2_migration' AND value = 'completed')",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(false);
+
+    if !v2_applied {
+        conn.execute(
+            "UPDATE apps SET needs_migration = 1 WHERE app_id IN (SELECT DISTINCT app_id FROM app_packages WHERE kind = 'runtime')",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO app_meta (key, value, revision) VALUES ('v2_migration', 'completed', 0)
+             ON CONFLICT(key) DO UPDATE SET value = 'completed'",
             [],
         )?;
     }

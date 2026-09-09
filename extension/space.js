@@ -12,6 +12,7 @@ import { createSidebarController } from './sidebar-controller.js';
 import { mountAppMenu } from './app-navigation-projection.js';
 import { createSettingsMenu } from './settings-menu.js';
 import { createGlobalSearchModal } from './global-search-modal.js';
+import { createWorkspaceMutationQueue } from './space-write-queue.js';
 
 let localeMessages = {};
 let selectedLanguage = 'zh_CN';
@@ -47,13 +48,8 @@ async function openModelSettings(returnFocus) {
 }
 
 async function openAppsCenter(returnFocus) {
-  // ADR-0025 D40: App Center is a settings-level surface on its own tab —
-  // space.html keeps 0 Native Port (D36) and never opens one for apps.
-  const url = chrome.runtime.getURL('apps.html');
-  const existing = (await chrome.tabs.query({ url: `${location.origin}/apps.html` })) || [];
-  if (existing[0]) chrome.tabs.update(existing[0].id, { active: true });
-  else chrome.tabs.create({ url });
-  returnFocus?.focus?.();
+  const module = await import('./model-settings.js');
+  await module.openModelSettings({ t, language: selectedLanguage, returnFocus, initialPage: 'apps' });
 }
 
 function toast(message, kind = 'info') {
@@ -138,6 +134,18 @@ async function nativeCall(method, params = {}) {
     throw error;
   }
 }
+
+// 统一空间写入口：串行执行 workspace 写操作，每次使用该空间的最新 revision，
+// 迟到的响应只更新对应空间，避免切换空间后覆盖当前画面。
+const queueWorkspaceMutation = createWorkspaceMutationQueue({
+  nativeCall,
+  getActiveWorkspaceId: () => activeWorkspaceId,
+  getActiveSnapshot: () => activeSnapshot,
+  applySnapshot: (result) => {
+    activeSnapshot = result;
+    renderView();
+  },
+});
 
 let wsTree;
 let dashboard;
@@ -266,10 +274,15 @@ async function init() {
   createGlobalSearchModal({ $, t, nativeCall });
 
   wsTree = createSpaceWorkspaceTree({ $, t, activateWorkspace, renameWorkspace: (ws) => nameModal.open(ws), deleteWorkspace: (ws) => deleteModal.open(ws) });
-  dashboard = createSpaceDashboard({ $, t, selectedLanguage, backgroundPlugins, widgetPlugins, nativeCall, broadcastRevision });
+  dashboard = createSpaceDashboard({
+    $, t, selectedLanguage, backgroundPlugins, widgetPlugins, nativeCall, broadcastRevision,
+    queueWorkspaceMutation,
+    toast,
+  });
 
   inspector = createSpaceInspector({
     $, t, language: selectedLanguage, nativeCall, broadcastRevision, updateSnapshot,
+    queueWorkspaceMutation,
     onPositionEditChange: (widgetId) => dashboard.setEditingWidget(widgetId, activeSnapshot, activeWorkspaceId, updateSnapshot),
     onCloseFocusAnchor: () => toolbar?.settingsButton?.focus(),
   });

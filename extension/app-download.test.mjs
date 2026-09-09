@@ -30,17 +30,17 @@ await assert.rejects(fetchBytes(url, { limit: 16, timeoutMs: 10,
   fetchImpl: async () => new Response(new ReadableStream({ start() {} })),
 }), { code: 'APP_NETWORK' }, 'a stalled response body must time out');
 
-const catalog = readFileSync(new URL('./apps/catalog-v1.json', import.meta.url));
-const signature = readFileSync(new URL('./apps/catalog-v1.sig', import.meta.url));
+const catalog = readFileSync(new URL('./apps/catalog-v2.json', import.meta.url));
+const signature = readFileSync(new URL('./apps/catalog-v2.sig', import.meta.url));
 const urls = [];
 const loaded = await loadVerifiedCatalog({ fetchImpl: async (source) => {
   urls.push(source);
   if (source.startsWith(CATALOG_SOURCES[0])) throw new TypeError('offline');
   return new Response(source.endsWith('.sig') ? signature : catalog);
 } });
-assert.equal(loaded.catalogVersion, 1);
+assert.equal(loaded.catalogVersion, 2);
 assert.ok(loaded.source.startsWith(CATALOG_SOURCES[1]));
-assert.deepEqual(urls.slice(1), ['catalog-v1.json', 'catalog-v1.sig'].map((name) => CATALOG_SOURCES[1] + name));
+assert.deepEqual(urls.slice(1), ['catalog-v2.json', 'catalog-v2.sig'].map((name) => CATALOG_SOURCES[1] + name));
 let reads = 0;
 await assert.rejects(loadVerifiedCatalog({ fetchImpl: async (source) => {
   reads++;

@@ -42,7 +42,7 @@ pub(crate) fn app_dispatch(
             }
             Ok(serde_json::json!({
                 "ok": true, "origin": origin,
-                "appsProtocolVersion": 2,
+                "appsProtocolVersion": 3,
                 "platform": if cfg!(target_os = "macos") { "darwin" } else { std::env::consts::OS },
                 "arch": match std::env::consts::ARCH { "aarch64" => "arm64", "x86_64" => "x64", other => other },
                 "version": env!("CARGO_PKG_VERSION")
@@ -78,6 +78,19 @@ pub(crate) fn app_dispatch(
             // Registry health only; install probes and App health are separate.
             let revision = store.global_revision().map_err(|error| error.to_string())?;
             Ok(serde_json::json!({ "status": "ok", "revision": revision }))
+        }
+        "apps:read_resource" => {
+            let app_id = params
+                .get("appId")
+                .and_then(Value::as_str)
+                .ok_or("appId is required")?;
+            let package_id = params
+                .get("packageId")
+                .and_then(Value::as_str)
+                .ok_or("packageId is required")?;
+            let offset = optional_u64(params, "offset")?;
+            let length = optional_u64(params, "length")?;
+            handle_result!(store.read_resource(app_id, package_id, offset, length))
         }
         "apps:install_begin" => {
             let request_payload = params
@@ -186,6 +199,16 @@ pub(crate) fn app_dispatch(
     }
 }
 
+fn optional_u64(params: &Value, key: &str) -> Result<Option<u64>, String> {
+    match params.get(key) {
+        None => Ok(None),
+        Some(value) => value
+            .as_u64()
+            .map(Some)
+            .ok_or_else(|| format!("{key} must be a non-negative integer")),
+    }
+}
+
 fn base64_decode(encoded: &str) -> Result<Vec<u8>, String> {
     use base64::Engine;
     base64::engine::general_purpose::STANDARD
@@ -196,6 +219,21 @@ fn base64_decode(encoded: &str) -> Result<Vec<u8>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resource_ranges_reject_negative_fractional_and_string_values() {
+        for value in [
+            serde_json::json!(-1),
+            serde_json::json!(1.5),
+            serde_json::json!("1"),
+        ] {
+            assert!(optional_u64(&serde_json::json!({ "offset": value }), "offset").is_err());
+        }
+        assert_eq!(
+            optional_u64(&serde_json::json!({ "offset": 0 }), "offset").unwrap(),
+            Some(0)
+        );
+    }
 
     #[test]
     fn handshake_cannot_grant_an_origin_not_supplied_by_chrome() {

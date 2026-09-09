@@ -14,26 +14,32 @@ import (
 // BuildChanges renders the per-client config writes pointing the client at the
 // local gateway. existingPreserved keeps unrelated user keys intact.
 func BuildChanges(clientID, home, baseURL, apiKey, model string, mappings *ClaudeMappings) ([]Change, string, error) {
+	return BuildChangesWithModels(clientID, home, baseURL, apiKey, model, nil, mappings)
+}
+
+// BuildChangesWithModels mirrors EasyCLIProxyAPI's conversion contract: the
+// selected model is first and every model exposed by the gateway is published.
+func BuildChangesWithModels(clientID, home, baseURL, apiKey, model string, models []ModelOption, mappings *ClaudeMappings) ([]Change, string, error) {
 	base := strings.TrimRight(baseURL, "/")
 	switch clientID {
 	case "claude-code":
 		return buildClaudeCode(home, base, apiKey, model, mappings)
 	case "zcode":
-		return buildZCode(home, base, apiKey, model)
+		return buildZCode(home, base, apiKey, model, models)
 	case "codex":
 		return buildCodex(home, base, apiKey, model)
 	case "opencode":
-		return buildOpenCode(home, base, apiKey, model)
+		return buildOpenCode(home, base, apiKey, model, models)
 	case "openclaw":
-		return buildOpenClaw(home, base, apiKey, model)
+		return buildOpenClaw(home, base, apiKey, model, models)
 	case "kimi-code":
-		return buildKimiCode(home, base, apiKey, model)
+		return buildKimiCode(home, base, apiKey, model, models)
 	case "grok-build":
-		return buildGrokBuild(home, base, apiKey, model)
+		return buildGrokBuild(home, base, apiKey, model, models)
 	case "deepseek-harness":
-		return buildDeepSeekHarness(home, base, apiKey, model)
+		return buildDeepSeekHarness(home, base, apiKey, model, models)
 	case "hermes":
-		return buildHermes(home, base, apiKey, model)
+		return buildHermes(home, base, apiKey, model, models)
 	case "pi":
 		return buildPi(home, base, apiKey, model)
 	case "claude-desktop":
@@ -50,7 +56,7 @@ func buildClaudeCode(home, base, apiKey, model string, mappings *ClaudeMappings)
 		return nil, "", err
 	}
 	if mappings == nil {
-		mappings = &ClaudeMappings{}
+		mappings = &ClaudeMappings{Opus: model, Sonnet: model, Haiku: model}
 	}
 	mappings.normalize()
 	document["model"] = mappings.with1M(mappings.Sonnet, mappings.Sonnet1M)
@@ -78,7 +84,7 @@ func buildClaudeCode(home, base, apiKey, model string, mappings *ClaudeMappings)
 	return []Change{{Path: path, Content: content}}, path, nil
 }
 
-func buildZCode(home, base, apiKey, model string) ([]Change, string, error) {
+func buildZCode(home, base, apiKey, model string, available []ModelOption) ([]Change, string, error) {
 	targets := []struct{ path, modelKey string }{
 		{filepath.Join(home, ".zcode", "v2", "config.json"), "model"},
 		{filepath.Join(home, ".zcode", "cli", "config.json"), "model.main"},
@@ -91,6 +97,14 @@ func buildZCode(home, base, apiKey, model string) ([]Change, string, error) {
 			return nil, "", err
 		}
 		providers := nestedMap(document, "provider")
+		models := map[string]any{}
+		for _, option := range OrderedModels(available, model) {
+			entry := map[string]any{"name": firstNonEmpty(option.Alias, option.Name)}
+			if option.ContextWindow > 0 {
+				entry["limit"] = map[string]any{"context": option.ContextWindow}
+			}
+			models[option.Name] = entry
+		}
 		providers[ProviderID] = map[string]any{
 			"enabled":     true,
 			"name":        ProviderName,
@@ -100,7 +114,7 @@ func buildZCode(home, base, apiKey, model string) ([]Change, string, error) {
 			"apiFormat":   "anthropic-messages",
 			"npm":         "@ai-sdk/anthropic",
 			"options":     map[string]any{"baseURL": base, "apiKey": apiKey},
-			"models":      map[string]any{model: map[string]any{"name": model}},
+			"models":      models,
 		}
 		managed := ProviderID + "/" + model
 		if target.modelKey == "model" {
@@ -132,13 +146,11 @@ func buildCodex(home, base, apiKey, model string) ([]Change, string, error) {
 	}
 	document["model_provider"] = ProviderID
 	document["model"] = model
-	document["model_providers"] = map[string]any{
-		ProviderID: map[string]any{
-			"name":                      ProviderName,
-			"base_url":                  base + "/v1",
-			"wire_api":                  "responses",
-			"experimental_bearer_token": apiKey,
-		},
+	nestedMap(document, "model_providers")[ProviderID] = map[string]any{
+		"name":                      ProviderName,
+		"base_url":                  base + "/v1",
+		"wire_api":                  "responses",
+		"experimental_bearer_token": apiKey,
 	}
 	configContent, err := toml.Marshal(document)
 	if err != nil {
@@ -155,17 +167,21 @@ func buildCodex(home, base, apiKey, model string) ([]Change, string, error) {
 	}, configPath, nil
 }
 
-func buildOpenCode(home, base, apiKey, model string) ([]Change, string, error) {
+func buildOpenCode(home, base, apiKey, model string, available []ModelOption) ([]Change, string, error) {
 	path := filepath.Join(envOr("XDG_CONFIG_HOME", filepath.Join(home, ".config")), "opencode", "opencode.json")
 	document, err := decodeJSONFile(path)
 	if err != nil {
 		return nil, "", err
 	}
+	models := map[string]any{}
+	for _, option := range OrderedModels(available, model) {
+		models[option.Name] = map[string]any{"name": firstNonEmpty(option.Alias, option.Name)}
+	}
 	nestedMap(document, "provider")[ProviderID] = map[string]any{
 		"npm":     "@ai-sdk/openai-compatible",
 		"name":    ProviderName,
 		"options": map[string]any{"baseURL": base + "/v1", "apiKey": apiKey},
-		"models":  map[string]any{model: map[string]any{"name": model}},
+		"models":  models,
 	}
 	document["model"] = ProviderID + "/" + model
 	content, err := marshalJSONIndent(document)
@@ -175,24 +191,42 @@ func buildOpenCode(home, base, apiKey, model string) ([]Change, string, error) {
 	return []Change{{Path: path, Content: content}}, path, nil
 }
 
-func buildOpenClaw(home, base, apiKey, model string) ([]Change, string, error) {
+func buildOpenClaw(home, base, apiKey, model string, available []ModelOption) ([]Change, string, error) {
 	path := filepath.Join(home, ".openclaw", "openclaw.json")
 	document, err := decodeJSONFile(path)
 	if err != nil {
 		return nil, "", err
 	}
+	ordered := OrderedModels(available, model)
 	models := nestedMap(document, "models")
-	models["mode"] = "merge"
-	models["providers"] = map[string]any{
-		ProviderID: map[string]any{
-			"baseUrl": base + "/v1",
-			"apiKey":  apiKey,
-			"api":     "openai-completions",
-			"models":  []map[string]any{{"id": model, "name": model}},
-		},
+	if _, exists := models["mode"]; !exists {
+		models["mode"] = "merge"
+	}
+	providerModels := make([]map[string]any, 0, len(ordered))
+	for _, option := range ordered {
+		providerModels = append(providerModels, map[string]any{"id": option.Name, "name": firstNonEmpty(option.Alias, option.Name)})
+	}
+	nestedMap(models, "providers")[ProviderID] = map[string]any{
+		"baseUrl": base + "/v1",
+		"apiKey":  apiKey,
+		"api":     "openai-completions",
+		"models":  providerModels,
 	}
 	agents := nestedMap(document, "agents", "defaults", "model")
 	agents["primary"] = ProviderID + "/" + model
+	catalog := nestedMap(document, "agents", "defaults", "models")
+	for key := range catalog {
+		if strings.HasPrefix(key, ProviderID+"/") {
+			delete(catalog, key)
+		}
+	}
+	for _, option := range ordered {
+		entry := map[string]any{}
+		if option.Alias != "" {
+			entry["alias"] = option.Alias
+		}
+		catalog[ProviderID+"/"+option.Name] = entry
+	}
 	content, err := marshalJSONIndent(document)
 	if err != nil {
 		return nil, "", err
@@ -200,7 +234,7 @@ func buildOpenClaw(home, base, apiKey, model string) ([]Change, string, error) {
 	return []Change{{Path: path, Content: content}}, path, nil
 }
 
-func buildKimiCode(home, base, apiKey, model string) ([]Change, string, error) {
+func buildKimiCode(home, base, apiKey, model string, available []ModelOption) ([]Change, string, error) {
 	path := filepath.Join(envOr("KIMI_CODE_HOME", filepath.Join(home, ".kimi-code")), "config.toml")
 	document := map[string]any{}
 	if data, err := os.ReadFile(path); err == nil && len(data) > 0 {
@@ -212,9 +246,7 @@ func buildKimiCode(home, base, apiKey, model string) ([]Change, string, error) {
 	}
 	managed := ProviderID + "/" + model
 	document["default_model"] = managed
-	document["providers"] = map[string]any{
-		ProviderID: map[string]any{"type": "openai", "base_url": base + "/v1", "api_key": apiKey},
-	}
+	nestedMap(document, "providers")[ProviderID] = map[string]any{"type": "openai", "base_url": base + "/v1", "api_key": apiKey}
 	models, _ := document["models"].(map[string]any)
 	if models == nil {
 		models = map[string]any{}
@@ -224,12 +256,16 @@ func buildKimiCode(home, base, apiKey, model string) ([]Change, string, error) {
 			delete(models, key)
 		}
 	}
-	models[managed] = map[string]any{
-		"provider":         ProviderID,
-		"model":            model,
-		"display_name":     model,
-		"max_context_size": 200000,
-		"capabilities":     []string{"tool_use"},
+	for _, option := range OrderedModels(available, model) {
+		contextWindow := option.ContextWindow
+		if contextWindow <= 0 {
+			contextWindow = 200000
+		}
+		models[ProviderID+"/"+option.Name] = map[string]any{
+			"provider": ProviderID, "model": option.Name,
+			"display_name":     firstNonEmpty(option.Alias, option.Name),
+			"max_context_size": contextWindow, "capabilities": []string{"tool_use"},
+		}
 	}
 	document["models"] = models
 	content, err := toml.Marshal(document)
@@ -239,7 +275,7 @@ func buildKimiCode(home, base, apiKey, model string) ([]Change, string, error) {
 	return []Change{{Path: path, Content: content}}, path, nil
 }
 
-func buildGrokBuild(home, base, apiKey, model string) ([]Change, string, error) {
+func buildGrokBuild(home, base, apiKey, model string, available []ModelOption) ([]Change, string, error) {
 	path := filepath.Join(home, ".grok", "config.toml")
 	document := map[string]any{}
 	if data, err := os.ReadFile(path); err == nil && len(data) > 0 {
@@ -251,13 +287,22 @@ func buildGrokBuild(home, base, apiKey, model string) ([]Change, string, error) 
 	}
 	managed := ProviderID + "/" + model
 	nestedMap(document, "models")["default"] = managed
-	nestedMap(document, "model")[managed] = map[string]any{
-		"model":          model,
-		"base_url":       base + "/v1",
-		"name":           model,
-		"api_key":        apiKey,
-		"api_backend":    "chat_completions",
-		"context_window": 200000,
+	entries := nestedMap(document, "model")
+	for key := range entries {
+		if strings.HasPrefix(key, ProviderID+"/") {
+			delete(entries, key)
+		}
+	}
+	for _, option := range OrderedModels(available, model) {
+		contextWindow := option.ContextWindow
+		if contextWindow <= 0 {
+			contextWindow = 200000
+		}
+		entries[ProviderID+"/"+option.Name] = map[string]any{
+			"model": option.Name, "base_url": base + "/v1",
+			"name": firstNonEmpty(option.Alias, option.Name), "api_key": apiKey,
+			"api_backend": "chat_completions", "context_window": contextWindow,
+		}
 	}
 	content, err := toml.Marshal(document)
 	if err != nil {
@@ -266,7 +311,7 @@ func buildGrokBuild(home, base, apiKey, model string) ([]Change, string, error) 
 	return []Change{{Path: path, Content: content}}, path, nil
 }
 
-func buildDeepSeekHarness(home, base, apiKey, model string) ([]Change, string, error) {
+func buildDeepSeekHarness(home, base, apiKey, model string, available []ModelOption) ([]Change, string, error) {
 	baseDir := envOr("DSH_HOME", filepath.Join(home, ".dsh"))
 	settingsPath := filepath.Join(baseDir, "settings.yaml")
 	document := map[string]any{}
@@ -278,12 +323,20 @@ func buildDeepSeekHarness(home, base, apiKey, model string) ([]Change, string, e
 		return nil, "", err
 	}
 	providers := nestedMap(document, "llm-pi-ai", "providers")
+	published := make([]map[string]any, 0, max(len(available), 1))
+	for _, option := range OrderedModels(available, model) {
+		entry := map[string]any{"id": option.Name, "name": firstNonEmpty(option.Alias, option.Name)}
+		if option.ContextWindow > 0 {
+			entry["contextWindow"] = option.ContextWindow
+		}
+		published = append(published, entry)
+	}
 	providers["easy-cliproxyapi"] = map[string]any{
 		"displayName": ProviderName,
 		"apiKeyEnv":   "EASYCLIPROXYAPI_API_KEY",
 		"api":         "openai-completions",
 		"baseURL":     base + "/v1",
-		"models":      []map[string]any{{"id": model, "name": model}},
+		"models":      published,
 	}
 	nestedMap(document, "agent-default-model")["provider"] = "easy-cliproxyapi"
 	nestedMap(document, "agent-default-model")["model"] = model
@@ -299,7 +352,7 @@ func buildDeepSeekHarness(home, base, apiKey, model string) ([]Change, string, e
 	}, settingsPath, nil
 }
 
-func buildHermes(home, base, apiKey, model string) ([]Change, string, error) {
+func buildHermes(home, base, apiKey, model string, available []ModelOption) ([]Change, string, error) {
 	path := filepath.Join(envOr("HERMES_HOME", filepath.Join(home, ".hermes")), "config.yaml")
 	document := map[string]any{}
 	if data, err := os.ReadFile(path); err == nil && len(data) > 0 {
@@ -308,6 +361,10 @@ func buildHermes(home, base, apiKey, model string) ([]Change, string, error) {
 		}
 	} else if err != nil && !os.IsNotExist(err) {
 		return nil, "", err
+	}
+	modelEntries := map[string]any{}
+	for _, option := range OrderedModels(available, model) {
+		modelEntries[option.Name] = map[string]any{}
 	}
 	providers, _ := document["custom_providers"].([]any)
 	replaced := false
@@ -319,7 +376,7 @@ func buildHermes(home, base, apiKey, model string) ([]Change, string, error) {
 		providers[index] = map[string]any{
 			"name": ProviderID, "base_url": base + "/v1", "api_key": apiKey,
 			"api_mode": "chat_completions", "model": model,
-			"models": map[string]any{model: map[string]any{}},
+			"models": modelEntries,
 		}
 		replaced = true
 	}
@@ -327,7 +384,7 @@ func buildHermes(home, base, apiKey, model string) ([]Change, string, error) {
 		document["custom_providers"] = append(providers, map[string]any{
 			"name": ProviderID, "base_url": base + "/v1", "api_key": apiKey,
 			"api_mode": "chat_completions", "model": model,
-			"models": map[string]any{model: map[string]any{}},
+			"models": modelEntries,
 		})
 	}
 	document["model"] = map[string]any{"default": model, "provider": ProviderID}

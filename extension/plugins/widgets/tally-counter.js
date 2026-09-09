@@ -38,14 +38,14 @@ export const tallyCounterWidget = {
       <div class="inspector-field-group">
         <label class="inspector-field"><span>${t('label', '标题')}</span><input id="tc-label" type="text" value="${escapeHtml(data.label || '')}" /></label>
         <label class="inspector-field"><span>${t('currentCount', '当前值')}</span><input id="tc-count" type="number" value="${Number(data.count) || 0}" /></label>
-        <label class="inspector-field"><span>${t('step', '步长')}</span><input id="tc-step" type="number" value="${Number(data.step) || 1}" /></label>
+        <label class="inspector-field"><span>${t('step', '步长')}</span><input id="tc-step" type="number" min="1" value="${Number.isFinite(Number(data.step)) ? Number(data.step) : 1}" /></label>
         <label class="inspector-checkbox"><input id="tc-reset" type="checkbox" ${data.showReset !== false ? 'checked' : ''} /><span>${t('showReset', '显示重置按钮')}</span></label>
       </div>`;
     const update = () => onChange({
       ...data,
       label: container.querySelector('#tc-label').value,
       count: Number(container.querySelector('#tc-count').value) || 0,
-      step: Number(container.querySelector('#tc-step').value) || 1,
+      step: (() => { const n = Number(container.querySelector('#tc-step').value); return Number.isFinite(n) ? Math.max(1, n) : 1; })(),
       showReset: container.querySelector('#tc-reset').checked,
     });
     container.querySelectorAll('input').forEach((input) => { input.onchange = update; });

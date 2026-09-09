@@ -50,7 +50,7 @@ impl AppStore {
                 Ok(app) => {
                     let spec: serde_json::Value = serde_json::from_str(&app.runtime_spec_json)
                         .map_err(|_| AppError::InvalidState("invalid app runtime registration".into()))?;
-                    let host = spec["host"].as_str().ok_or_else(|| AppError::InvalidState("missing app host".into()))?.to_owned();
+                    let host = spec.get("host").and_then(|h| h.as_str()).unwrap_or("").to_owned();
                     let permissions: Vec<String> = query::permissions(&tx, app_id)?.into_iter().map(|p| p.permission).collect();
                     (app.name, host, serde_json::to_string(&permissions).map_err(|_| AppError::InvalidState("invalid permissions".into()))?,
                         existing.as_ref().is_some_and(|entry| entry.2))
@@ -61,7 +61,9 @@ impl AppStore {
                 }
                 Err(error) => return Err(error),
             };
-            app_host_manifest::manifest_path_in(&manifests, &host)?;
+            if !host.is_empty() {
+                app_host_manifest::manifest_path_in(&manifests, &host)?;
+            }
             if previous_purge && !purge {
                 return Err(AppError::InvalidState("APP_CONFIRMATION_REQUIRED: retry data deletion with confirmation".into()));
             }
@@ -87,8 +89,10 @@ impl AppStore {
         if purge {
             app_install::validate_app_path(natives, &logs)?;
         }
-        self.sync_registration(&host, false)?;
-        app_host_manifest::remove_manifest_in(&manifests, &host)?;
+        if !host.is_empty() {
+            self.remove_registration(&host)?;
+            app_host_manifest::remove_manifest_in(&manifests, &host)?;
+        }
         if purge {
             let permissions: Vec<String> = serde_json::from_str(&permissions)
                 .map_err(|_| AppError::InvalidState("invalid retained permissions".into()))?;

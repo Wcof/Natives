@@ -297,14 +297,16 @@ func (e *Engine) dispatch(ctx context.Context, method string, raw json.RawMessag
 	// Agent clients (智能体配置)
 	case "model_agent_clients_list":
 		return e.listAgentClients()
+	case "model_agent_clients_sync":
+		return e.syncAgentClientConfigs(ctx)
 	case "model_agent_client_models":
 		return e.agentClientModels(ctx, raw)
 	case "model_agent_client_apply":
-		return e.applyAgentClientConfig(raw, "apply")
+		return e.applyAgentClientConfig(ctx, raw, "apply")
 	case "model_agent_client_default":
-		return e.applyAgentClientConfig(raw, "default")
+		return e.applyAgentClientConfig(ctx, raw, "default")
 	case "model_agent_client_close":
-		return e.applyAgentClientConfig(raw, "close")
+		return e.applyAgentClientConfig(ctx, raw, "close")
 	case "model_agent_client_launch":
 		return e.launchAgentClient(raw)
 	case "model_agent_codex_auth_check", "model_agent_codex_clear",

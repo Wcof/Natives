@@ -10,24 +10,33 @@ export function compareAppVersions(a, b) {
   return 0;
 }
 
-export function resolveAppPackages(entry, host) {
+export function resolveAppPackages(entry, host, extensionVersion) {
   if (!isKnownUiModule(entry.app_id)) return { reason: 'appsNeedsUpdate', packages: [] };
   if (!host) return { reason: 'appsHostOffline', packages: [] };
+  if (host.appsProtocolVersion !== 3) return { reason: 'appsNeedsUpdate', packages: [] };
   if (entry.published === false) return { reason: 'appsNotReleased', packages: [] };
   if (entry.minNativesVersion && compareAppVersions(host.version, entry.minNativesVersion) !== 0
       && compareAppVersions(host.version, entry.minNativesVersion) !== 1) {
     return { reason: 'appsNeedsUpdate', packages: [] };
   }
-  if (!entry.packages?.length) return { reason: 'appsNotReleased', packages: [] };
+  if (entry.minHostVersion && compareAppVersions(host.version, entry.minHostVersion) !== 0
+      && compareAppVersions(host.version, entry.minHostVersion) !== 1) {
+    return { reason: 'appsNeedsUpdate', packages: [] };
+  }
+  if (entry.minExtensionVersion && compareAppVersions(extensionVersion, entry.minExtensionVersion) !== 0
+      && compareAppVersions(extensionVersion, entry.minExtensionVersion) !== 1) {
+    return { reason: 'appsNeedsUpdate', packages: [] };
+  }
+  if (!entry.packages || entry.packages.length === 0) {
+    return { packages: [], reason: null };
+  }
   const packages = entry.packages.filter((pkg) =>
     (pkg.platform === host.platform || pkg.platform === 'any') && (pkg.arch === host.arch || pkg.arch === 'any'));
-  const runtimes = packages.filter((pkg) => pkg.kind === 'runtime' && pkg.required !== false);
-  if (runtimes.length !== 1) return { reason: 'appsUnsupportedPlatform', packages: [] };
   const ids = new Set();
   let wire = 0, payload = 0, required = 0;
   for (const pkg of packages) {
     if (!/^[a-z0-9][a-z0-9._-]{0,127}$/.test(pkg.package_id) || ids.has(pkg.package_id)
-        || !['runtime', 'data'].includes(pkg.kind) || pkg.version !== entry.version
+        || !['data', 'resource'].includes(pkg.kind) || pkg.version !== entry.version
         || !hash.test(pkg.artifact_sha256) || !hash.test(pkg.payload_sha256)
         || !Number.isSafeInteger(pkg.wire_size) || pkg.wire_size <= 0 || pkg.wire_size > 5 * 1024 * 1024
         || !Number.isSafeInteger(pkg.payload_size) || pkg.payload_size <= 0 || pkg.payload_size > 20 * 1024 * 1024) {

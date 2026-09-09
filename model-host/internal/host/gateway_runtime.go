@@ -33,22 +33,18 @@ func (e *Engine) reconfigureGateway(snapshot domain.Snapshot, mutationErr error)
 		var port int
 		port, err = e.runtime.Start(ctx, restarting, e.secrets, e.authStore, e.runtimeConfigPath)
 		if err == nil {
-				snapshot, err = e.repo.Update(nil, func(current *domain.Snapshot) error {
-					current.Gateway.State = "running"
-					current.Gateway.Port = port
-					if current.Gateway.PreferredPort == 0 {
-						current.Gateway.PreferredPort = 8317
-					}
-					if current.Gateway.Settings.PreferredPort == 0 {
-						current.Gateway.Settings.PreferredPort = 8317
-					}
-					current.Gateway.BaseURL = fmt.Sprintf("http://127.0.0.1:%d", port)
-					current.Gateway.PID = os.Getpid()
-					current.Gateway.KernelVersion = getLocalKernelVersion()
-					current.Gateway.LatestKernelVersion = getCachedLatestKernelVersion()
-					current.Gateway.Version = "v0.2.25"
-					return nil
-				})
+			snapshot, err = e.repo.Update(nil, func(current *domain.Snapshot) error {
+				current.Gateway.State = "running"
+				current.Gateway.Port = port
+				current.Gateway.PreferredPort = port
+				current.Gateway.Settings.PreferredPort = port
+				current.Gateway.BaseURL = fmt.Sprintf("http://127.0.0.1:%d", port)
+				current.Gateway.PID = os.Getpid()
+				current.Gateway.KernelVersion = getLocalKernelVersion()
+				current.Gateway.LatestKernelVersion = getCachedLatestKernelVersion()
+				current.Gateway.Version = "v0.2.25"
+				return nil
+			})
 		}
 	}
 	if err != nil {

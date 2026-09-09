@@ -77,24 +77,20 @@ func (e *Engine) startGatewayWithState(ctx context.Context, expectedRevision *in
 		e.emitSnapshot("model_gateway_state_changed", failed)
 		return failed, &SafeError{Code: "gateway_start_failed", Message: "本地模型代理启动失败"}
 	}
-		running, err := e.repo.Update(nil, func(snapshot *domain.Snapshot) error {
-			snapshot.Gateway.State = "running"
-			snapshot.Gateway.Port = port
-			// Only update PreferredPort if the user never configured one (default 8317)
-			if snapshot.Gateway.PreferredPort == 0 {
-				snapshot.Gateway.PreferredPort = 8317
-			}
-			if snapshot.Gateway.Settings.PreferredPort == 0 {
-				snapshot.Gateway.Settings.PreferredPort = 8317
-			}
-			snapshot.Gateway.BaseURL = fmt.Sprintf("http://127.0.0.1:%d", port)
-			snapshot.Gateway.ErrorCode = ""
-			snapshot.Gateway.PID = os.Getpid()
-			snapshot.Gateway.KernelVersion = getLocalKernelVersion()
-			snapshot.Gateway.LatestKernelVersion = getCachedLatestKernelVersion()
-			snapshot.Gateway.Version = "v0.2.25"
-			return nil
-		})
+	running, err := e.repo.Update(nil, func(snapshot *domain.Snapshot) error {
+		snapshot.Gateway.State = "running"
+		snapshot.Gateway.Port = port
+		// Persist the effective port so agent configs survive gateway restarts.
+		snapshot.Gateway.PreferredPort = port
+		snapshot.Gateway.Settings.PreferredPort = port
+		snapshot.Gateway.BaseURL = fmt.Sprintf("http://127.0.0.1:%d", port)
+		snapshot.Gateway.ErrorCode = ""
+		snapshot.Gateway.PID = os.Getpid()
+		snapshot.Gateway.KernelVersion = getLocalKernelVersion()
+		snapshot.Gateway.LatestKernelVersion = getCachedLatestKernelVersion()
+		snapshot.Gateway.Version = "v0.2.25"
+		return nil
+	})
 	if err == nil {
 		e.emitSnapshot("model_gateway_state_changed", running)
 	}

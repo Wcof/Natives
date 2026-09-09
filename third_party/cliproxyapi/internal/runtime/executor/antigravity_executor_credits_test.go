@@ -297,6 +297,19 @@ func TestAntigravityExecute_DoesNotUseRequestRetryForInternalRetries(t *testing.
 	}
 }
 
+func TestNewAntigravityStatusErrTreatsUnsupportedLocationAsTransient(t *testing.T) {
+	err := newAntigravityStatusErr(http.StatusBadRequest, []byte(`{"error":{"message":"User location is not supported for the API use."}}`))
+	var authErr *cliproxyauth.Error
+	if !errors.As(err, &authErr) || authErr.StatusCode() != http.StatusServiceUnavailable || !authErr.Retryable {
+		t.Fatalf("error = %#v, want retryable status %d", err, http.StatusServiceUnavailable)
+	}
+	ordinary := newAntigravityStatusErr(http.StatusBadRequest, []byte(`{"error":{"message":"invalid request"}}`))
+	status, ok := ordinary.(interface{ StatusCode() int })
+	if !ok || status.StatusCode() != http.StatusBadRequest {
+		t.Fatalf("ordinary error = %#v, want status %d", ordinary, http.StatusBadRequest)
+	}
+}
+
 func TestAntigravityExecute_CreditsInjectedWhenConductorRequests(t *testing.T) {
 	resetAntigravityCreditsRetryState()
 	t.Cleanup(resetAntigravityCreditsRetryState)

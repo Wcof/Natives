@@ -57,7 +57,7 @@ Windows 的 Native Messaging 只能由 HKCU 注册表发现，无法安全隔离
    - macOS：Chrome 使用 `~/Library/Application Support/Google/Chrome/NativeMessagingHosts/`，Chromium 使用 `~/Library/Application Support/Chromium/NativeMessagingHosts/`
    - Linux：Chrome 使用 `~/.config/google-chrome/NativeMessagingHosts/`，Chromium 使用 `~/.config/chromium/NativeMessagingHosts/`
    - Windows：运行注册脚本；它会写入 Chrome 和 Chromium 的当前用户注册表项。
-4. 打开 `chrome://extensions`，启用开发者模式，加载 `extension/` 未打包扩展。
+4. 打开 `chrome://extensions`，启用开发者模式，加载 `extension/` 未打包扩展。若需要接管本地 Markdown 文件（`file://`），请在扩展详情页中手动开启“允许访问文件网址”。
 5. 点击工具栏的“文件管理”按钮，或在新标签页点击文件入口；打开文件页时 Chrome 会按需启动 Files Host。在文件页或个人空间的设置菜单点击“模型设置”时，Chrome 才启动 Model Host。
 
 ## 正式安装（尚未发布）

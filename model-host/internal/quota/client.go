@@ -355,10 +355,24 @@ func parseWindow(raw map[string]any, defaultName string, models []string) QuotaW
 	}
 
 	reset := ""
-	if r, ok := raw["reset_at"].(string); ok {
-		reset = r
-	} else if r, ok := raw["resetAt"].(string); ok {
-		reset = r
+	for _, key := range []string{"reset_at", "resetAt"} {
+		switch value := raw[key].(type) {
+		case string:
+			reset = value
+		case float64:
+			reset = time.Unix(int64(value), 0).UTC().Format(time.RFC3339)
+		}
+		if reset != "" {
+			break
+		}
+	}
+	if reset == "" {
+		for _, key := range []string{"reset_after_seconds", "resetAfterSeconds"} {
+			if seconds, ok := raw[key].(float64); ok && seconds >= 0 {
+				reset = time.Now().Add(time.Duration(seconds) * time.Second).UTC().Format(time.RFC3339)
+				break
+			}
+		}
 	}
 
 	return QuotaWindow{

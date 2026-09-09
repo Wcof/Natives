@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -274,6 +275,34 @@ func TestResidentGatewayRestoresAndNonResidentCloseStopsState(t *testing.T) {
 	stopped, _ := repo.Load()
 	if stopped.Gateway.State != "stopped" || stopped.Gateway.Port != 0 || stopped.Gateway.BaseURL != "" {
 		t.Fatalf("non-resident close left running state: %#v", stopped.Gateway)
+	}
+}
+
+func TestGatewayFallbackPortBecomesPreferred(t *testing.T) {
+	blocked, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer blocked.Close()
+	preferred := blocked.Addr().(*net.TCPAddr).Port
+
+	dir := t.TempDir()
+	engine, err := NewEngine(domain.NewRepository(filepath.Join(dir, "state.json")), secrets.NewMemoryStore(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine.runtimeConfigPath = filepath.Join(dir, "runtime.yaml")
+	t.Cleanup(engine.Close)
+	settings, err := engine.updateGatewaySettings(json.RawMessage(fmt.Sprintf(`{"expectedRevision":1,"settings":{"preferredPort":%d}}`, preferred)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	running, err := engine.startGateway(context.Background(), json.RawMessage(`{"expectedRevision":`+jsonNumber(settings.Revision)+`}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if running.Gateway.Port == preferred || running.Gateway.PreferredPort != running.Gateway.Port || running.Gateway.Settings.PreferredPort != running.Gateway.Port {
+		t.Fatalf("fallback port was not stabilized: %#v", running.Gateway)
 	}
 }
 

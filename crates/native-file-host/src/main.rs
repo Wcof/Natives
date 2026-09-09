@@ -71,6 +71,7 @@ fn main() -> io::Result<()> {
     let app_store_singleton = match AppStore::open(&workspace_store::default_db_path()) {
         Ok(store) => {
             store.set_caller_origin(std::env::args().nth(1).as_deref());
+            let _ = store.clean_legacy_manifests();
             if let Err(error) = store.recover_interrupted() {
                 eprintln!("app install recovery pending: {}", error.code());
             }

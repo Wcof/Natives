@@ -18,6 +18,7 @@ export class FilesSidebar {
     onLanguageChange,
     onThemeChange,
     onModelSettings,
+    onAppsCenter,
     t = (key, fallback) => fallback || key,
   }) {
     this.container = typeof container === 'string' ? document.querySelector(container) : container;
@@ -35,6 +36,7 @@ export class FilesSidebar {
     this.onLanguageChange = onLanguageChange;
     this.onThemeChange = onThemeChange;
     this.onModelSettings = onModelSettings;
+    this.onAppsCenter = onAppsCenter;
     this.t = t;
 
     this.language = 'zh_CN';
@@ -80,6 +82,7 @@ export class FilesSidebar {
           this.onThemeChange?.(theme);
         },
         onModelSettings: (anchor) => this.onModelSettings?.(anchor),
+        onAppsCenter: (anchor) => this.onAppsCenter?.(anchor),
         t: this.t,
       });
       settingsEntry.onclick = () => this.settingsMenu?.toggle();

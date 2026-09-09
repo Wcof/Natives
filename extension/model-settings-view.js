@@ -46,6 +46,12 @@ export function createModelSettingsView({ t, onAction }) {
         <div class="model-settings-brand"><span aria-hidden="true">N</span><strong>Natives</strong></div>
         <button type="button" class="model-settings-back" data-action="close" data-role="close"></button>
         <div class="model-settings-nav-group">
+          <span data-role="appsNavGroup"></span>
+          <nav class="model-settings-subnav" aria-label="Apps Center">
+            <button type="button" data-action="select-model-page" data-page="apps"><svg class="icon" aria-hidden="true"><use href="#i-grid" /></svg><span data-role="appsListNav"></span></button>
+          </nav>
+        </div>
+        <div class="model-settings-nav-group">
           <span data-role="navGroup"></span>
           <nav class="model-settings-subnav" aria-label="Model settings">
             <button type="button" data-action="select-model-page" data-page="custom"><svg class="icon" aria-hidden="true"><use href="#i-pen" /></svg><span data-role="customNav"></span></button>
@@ -64,6 +70,17 @@ export function createModelSettingsView({ t, onAction }) {
         </header>
         <div class="model-settings-notice" data-role="notice" role="status" aria-live="polite" hidden></div>
         <div class="model-settings-pages">
+          <section class="model-settings-page" data-page-panel="apps" hidden>
+            <header class="model-page-heading">
+              <div>
+                <h3 data-role="appsTitle"></h3>
+                <p class="muted" data-role="appsDescription"></p>
+              </div>
+            </header>
+            <div class="model-apps-container" data-role="appsContainer">
+              <div class="apps-list" data-role="appsList" role="list"></div>
+            </div>
+          </section>
           <section class="model-settings-page" data-page-panel="custom">
             <header class="model-page-heading"><div><h3 data-role="customTitle"></h3><p class="muted" data-role="customDescription"></p></div><button type="button" class="model-add-provider" data-action="new-provider"></button></header>
             <div class="model-settings-layout"><aside class="model-provider-pane"><div class="model-provider-scroll" data-role="providerList"></div></aside><div class="model-provider-detail" data-role="detail"></div></div>
@@ -142,6 +159,13 @@ export function createModelSettingsView({ t, onAction }) {
         item.setAttribute('aria-current', selected ? 'page' : 'false');
       }
       for (const panel of dialog.querySelectorAll('[data-page-panel]')) panel.hidden = panel.dataset.pagePanel !== activePage;
+      const titleEl = dialog.querySelector('#model-settings-title');
+      if (titleEl) {
+        titleEl.textContent = activePage === 'apps' ? t('appsCenter', '应用中心') : t('modelSettings', '模型与服务');
+      }
+      if (roles.subtitle) {
+        roles.subtitle.textContent = activePage === 'apps' ? t('appsCenterSub', '管理可选 Natives 应用') : t('modelSettingsDescription', '管理模型供应商配置，包括自定义模型、OAuth 和本地代理设置。');
+      }
     },
     setOAuthTab(tab) {
       activeOAuthTab = tab;
@@ -180,6 +204,10 @@ export function createModelSettingsView({ t, onAction }) {
       roles.error.querySelector('button').textContent = t('retry', '重试');
       dialog.querySelector('.model-add-provider').textContent = `＋ ${t('modelAddProvider', '添加自定义供应商')}`;
       roles.close.textContent = `← ${t('modelBackToWorkspace', '返回工作区')}`;
+      roles.appsNavGroup.textContent = t('appsCenter', '应用中心');
+      roles.appsListNav.textContent = t('appsList', '应用列表');
+      roles.appsTitle.textContent = t('appsList', '应用列表');
+      roles.appsDescription.textContent = t('appsCenterSub', '管理可选 Natives 应用');
       roles.navGroup.textContent = t('modelModelsAndServices', '模型与服务');
       roles.customNav.textContent = t('modelCustomModels', '自定义模型');
       roles.oauthNav.textContent = 'OAuth';
@@ -188,8 +216,8 @@ export function createModelSettingsView({ t, onAction }) {
       roles.agentNav.textContent = t('modelAgentSettings', '智能体配置');
       roles.advancedNav.textContent = t('modelAdvancedSettings', '高级设置');
 
-      dialog.querySelector('#model-settings-title').textContent = t('modelSettings', '模型与服务');
-      roles.subtitle.textContent = t('modelSettingsDescription', '管理模型供应商配置，包括自定义模型、OAuth 和本地代理设置。');
+      dialog.querySelector('#model-settings-title').textContent = activePage === 'apps' ? t('appsCenter', '应用中心') : t('modelSettings', '模型与服务');
+      roles.subtitle.textContent = activePage === 'apps' ? t('appsCenterSub', '管理可选 Natives 应用') : t('modelSettingsDescription', '管理模型供应商配置，包括自定义模型、OAuth 和本地代理设置。');
       roles.customTitle.textContent = t('modelCustomModels', '自定义模型');
       roles.customDescription.textContent = t('modelCustomModelsDescription', '配置兼容接口、API Key 与可用模型。');
       roles.gatewayTitle.textContent = t('modelLocalProxy', '本地代理');

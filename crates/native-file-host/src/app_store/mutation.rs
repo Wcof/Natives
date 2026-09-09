@@ -80,12 +80,19 @@ impl AppStore {
         &self.app_root
     }
 
-    pub(super) fn sync_registration(&self, host: &str, present: bool) -> Result<(), AppError> {
+    pub(super) fn remove_registration(&self, host: &str) -> Result<(), AppError> {
         if self.manifest_dir.lock().map_err(lock_error)?.is_some() {
             return Ok(());
         }
-        crate::app_host_manifest::sync_registration(&self.manifest_dir()?, host, present)?;
+        crate::app_host_manifest::remove_registration(&self.manifest_dir()?, host)?;
         Ok(())
+    }
+
+    pub fn clean_legacy_manifests(&self) -> Result<(), AppError> {
+        let manifest_dir = self.manifest_dir()?;
+        self.with_conn(|conn| {
+            schema::clean_legacy_child_manifests_in(&manifest_dir, self.app_root(), conn)
+        })
     }
 
     /// Bind Chrome's process argument. Page handshakes can only check it.
@@ -165,6 +172,141 @@ impl AppStore {
             let app = query::app(&tx, app_id)?;
             tx.commit()?;
             Ok(app)
+        })
+    }
+
+    pub fn read_resource(
+        &self,
+        app_id: &str,
+        package_id: &str,
+        offset: Option<u64>,
+        length: Option<u64>,
+    ) -> Result<super::types::ReadResourceResult, AppError> {
+        crate::app_install::validate_identifier(app_id, "app_id")?;
+        crate::app_install::validate_identifier(package_id, "package_id")?;
+        use rusqlite::OptionalExtension;
+        let (version, enabled, needs_migration, recovery_pending) = self
+            .with_conn(|conn| {
+                let res = conn
+                    .query_row(
+                        "SELECT version, enabled, needs_migration,
+                         EXISTS(SELECT 1 FROM app_install_transactions AS recovery WHERE recovery.app_id = apps.app_id \
+                         AND (recovery.state IN ('committing', 'rolling_back') \
+                         OR (recovery.state = 'installed' AND recovery.rollback_json != '')))
+                         FROM apps WHERE app_id = ?1",
+                        [app_id],
+                        |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)? != 0, row.get::<_, i64>(2)? != 0, row.get::<_, i64>(3)? != 0)),
+                    )
+                    .optional()?;
+                Ok(res)
+            })?
+            .ok_or_else(|| AppError::NotFound(format!("app not found: {app_id}")))?;
+
+        if !enabled {
+            return Err(AppError::InvalidState("app is disabled".into()));
+        }
+        if needs_migration {
+            return Err(AppError::InvalidState(
+                "app requires migration before reading resources".into(),
+            ));
+        }
+        if recovery_pending {
+            return Err(AppError::Conflict("app recovery pending".into()));
+        }
+
+        let (kind, pkg_version, installed_path) = self.with_conn(|conn| {
+            let res = conn
+                .query_row(
+                    "SELECT kind, version, installed_path FROM app_packages WHERE app_id = ?1 AND package_id = ?2",
+                    params![app_id, package_id],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)),
+                )
+                .optional()?;
+            Ok(res)
+        })?
+        .ok_or_else(|| AppError::NotFound(format!("package not found: {package_id}")))?;
+
+        if kind == "runtime" {
+            return Err(AppError::InvalidState(
+                "reading runtime binaries is forbidden".into(),
+            ));
+        }
+        if pkg_version != version {
+            return Err(AppError::InvalidState(
+                "package version does not match installed app version".into(),
+            ));
+        }
+
+        let expected_path = crate::app_install::install_path_for(
+            self.app_root(),
+            app_id,
+            &kind,
+            &version,
+            package_id,
+        )?;
+
+        if !installed_path.is_empty() && Path::new(&installed_path) != expected_path {
+            return Err(AppError::InvalidState(
+                "installed path does not match canonical path".into(),
+            ));
+        }
+
+        crate::app_install::validate_app_path(self.app_root(), &expected_path)?;
+
+        if !expected_path.is_file() {
+            return Err(AppError::NotFound("resource file not found on disk".into()));
+        }
+
+        let total_size = std::fs::metadata(&expected_path)?.len();
+        let off = offset.unwrap_or(0);
+        if off > total_size {
+            return Err(AppError::InvalidState("offset exceeds file size".into()));
+        }
+
+        const MAX_RESOURCE_CHUNK_BYTES: u64 = 512 * 1024;
+        let requested_len = length.unwrap_or(MAX_RESOURCE_CHUNK_BYTES);
+        if requested_len == 0 || requested_len > MAX_RESOURCE_CHUNK_BYTES {
+            return Err(AppError::InvalidState(
+                "invalid length: must be 1..=524288 bytes".into(),
+            ));
+        }
+        let read_len = (total_size - off).min(requested_len) as usize;
+
+        use std::io::{Read, Seek, SeekFrom};
+        let mut file = std::fs::File::open(&expected_path)?;
+        let mut header = [0u8; 12];
+        let header_len = file.read(&mut header)?;
+        file.seek(SeekFrom::Start(off))?;
+        let mut buf = vec![0u8; read_len];
+        file.read_exact(&mut buf)?;
+
+        let format = match &kind[..] {
+            "data" => "json".to_string(),
+            _ => {
+                if header_len >= 8 && &header[..8] == b"\x89PNG\r\n\x1a\n" {
+                    "png".to_string()
+                } else if header_len >= 3 && &header[..3] == b"\xff\xd8\xff" {
+                    "jpeg".to_string()
+                } else if header_len >= 12 && &header[..4] == b"RIFF" && &header[8..12] == b"WEBP" {
+                    "webp".to_string()
+                } else {
+                    "binary".to_string()
+                }
+            }
+        };
+
+        use base64::Engine;
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&buf);
+        Ok(super::types::ReadResourceResult {
+            ok: true,
+            app_id: app_id.to_string(),
+            package_id: package_id.to_string(),
+            version: version.clone(),
+            format,
+            total_size,
+            offset: off,
+            length: read_len,
+            data: encoded,
         })
     }
 }

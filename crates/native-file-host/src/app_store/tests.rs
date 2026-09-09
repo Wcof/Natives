@@ -30,8 +30,12 @@ impl StoreEnv {
 /// Isolated temp store + temp app root (A2/A5 tests never touch the real
 /// `~/.natives` or the browser manifest dir).
 fn temp_store(tag: &str) -> StoreEnv {
-    let base =
-        std::env::temp_dir().join(format!("natives-app-test-{}-{}", tag, std::process::id()));
+    let base = std::env::temp_dir().join(format!(
+        "natives-app-test-{}-{}-{:?}",
+        tag,
+        std::process::id(),
+        std::thread::current().id()
+    ));
     let _ = std::fs::remove_dir_all(&base);
     std::fs::create_dir_all(base.join("apps")).expect("create temp store base");
     let store = AppStore::open_at(&base.join("natives.db"), base.join("apps")).expect("open store");
@@ -48,29 +52,54 @@ fn err_code<T>(result: Result<T, AppError>) -> &'static str {
 }
 
 fn demo_request() -> InstallRequest {
-    let bytes = HEALTH_OK_STUB.as_bytes();
-    let runtime = runtime_request(
-        "com.natives.app.demo",
+    let json_bytes = b"{\"message\":\"hello from demo data\"}";
+    data_request(
         "com.natives.app.demo",
         "1.0.0",
-        bytes.len() as u64,
-        &crate::app_install::hex_sha256(bytes),
-    );
+        json_bytes.len() as u64,
+        &crate::app_install::hex_sha256(json_bytes),
+    )
+}
+
+/// Helper for v2 pure data/resource requests
+fn data_request(
+    app_id: &str,
+    version: &str,
+    payload_size: u64,
+    payload_sha256: &str,
+) -> InstallRequest {
+    let name = if app_id.contains("demo") {
+        "Demo"
+    } else {
+        "Resource Test"
+    };
     InstallRequest {
         app: super::types::AppMeta {
-            app_id: "com.natives.app.demo".to_string(),
+            app_id: app_id.to_string(),
             kind: "extension_app".to_string(),
-            name: "Demo".to_string(),
-            version: "1.0.0".to_string(),
+            name: name.to_string(),
+            version: version.to_string(),
             enabled: true,
             show_in_sidebar: true,
             sidebar_order: 0,
-            runtime_spec: serde_json::json!({ "host": "com.natives.app.demo" }),
-            surface: serde_json::json!({ "route": "app.html?app=com.natives.app.demo" }),
-            manifest: serde_json::json!({ "schemaVersion": 1 }),
+            runtime_spec: serde_json::json!({}),
+            surface: serde_json::json!({ "route": format!("app.html?app={app_id}") }),
+            manifest: serde_json::json!({ "schemaVersion": 2 }),
         },
-        packages: runtime.packages,
+        packages: vec![super::types::PackageMeta {
+            package_id: "demo-data".to_string(),
+            kind: "data".to_string(),
+            version: version.to_string(),
+            platform: "any".to_string(),
+            arch: "any".to_string(),
+            wire_size: payload_size as i64,
+            payload_size: payload_size as i64,
+            artifact_sha256: "ab".repeat(32),
+            payload_sha256: payload_sha256.to_string(),
+            required: true,
+        }],
         permissions: vec!["app.lifecycle".to_string()],
+        min_host_version: None,
     }
 }
 
@@ -89,11 +118,17 @@ fn demo_install_query_enable_sidebar_uninstall_cycle() {
     let store = &env.store;
 
     // begin → catalog_resolved
-    let tx = store.install_begin(&demo_request()).expect("begin");
+    let req = demo_request();
+    let json_bytes = b"{\"message\":\"hello from demo data\"}";
+    let tx = store.install_begin(&req).expect("begin");
     assert_eq!(tx.state, install_state::CATALOG_RESOLVED);
     assert!(!tx.install_id.is_empty());
 
-    stage_fake_binary(&env, &tx.install_id, HEALTH_OK_STUB.as_bytes());
+    use base64::Engine as _;
+    let data = base64::engine::general_purpose::STANDARD.encode(json_bytes);
+    store
+        .install_package(&tx.install_id, "demo-data", &data)
+        .expect("stage data");
     // commit → installed app row
     let app = store.install_commit(&tx.install_id).expect("commit");
     assert_eq!(app.app_id, "com.natives.app.demo");
@@ -101,7 +136,22 @@ fn demo_install_query_enable_sidebar_uninstall_cycle() {
     assert!(app.enabled);
     assert!(app.show_in_sidebar);
     assert_eq!(app.sidebar_order, 0);
-    assert!(app.host_registered);
+    assert!(
+        !app.host_registered,
+        "v2 resource installs must not claim a child Host registration"
+    );
+
+    // resource reading (ADR-0026)
+    let res = store
+        .read_resource(&app.app_id, "demo-data", None, None)
+        .expect("read resource");
+    assert!(res.ok);
+    assert_eq!(res.format, "json");
+    assert_eq!(res.total_size, json_bytes.len() as u64);
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(&res.data)
+        .unwrap();
+    assert_eq!(decoded, json_bytes);
 
     // query
     let apps = store.apps().expect("list apps");
@@ -180,8 +230,14 @@ fn begin_rejects_unknown_kind_and_bad_app_id() {
 fn double_install_is_a_conflict() {
     let env = temp_store("conflict");
     let store = &env.store;
-    let tx = store.install_begin(&demo_request()).expect("begin");
-    stage_fake_binary(&env, &tx.install_id, HEALTH_OK_STUB.as_bytes());
+    let req = demo_request();
+    let json_bytes = b"{\"message\":\"hello from demo data\"}";
+    let tx = store.install_begin(&req).expect("begin");
+    use base64::Engine as _;
+    let data = base64::engine::general_purpose::STANDARD.encode(json_bytes);
+    store
+        .install_package(&tx.install_id, "demo-data", &data)
+        .expect("stage data");
     store.install_commit(&tx.install_id).expect("commit");
     assert_eq!(
         err_code(store.install_begin(&demo_request())),
@@ -274,6 +330,7 @@ fn runtime_request(
             required: true,
         }],
         permissions: vec![],
+        min_host_version: None,
     }
 }
 
@@ -282,14 +339,7 @@ const HEALTH_OK_STUB: &str = "#!/bin/sh\nprintf '{\"status\":\"ok\",\"version\":
 #[test]
 fn install_cannot_commit_missing_packages_or_an_aborted_transaction() {
     let env = a5_env("incomplete");
-    let bytes = HEALTH_OK_STUB.as_bytes();
-    let request = runtime_request(
-        "demo",
-        "com.natives.app.demo",
-        "1.0.0",
-        bytes.len() as u64,
-        &crate::app_install::hex_sha256(bytes),
-    );
+    let (request, _bytes) = version_request("1.0.0");
     let tx = env.store.install_begin(&request).unwrap();
     assert!(env.store.install_commit(&tx.install_id).is_err());
     env.store
@@ -303,16 +353,9 @@ fn install_cannot_commit_missing_packages_or_an_aborted_transaction() {
 #[test]
 fn update_can_begin_without_removing_the_installed_app() {
     let env = a5_env("update-begin");
-    let bytes = HEALTH_OK_STUB.as_bytes();
-    let mut request = runtime_request(
-        "demo",
-        "com.natives.app.demo",
-        "1.0.0",
-        bytes.len() as u64,
-        &crate::app_install::hex_sha256(bytes),
-    );
+    let (mut request, bytes) = version_request("1.0.0");
     let tx = env.store.install_begin(&request).unwrap();
-    stage_fake_binary(&env, &tx.install_id, bytes);
+    stage_fake_binary(&env, &tx.install_id, &bytes);
     env.store.install_commit(&tx.install_id).unwrap();
     request.app.version = "1.1.0".into();
     request.packages[0].version = "1.1.0".into();
@@ -330,17 +373,31 @@ fn update_can_begin_without_removing_the_installed_app() {
 }
 
 fn version_request(version: &str) -> (InstallRequest, Vec<u8>) {
-    let bytes = HEALTH_OK_STUB.replace("1.0.0", version).into_bytes();
+    let json_bytes = format!("{{\"message\":\"version {}\"}}", version).into_bytes();
     (
-        runtime_request(
+        data_request(
             "demo",
-            "com.natives.app.demo",
             version,
-            bytes.len() as u64,
-            &crate::app_install::hex_sha256(&bytes),
+            json_bytes.len() as u64,
+            &crate::app_install::hex_sha256(&json_bytes),
         ),
-        bytes,
+        json_bytes,
     )
+}
+
+fn stage_fake_binary(env: &StoreEnv, install_id: &str, content: &[u8]) {
+    use base64::Engine as _;
+    let data = base64::engine::general_purpose::STANDARD.encode(content);
+    let staged = env
+        .store
+        .install_package(install_id, "demo-data", &data)
+        .expect("install_package stages the payload");
+    assert_eq!(staged.state, "staging");
+    assert_eq!(staged.payload_size as usize, content.len());
+    assert_eq!(
+        staged.payload_sha256,
+        crate::app_install::hex_sha256(content)
+    );
 }
 
 fn install_version(env: &StoreEnv, version: &str) {
@@ -351,6 +408,7 @@ fn install_version(env: &StoreEnv, version: &str) {
 }
 
 mod updates;
+mod v2;
 
 #[test]
 fn install_owner_blocks_other_connections_and_abort_removes_staging() {
@@ -361,6 +419,7 @@ fn install_owner_blocks_other_connections_and_abort_removes_staging() {
     let other = AppStore::open_at(&env.db(), env.app_root()).unwrap();
     other.set_caller_origin(env.store.caller_origin().as_deref());
     other.set_manifest_dir(env.base.join("nm-hosts"));
+    assert_eq!(other.transaction(&tx.install_id).unwrap().state, "staging");
     assert!(other.install_begin(&request).is_err());
     assert!(other.install_commit(&tx.install_id).is_err());
     assert!(other
@@ -435,8 +494,12 @@ fn metadata_only_and_incompatible_package_sets_are_rejected() {
     let (mut request, _) = version_request("1.0.0");
     request.packages[0].arch = "unsupported".into();
     assert!(env.store.install_begin(&request).is_err());
-    request.packages.clear();
-    assert!(env.store.install_begin(&request).is_err());
+    let mut runtime_pkg = request.clone();
+    runtime_pkg.packages[0].kind = "runtime".into();
+    assert!(
+        env.store.install_begin(&runtime_pkg).is_err(),
+        "runtime packages are forbidden"
+    );
     env.drop();
 }
 
@@ -449,43 +512,23 @@ fn a5_env(tag: &str) -> StoreEnv {
     env
 }
 
-/// Stage the fake runtime payload through the real `install_package`
-/// gate (base64 + size + payload hash against the signed snapshot).
-fn stage_fake_binary(env: &StoreEnv, install_id: &str, content: &[u8]) {
-    use base64::Engine as _;
-    let data = base64::engine::general_purpose::STANDARD.encode(content);
-    let staged = env
-        .store
-        .install_package(install_id, "host", &data)
-        .expect("install_package stages the payload");
-    assert_eq!(staged.state, "staging");
-    assert_eq!(staged.payload_size as usize, content.len());
-    assert_eq!(
-        staged.payload_sha256,
-        crate::app_install::hex_sha256(content)
-    );
-}
-
 #[test]
-fn a5_commit_registers_runtime_with_real_origin() {
+fn a5_commit_registers_resource_package_and_allows_read() {
     let env = a5_env("a5-reg");
-    let manifest_dir = env.base.join("nm-hosts");
     let app_id = "com.natives.app.a5";
-    let host = "com.natives.app.a5.host";
     let origin = "chrome-extension://abcdefghijklmnopabcdefghijklmnop/";
 
-    let stub = HEALTH_OK_STUB.as_bytes();
+    let json_bytes = b"{\"name\":\"hello\",\"version\":\"1.0.0\"}";
     let tx = env
         .store
-        .install_begin(&runtime_request(
+        .install_begin(&data_request(
             app_id,
-            host,
             "1.0.0",
-            stub.len() as u64,
-            &crate::app_install::hex_sha256(stub),
+            json_bytes.len() as u64,
+            &crate::app_install::hex_sha256(json_bytes),
         ))
         .expect("begin");
-    stage_fake_binary(&env, &tx.install_id, stub);
+    stage_fake_binary(&env, &tx.install_id, json_bytes);
 
     // handshake → commit with the real caller origin
     env.store.set_caller_origin(Some(origin));
@@ -494,40 +537,23 @@ fn a5_commit_registers_runtime_with_real_origin() {
         .install_commit_with_origin(&tx.install_id, Some(origin))
         .expect("commit with origin");
 
-    assert!(
-        app.host_registered,
-        "manifest must be registered with a real origin"
-    );
-    // D15 layout: apps/<app_id>/runtime/1.0.0/host + current pointer
+    assert_eq!(app.app_id, app_id);
     let installed = env
         .app_root()
         .join(app_id)
-        .join("runtime")
+        .join("packages")
         .join("1.0.0")
-        .join("host");
-    assert!(
-        installed.is_file(),
-        "installed runtime missing: {installed:?}"
-    );
-    let current = env.app_root().join(app_id).join("runtime").join("current");
-    assert_eq!(
-        std::fs::read_to_string(&current)
-            .expect("current pointer")
-            .trim(),
-        "1.0.0"
-    );
-    // manifest: real origin only, nothing else (D16/D18)
-    let manifest = manifest_dir.join(format!("{host}.json"));
-    let parsed: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&manifest).expect("manifest written"))
-            .expect("manifest json");
-    assert_eq!(parsed["name"], host);
-    assert_eq!(parsed["type"], "stdio");
-    assert_eq!(parsed["allowed_origins"][0], origin);
-    assert_eq!(parsed["path"], installed.to_string_lossy().into_owned());
-    for key in ["token", "secret", "api_key", "account"] {
-        assert!(parsed.get(key).is_none(), "manifest must not carry {key}");
-    }
+        .join("demo-data");
+    assert!(installed.is_file(), "installed data missing: {installed:?}");
+
+    // read_resource works
+    let res = env
+        .store
+        .read_resource(app_id, "demo-data", None, None)
+        .expect("read");
+    assert_eq!(res.format, "json");
+    assert_eq!(res.total_size, json_bytes.len() as u64);
+
     // package receipt carries the Core-decided path
     let detail = env.store.app_detail(app_id).expect("detail");
     assert_eq!(detail.packages.len(), 1);
@@ -545,22 +571,19 @@ fn a5_commit_registers_runtime_with_real_origin() {
 #[test]
 fn a5_commit_without_origin_refuses_registration() {
     let env = a5_env("a5-skip");
-    let manifest_dir = env.base.join("nm-hosts");
     let app_id = "com.natives.app.a5skip";
-    let host = "com.natives.app.a5skip.host";
 
-    let stub = HEALTH_OK_STUB.as_bytes();
+    let json_bytes = b"{\"hello\":true}";
     let tx = env
         .store
-        .install_begin(&runtime_request(
+        .install_begin(&data_request(
             app_id,
-            host,
             "1.0.0",
-            stub.len() as u64,
-            &crate::app_install::hex_sha256(stub),
+            json_bytes.len() as u64,
+            &crate::app_install::hex_sha256(json_bytes),
         ))
         .expect("begin");
-    stage_fake_binary(&env, &tx.install_id, stub);
+    stage_fake_binary(&env, &tx.install_id, json_bytes);
 
     // No handshake on this connection → registration explicitly skipped.
     let result = env.store.install_commit_with_origin(&tx.install_id, None);
@@ -568,94 +591,69 @@ fn a5_commit_without_origin_refuses_registration() {
         result.is_err(),
         "missing origin must not produce an installed app"
     );
-    // The runtime binary IS installed (the app works in-process); only the
-    // manifest is missing — an explicit state, never fabricated.
     let installed = env
         .app_root()
         .join(app_id)
-        .join("runtime")
+        .join("packages")
         .join("1.0.0")
-        .join("host");
+        .join("demo-data");
     assert!(!installed.exists());
-    assert!(
-        !manifest_dir.join(format!("{host}.json")).exists(),
-        "manifest must NOT be fabricated"
-    );
     env.drop();
 }
 
 #[test]
-fn a5_bad_health_rolls_back_to_failed_without_app_row() {
-    let env = a5_env("a5-health");
-    let manifest_dir = env.base.join("nm-hosts");
+fn a5_bad_payload_rolls_back_to_failed_without_app_row() {
+    let env = a5_env("a5-bad");
     let app_id = "com.natives.app.a5bad";
-    let host = "com.natives.app.a5bad.host";
     let origin = "chrome-extension://bcdefghijklmnopabcdefghijklmnopa/";
     env.store.set_caller_origin(Some(origin));
 
-    // A binary that FAILS --health (exit 1): the whole commit must roll
-    // back to `failed` — no app row, no runtime dir, no manifest.
-    let stub = b"#!/bin/sh\nexit 1\n";
+    // Executable ELF/Mach-O or script is rejected in resource validation
+    let bad_bytes = b"\x7fELFfakeexecutable";
     let tx = env
         .store
-        .install_begin(&runtime_request(
+        .install_begin(&data_request(
             app_id,
-            host,
             "1.0.0",
-            stub.len() as u64,
-            &crate::app_install::hex_sha256(stub),
+            bad_bytes.len() as u64,
+            &crate::app_install::hex_sha256(bad_bytes),
         ))
         .expect("begin");
-    stage_fake_binary(&env, &tx.install_id, stub);
 
-    let result = env
+    use base64::Engine as _;
+    let encoded = base64::engine::general_purpose::STANDARD.encode(bad_bytes);
+    let stage_result = env
         .store
-        .install_commit_with_origin(&tx.install_id, Some(origin));
-    assert!(result.is_err(), "health probe failure must fail the commit");
+        .install_package(&tx.install_id, "demo-data", &encoded);
+    assert!(stage_result.is_err(), "executable payload must be rejected");
 
-    // transaction: failed with an explicit error (D14 state machine)
     let failed = env
         .store
         .transaction(&tx.install_id)
         .expect("failed record");
     assert_eq!(failed.state, install_state::FAILED);
-    assert!(
-        failed.error_code.is_some(),
-        "failed install records an explicit code"
-    );
-    // no app row (D14: registry row only on successful commit)
     assert!(env.store.apps().expect("list").is_empty());
-    // file side rolled back: no runtime dir, no manifest
-    assert!(!env.app_root().join(app_id).join("runtime").exists());
-    assert!(!manifest_dir.join(format!("{host}.json")).exists());
-    // staging cleared
-    let staging = crate::app_install::staging_dir(env.app_root(), app_id, &tx.install_id)
-        .expect("staging path");
-    assert!(!staging.exists());
     env.drop();
 }
 
 #[test]
-fn a5_uninstall_removes_manifest_and_runtime_keeps_data() {
+fn a5_uninstall_removes_packages_keeps_data() {
     let env = a5_env("a5-uninstall");
-    let manifest_dir = env.base.join("nm-hosts");
     let app_id = "com.natives.app.a5un";
-    let host = "com.natives.app.a5un.host";
     let origin = "chrome-extension://cdefghijklmnopabcdefghijklmnopab/";
     env.store.set_caller_origin(Some(origin));
 
-    let stub = HEALTH_OK_STUB.as_bytes();
+    let json_bytes = b"{\"test\":1}";
     let tx = env
         .store
-        .install_begin(&runtime_request(
+        .install_begin(&data_request(
             app_id,
-            host,
             "1.0.0",
-            stub.len() as u64,
-            &crate::app_install::hex_sha256(stub),
+            json_bytes.len() as u64,
+            &crate::app_install::hex_sha256(json_bytes),
         ))
         .expect("begin");
-    stage_fake_binary(&env, &tx.install_id, stub);
+    stage_fake_binary(&env, &tx.install_id, json_bytes);
     env.store
         .install_commit_with_origin(&tx.install_id, Some(origin))
         .expect("commit");
@@ -668,9 +666,7 @@ fn a5_uninstall_removes_manifest_and_runtime_keeps_data() {
     let receipt = env.store.uninstall(app_id).expect("uninstall");
     assert!(receipt.data_preserved);
 
-    // manifest gone, runtime gone, data preserved
-    assert!(!manifest_dir.join(format!("{host}.json")).exists());
-    assert!(!env.app_root().join(app_id).join("runtime").exists());
+    assert!(!env.app_root().join(app_id).join("packages").exists());
     assert!(
         data_dir.join("notes.json").exists(),
         "personal data must be preserved"

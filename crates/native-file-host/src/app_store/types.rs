@@ -70,11 +70,10 @@ pub struct App {
     pub installed_at: i64,
     pub updated_at: i64,
     pub revision: i64,
-    /// 1 when the Native Messaging host manifest was written with a real
-    /// caller origin (Phase A5); 0 = registration explicitly skipped
-    /// (no origin / no runtime). Never fabricated.
+    /// Legacy migration-only field. V2 resource installs always leave it false.
     pub host_registered: bool,
     pub recovery_pending: bool,
+    pub needs_migration: bool,
 }
 
 /// Installed package receipt row (`app_packages` table, ADR-0025 D7/D13).
@@ -154,7 +153,7 @@ pub struct InstallTransaction {
 /// Payload of `apps:install_begin`. A catalog entry only becomes an App
 /// after `apps:install_commit` (ADR-0025 D11/D42). Package bytes are not
 /// part of this call; they arrive via `apps:install_package` (Phase A5).
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct InstallRequest {
     pub app: AppMeta,
@@ -162,21 +161,45 @@ pub struct InstallRequest {
     pub packages: Vec<PackageMeta>,
     #[serde(default)]
     pub permissions: Vec<String>,
+    #[serde(default)]
+    pub min_host_version: Option<String>,
+}
+
+/// Result of `apps:read_resource` (ADR-0026 D4).
+#[derive(Serialize)]
+pub struct ReadResourceResult {
+    pub ok: bool,
+    pub app_id: String,
+    pub package_id: String,
+    pub version: String,
+    pub format: String,
+    pub total_size: u64,
+    pub offset: u64,
+    pub length: usize,
+    pub data: String,
 }
 
 impl InstallRequest {
     pub fn validate(&self) -> Result<(), AppError> {
         self.app.validate()?;
-        let host = self.host_name()?;
-        crate::app_host_manifest::manifest_path_in(std::path::Path::new("."), host)?;
-        if self.packages.is_empty() || self.packages.len() as u64 > MAX_TOTAL_PACKAGES {
+        if let Some(min_host) = &self.min_host_version {
+            let req_ver = semver::Version::parse(min_host)
+                .map_err(|_| AppError::InvalidState("invalid min_host_version".into()))?;
+            let current_host = semver::Version::parse(env!("CARGO_PKG_VERSION"))
+                .map_err(|_| AppError::InvalidState("invalid host version".into()))?;
+            if current_host < req_ver {
+                return Err(AppError::InvalidState(
+                    "host version below required min_host_version".into(),
+                ));
+            }
+        }
+        if self.packages.len() as u64 > MAX_TOTAL_PACKAGES {
             return Err(AppError::InvalidState("invalid package count".into()));
         }
         let mut ids = std::collections::BTreeSet::new();
         let mut required = 0;
         let mut wire = 0;
         let mut payload = 0;
-        let mut runtimes = 0;
         for package in &self.packages {
             crate::app_install::validate_identifier(&package.package_id, "package id")?;
             if !ids.insert(&package.package_id) || package.version != self.app.version {
@@ -197,14 +220,12 @@ impl InstallRequest {
                 }
             }
             match package.kind.as_str() {
-                "runtime"
-                    if package.required
-                        && package.platform == platform()
-                        && package.arch == architecture() =>
-                {
-                    runtimes += 1;
+                "runtime" => {
+                    return Err(AppError::InvalidState(
+                        "runtime packages are deprecated; apps share native-file-host".into(),
+                    ));
                 }
-                "data"
+                "data" | "resource"
                     if (package.platform == "any" || package.platform == platform())
                         && (package.arch == "any" || package.arch == architecture()) => {}
                 _ => {
@@ -219,8 +240,7 @@ impl InstallRequest {
             }
             payload += package.payload_size as u64;
         }
-        if runtimes != 1
-            || required > REQUIRED_MAX_PACKAGES
+        if required > REQUIRED_MAX_PACKAGES
             || wire > REQUIRED_MAX_TOTAL_WIRE_BYTES
             || payload > APP_MAX_INSTALLED_BYTES
         {
@@ -237,22 +257,6 @@ impl InstallRequest {
             return Err(AppError::InvalidState("unsupported app permission".into()));
         }
         Ok(())
-    }
-
-    pub fn host_name(&self) -> Result<&str, AppError> {
-        let host = self
-            .app
-            .runtime_spec
-            .get("host")
-            .and_then(serde_json::Value::as_str)
-            .ok_or_else(|| AppError::InvalidState("runtime host is required".into()))?;
-        let namespace = self.app.namespace();
-        if host != namespace && host != format!("{namespace}.host") {
-            return Err(AppError::InvalidState(
-                "runtime host must belong to the app namespace".into(),
-            ));
-        }
-        Ok(host)
     }
 }
 
@@ -345,7 +349,7 @@ impl AppMeta {
         semver::Version::parse(&self.version)
             .map_err(|_| AppError::InvalidState("app version must be SemVer".into()))?;
         for (value, allowed) in [
-            (&self.runtime_spec, &["host", "version"][..]),
+            (&self.runtime_spec, &["version"][..]),
             (&self.surface, &["route", "icon"][..]),
             (&self.manifest, &["permissions", "schemaVersion"][..]),
         ] {
@@ -381,7 +385,7 @@ impl AppMeta {
 
 /// Catalog-derived package descriptor (ADR-0025 D7). Describes the target;
 /// the install path is decided by Core from `kind`, never by the catalog.
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PackageMeta {
     pub package_id: String,

@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { createPrivateKey, createPublicKey, sign } from 'node:crypto';
 import { CATALOG_PUBLIC_KEY_B64 } from '../../extension/catalog-client.js';
+import { resolve } from 'node:path';
 
 export function signCatalog(path, keyPath) {
   const text = keyPath ? readFileSync(keyPath, 'utf8') : process.env.NATIVES_CATALOG_SIGNING_KEY;
@@ -16,4 +17,10 @@ export function signCatalog(path, keyPath) {
     throw new Error('signing key does not match the compiled catalog public key');
   }
   writeFileSync(path.replace(/\.json$/, '.sig'), sign(null, readFileSync(path), privateKey).toString('base64'));
+}
+
+if (process.argv[1] && import.meta.url === new URL('file://' + process.argv[1]).href) {
+  const path = resolve(process.argv[2] || 'dist/app-release/catalog-v2.json');
+  signCatalog(path, process.argv[3]);
+  console.log(`signed ${path}`);
 }
