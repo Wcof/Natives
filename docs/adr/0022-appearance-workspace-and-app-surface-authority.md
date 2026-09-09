@@ -1,5 +1,7 @@
 # ADR-0022: Appearance Preference、Workspace 交互与 Apps Web Surface 统一权威
 
+> **2026-09-09 注记（ADR-0027）**：本文 §4 的 Apps Wire Contract 与 Managed Web Surface（Tauri `BrowserStateHandle` / child WebView / LRU 预算）属于已删除的 Tauri/macOS 路径，**标记为历史**；Apps 新目标见 [ADR-0027](0027-managed-apps-independent-delivery.md) 与 [托管应用契约 v1](../contracts/managed-app-contract.md)。本文的 Appearance Preference 与 Workspace 交互决策**不变、继续生效**。配套历史契约：`docs/contracts/apps-web-surface-contract.md`。
+
 - **状态**: 已接受（Accepted）
 - **日期**: 2026-08-25
 - **决策者**: 产品方（用户）与主集成 Agent

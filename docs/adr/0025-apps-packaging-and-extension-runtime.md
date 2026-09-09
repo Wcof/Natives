@@ -1,7 +1,10 @@
 # ADR-0025：Apps 打包与扩展应用运行时（App Packaging & Extension App Runtime）
 
-- **状态**: 已接受（2026-09-06）
+- **状态**: 已接受（2026-09-06）；**Apps 目标决策已被 ADR-0027 取代（2026-09-09，A0 生效）**
 - **决策者**: 产品方（用户）
+- **取代范围注记（2026-09-09 新增）**:
+  - **ADR-0027 取代本 ADR 的以下决策**：构建期 UI 白名单（`app-module-registry.js` / Extension App UI 随扩展发布）、旧 Catalog/协议预算（Catalog v2、`.nap` ≤ 5 MiB wire / 20 MiB payload）、旧运行呈现方式（扩展内置 UI mount）。新目标见 ADR-0027 与 [托管应用契约 v1](../contracts/managed-app-contract.md)。
+  - **可复用思想保留**：独立 Host 注册与安装事务、签名供应链、按需生命周期（stdin EOF 2 秒退出）、预算分账与门禁纪律。不恢复本 ADR 历史代码整包。
 - **取代范围注记**:
   - ADR-0022 的 Apps Web Surface 运行时（Tauri `BrowserStateHandle` 托管 child WebView、R-P11 的 WebView 实例预算）在**当前 Chrome 扩展生产面**不再适用，由本 ADR D2/D17 取代；ADR-0022 的主题/外观决策不受影响。
   - ADR-0023 资源预算表中「Native Host 单架构 Release 二进制 ≤ 3 MB」一行由本 ADR D19 重述（目标 3 MiB，过渡硬 Gate 4 MiB）；「扩展 ZIP ≤ 250 KB」已被 ADR-0024 修订为 300 KiB，本 ADR D4 沿用 300 KiB 并增加分层 Gate。

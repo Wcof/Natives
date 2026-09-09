@@ -1,5 +1,7 @@
 # 应用中心 V2 · AI 可执行需求基线
 
+> **历史需求记录（2026-09-09 标记）**：以下正文描述 2026-08 的 Tauri/Web/macOS 应用方案，不能作为当前生产事实或本次重构入口。新的产品输入和执行顺序见[应用中心与基金两阶段实施方案](../development/app-center-fund-implementation-plan.md)，新目标见[ADR-0027 草案](../adr/0027-managed-apps-independent-delivery.md)。保留正文用于追溯，不恢复已删除的 Tauri 路径。
+
 > 状态：`ready-for-solution-design`
 > 日期：2026-08-23
 > 适用平台：macOS（P0）

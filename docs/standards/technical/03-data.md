@@ -32,7 +32,7 @@
   ```
   Secret **必须**按 R-S12 进入 OS Keychain；DB 只保存 opaque reference。**禁止**把其它用户数据散落到项目目录或任意路径；**禁止**用 env 变量随意覆盖此根目录（除非有受控测试夹具）。
 
-  **App 数据分账（ADR-0026，取代 ADR-0025 独立 Host 决策）**：`natives.db` 内的 App Store 表（`apps` / `app_packages` / `app_permissions` / `app_install_transactions`）是 App 安装状态与资源收据的唯一权威，只由 `native-file-host` 写入；静态只读资源安装于 `apps/<appId>/packages/<version>/`；App 私有用户数据位于 `apps/<appId>/data/`。资源升级不覆盖用户数据；卸载默认保留 `data/` 与 `imports/`；「删除应用及全部个人数据」必须二次确认。
+  **App 数据分账（ADR-0027，取代 ADR-0026/ADR-0025 对应决策，2026-09-09 生效）**：`natives.db` 内的 App Store 表是 App 安装状态、收据与 Native Host 注册的唯一权威，只由 `native-file-host` 写入；应用自有业务库独立存放于 `apps/<appId>/data/`，由官方 App Host 独占写入并独立迁移（`data/.migration.json` journal、一致性备份、`backups/<migrationId>/` 有界保留）。App Store 与业务库分别写、分别迁移：应用禁止连接 natives.db 写业务表，Core 禁止创建应用业务表（如 portfolio/transactions/nav）。代码升级不覆盖用户数据；卸载默认保留 `data/`、`imports/` 与迁移备份；「删除应用及全部个人数据」必须二次确认。不依赖 beforeunload 保存业务数据：未落盘成功即视为未保存。
 - **为什么**：dotfile 目录模式与兄弟项目（CodePilot/Natives2）一致，便于备份、迁移、清理。
 - **检查方法**：新增持久化路径时核对是否在 `~/.natives/` 下。
 

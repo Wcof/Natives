@@ -50,6 +50,7 @@ Home 布局复用 `settings` K/V 的单份版本化 JSON；拖动/缩放过程�
 - Proxy 是个人本地轻量代理，不是企业 AI Gateway；协议转换由可替换的深 `ProxyEngine` module 执行。
 - Claude Code、Codex、Gemini CLI、OpenCode 属于 AI Tool Integration，配置流程必须支持 Detect / Inspect / Backup / Plan / Apply / Verify / Rollback。
 - Usage/Analytics 复用现有采集、归一、聚合资产，不建设统一 Event Platform。
+- **官方托管应用（有界例外，ADR-0027，2026-09-09）**：在上述 Apps 领域模型内，官方应用以独立原生可执行程序交付（业务代码与构建后 UI 嵌入程序内），由 Core App Store 负责安装、登记、签名校验与受限 Native Host 注册；应用自有业务数据存放于 `~/.natives/apps/<appId>/data/`，业务库归应用自身写。该例外仅限官方签名托管应用，**不**恢复 Agent/Harness/Planner/Jobs、通用 Plugin Runtime 或旧 Tauri 产品路径；Core 不写业务库、不代理任意业务指令。
 
 ### 5. Native Backend authority
 

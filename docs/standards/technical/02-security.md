@@ -136,18 +136,18 @@ Natives 把不可信的第三方代码（插件）以 iframe 形式跑在用户�
 - **为什么**：Renderer 是 XSS 的攻击面，内存里的明文凭证可被脚本窃取。
 - **检查方法**：Tauri adapter 暴露的凭证相关 API 是否仅返回掩码。
 
-#### R-S14 · 子应用纯资源分发与共享 Host 供应链防线（ADR-0026，取代 ADR-0025 独立 Host 决策）
+#### R-S14 · 官方托管应用供应链与承载隔离防线（ADR-0027，取代 ADR-0026/ADR-0025 对应决策，2026-09-09 生效）
 - **等级**：MUST
 - **分类**：安全、供应链、Apps
 - **规则**：
-  - App Catalog 必须为签名产物（`catalog-v2.json` + `catalog-v2.sig`，Ed25519，公钥编译进扩展）；签名验证失败、hash 不匹配、包超尺寸一律拒绝安装并进入 rollback。
-  - 浏览器执行代码禁止在线下载安装（JS/WASM/远程 DSL 解释器）；Extension App 的 UI 必须 build-time 进入扩展包，`app-module-registry.js` 是唯一的 UI module 映射表。
-  - 子应用共用现有 `native-file-host`，禁止在系统中注册独立 Native Messaging Host Manifest，禁止下载或执行独立二进制（`runtime` 包已废弃，包类型仅限 `data` / `resource`）。
-  - 安装路径由 Core 统一决定在 `~/.natives/apps/<appId>/packages/<version>/`，Catalog/请求参数禁止携带目标路径；`../`、绝对路径、`C:\`、`~/`、symlink 逃逸必须被拒绝。
-  - 资源读取仅限 Host 提供的受限接口 `apps:read_resource`，由 Host 校验安装状态、应用归属并把单次原始读取固定为至多 $512\text{ KiB}$，禁止前端提交文件路径。
-  - App 专属 Secret（如凭据/Token）只进 OS Keychain（namespace `com.natives.app.<id>`），禁止进入 `*.db`/`natives.db`/日志/前端/`chrome.storage`。
-- **为什么**：纯资源包 + 共享 Host 彻底消除了可执行文件供应链风险与操作系统授权摩擦；签名、hash、只读路径白名单与 Secret 隔离是不可缺的防线。
-- **检查方法**：`scripts/apps/check-catalog-signature.mjs`、`check-app-security.mjs`、`check-package-budget.mjs` 全绿；Path Security Gate 测试覆盖逃逸向量。
+  - App Catalog 必须为签名产物（Catalog v3，Ed25519，公钥固定于 Core 信任根）；Host 在可信边界重新验签原文、条目元数据并对实际字节计算摘要，禁止信任前端 alreadyVerified 或前端 hash。签名失败、hash 不匹配、平台/架构不符、超尺寸一律拒绝安装。
+  - 浏览器侧禁止在线下载执行代码（JS/WASM/远程 DSL 解释器、`eval`/`new Function`）；应用业务代码不进入扩展执行上下文，业务由独立官方 App Host（签名原生程序）承载。
+  - Native Host 名称（runtimeHost）由 Core 计算并持久化于安装收据；注册为受限 manifest，不接受页面/Catalog 提供的任意命令、绝对路径或 Host 名称。安装路径由 Core 统一决定于 `~/.natives/apps/<appId>/`；`../`、绝对路径、`C:\`、`~/`、symlink 逃逸必须被拒绝。
+  - app.html 应用 iframe sandbox 精确为 `allow-scripts allow-forms`，禁止 `allow-same-origin`/`allow-top-navigation`/`allow-popups`/downloads；会话鉴权（两阶段握手、≥128bit challenge、32 字节 CSPRNG bearer token、15 分钟上限、load/navigation 立即撤销）、CORS（仅 Origin: null + 指定 method/header + 有效 bearer，无 cookie/credentials）、Host header 校验、单帧 ≤ 512 KiB 与 HTTP 限额必须按[托管应用契约 v1](../../contracts/managed-app-contract.md) §5/§7 实现。旧通用路径前缀规则（插件 `/modules/{id}/`）不再适用于 Apps；Apps 改为每应用独立端口与资源域。
+  - 应用专属 Secret（凭据/Token）只进 OS Keychain（namespace `com.natives.app.<id>`），禁止进入 `*.db`/`natives.db`/日志/前端/`chrome.storage`；Core 清理仅按精确 service/属性或带冒号分隔完整 target 前缀匹配。
+  - 原生程序按用户权限运行，本防线不宣称对恶意原生程序有 OS 级沙箱；官方发布签名审查是信任前提，第三方 native 包明确拒绝。
+- **为什么**：独立原生应用引入可执行载荷供应链与本地服务攻击面；签名、Host 侧重验、sandbox、会话鉴权、限额与 Secret 隔离是不可缺的防线。
+- **检查方法**：`scripts/apps/check-catalog-signature.mjs`、`check-app-security.mjs`、`check-package-budget.mjs` 与契约黑盒套件全绿；Path Security Gate 测试覆盖逃逸向量；真实浏览器验证 sandbox/CORS/Token 撤销。
 
 ---
 

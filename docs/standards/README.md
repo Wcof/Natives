@@ -19,7 +19,7 @@ docs/standards/
 │   ├── 03-data.md               SQLite / migration / atomic writes
 │   ├── 04-performance.md        budgets / lifecycle / bounded growth
 │   ├── 05-backend.md            Rust errors / logs / deep shared modules / supervisor
-│   └── 06-sub-apps.md           sub-apps code ownership / resource contracts / shared host
+│   └── 06-sub-apps.md           managed apps（官方托管应用独立交付，ADR-0027）
 ├── frontend/
 │   ├── 01-structure.md
 │   ├── 02-state-and-data.md

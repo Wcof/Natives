@@ -40,8 +40,8 @@
 #### R-B3 · 可复用深逻辑归明确 module，禁止复制
 - **等级**：MUST
 - **分类**：分层、可维护性
-- **规则**：两个真实 caller/adapter 共享的类型、codec、算法或流程**必须**放入职责明确的 `crates/` module；Host 专属数据库、Keychain、进程和 HTTP policy **必须**留在 Host。**禁止**为 legacy 兼容复制实现，也禁止把浅 pass-through wrapper 当共享抽象。
-- **反例**：`src-tauri/` 与 `src-agent-daemon/` 各有一份内容雷同的重试/解析函数，修 bug 只改了一边。
+- **规则**：两个真实 caller/adapter 共享的类型、codec、算法或流程**必须**放入职责明确的 `crates/` module；Host 专属数据库、Keychain、进程和 HTTP policy **必须**留在 Host。**禁止**为 legacy 兼容复制实现，也禁止把浅 pass-through wrapper 当共享抽象。官方托管应用的通用运行支持（Native framing、origin 校验、运行锁、会话鉴权、HTTP 限额、EOF 退出）**必须**由 `crates/app-host-support` 单一提供，标准样例与各官方应用共用；支持库不依赖 native-file-host 二进制或 file-manager-core 文件能力，协议 schema/fixture 从支持库单一来源导出。
+- **反例**：`src-tauri/` 与 `src-agent-daemon/` 各有一份内容雷同的重试/解析函数，修 bug 只改了一边；两个 App Host 各自手写一套会话鉴权。
 - **为什么**：共享应提高 interface leverage/locality，而不是延续旧 runtime ownership。
 - **检查方法**：Review 时发现两侧出现同名/同形函数即要求下沉；新共享需求先看 `crates/` 是否已有归属。
 
@@ -76,12 +76,12 @@
 - **为什么**：Tauri/Tokio 的 worker 线程是全局共享的，一处阻塞放大为整个后端「假死」，直接违反 `technical/04` 的响应预算。
 - **检查方法**：Review async 路径中的同步重操作；性能改动按 `technical/04` 跑 `npm run perf:check`。
 
-#### R-B7 · 子进程必须纳入 `sidecar_supervisor` 监督
+#### R-B7 · 子进程必须纳入监督并有确定性 shutdown
 - **等级**：MUST
 - **分类**：进程、安全
-- **规则**：Host 侧启动的常驻/业务子进程（AI 工具、应用 runtime、迁移期 Daemon 等）**必须**经 `src-tauri/src/sidecar_supervisor.rs` 或同一受监督基础纳入生命周期管理（看门狗、退出回收、重启策略）；**禁止**裸 `Command::spawn` 后不跟踪句柄、不回收退出状态。一次性短命令也**必须**等待或显式回收。
+- **规则**：Host 侧启动的常驻/业务子进程（AI 工具、应用 runtime、迁移期 Daemon 等）**必须**经 `src-tauri/src/sidecar_supervisor.rs` 或同一受监督基础纳入生命周期管理（看门狗、退出回收、重启策略）；**禁止**裸 `Command::spawn` 后不跟踪句柄、不回收退出状态。一次性短命令也**必须**等待或显式回收。官方 App Host 的 `--health` 与 `--inspect-data` 受限模式**必须**限时（五秒）并有界输出（≤ 64 KiB）后回收进程；健康检查不得获取安装器已持有的 runtime 锁。App Host 自身**必须**提供确定性 shutdown（stop/EOF 共用取消/关闭路径，两秒内退出）；没有确定性 shutdown 的应用禁止发布。
 - **为什么**：这是五大防线之防线 1（R-S1）的后端落点——无监督的子进程意味着孤儿进程、端口/文件句柄泄漏和不可观测的静默失败。
-- **检查方法**：`grep -n "Command::new\|spawn(" src-tauri/src/` 中新出现的 spawn 点，确认走 supervisor 或有明确 `wait`/回收路径。
+- **检查方法**：`grep -n "Command::new\|spawn(" src-tauri/ crates/` 中新出现的 spawn 点，确认走 supervisor 或有明确 `wait`/回收路径；健康检查有超时与输出上限。
 
 ---
 

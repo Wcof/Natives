@@ -18,13 +18,30 @@
   `model-host` authorized by ADR-0020. `src/`, `src-tauri/`,
   `src-agent-daemon/`, Agent/Harness/Capability crates, Jobs, Assistant, and
   Plugin Runtime have been deleted; do not recreate them.
+- **Official managed apps exception (ADR-0027, 2026-09-09; supersedes the
+  ADR-0026 Apps decisions)**: official apps are delivered as independent
+  signed native executables (business code and build-time UI embedded in the
+  program). The Core App Store (`crates/native-file-host`) owns installation,
+  receipts, signature verification, and restricted Native Host registration;
+  the generic `extension/app.html` is each app's owner page — a short Core
+  verification connection, then a direct Native Port to the app host, with the
+  app UI in a restricted sandbox iframe over the app's 127.0.0.1 loopback
+  server. The shared runtime library is `crates/app-host-support`. New/upgraded
+  apps MUST NOT require re-publishing the extension or Core. This exception
+  does NOT authorize third-party web URLs, third-party native packages,
+  Agent/Harness/Jobs, generic Plugin Runtime, Service Worker ports/polling, or
+  any fund-specific logic inside the extension/Core. Until migration (A3—A5)
+  completes, the legacy resource-package path remains the production fallback;
+  do not keep two production chains afterward.
 - The extension's `newtab.html` is static, while `files.html` directly owns its
   Native Messaging Port. The Host owns filesystem access and never exposes
   arbitrary paths, processes, SQLite, or Secret plaintext to the page.
 - Service Worker code must remain stateless: no Native Port, polling, keepalive,
   or local service. Host cleanup is driven by Native Messaging stdin EOF.
-- The extension page is the only product surface; do not reintroduce iframe,
-  WebView, React workspace, plugin, or runtime surfaces.
+- The extension page is the only product surface; iframes are only allowed for
+  the ADR-0027 app sandbox exception (no `allow-same-origin`, no downloaded
+  business JS in extension context); do not reintroduce WebView, React
+  workspace, plugin, or runtime surfaces.
 - `model-host` is an AI-domain Native Messaging Host, not a general daemon. It
   may remain resident only after the user explicitly enables that setting; it
   must bind loopback, remain single-instance, keep Secrets in OS Keychain, and

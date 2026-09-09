@@ -1,5 +1,7 @@
 # ADR-0026：子应用共用 Host 与纯资源包分发架构（Sub-Apps Shared Host & Resource Distribution）
 
+> **已被取代（2026-09-09，A0 生效）**：[ADR-0027](0027-managed-apps-independent-delivery.md)（accepted-target）**取代本 ADR 的全部 Apps 目标决策**——即“共享 file Host 承载应用业务、UI/逻辑内置扩展、纯资源包、禁止独立应用 Host”四项；本 ADR 状态相应改为 **superseded (Apps 部分)**，历史正文与原因保留，不篡改当时结论。**继续保留的安全原则**：签名 Catalog 与 Ed25519 验签、双重 SHA-256、原子安装事务、升级/默认卸载保留用户数据、清数据二次确认、Secret 仅入 OS Keychain。新规范入口：`standards/technical/06-sub-apps.md` + [托管应用契约 v1](../contracts/managed-app-contract.md)。生产迁移在 A3—A5 完成前仍按本 ADR 运行，旧资源包链路作为迁移来源保留至 A5。
+
 - **状态**: 已接受（2026-09-08）
 - **决策者**: 产品方（用户）
 - **取代范围注记**:

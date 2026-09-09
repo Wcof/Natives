@@ -30,7 +30,7 @@ Service Worker 长连接。旧 Tauri Files 调用链是迁移源，不得继续�
 
 **Model Host 例外（ADR-0020 §6.1）**：扩展通过独立 Native Messaging interface 调用单用途 `model-host`，不得共享 Files 能力。默认由页面连接拥有生命周期；仅用户显式开启常驻后可跨页面关闭存活，必须单实例、可停止且无登录自启动。Gateway 仅绑定 `127.0.0.1` 并鉴权，禁止 Management API；持久 Secret 由 OS Keychain 持有。该例外不授权通用 Daemon 或新的产品 Surface。
 
-**Extension App 例外（ADR-0026，取代 ADR-0025 独立 Host）**：Extension App 页面直接复用 `native-file-host` 的受限 Apps 领域接口；禁止注册 `com.natives.app.*` Native Messaging Host、下载 `runtime` 包或启动 App 子进程。App UI/业务逻辑随扩展发布，下载包只含只读 `data` / `resource`；新增系统能力必须随 Core Host 更新并重新审查。
+**Extension App 例外（ADR-0027，取代 ADR-0026/ADR-0025 对应决策，2026-09-09 生效）**：官方托管应用（managed_local）以独立原生可执行程序交付，业务代码与构建后 UI 嵌入程序内；Core App Store 负责安装、签名核验、登记与受限 Native Host 注册（runtimeHost 由 Core 计算）。通用 `app.html` 每应用一个 owner 页面：先短连 Core 核验安装，再以 `runtime.connectNative` 直连 App Host（Chrome 按连接启动应用进程，每个 Port 独立进程）；应用在 127.0.0.1 动态端口提供内嵌 UI 与业务接口，app.html 用受限 sandbox iframe（`allow-scripts allow-forms`）呈现。业务代码不进入扩展执行上下文；协议兼容时新增/升级应用不重新发布扩展/Core。Service Worker 仍无状态、无 Port、无轮询；Files/Model Host 边界不变。
 
 #### R-T2 · 数据 authority 单一
 - **等级**：MUST

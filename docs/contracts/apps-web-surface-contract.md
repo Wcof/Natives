@@ -1,6 +1,6 @@
 # Apps Web Surface 契约与运行时生命周期（ADR-0022）
 
-> 状态：**已冻结**（2026-08-25）。Apps 域 DTO、Wire Contract 与 Web Surface 生命周期契约。
+> 状态：**历史（HISTORICAL，2026-09-09 标记）**。本文描述的 Tauri `BrowserStateHandle` / child WebView / `src-tauri/src/apps/model.rs` 运行时属于已删除的 Tauri/macOS 产品路径，仅作历史追溯保留。Apps 新契约见 [托管应用契约 v1](managed-app-contract.md)（ADR-0027）；ADR-0022 的 Appearance/Workspace 决策不受影响。
 > 关联：[ADR-0022](../adr/0022-appearance-workspace-and-app-surface-authority.md)、`docs/standards/technical/01-layering.md`、`docs/standards/technical/02-security.md`、`docs/standards/technical/05-backend.md`。
 
 ---

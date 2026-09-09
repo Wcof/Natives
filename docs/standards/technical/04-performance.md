@@ -99,15 +99,18 @@
   - 安装、启动和更新不得引入 Electron/Tauri 壳、daemon、托盘常驻进程或后台更新轮询。
 - **为什么**：Natives 复用用户已有 Chrome，增量成本必须限制在当前文件 Surface，而不是复制浏览器或常驻运行时。
 
-#### R-P13 · App 纯资源包与共享 Host 预算
+#### R-P13 · 官方托管应用包与运行预算（ADR-0027，取代 ADR-0026/ADR-0025 对应预算，2026-09-09 生效）
 - **等级**：MUST
 - **分类**：性能、分发、Apps
-- **规则**（详见 ADR-0026）：
-  - 单个下载 Package（`.nap`）wire 大小 ≤ 5 MiB（5,242,880 bytes），精确到字节；Required Packages ≤ 3 个且总量 ≤ 15 MiB；全部 Package ≤ 16 个；单包解压 payload ≤ 20 MiB；应用安装代码+静态资源总体 ≤ 50 MiB（不含用户个人数据）。
-  - 超过 Gate 的 CI 必须直接失败；禁止 `ALLOW_OVERSIZE`/`SKIP_APP_SIZE_CHECK`/baseline waiver 等豁免；修改 Gate 数字本身必须新增 ADR。
-  - 禁止创建 Extension App Host 或 App 子进程；页面复用 `native-file-host` 的受限领域接口，其端口、EOF、CPU、RSS、GPU 与后台计时器继续受 R-P12 同一预算约束。
-  - Apps Framework 相对 A1 baseline 的扩展增量 ≤ 20 KiB（gzip 估算）；扩展估算 ≥ 290 KiB 时 CI 必须输出 NEAR_BUDGET 警告。
-- **为什么**：在线分发的 App 包是供应链与体积的双重风险点；资源包与扩展代码必须分账，但不得以独立进程逃逸 Core Gate。
+- **规则**（详见 [托管应用契约 v1](../../contracts/managed-app-contract.md)）：
+  - 单个平台应用下载包（gzip 单载荷 `.nap`）wire ≤ 32 MiB、解压 payload ≤ 128 MiB，精确长度与双 SHA-256 校验；这是本方案对原生可执行载荷的新增目标上限，不是实测值。32/128 MiB 修改原因是交付物从纯资源变为可执行应用；Core 原有预算（R-P12 的扩展 300 KiB、native-file-host 4 MiB Gate、12 MB 空闲 RSS、0.5% 空闲 CPU）**不放宽**。
+  - 应用代码占用 = 活跃版本 + 上一版本；staging 有界，峰值至多三份载荷；个人数据/导入原件/迁移备份另计。超过 Gate 的 CI 必须直接失败；禁止 `ALLOW_OVERSIZE`/`SKIP_APP_SIZE_CHECK`/baseline waiver 等豁免；修改 Gate 数字本身必须新增 ADR。
+  - 未启动或已停止应用的应用进程、监听端口、业务定时器必须为 0；EOF/停止至应用退出 ≤ 2 秒；标准样例启动 ready 同机 Release 5 次 p75 ≤ 2.5 秒。
+  - 并发：每 appId 至多一个运行实例；每 OS 用户命名空间至多四个活动应用实例（共享运行槽文件锁保证，禁止仅用 tabs.query 做竞态数量检查）；到上限明确提示。
+  - Native 单帧 < 1 MiB（安装传输帧 ≤ 512 KiB）；应用 HTTP 请求/响应默认 ≤ 1 MiB，大批量分页/分块。
+  - Apps 不使用旧 WebView LRU 实例预算（R-P11 的 Tauri child WebView 部分对 Apps 标记历史）。Core/App 分账：性能改动必须有同设备 Release 前后对比证据（R-P1），样例与基金分别提交实际尺寸、RSS、CPU 和打开/关闭循环证据，禁止用新上限掩盖 Core 回归。
+- **为什么**：独立原生应用把预算从静态资源扩展到可执行载荷；分账与有界回收防止应用逃逸 Core 门禁。
+- **检查方法**：`scripts/apps/check-package-budget.mjs` 更新为 32/128 MiB 与载荷结构检查；`perf:check` 全绿；30 分钟循环与回收证据随 A-G9 提交。
 
 ## 提交前清单
 

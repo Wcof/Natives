@@ -87,6 +87,13 @@
 
 - **参考位置**：`/Volumes/UNTITLED/本人材料/project/FundVal-Live`
 - **定位**：基金应用（Phase F）的行为规格审计对象。**禁止复制任何源码**，
+  （2026-09-09 更新）新接入落点见 ADR-0027 与
+  `docs/contracts/managed-app-contract.md`：Fund UI/业务独立交付，
+  `fund-host` 自身为 Native Messaging Host 并使用 `crates/app-host-support`；
+  不再写 `extension/apps/fund-ui.js`。历史落点原记录见
+  `docs/adr/0025-apps-packaging-and-extension-runtime.md`（D15 / §Fund 节）。
+  `Natives-App-Fund`（独立仓库）包含
+  `docs/reference/fundval-local-audit.md` 审计文档。
   技术栈（Django/React/Tauri/PostgreSQL/Redis）全部禁止引入（ADR-0025）。
 - **仅提取的行为规格**：SourceRegistry、source fallback 链（requested /
   resolved / fallback_level 可观测）、行业穿透算法、持仓回放不变式、
@@ -139,11 +146,13 @@
 #### 4.2 Natives-App-Fund
 
 - **位置**：`/Users/ldh/Downloads/project/AiNative/Natives-App-Fund`
-- **定位**：基金应用独立工程（ADR-0025 第五十二节）。浏览器 UI
+- **定位**：基金应用独立工程（2026-09-09 更新：新目标见 ADR-0027 与
+  `docs/contracts/managed-app-contract.md`——Fund UI/业务独立发布，
+  `fund-host` 为 Native Messaging Host，使用 `crates/app-host-support`；
+  不再写 `extension/apps/fund-ui.js`）。历史落点原记录：浏览器 UI
   build-time 进 Natives Core（`extension/apps/fund-ui.js`，A6 已落地为
-  占位模块：已安装无资产的提示态，打开 `app.html?app=fund` 即挂载，
-  不连接任何 host），Native 业务（`fund-host`）与本仓库分仓维护。
-  **fund-host crate 当前尚未创建**，仅有审计文档。
+  占位模块），Native 业务（`fund-host`）与本仓库分仓维护。
+  **fund-host crate 当前尚未创建**，仅有审计文档；占位页不算业务实现。
 - **文件**：
   - `docs/reference/fundval-local-audit.md` — Phase R0 强制的
     FundVal-Live 本地源码审计产出（参考文件 → 问题 → 输入/输出 →

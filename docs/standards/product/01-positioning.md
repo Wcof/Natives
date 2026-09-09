@@ -20,7 +20,8 @@
 #### R-P1 · 一级 IA 固定
 - **等级**：MUST
 - **分类**：产品、交互
-- **规则**：一级入口**必须**为：首页、文件、应用、AI、数据与用量、设置。AI 下分 AI Resources、Local Proxy、AI Tool Integration。**禁止**新增 Workspace 一级菜单；Home 是唯一 Workspace 一级入口，其下可打开多个 Workspace（ADR-0021）。「应用」入口在至少 1 个 Extension App 安装后显示（ADR-0025 D17），卸载后自动消失；「设置」下提供「应用中心」作为 App 安装/管理入口（ADR-0025 D26）。
+- **规则**：一级入口**必须**为：首页、文件、应用、AI、数据与用量、设置。AI 下分 AI Resources、Local Proxy、AI Tool Integration。**禁止**新增 Workspace 一级菜单；Home 是唯一 Workspace 一级入口，其下可打开多个 Workspace（ADR-0021）。「应用」入口在至少 1 个官方托管应用安装后显示，卸载后自动消失；「设置」下提供「应用中心」作为 App 安装/管理入口。
+  **App 独立交付（ADR-0027，2026-09-09 取代 ADR-0025/0026 Apps 目标）**：官方应用 UI 与业务独立发布为原生程序，不随扩展构建；入口与来源/托管分离——应用中心只做通用管理（安装/更新/启停/卸载），不包含任何单个应用的专用业务；协议兼容时新增/升级应用不重新发布 Core/扩展。旧「Extension App UI 必须 build-time 进入扩展包」的 MUST 由 ADR-0027 取代。
 - **为什么**：这是用户任务组织方式，不以内部 runtime/技术名暴露产品结构。
 
 ## 二、Home 与 Widget
