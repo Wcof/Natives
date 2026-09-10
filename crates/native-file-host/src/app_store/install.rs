@@ -2,11 +2,353 @@
 
 use super::mutation::{bump_revision, lock_error, now_millis, AppStore};
 use super::{query, types::*};
-use crate::{app_host, app_install};
+use crate::{app_host, app_install, app_signing};
 use base64::Engine;
 use rusqlite::{params, OptionalExtension};
+use sha2::{Digest, Sha256};
+use std::io::Read;
 
 impl AppStore {
+    /// Core Apps protocol v4 `apps:install_begin` (contract §4.0): the page
+    /// uploads the SIGNED catalog plus its Ed25519 signature; Core verifies
+    /// the signature against the fixed trust root, selects the executable
+    /// package for this platform itself, and fixes the chunk size. The page
+    /// cannot mark anything as verified.
+    pub fn install_begin_catalog(
+        &self,
+        catalog_base64: &str,
+        signature_base64: &str,
+    ) -> Result<InstallBeginResult, AppError> {
+        if catalog_base64.len() > CATALOG_MAX_BYTES * 4 / 3 + 4 {
+            return Err(AppError::InvalidState(
+                "APP_CATALOG_TOO_LARGE: catalog exceeds 256 KiB".into(),
+            ));
+        }
+        let catalog = base64::engine::general_purpose::STANDARD
+            .decode(catalog_base64)
+            .map_err(|_| AppError::InvalidState("invalid catalog encoding".into()))?;
+        if catalog.len() > CATALOG_MAX_BYTES {
+            return Err(AppError::InvalidState(
+                "APP_CATALOG_TOO_LARGE: catalog exceeds 256 KiB".into(),
+            ));
+        }
+        app_signing::verify_catalog_signature(&catalog, signature_base64)?;
+        let request: InstallRequest = serde_json::from_slice(&catalog)
+            .map_err(|_| AppError::InvalidState("catalog is not a valid install request".into()))?;
+        request.validate()?;
+        // Core selects the package for THIS platform; the catalog never
+        // decides disk paths or what runs.
+        let package = request
+            .packages
+            .iter()
+            .find(|p| p.kind == KIND_MANAGED_LOCAL)
+            .ok_or_else(|| {
+                AppError::InvalidState("catalog declares no managed_local executable".into())
+            })?
+            .clone();
+
+        if self.caller_origin().is_none() {
+            return Err(AppError::InvalidState(
+                "APP_ORIGIN_REQUIRED: Chrome caller origin missing".into(),
+            ));
+        }
+        let _operation = self.operation.lock().map_err(lock_error)?;
+        // Self-heal FIRST: a leftover transaction from this connection's own
+        // failed install still holds the install lock in self.installs, so
+        // acquiring first would self-conflict on the same flock file
+        // (AGENTS.md lock discipline). Cross-connection leftovers are still
+        // handled by recover_app after the lock is taken.
+        self.recover_owned_stale(&request.app.app_id)?;
+        let lock = app_install::acquire_app_lock(self.app_root(), &request.app.app_id, false)?;
+        // Plan §137: install→runtime lock order; a running app cannot be
+        // updated. Never wait long or kill the running process.
+        let _runtime = app_install::acquire_app_lock(self.app_root(), &request.app.app_id, true)?;
+        let install_id = crate::workspace_store::schema::uuid_v4();
+        let staging = app_install::staging_dir(self.app_root(), &request.app.app_id, &install_id)?;
+        std::fs::create_dir_all(&staging)?;
+        let record = self.with_conn(|conn| {
+            let tx = rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)?;
+            let pending: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM app_retained_data WHERE app_id = ?1 AND cleanup_pending = 1)",
+                [&request.app.app_id], |row| row.get(0))?;
+            if pending { return Err(AppError::Conflict("app cleanup must finish before installing".into())); }
+            let from: Option<String> = tx.query_row("SELECT version FROM apps WHERE app_id = ?1",
+                [&request.app.app_id], |row| row.get(0)).optional()?;
+            if let Some(from) = &from {
+                let current = semver::Version::parse(from).map_err(|_| AppError::InvalidState("installed version is invalid".into()))?;
+                let next = semver::Version::parse(&request.app.version).map_err(|_| AppError::InvalidState("new version is invalid".into()))?;
+                if next <= current { return Err(AppError::Conflict("update must increase the installed version".into())); }
+            }
+            let request_json = serde_json::to_string(&request).map_err(|_| AppError::InvalidState("invalid install request".into()))?;
+            tx.execute("INSERT INTO app_install_transactions
+                (install_id, app_id, from_version, to_version, request_json, state, staging_path, started_at)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![install_id, request.app.app_id, from.unwrap_or_default(), request.app.version,
+                    request_json, install_state::DOWNLOADING, staging.to_string_lossy(), now_millis()])?;
+            tx.commit()?;
+            Ok(())
+        })?;
+        self.installs
+            .lock()
+            .map_err(lock_error)?
+            .insert(install_id.clone(), lock);
+        let _ = record;
+        Ok(InstallBeginResult {
+            install_id,
+            package_id: package.package_id,
+            chunk_size: INSTALL_CHUNK_SIZE,
+            next_offset: 0,
+        })
+    }
+
+    /// v4 `apps:install_chunk` (contract §4.0): sequential append-only
+    /// upload of the raw gzip artifact. `offset` must equal the confirmed
+    /// length; an identical re-send of the last confirmed chunk is idempotent;
+    /// overlap, divergence, out-of-order or oversized uploads are rejected
+    /// with APP_PACKAGE_INVALID. The confirmed length is durable
+    /// (staged_path + payload_size on the stage row), so reconnects resume.
+    pub fn install_chunk(
+        &self,
+        install_id: &str,
+        package_id: &str,
+        offset: u64,
+        data_base64: &str,
+        chunk_sha256: &str,
+    ) -> Result<InstallChunkResult, AppError> {
+        let _operation = self.operation.lock().map_err(lock_error)?;
+        let record = self.owned_transaction(install_id)?;
+        if !matches!(
+            record.state.as_str(),
+            install_state::DOWNLOADING | install_state::CATALOG_RESOLVED
+        ) {
+            return Err(AppError::InvalidState(
+                "install no longer accepts chunks".into(),
+            ));
+        }
+        let request = decode_request(&record)?;
+        let package = request
+            .packages
+            .iter()
+            .find(|p| p.package_id == package_id)
+            .ok_or_else(|| AppError::NotFound("package not declared in transaction".into()))?;
+        if data_base64.len() > INSTALL_CHUNK_DATA_MAX_BASE64_BYTES {
+            return Err(AppError::PackageInvalid(
+                "chunk exceeds base64 budget".into(),
+            ));
+        }
+        let data = base64::engine::general_purpose::STANDARD
+            .decode(data_base64)
+            .map_err(|_| AppError::PackageInvalid("invalid chunk encoding".into()))?;
+        if data.len() > INSTALL_CHUNK_SIZE {
+            return Err(AppError::PackageInvalid("chunk exceeds 256 KiB".into()));
+        }
+        if !app_install::sha256_matches(chunk_sha256, &app_install::hex_sha256(&data)) {
+            return Err(AppError::PackageInvalid("chunk hash mismatch".into()));
+        }
+        if offset as u64 + data.len() as u64 > package.wire_size as u64 {
+            return Err(AppError::PackageInvalid(
+                "chunk extends past declared wire size".into(),
+            ));
+        }
+
+        let staging = app_install::staging_dir(self.app_root(), &record.app_id, install_id)?;
+        let artifact = app_install::staged_artifact_path(&staging, package_id)?;
+        let confirmed: u64 = {
+            let stage = self.with_conn(|conn| {
+                Ok(conn.query_row(
+                    "SELECT staged_path, payload_size FROM app_package_stages WHERE install_id = ?1 AND package_id = ?2",
+                    params![install_id, package_id],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+                ).optional()?)
+            })?;
+            match stage {
+                Some((path, len)) if path == artifact.to_string_lossy() => len.max(0) as u64,
+                Some(_) => {
+                    return Err(AppError::PackageInvalid(
+                        "staged artifact path changed inside a transaction".into(),
+                    ))
+                }
+                None => {
+                    if offset != 0 {
+                        return Err(AppError::PackageInvalid(
+                            "first chunk must start at offset 0".into(),
+                        ));
+                    }
+                    0
+                }
+            }
+        };
+
+        // Idempotent resend of the trailing confirmed chunk (or the whole
+        // prefix at offset 0 when everything is already confirmed).
+        if offset + data.len() as u64 <= confirmed {
+            let existing = std::fs::read(&artifact).map_err(AppError::from)?;
+            let slice = &existing[offset as usize..(offset + data.len() as u64) as usize];
+            if slice == data.as_slice() {
+                self.set_install_state(install_id, install_state::DOWNLOADING)?;
+                return Ok(InstallChunkResult {
+                    install_id: install_id.into(),
+                    package_id: package_id.into(),
+                    next_offset: confirmed,
+                });
+            }
+            return Err(AppError::PackageInvalid(
+                "resent chunk diverges from confirmed bytes".into(),
+            ));
+        }
+        if offset != confirmed {
+            return Err(AppError::PackageInvalid(format!(
+                "out-of-order chunk: offset {offset} != confirmed {confirmed}"
+            )));
+        }
+
+        // Sequential append; fsync so the confirmed length is durable.
+        {
+            use std::io::Write as _;
+            let mut file = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&artifact)?;
+            file.write_all(&data)?;
+            file.sync_all()?;
+        }
+        let new_len = confirmed + data.len() as u64;
+        self.with_conn(|conn| {
+            let tx = conn.unchecked_transaction()?;
+            tx.execute(
+                "INSERT INTO app_package_stages (install_id, package_id, state, staged_path, payload_size, payload_sha256)
+                 VALUES (?1, ?2, 'downloading', ?3, ?4, ?5)
+                 ON CONFLICT(install_id, package_id) DO UPDATE SET
+                 state = excluded.state, staged_path = excluded.staged_path, payload_size = excluded.payload_size",
+                params![install_id, package_id, artifact.to_string_lossy(), new_len as i64, chunk_sha256],
+            )?;
+            tx.execute(
+                "UPDATE app_install_transactions SET state = ?2 WHERE install_id = ?1",
+                params![install_id, install_state::DOWNLOADING],
+            )?;
+            tx.commit()?;
+            Ok(())
+        })?;
+        Ok(InstallChunkResult {
+            install_id: install_id.into(),
+            package_id: package_id.into(),
+            next_offset: new_len,
+        })
+    }
+
+    /// v4 `apps:install_finish` (contract §4.0): the confirmed artifact must
+    /// match the signed wire size and overall hash; Core streams the gunzip
+    /// itself (bounded per step), verifies length/payload hash and executable
+    /// format, then marks the package staged for commit.
+    pub fn install_finish(
+        &self,
+        install_id: &str,
+        package_id: &str,
+        artifact_bytes: u64,
+    ) -> Result<InstallFinishResult, AppError> {
+        let _operation = self.operation.lock().map_err(lock_error)?;
+        let record = self.owned_transaction(install_id)?;
+        if !matches!(
+            record.state.as_str(),
+            install_state::DOWNLOADING | install_state::CATALOG_RESOLVED
+        ) {
+            return Err(AppError::InvalidState(
+                "install no longer accepts uploads".into(),
+            ));
+        }
+        let request = decode_request(&record)?;
+        let package = request
+            .packages
+            .iter()
+            .find(|p| p.package_id == package_id)
+            .ok_or_else(|| AppError::NotFound("package not declared in transaction".into()))?;
+
+        let staging = app_install::staging_dir(self.app_root(), &record.app_id, install_id)?;
+        let artifact = app_install::staged_artifact_path(&staging, package_id)?;
+        let confirmed: u64 = {
+            let stage = self.with_conn(|conn| {
+                Ok(conn.query_row(
+                    "SELECT staged_path, payload_size FROM app_package_stages WHERE install_id = ?1 AND package_id = ?2",
+                    params![install_id, package_id],
+                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+                ).optional()?)
+            })?;
+            match stage {
+                Some((path, len)) if path == artifact.to_string_lossy() => len.max(0) as u64,
+                _ => {
+                    return Err(AppError::PackageInvalid(
+                        "no confirmed chunks to finish".into(),
+                    ))
+                }
+            }
+        };
+        if artifact_bytes != package.wire_size as u64 || confirmed != package.wire_size as u64 {
+            return Err(AppError::PackageInvalid(format!(
+                "artifact length {artifact_bytes} (confirmed {confirmed}) != signed wire size {}",
+                package.wire_size
+            )));
+        }
+
+        let result = (|| {
+            // Overall artifact hash over the staged file.
+            let mut file = std::fs::File::open(&artifact)?;
+            let mut hasher = Sha256::new();
+            let mut buf = [0u8; 64 * 1024];
+            loop {
+                let n = file.read(&mut buf)?;
+                if n == 0 {
+                    break;
+                }
+                hasher.update(&buf[..n]);
+            }
+            let actual: String = hasher
+                .finalize()
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect();
+            if !app_install::sha256_matches(&package.artifact_sha256, &actual) {
+                return Err(AppError::PackageInvalid(format!(
+                    "APP_ARTIFACT_HASH_MISMATCH: staged artifact hash {actual} != declared {}",
+                    package.artifact_sha256
+                )));
+            }
+            // Streamed gunzip with per-step bomb guard; trailing members and
+            // truncation are rejected by the multi-member read below.
+            let payload = app_install::staged_payload_path(&staging, package_id)?;
+            app_install::decompress_gzip_bounded(
+                &artifact,
+                &payload,
+                package.payload_size as u64,
+                &package.payload_sha256,
+            )?;
+            self.with_conn(|conn| {
+                let tx = conn.unchecked_transaction()?;
+                tx.execute(
+                    "UPDATE app_package_stages SET state = 'staging' WHERE install_id = ?1 AND package_id = ?2",
+                    params![install_id, package_id],
+                )?;
+                tx.execute(
+                    "UPDATE app_install_transactions SET state = ?2 WHERE install_id = ?1",
+                    params![install_id, install_state::STAGING],
+                )?;
+                tx.commit()?;
+                Ok(())
+            })?;
+            Ok(())
+        })();
+        if let Err(error) = &result {
+            self.abort_owned(&record, error.code(), "artifact verification failed")?;
+        }
+        result?;
+        Ok(InstallFinishResult {
+            install_id: install_id.into(),
+            package_id: package_id.into(),
+            state: install_state::STAGING.into(),
+            payload_size: package.payload_size as u64,
+            payload_sha256: package.payload_sha256.clone(),
+            ready: true,
+        })
+    }
+
     pub fn install_begin(&self, request: &InstallRequest) -> Result<InstallTransaction, AppError> {
         request.validate()?;
         if self.caller_origin().is_none() {
@@ -15,6 +357,9 @@ impl AppStore {
             ));
         }
         let _operation = self.operation.lock().map_err(lock_error)?;
+        // Self-heal FIRST (see install_begin_catalog): this connection's own
+        // leftover transaction holds the install lock in self.installs.
+        self.recover_owned_stale(&request.app.app_id)?;
         let lock = app_install::acquire_app_lock(self.app_root(), &request.app.app_id, false)?;
         self.recover_app(&request.app.app_id)?;
         let install_id = crate::workspace_store::schema::uuid_v4();
@@ -193,12 +538,43 @@ impl AppStore {
                     &pkg.package_id,
                 )?;
                 app_install::install_staged_payload(&staged, &target)?;
+                // ADR-0027 managed_local activation (contract §5 steps 4–7):
+                // platform signature gate → exec bit → bounded --health
+                // probe → Native Host registration. The executable is NOT
+                // started as the app.
+                if pkg.kind == KIND_MANAGED_LOCAL {
+                    // Contract §4.0.1 step 4: verify code identity BEFORE the
+                    // probe. Dev fixtures carry the explicit fixture flag.
+                    let fixture = request
+                        .app
+                        .manifest
+                        .get("fixture")
+                        .and_then(serde_json::Value::as_bool)
+                        .unwrap_or(false);
+                    let _backend = app_signing::verify_platform_signature(&target, fixture)?;
+                    crate::app_activation::make_executable(&target)?;
+                    crate::app_activation::health_probe(&target)?;
+                    self.with_conn(|conn| {
+                        conn.execute("UPDATE app_install_transactions SET rollback_json = 'host_registered' WHERE install_id = ?1",
+                            [install_id])?;
+                        Ok(())
+                    })?;
+                    let origin = trusted.clone();
+                    crate::app_activation::register_runtime_host(&record.app_id, &target, &origin)?;
+                    self.with_conn(|conn| {
+                        conn.execute("UPDATE app_install_transactions SET rollback_json = 'activated' WHERE install_id = ?1",
+                            [install_id])?;
+                        Ok(())
+                    })?;
+                }
             }
             self.commit_registry(&record, &request)
         })();
         match result {
             Ok(_) => {
                 let cleanup = self.finish_committed(&record);
+                // Drop the returned File immediately (temporary value): the
+                // flock must release before this function returns.
                 self.installs.lock().map_err(lock_error)?.remove(install_id);
                 if let Err(e) = cleanup {
                     return Err(e);
@@ -206,6 +582,12 @@ impl AppStore {
                 self.app(&record.app_id)
             }
             Err(error) => {
+                // Activation failure after registration: do not leave a
+                // "success but registration unusable" half-install (A3 §143);
+                // the previous version stays usable via rollback_install.
+                if error.code() != "APP_NOT_FOUND" {
+                    let _ = crate::app_activation::unregister_runtime_host(&record.app_id);
+                }
                 self.abort_owned(&record, error.code(), "package install failed")?;
                 Err(error)
             }
@@ -285,12 +667,14 @@ impl AppStore {
         code: &str,
         message: &str,
     ) -> Result<(), AppError> {
-        self.rollback_install(record, code, message)?;
+        // Release the install lock FIRST: a rollback failure must not leak
+        // the lock in self.installs (flock self-conflict on the next begin).
+        // The removed File drops immediately (temporary value).
         self.installs
             .lock()
             .map_err(lock_error)?
             .remove(&record.install_id);
-        Ok(())
+        self.rollback_install(record, code, message)
     }
 
     pub(super) fn rollback_install(
@@ -328,8 +712,20 @@ impl AppStore {
         let staging =
             app_install::staging_dir(self.app_root(), &record.app_id, &record.install_id)?;
         app_install::remove_staging_dir(&staging)?;
+        // Contract §5 step 7: keep the new version plus ONE previous version;
+        // anything older is cleaned. The update itself does not run the app.
         if !record.from_version.is_empty() && record.from_version != record.to_version {
-            app_host::remove_version(self.app_root(), &record.app_id, &record.from_version)?;
+            app_host::retain_versions(
+                self.app_root(),
+                &record.app_id,
+                &[record.to_version.as_str(), record.from_version.as_str()],
+            )?;
+        } else {
+            app_host::retain_versions(
+                self.app_root(),
+                &record.app_id,
+                &[record.to_version.as_str()],
+            )?;
         }
         self.with_conn(|conn| {
             let tx = conn.unchecked_transaction()?;
@@ -358,6 +754,43 @@ impl AppStore {
                 self.finish_committed(&record)?;
             } else {
                 self.rollback_install(&record, "APP_INTERRUPTED", "interrupted install recovered")?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Roll back this connection's own leftover transactions for `app_id`
+    /// (ones still registered in `self.installs`, i.e. holding the install
+    /// lock). Called BEFORE acquiring the app lock in the begin methods so
+    /// a same-connection retry after a failed install cannot self-conflict
+    /// on the flock file. Transactions owned by another connection (not in
+    /// `self.installs`) are left untouched — `recover_app` after the lock
+    /// acquisition owns that decision.
+    fn recover_owned_stale(&self, app_id: &str) -> Result<(), AppError> {
+        let ids = self.with_conn(|conn| {
+            let mut stmt = conn.prepare("SELECT install_id FROM app_install_transactions WHERE app_id = ?1 AND (state NOT IN ('installed', 'failed') OR rollback_json != '') ORDER BY started_at")?;
+            let rows = stmt.query_map([app_id], |row| row.get::<_, String>(0))?;
+            Ok(rows.collect::<Result<Vec<_>, _>>()?)
+        })?;
+        let mut owned = self.installs.lock().map_err(lock_error)?;
+        for id in ids {
+            // Only roll back what THIS connection still owns (lock held in
+            // the map). Removing the entry drops the install lock.
+            if owned.remove(&id).is_some() {
+                let record = self.transaction(&id)?;
+                if record.state == install_state::INSTALLED {
+                    drop(owned);
+                    self.finish_committed(&record)?;
+                    owned = self.installs.lock().map_err(lock_error)?;
+                } else {
+                    drop(owned);
+                    self.rollback_install(
+                        &record,
+                        "APP_INTERRUPTED",
+                        "interrupted install recovered",
+                    )?;
+                    owned = self.installs.lock().map_err(lock_error)?;
+                }
             }
         }
         Ok(())

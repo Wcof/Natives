@@ -76,7 +76,9 @@ fn data_request(
     InstallRequest {
         app: super::types::AppMeta {
             app_id: app_id.to_string(),
-            kind: "extension_app".to_string(),
+            // ADR-0027: managed_local is the only accepted app kind; data
+            // packages remain valid payloads inside a managed_local app.
+            kind: super::types::KIND_MANAGED_LOCAL.to_string(),
             name: name.to_string(),
             version: version.to_string(),
             enabled: true,
@@ -132,7 +134,7 @@ fn demo_install_query_enable_sidebar_uninstall_cycle() {
     // commit → installed app row
     let app = store.install_commit(&tx.install_id).expect("commit");
     assert_eq!(app.app_id, "com.natives.app.demo");
-    assert_eq!(app.kind, "extension_app");
+    assert_eq!(app.kind, super::types::KIND_MANAGED_LOCAL);
     assert!(app.enabled);
     assert!(app.show_in_sidebar);
     assert_eq!(app.sidebar_order, 0);
@@ -307,7 +309,7 @@ fn runtime_request(
     InstallRequest {
         app: super::types::AppMeta {
             app_id: app_id.to_string(),
-            kind: "extension_app".to_string(),
+            kind: super::types::KIND_MANAGED_LOCAL.to_string(),
             name: "A5 Test".to_string(),
             version: version.to_string(),
             enabled: true,
@@ -401,10 +403,228 @@ fn stage_fake_binary(env: &StoreEnv, install_id: &str, content: &[u8]) {
 }
 
 fn install_version(env: &StoreEnv, version: &str) {
+    let tx = store_install_version_begin(env, version);
+    env.store.install_commit(&tx.install_id).unwrap();
+}
+
+fn store_install_version_begin(env: &StoreEnv, version: &str) -> super::types::InstallTransaction {
     let (request, bytes) = version_request(version);
     let tx = env.store.install_begin(&request).unwrap();
     stage_fake_binary(env, &tx.install_id, &bytes);
-    env.store.install_commit(&tx.install_id).unwrap();
+    let _ = version;
+    tx
+}
+
+// ── Core Apps protocol v4 (ADR-0027): signed catalog → chunks → finish ──
+
+fn openssl_sign(catalog: &[u8]) -> Option<String> {
+    const DEV_PRIVATE_PEM: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../scripts/apps/keys/catalog-trust-dev.private.pem"
+    );
+    if !std::path::Path::new(DEV_PRIVATE_PEM).exists() {
+        return None;
+    }
+    let input = std::env::temp_dir().join(format!(
+        "v4-sign-{}-{}",
+        std::process::id(),
+        std::thread::current()
+            .name()
+            .unwrap_or("t")
+            .replace([' ', ':'], "_")
+    ));
+    std::fs::write(&input, catalog).ok()?;
+    let output = std::process::Command::new("openssl")
+        .args(["pkeyutl", "-sign", "-inkey"])
+        .arg(DEV_PRIVATE_PEM)
+        .args(["-rawin", "-in"])
+        .arg(&input)
+        .output()
+        .ok()?;
+    let _ = std::fs::remove_file(&input);
+    if !output.status.success() {
+        return None;
+    }
+    use base64::Engine as _;
+    Some(base64::engine::general_purpose::STANDARD.encode(&output.stdout))
+}
+
+/// A managed_local catalog whose executable payload is the gzip of `payload`.
+fn managed_catalog(
+    app_id: &str,
+    version: &str,
+    payload: &[u8],
+) -> (Vec<u8>, Vec<u8>, InstallRequest) {
+    use std::io::Write as _;
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder.write_all(payload).unwrap();
+    let artifact = encoder.finish().unwrap();
+    let request = InstallRequest {
+        app: super::types::AppMeta {
+            app_id: app_id.to_string(),
+            kind: super::types::KIND_MANAGED_LOCAL.to_string(),
+            name: "Managed Demo".to_string(),
+            version: version.to_string(),
+            enabled: true,
+            show_in_sidebar: true,
+            sidebar_order: 0,
+            runtime_spec: serde_json::json!({}),
+            surface: serde_json::json!({ "route": format!("app.html?app={app_id}") }),
+            manifest: serde_json::json!({ "schemaVersion": 3 }),
+        },
+        packages: vec![super::types::PackageMeta {
+            package_id: "app-exec".to_string(),
+            kind: super::types::KIND_MANAGED_LOCAL.to_string(),
+            version: version.to_string(),
+            platform: super::types::platform().to_string(),
+            arch: super::types::architecture().to_string(),
+            wire_size: artifact.len() as i64,
+            payload_size: payload.len() as i64,
+            artifact_sha256: crate::app_install::hex_sha256(&artifact),
+            payload_sha256: crate::app_install::hex_sha256(payload),
+            required: true,
+        }],
+        permissions: vec!["app.lifecycle".to_string()],
+        min_host_version: None,
+    };
+    (artifact, payload.to_vec(), request)
+}
+
+fn chunk<T: AsRef<[u8]>>(data: T) -> (String, String) {
+    use base64::Engine as _;
+    (
+        base64::engine::general_purpose::STANDARD.encode(data.as_ref()),
+        crate::app_install::hex_sha256(data.as_ref()),
+    )
+}
+
+#[test]
+fn v4_rejects_platform_mismatch_and_payload_hash_mismatch() {
+    let env = temp_store("v4-rejects");
+    let store = &env.store;
+    let payload = b"#!/bin/sh\necho x\n";
+    let (artifact, _payload, mut request) =
+        managed_catalog("com.natives.app.demo", "1.0.0", payload);
+    // Platform mismatch: the signed catalog targets another OS.
+    request.packages[0].platform = "windows".to_string();
+    let catalog_json = serde_json::to_vec(&request).unwrap();
+    let Some(signature) = openssl_sign(&catalog_json) else {
+        env.drop();
+        return;
+    };
+    use base64::Engine as _;
+    let catalog_b64 = base64::engine::general_purpose::STANDARD.encode(&catalog_json);
+    assert_eq!(
+        err_code(store.install_begin_catalog(&catalog_b64, &signature)),
+        "APP_INVALID_STATE"
+    );
+
+    // Payload hash mismatch: signature is valid but the decompressed bytes
+    // do not match the declared payload_sha256 — finish must fail closed.
+    let (artifact2, _p, request2) = managed_catalog("com.natives.app.demo", "1.0.0", payload);
+    let mut request2 = request2;
+    request2.packages[0].payload_sha256 = crate::app_install::hex_sha256(b"tampered");
+    let catalog2 = serde_json::to_vec(&request2).unwrap();
+    let Some(signature2) = openssl_sign(&catalog2) else {
+        env.drop();
+        return;
+    };
+    let catalog2_b64 = base64::engine::general_purpose::STANDARD.encode(&catalog2);
+    let begun = store
+        .install_begin_catalog(&catalog2_b64, &signature2)
+        .expect("valid signature begins");
+    let (first, first_hash) = chunk(&artifact2);
+    store
+        .install_chunk(&begun.install_id, &begun.package_id, 0, &first, &first_hash)
+        .expect("chunk");
+    let error = store
+        .install_finish(&begun.install_id, &begun.package_id, artifact2.len() as u64)
+        .expect_err("payload hash mismatch must reject");
+    assert_eq!(error.code(), "APP_INVALID_STATE");
+    assert!(error.to_string().contains("APP_PAYLOAD_HASH_MISMATCH"));
+    env.drop();
+}
+
+#[test]
+fn v4_signed_catalog_chunked_install_reaches_staged() {
+    let env = temp_store("v4-chunked");
+    let store = &env.store;
+    let payload = b"#!/bin/sh\necho managed demo\n";
+    let (artifact, _payload, request) = managed_catalog("com.natives.app.demo", "1.0.0", payload);
+    let catalog_json = serde_json::to_vec(&request).unwrap();
+    let Some(signature) = openssl_sign(&catalog_json) else {
+        env.drop();
+        return; // openssl/key unavailable in this environment
+    };
+    use base64::Engine as _;
+    let catalog_b64 = base64::engine::general_purpose::STANDARD.encode(&catalog_json);
+
+    // Tampered catalog is rejected before any state is created.
+    let mut tampered = catalog_json.clone();
+    tampered[0] ^= 0x01;
+    let tampered_b64 = base64::engine::general_purpose::STANDARD.encode(&tampered);
+    assert_eq!(
+        err_code(store.install_begin_catalog(&tampered_b64, &signature)),
+        "APP_INVALID_STATE"
+    );
+
+    let begun = store
+        .install_begin_catalog(&catalog_b64, &signature)
+        .expect("signed catalog begins an install");
+    assert_eq!(begun.chunk_size, super::types::INSTALL_CHUNK_SIZE);
+    assert_eq!(begun.next_offset, 0);
+
+    // Sequential chunks in two halves.
+    let mid = artifact.len() / 2;
+    let (first, first_hash) = chunk(&artifact[..mid]);
+    let (second, second_hash) = chunk(&artifact[mid..]);
+    let r1 = store
+        .install_chunk(&begun.install_id, &begun.package_id, 0, &first, &first_hash)
+        .expect("first chunk");
+    assert_eq!(r1.next_offset, mid as u64);
+    // Out-of-order (gap) is rejected.
+    assert_eq!(
+        err_code(store.install_chunk(
+            &begun.install_id,
+            &begun.package_id,
+            mid as u64 + 1,
+            &second,
+            &second_hash
+        )),
+        "APP_PACKAGE_INVALID"
+    );
+    // Idempotent resend of the confirmed first chunk returns the same offset.
+    let resend = store
+        .install_chunk(&begun.install_id, &begun.package_id, 0, &first, &first_hash)
+        .expect("idempotent resend");
+    assert_eq!(resend.next_offset, mid as u64);
+    let r2 = store
+        .install_chunk(
+            &begun.install_id,
+            &begun.package_id,
+            mid as u64,
+            &second,
+            &second_hash,
+        )
+        .expect("second chunk");
+    assert_eq!(r2.next_offset, artifact.len() as u64);
+
+    // finish: length must equal the signed wire size; then streams gunzip.
+    let wrong = store.install_finish(
+        &begun.install_id,
+        &begun.package_id,
+        artifact.len() as u64 + 1,
+    );
+    assert_eq!(err_code(wrong), "APP_PACKAGE_INVALID");
+    let finished = store
+        .install_finish(&begun.install_id, &begun.package_id, artifact.len() as u64)
+        .expect("finish stages the payload");
+    assert!(finished.ready);
+    assert_eq!(
+        finished.payload_sha256,
+        crate::app_install::hex_sha256(payload)
+    );
+    env.drop();
 }
 
 mod updates;

@@ -23,7 +23,13 @@ const demo = {
     wire_size: 10, payload_size: 10, artifact_sha256: 'a'.repeat(64), payload_sha256: 'b'.repeat(64), required: true,
     url: 'https://github.com/Wcof/Natives/releases/download/apps-demo-v1.0.0/demo.nap' }],
 };
-const catalog = { catalogVersion: 2, apps: [demo, { app_id: 'fund', name: '基金', version: '0.1.0', published: false, packages: [] }] };
+const catalog = {
+  catalogVersion: 2, apps: [demo, { app_id: 'fund', name: '基金', version: '0.1.0', published: false, packages: [] }],
+  // v4: the install flow forwards these signed bytes to the Host verbatim;
+  // the fixture Host just decodes them again (contract §4.0).
+  rawBytes: new TextEncoder().encode(JSON.stringify({ catalogVersion: 2, apps: [demo] })),
+  rawSignatureB64: 'c2lnbmF0dXJlLXN0dWIK',
+};
 function clientFixture({ failCommit = false } = {}) {
   const calls = [], apps = [];
   let request, staged = false;
@@ -34,15 +40,33 @@ function clientFixture({ failCommit = false } = {}) {
       if (method === 'apps:handshake') return { platform: 'darwin', arch: 'arm64', version: '0.1.0', appsProtocolVersion: 3 };
       if (method === 'apps:list') return { apps: [...apps], revision: calls.length, retainedData: [] };
       if (method === 'apps:install_begin') {
-        request = JSON.parse(Buffer.from(params.request, 'base64'));
-        assert.equal(request.packages.length, 1);
-        assert.equal(request.packages[0].url, undefined, 'Host receives metadata, never a download path');
+        // v4: signed catalog + Ed25519 signature; the fixture does not
+        // re-verify, it only asserts the signed document is what arrived.
+        assert.equal(typeof params.catalogBase64, 'string');
+        assert.equal(typeof params.signature, 'string');
+        const catalogDoc = JSON.parse(Buffer.from(params.catalogBase64, 'base64'));
+        assert.ok(Array.isArray(catalogDoc.apps));
+        const catalogEntry = catalogDoc.apps.find((candidate) => candidate.app_id === 'com.natives.app.demo');
+        assert.ok(catalogEntry, 'signed catalog must contain the app being installed');
+        request = { app: catalogEntry, packages: demo.packages };
         staged = false;
-        return { install_id: 'tx-1' };
+        return { install_id: 'tx-1', chunk_size: 262144, next_offset: 0 };
       }
-      if (method === 'apps:install_package') { assert.equal(params.installId, 'tx-1'); assert.ok(params.data); staged = true; }
+      if (method === 'apps:install_chunk') {
+        assert.equal(params.installId, 'tx-1');
+        assert.equal(params.offset, staged ? 10 : 0, 'chunks are sequential');
+        assert.ok(params.dataBase64);
+        assert.equal(params.chunkSha256.length, 64);
+        staged = true;
+        return { next_offset: params.offset + 10 };
+      }
+      if (method === 'apps:install_finish') {
+        assert.ok(staged, 'finish must follow chunk transfer');
+        staged = 'finished';
+        return { install_id: 'tx-1', package_id: 'demo-data', ready: true };
+      }
       if (method === 'apps:install_commit') {
-        assert.ok(staged, 'commit must follow package transfer');
+        assert.ok(staged === 'finished', 'commit must follow finish');
         if (failCommit) throw Object.assign(new Error('private backend detail'), { code: 'APP_INVALID_STATE' });
         const app = { ...request.app, host_registered: false, runtime_spec_json: JSON.stringify(request.app.runtime_spec) };
         const index = apps.findIndex((entry) => entry.app_id === app.app_id);
@@ -61,7 +85,12 @@ function makeDom() {
   }
   return { list: document.getElementById('apps-list'), toast: document.getElementById('apps-toast') };
 }
-const transfer = async (_, { onProgress }) => { onProgress?.(10); return 'cGF5bG9hZA=='; };
+// v4: packageTransfer returns the RAW gzip artifact bytes; the Host owns
+// decompression and hash verification (contract §4.0).
+const transfer = async (_, { onProgress }) => {
+  onProgress?.(10);
+  return new TextEncoder().encode('payload-gzip-artifact');
+};
 {
   const dom = makeDom(), client = clientFixture();
   const call = client.call.bind(client);
@@ -101,9 +130,13 @@ const transfer = async (_, { onProgress }) => { onProgress?.(10); return 'cGF5bG
   assert.equal(dom.list.querySelectorAll('.action.primary').length, 1, 'unreleased Fund must not be installable');
   await center.install(demo);
   assert.deepEqual(client.calls.filter((call) => call.method.startsWith('apps:install_')).map((call) => call.method),
-    ['apps:install_begin', 'apps:install_package', 'apps:install_commit']);
+    ['apps:install_begin', 'apps:install_chunk', 'apps:install_finish', 'apps:install_commit']);
   assert.equal(client.apps.length, 1);
+  // v4: the version comes from the SIGNED catalog, so the update ships a
+  // re-signed catalog with the new version.
   const next = { ...demo, version: '1.1.0', packages: demo.packages.map((pkg) => ({ ...pkg, version: '1.1.0' })) };
+  catalog.rawBytes = new TextEncoder().encode(JSON.stringify({ catalogVersion: 2, apps: [next] }));
+  await center.reloadCatalog();
   await center.install(next);
   assert.equal(client.apps[0].version, '1.1.0');
   assert.ok(!client.calls.some((call) => call.method === 'apps:uninstall'), 'update must never uninstall the old version first');

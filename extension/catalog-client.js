@@ -117,7 +117,13 @@ export async function loadVerifiedCatalog({
       if (catalog?.catalogVersion !== 2 || !Array.isArray(catalog.apps) || catalog.apps.length > 128) {
         throw newSignatureError('unsupported catalog structure');
       }
-      return { ...catalog, source: jsonUrl, embedded: !jsonUrl.startsWith('https:') };
+      // v4: expose the verified raw bytes + signature so the install flow
+      // can hand the SIGNED document to the Host for independent
+      // verification (contract §4.0 — the Host re-checks everything).
+      return {
+        ...catalog, source: jsonUrl, embedded: !jsonUrl.startsWith('https:'),
+        rawBytes: catalogBytes, rawSignatureB64: new TextDecoder().decode(signature),
+      };
     } catch (error) {
       if (error.code !== 'APP_NETWORK') throw error;
       failure = error;

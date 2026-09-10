@@ -2,6 +2,7 @@
 
 use super::types::{App, AppError, AppPackage, AppPermission, InstallTransaction};
 use super::{query, schema};
+use crate::app_install;
 use rusqlite::{params, Connection};
 use serde::Serialize;
 use std::collections::BTreeMap;
@@ -139,6 +140,18 @@ impl AppStore {
     }
 
     pub fn set_enabled(&self, app_id: &str, enabled: bool) -> Result<App, AppError> {
+        // Plan §137: a running app cannot be disabled. Probe the runtime lock
+        // (install→runtime order is trivially satisfied: install lock is not
+        // held here) and release it after the DB update closes the read window.
+        let _runtime = if !enabled {
+            Some(app_install::acquire_app_lock(
+                self.app_root(),
+                app_id,
+                true,
+            )?)
+        } else {
+            None
+        };
         self.with_conn(|conn| {
             let tx = conn.unchecked_transaction()?;
             if tx.execute("UPDATE apps SET enabled = ?2, updated_at = ?3, revision = revision + 1 WHERE app_id = ?1",

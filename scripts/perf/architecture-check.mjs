@@ -14,6 +14,8 @@ const ALLOWED_EXCEED_REASONS = new Map([
   ['crates/file-manager-core/src/file_manager/file_manager_tests.rs', 'Comprehensive core filesystem operations test suite'],
   ['extension/files.js', 'Workspace shell controller: files.html surface, section routing and app-menu wiring'],
   ['crates/native-file-host/src/app_store/mutation.rs', 'App Store mutation layer: install/commit/rollback state machine and runtime registration'],
+  ['crates/native-file-host/src/app_store/install.rs', 'App Store install engine: v4 chunked transfer, activation and recovery state machine'],
+  ['crates/native-file-host/src/app_store/tests.rs', 'App Store test suite: v4 signed catalog install, update and cleanup scenarios'],
 ]);
 
 async function scanFiles(dir) {

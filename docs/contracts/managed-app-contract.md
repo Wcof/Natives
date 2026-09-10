@@ -94,7 +94,9 @@ catalogEvidenceSha256 指向标准 apps/.catalog-evidence/<sha256>.json 与同�
 
 ## 4. 安装、更新与清理
 
-管理方法沿用 apps:install_begin / install_package / install_commit / install_abort / recover / uninstall / clear_data / set_enabled 等现有语义，修改现有协议类型，不创建 parallel v2 store。
+管理方法沿用 apps:install_begin / install_chunk / install_finish / install_commit / install_abort / recover / uninstall / clear_data / set_enabled 等现有语义，修改现有协议类型，不创建 parallel v2 store。
+
+> 实现注记：v4 传输协议落地后，`install_begin` 只接受签名 Catalog（`catalogBase64` + `signature`，Ed25519 固定信任根验签，Core 自行选包）；旧的无签名整包 `install_package` 方法已删除，不再保留两条生产链路。分块方法实现为 `install_chunk`。
 
 ### 4.0 安装传输协议（Core Apps v4）
 
@@ -102,8 +104,8 @@ Native 请求/响应均限制为最多 512 KiB UTF-8 JSON，严格小于 Chrome 
 
 | 方法 | 必填输入 | 成功输出/确定语义 |
 |---|---|---|
-| apps:install_begin | catalogBytesBase64（原文≤256 KiB）、signature、appId、version、platform、arch、requestId | Core 用固定官方公钥验签并自行选包；返回 installId、packageId、chunkSize=262144、nextOffset=0 |
-| apps:install_package | installId、packageId、offset、dataBase64（解码≤256 KiB）、chunkSha256 | 只传原始 gzip artifact；Core 计算 chunk hash 并原子记录有效长度，返回 nextOffset |
+| apps:install_begin | catalogBase64（原文≤256 KiB 签名 Catalog JSON）、signature（base64 Ed25519） | Core 用固定官方公钥验签并自行选包；返回 installId、packageId、chunkSize=262144、nextOffset=0 |
+| apps:install_chunk | installId、packageId、offset、dataBase64（解码≤256 KiB）、chunkSha256 | 只传原始 gzip artifact；Core 计算 chunk hash 并原子记录有效长度，返回 nextOffset |
 | apps:install_finish | installId、packageId、artifactBytes | 长度必须等于签名 wire_size；校验整体 artifact hash，流式 gunzip→受限临时载荷并核对长度、payload hash、格式/架构；返回 staged |
 | apps:install_commit | installId | 全部校验与 health 已完成后按 journal 激活；返回新的安装快照 |
 | apps:install_abort / recover | installId（recover 可恢复本命名空间未完成事务） | 停止解压/写入、清理或恢复 staging，原安装版本保持可用 |

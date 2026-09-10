@@ -10,6 +10,12 @@ use serde::{Deserialize, Serialize};
 /// V1 only allows `extension_app` (ADR-0025 D13).
 pub const KIND_EXTENSION_APP: &str = "extension_app";
 
+/// ADR-0027: official managed apps ship one native executable payload
+/// (UI embedded), installed via the v4 chunked protocol. This is the only
+/// kind accepted by Core Apps protocol v4 (ADR-0027 supersedes the V1
+/// `extension_app` resource-installer target for new installs).
+pub const KIND_MANAGED_LOCAL: &str = "managed_local";
+
 /// Maximum app_id length (catalog-derived, Core-validated).
 pub const APP_ID_MAX_LEN: usize = 64;
 
@@ -53,6 +59,31 @@ pub fn architecture() -> &'static str {
 /// Maximum base64 length of one `apps:install_package` payload parameter
 /// (base64 of a ≤20 MiB payload, plus margin): 28 MiB.
 pub const PACKAGE_DATA_MAX_BASE64_BYTES: usize = 28 * 1024 * 1024;
+
+// ── ADR-0027 managed_local budgets (Core Apps protocol v4) ──
+// The existing 5/20 MiB resource budgets are NOT relaxed; managed_local
+// executables get their own larger ceilings, recorded here per plan §93.
+
+/// One managed_local wire artifact (gzip of the executable): 32 MiB.
+pub const MANAGED_WIRE_MAX_BYTES: u64 = 32 * 1024 * 1024;
+
+/// One managed_local decompressed executable: 128 MiB (decompression bomb
+/// guard, enforced per streaming step; the browser never decompresses).
+pub const MANAGED_PAYLOAD_MAX_BYTES: u64 = 128 * 1024 * 1024;
+
+/// Sequential upload chunk size fixed by contract §4.0: 256 KiB.
+pub const INSTALL_CHUNK_SIZE: usize = 256 * 1024;
+
+/// Maximum base64 size of one `apps:install_package` chunk parameter
+/// (256 KiB chunk → ~349.5 KiB base64; 512 KiB leaves margin and matches
+/// the 512 KiB Native Messaging frame budget).
+pub const INSTALL_CHUNK_DATA_MAX_BASE64_BYTES: usize = 512 * 1024;
+
+/// Maximum signed catalog bytes accepted by `apps:install_begin`: 256 KiB.
+pub const CATALOG_MAX_BYTES: usize = 256 * 1024;
+
+/// Maximum Ed25519 signature (base64) length accepted by install_begin.
+pub const CATALOG_SIGNATURE_MAX_BASE64_BYTES: usize = 128;
 
 /// Complete App Registry row (`apps` table).
 #[derive(Serialize)]
@@ -207,10 +238,18 @@ impl InstallRequest {
                     "duplicate package or inconsistent version".into(),
                 ));
             }
+            let managed = package.kind == "runtime" || package.kind == KIND_MANAGED_LOCAL;
+            let (wire_max, payload_max) = if managed {
+                // ADR-0027: one native executable per platform; existing
+                // resource budgets are NOT relaxed (plan §93).
+                (MANAGED_WIRE_MAX_BYTES, MANAGED_PAYLOAD_MAX_BYTES)
+            } else {
+                (PACKAGE_MAX_WIRE_BYTES, PACKAGE_MAX_PAYLOAD_BYTES)
+            };
             if package.wire_size <= 0
-                || package.wire_size as u64 > PACKAGE_MAX_WIRE_BYTES
+                || package.wire_size as u64 > wire_max
                 || package.payload_size <= 0
-                || package.payload_size as u64 > PACKAGE_MAX_PAYLOAD_BYTES
+                || package.payload_size as u64 > payload_max
             {
                 return Err(AppError::InvalidState("package size outside budget".into()));
             }
@@ -220,10 +259,19 @@ impl InstallRequest {
                 }
             }
             match package.kind.as_str() {
-                "runtime" => {
-                    return Err(AppError::InvalidState(
-                        "runtime packages are deprecated; apps share native-file-host".into(),
-                    ));
+                // ADR-0027: managed_local is the official executable payload
+                // ("runtime" receipts from pre-0027 installs stay readable).
+                k if k == KIND_MANAGED_LOCAL || k == "runtime" => {
+                    if package.platform != platform() || package.arch != architecture() {
+                        return Err(AppError::InvalidState(
+                            "executable package does not match this platform".into(),
+                        ));
+                    }
+                    if !package.required {
+                        return Err(AppError::InvalidState(
+                            "the executable payload must be required".into(),
+                        ));
+                    }
                 }
                 "data" | "resource"
                     if (package.platform == "any" || package.platform == platform())
@@ -287,6 +335,37 @@ pub struct InstallPackageResult {
     pub ready: bool,
 }
 
+/// Result of `apps:install_begin` under Core Apps protocol v4: Core has
+/// verified the signed catalog, selected the executable package for this
+/// platform, and fixed the upload chunk size (contract §4.0).
+#[derive(Serialize)]
+pub struct InstallBeginResult {
+    pub install_id: String,
+    pub package_id: String,
+    pub chunk_size: usize,
+    pub next_offset: u64,
+}
+
+/// Result of `apps:install_chunk`: the new confirmed artifact length.
+#[derive(Serialize)]
+pub struct InstallChunkResult {
+    pub install_id: String,
+    pub package_id: String,
+    pub next_offset: u64,
+}
+
+/// Result of `apps:install_finish`: the artifact decompressed, verified
+/// and staged; the transaction is ready for `apps:install_commit`.
+#[derive(Debug, Serialize)]
+pub struct InstallFinishResult {
+    pub install_id: String,
+    pub package_id: String,
+    pub state: String,
+    pub payload_size: u64,
+    pub payload_sha256: String,
+    pub ready: bool,
+}
+
 /// Catalog-derived app metadata.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -317,9 +396,9 @@ impl AppMeta {
             format!("com.natives.app.{}", self.app_id)
         }
     }
-    /// Core-side validation before anything is persisted (ADR-0025 D13:
-    /// `kind` V1 only allows `extension_app`; catalog must not smuggle
-    /// paths or scripts).
+    /// Core-side validation before anything is persisted (Core Apps v4:
+    /// `kind` only allows `managed_local`; the catalog cannot smuggle
+    /// paths or scripts — ADR-0027).
     pub fn validate(&self) -> Result<(), AppError> {
         crate::app_install::validate_identifier(&self.app_id, "app id")?;
         if self.app_id.is_empty() || self.app_id.len() > APP_ID_MAX_LEN {
@@ -336,10 +415,10 @@ impl AppMeta {
                 self.app_id
             )));
         }
-        if self.kind != KIND_EXTENSION_APP {
+        if self.kind != KIND_MANAGED_LOCAL {
             return Err(AppError::InvalidState(format!(
-                "kind {} not allowed in V1 (only {})",
-                self.kind, KIND_EXTENSION_APP
+                "kind {} not allowed (only {})",
+                self.kind, KIND_MANAGED_LOCAL
             )));
         }
         if self.name.trim().is_empty() || self.name.len() > 128 {
@@ -413,6 +492,9 @@ fn required_by_default() -> bool {
 pub enum AppError {
     NotFound(String),
     InvalidState(String),
+    /// Contract §4.0: chunk rewrites, divergent data, out-of-order or
+    /// oversized uploads are surfaced as APP_PACKAGE_INVALID.
+    PackageInvalid(String),
     Conflict(String),
     Sql(rusqlite::Error),
     Io(std::io::Error),
@@ -423,6 +505,7 @@ impl AppError {
         match self {
             Self::NotFound(_) => "APP_NOT_FOUND",
             Self::InvalidState(_) => "APP_INVALID_STATE",
+            Self::PackageInvalid(_) => "APP_PACKAGE_INVALID",
             Self::Conflict(_) => "APP_CONFLICT",
             Self::Sql(_) => "APP_INTERNAL",
             Self::Io(_) => "APP_IO",
@@ -435,6 +518,7 @@ impl std::fmt::Display for AppError {
         match self {
             Self::NotFound(target) => write!(f, "app not found: {target}"),
             Self::InvalidState(message) => write!(f, "invalid app state: {message}"),
+            Self::PackageInvalid(message) => write!(f, "invalid package upload: {message}"),
             Self::Conflict(message) => write!(f, "conflicting app state: {message}"),
             Self::Sql(error) => write!(f, "sql error: {error}"),
             Self::Io(error) => write!(f, "io error: {error}"),

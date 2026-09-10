@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
+mod app_activation;
 mod app_dispatch;
 #[cfg(debug_assertions)]
 mod app_fixture;
@@ -16,6 +17,7 @@ mod app_host;
 mod app_host_manifest;
 mod app_install;
 mod app_secrets;
+mod app_signing;
 mod app_store;
 mod batch;
 mod dispatch;

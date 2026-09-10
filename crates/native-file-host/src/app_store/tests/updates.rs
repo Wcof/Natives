@@ -29,7 +29,9 @@ fn update_failure_preserves_previous_and_success_preserves_preferences() {
     assert!(!app.enabled);
     assert!(!app.show_in_sidebar);
     assert_eq!(app.sidebar_order, 7);
-    assert!(!env.app_root().join("demo/packages/1.0.0").exists());
+    // ADR-0027 contract §5 step 7: exactly ONE previous version is retained
+    // for rollback; only older ones are cleaned.
+    assert!(env.app_root().join("demo/packages/1.0.0").exists());
     assert!(env.app_root().join("demo/packages/1.1.0").exists());
     env.drop();
 }
@@ -38,8 +40,12 @@ fn update_failure_preserves_previous_and_success_preserves_preferences() {
 #[cfg(unix)]
 fn committed_cleanup_failure_can_retry_without_rolling_back_new_version() {
     let env = a5_env("committed-cleanup");
+    // Three versions: the update to 1.1.0 retains 1.0.0 and must clean the
+    // older 0.9.0 — which we trap behind a symlink to prove cleanup never
+    // follows it out of the app root.
+    install_version(&env, "0.9.0");
     install_version(&env, "1.0.0");
-    let old = env.app_root().join("demo/packages/1.0.0");
+    let old = env.app_root().join("demo/packages/0.9.0");
     let held = env.base.join("old-version");
     std::fs::rename(&old, &held).unwrap();
     std::os::unix::fs::symlink(&held, &old).unwrap();
@@ -62,6 +68,8 @@ fn committed_cleanup_failure_can_retry_without_rolling_back_new_version() {
     env.store.recover_install("demo").unwrap();
     assert!(!env.store.app("demo").unwrap().recovery_pending);
     assert_eq!(env.store.app("demo").unwrap().version, "1.1.0");
-    assert!(!old.exists());
+    assert!(!old.exists(), "stale version cleaned after recovery");
+    // Retention: the one previous version survives recovery.
+    assert!(env.app_root().join("demo/packages/1.0.0").exists());
     env.drop();
 }

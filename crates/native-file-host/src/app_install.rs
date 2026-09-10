@@ -117,6 +117,15 @@ pub fn staged_payload_path(staging: &Path, package_id: &str) -> Result<PathBuf, 
     Ok(path)
 }
 
+/// Staged wire artifact (raw gzip bytes uploaded in chunks):
+/// `<staging_dir>/<package_id>.artifact`.
+pub fn staged_artifact_path(staging: &Path, package_id: &str) -> Result<PathBuf, AppError> {
+    validate_identifier(package_id, "package_id")?;
+    let path = staging.join(format!("{package_id}.artifact"));
+    validate_app_path(staging, &path)?;
+    Ok(path)
+}
+
 /// Lock files stay outside the removable app tree, so their inode cannot
 /// change during uninstall. OS ownership ends automatically on process exit.
 pub(crate) fn acquire_app_lock(
@@ -144,9 +153,10 @@ pub(crate) fn acquire_app_lock(
                 std::thread::sleep(Duration::from_millis(10));
             }
             Err(std::fs::TryLockError::WouldBlock) => {
-                return Err(AppError::Conflict(
-                    "APP_BUSY: app is in use by another operation or runtime".into(),
-                ))
+                return Err(AppError::Conflict(format!(
+                    "APP_BUSY: app is in use by another operation or runtime (lock: {})",
+                    path.display()
+                )));
             }
             Err(std::fs::TryLockError::Error(error)) => return Err(error.into()),
         }
@@ -154,7 +164,8 @@ pub(crate) fn acquire_app_lock(
     Ok(file)
 }
 
-/// Core-decided final install path from `kind` (ADR-0026 D2: only data and resource packages).
+/// Core-decided final install path from `kind` (ADR-0026 D2, extended by
+/// ADR-0027: managed_local executables land under `runtime/<version>/`).
 pub fn install_path_for(
     app_root: &Path,
     app_id: &str,
@@ -170,6 +181,11 @@ pub fn install_path_for(
         "data" | "resource" => app_root
             .join(app_id)
             .join("packages")
+            .join(version)
+            .join(package_id),
+        "runtime" | crate::app_store::types::KIND_MANAGED_LOCAL => app_root
+            .join(app_id)
+            .join("runtime")
             .join(version)
             .join(package_id),
         other => {
@@ -259,6 +275,127 @@ pub fn write_staged_payload(path: &Path, bytes: &[u8]) -> Result<(u64, String), 
     atomic_write(path, bytes)?;
     let hash = hex_sha256(bytes);
     Ok((bytes.len() as u64, hash))
+}
+
+/// Stream-decompress a gzip artifact (contract §4.0): the Host runs the
+/// mature gzip implementation, never the page. Enforces the decompression
+/// bomb guard at every step (`max_payload`), verifies the decompressed
+/// length and payload hash, and rejects truncated streams, trailing
+/// members (ZIP-bomb / multi-payload smuggling) via the exact-length read.
+pub fn decompress_gzip_bounded(
+    artifact: &Path,
+    payload: &Path,
+    expected_size: u64,
+    expected_sha256: &str,
+) -> Result<(), AppError> {
+    use flate2::read::GzDecoder;
+    use std::io::{Read as _, Write as _};
+
+    let input = std::fs::File::open(artifact)?;
+    let mut decoder = GzDecoder::new(input);
+    let parent = payload
+        .parent()
+        .ok_or_else(|| AppError::InvalidState("missing payload parent".into()))?;
+    std::fs::create_dir_all(parent)?;
+    let temp = payload.with_extension(format!("{}.tmp", crate::workspace_store::schema::uuid_v4()));
+    let result = (|| {
+        #[cfg(unix)]
+        let mut out = {
+            use std::os::unix::fs::OpenOptionsExt;
+            std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(&temp)?
+        };
+        #[cfg(not(unix))]
+        let mut out = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp)?;
+        let mut hasher = Sha256::new();
+        let mut total: u64 = 0;
+        let mut buf = [0u8; 64 * 1024];
+        loop {
+            // Bounded read: cap what we accept before pulling more bytes so
+            // a bomb stream never inflates past the limit on disk.
+            let budget = std::cmp::min(buf.len() as u64, managed_step_budget(total)) as usize;
+            if budget == 0 {
+                return Err(AppError::InvalidState(
+                    "APP_PAYLOAD_TOO_LARGE: decompressed payload exceeds budget".into(),
+                ));
+            }
+            let n = decoder.read(&mut buf[..budget])?;
+            if n == 0 {
+                break;
+            }
+            out.write_all(&buf[..n])?;
+            hasher.update(&buf[..n]);
+            total += n as u64;
+        }
+        out.sync_all()?;
+        drop(out);
+        // Exact length: longer means bomb, shorter means truncation.
+        if total != expected_size {
+            std::fs::rename(&temp, payload).ok();
+            let _ = std::fs::remove_file(payload);
+            return Err(AppError::InvalidState(format!(
+                "APP_PAYLOAD_SIZE_MISMATCH: decompressed {total} bytes, expected {expected_size}"
+            )));
+        }
+        // Trailing-member rejection (contract: 尾随多载荷拒绝): a second
+        // pass with MultiGzDecoder (consumes EVERY member) must yield the
+        // same total as the single-member read above. Any trailing member
+        // carrying bytes inflates the multi total and is rejected here.
+        let multi_total = {
+            let file2 = std::fs::File::open(artifact)?;
+            let mut multi = flate2::read::MultiGzDecoder::new(file2);
+            let mut extra: u64 = 0;
+            let mut sink = [0u8; 64 * 1024];
+            loop {
+                let n = multi.read(&mut sink)?;
+                if n == 0 {
+                    break;
+                }
+                extra += n as u64;
+                if extra > crate::app_store::types::MANAGED_PAYLOAD_MAX_BYTES {
+                    return Err(AppError::InvalidState(
+                        "APP_PAYLOAD_TOO_LARGE: decompressed payload exceeds budget".into(),
+                    ));
+                }
+            }
+            extra
+        };
+        if multi_total != total {
+            return Err(AppError::InvalidState(
+                "APP_TRAILING_DATA: artifact has data after the first gzip member".into(),
+            ));
+        }
+        if !sha256_matches(expected_sha256, &{
+            let digest = hasher.finalize();
+            let mut hex = String::with_capacity(64);
+            for byte in digest {
+                hex.push_str(&format!("{byte:02x}"));
+            }
+            hex
+        }) {
+            return Err(AppError::InvalidState(
+                "APP_PAYLOAD_HASH_MISMATCH: decompressed payload hash mismatch".into(),
+            ));
+        }
+        std::fs::rename(&temp, payload)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(temp);
+    }
+    result
+}
+
+/// Per-step decompression budget helper: the hard payload ceiling minus
+/// bytes already written, clamped for the read-buffer arithmetic.
+const fn managed_step_budget(written: u64) -> u64 {
+    crate::app_store::types::MANAGED_PAYLOAD_MAX_BYTES.saturating_sub(written)
 }
 
 /// Remove a staging directory tree (rollback / abort). Idempotent.

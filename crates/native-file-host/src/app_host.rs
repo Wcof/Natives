@@ -18,3 +18,28 @@ pub(crate) fn remove_version(root: &Path, app_id: &str, version: &str) -> Result
     }
     Ok(())
 }
+
+/// Keep only the listed version directories under `runtime/` and
+/// `packages/`, removing anything older (contract §5 step 7: after a commit
+/// exactly one previous version is retained; older ones and staging are
+/// cleaned). Names come from our own validated install layout.
+pub(crate) fn retain_versions(root: &Path, app_id: &str, keep: &[&str]) -> Result<(), AppError> {
+    for base in ["runtime", "packages"] {
+        let base_dir = root.join(app_id).join(base);
+        let entries = match fs::read_dir(&base_dir) {
+            Ok(entries) => entries,
+            Err(_) => continue,
+        };
+        for entry in entries {
+            let entry = entry?;
+            let Some(name) = entry.file_name().to_str().map(str::to_string) else {
+                continue;
+            };
+            if keep.contains(&name.as_str()) {
+                continue;
+            }
+            remove_version(root, app_id, &name)?;
+        }
+    }
+    Ok(())
+}

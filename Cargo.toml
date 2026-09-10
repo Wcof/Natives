@@ -2,6 +2,8 @@
 members = [
     "crates/file-manager-core",
     "crates/native-file-host",
+    "crates/app-host-support",
+    "scripts/apps/fixtures/sample-host",
 ]
 resolver = "2"
 # Formal Chromium file-manager release target.

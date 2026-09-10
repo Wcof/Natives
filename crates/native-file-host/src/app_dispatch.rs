@@ -6,10 +6,6 @@ use crate::app_store::{AppStore, UninstallReceipt};
 use crate::protocol::Request;
 use serde_json::Value;
 
-/// Maximum base64 size of a metadata install request payload (well under
-/// the 1 MiB incoming frame limit; package bytes never travel here).
-const MAX_INSTALL_REQUEST_BASE64: usize = 256 * 1024;
-
 /// `caller_origin` comes from Chrome's launch argument. Handshakes only
 /// verify it; installation rejects a missing origin.
 pub(crate) fn app_dispatch(
@@ -93,20 +89,20 @@ pub(crate) fn app_dispatch(
             handle_result!(store.read_resource(app_id, package_id, offset, length))
         }
         "apps:install_begin" => {
-            let request_payload = params
-                .get("request")
+            // Core Apps protocol v4 (contract §4.0): the page uploads the SIGNED
+            // catalog plus its Ed25519 signature; Core verifies and selects the
+            // package itself. The unsigned whole-request path is removed.
+            let catalog = params
+                .get("catalogBase64")
                 .and_then(Value::as_str)
-                .ok_or("request (base64 JSON) is required")?;
-            if request_payload.len() > MAX_INSTALL_REQUEST_BASE64 {
-                return Err("install request is too large".into());
-            }
-            let bytes = base64_decode(request_payload)?;
-            let install_request: crate::app_store::types::InstallRequest =
-                serde_json::from_slice(&bytes)
-                    .map_err(|error| format!("invalid install request: {error}"))?;
-            handle_result!(store.install_begin(&install_request))
+                .ok_or("catalogBase64 (signed catalog) is required")?;
+            let signature = params
+                .get("signature")
+                .and_then(Value::as_str)
+                .ok_or("signature (base64 Ed25519) is required")?;
+            handle_result!(store.install_begin_catalog(catalog, signature))
         }
-        "apps:install_package" => {
+        "apps:install_chunk" => {
             let install_id = params
                 .get("installId")
                 .and_then(Value::as_str)
@@ -115,11 +111,29 @@ pub(crate) fn app_dispatch(
                 .get("packageId")
                 .and_then(Value::as_str)
                 .ok_or("packageId is required")?;
+            let offset = required_u64(params, "offset")?;
             let data = params
-                .get("data")
+                .get("dataBase64")
                 .and_then(Value::as_str)
-                .ok_or("data (base64 payload) is required")?;
-            handle_result!(store.install_package(install_id, package_id, data))
+                .ok_or("dataBase64 (chunk payload) is required")?;
+            let chunk_sha256 = params
+                .get("chunkSha256")
+                .and_then(Value::as_str)
+                .ok_or("chunkSha256 is required")?;
+            handle_result!(store.install_chunk(install_id, package_id, offset, data, chunk_sha256))
+        }
+        "apps:install_finish" => {
+            let install_id = params
+                .get("installId")
+                .and_then(Value::as_str)
+                .ok_or("installId is required")?;
+            let package_id = params
+                .get("packageId")
+                .and_then(Value::as_str)
+                .ok_or("packageId is required")?;
+            // Contract §4.0: artifactBytes must equal the signed wire size.
+            let artifact_bytes = required_u64(params, "artifactBytes")?;
+            handle_result!(store.install_finish(install_id, package_id, artifact_bytes))
         }
         "apps:install_commit" => {
             let install_id = params
@@ -209,11 +223,8 @@ fn optional_u64(params: &Value, key: &str) -> Result<Option<u64>, String> {
     }
 }
 
-fn base64_decode(encoded: &str) -> Result<Vec<u8>, String> {
-    use base64::Engine;
-    base64::engine::general_purpose::STANDARD
-        .decode(encoded)
-        .map_err(|error| format!("invalid base64 install request: {error}"))
+fn required_u64(params: &Value, key: &str) -> Result<u64, String> {
+    optional_u64(params, key)?.ok_or_else(|| format!("{key} is required"))
 }
 
 #[cfg(test)]

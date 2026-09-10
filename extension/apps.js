@@ -5,13 +5,16 @@ import { loadVerifiedCatalog, downloadNapPackage, decompressNap, payloadToBase64
 import { resolveAppPackages, compareAppVersions, classifyAppError } from './app-catalog-policy.js';
 import { appLifecycle } from './app-lifecycle.js';
 
+// v4 helper: SHA-256 hex of a byte slice via SubtleCrypto.
+async function sha256Hex(bytes) {
+  const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes);
+  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
+}
+
 async function transferPackage(pkg, { signal, onProgress } = {}) {
-  const downloaded = await downloadNapPackage({ url: pkg.url, wireSize: pkg.wire_size, signal, onProgress });
-  const payload = await decompressNap(downloaded, {
-    artifactSha256: pkg.artifact_sha256, payloadSha256: pkg.payload_sha256, payloadSize: pkg.payload_size,
-  });
-  signal?.throwIfAborted();
-  return payloadToBase64(payload.payloadBytes);
+  // Core Apps protocol v4 (contract §4.0): the page streams the RAW gzip
+  // artifact only; decompression and every hash check happen in the Host.
+  return downloadNapPackage({ url: pkg.url, wireSize: pkg.wire_size, signal, onProgress });
 }
 
 export function createAppCenter({
@@ -24,15 +27,31 @@ export function createAppCenter({
   const list = customList || (typeof document !== 'undefined' ? document.getElementById('apps-list') : null);
   const toast = customToast || (typeof document !== 'undefined' ? document.getElementById('apps-toast') : null);
   const state = { catalog: [], apps: [], retained: [], revision: 0, host: null,
-    loading: true, catalogError: null, error: null, embedded: false, busy: new Map(), failures: new Map() };
+    loading: true, catalogError: null, error: null, embedded: false, busy: new Map(), failures: new Map(),
+    signedCatalog: null };
+  // v4 helper: return the SIGNED catalog document for install_begin. The
+  // page never self-certifies: refresh() captured the verified raw bytes +
+  // Ed25519 signature, and the Host re-verifies both against its fixed
+  // trust root (contract §4.0). Without a signed catalog there is no path.
+  function signedCatalogForInstall() {
+    const signed = state.signedCatalog;
+    if (!signed?.bytes || !signed?.signatureB64) {
+      throw Object.assign(new Error('no signed catalog available'), { code: 'APP_CATALOG_INVALID' });
+    }
+    return {
+      catalogBase64: payloadToBase64(signed.bytes),
+      signature: signed.signatureB64.trim(),
+    };
+  }
   let toastTimer, idleTimer, progressFrame, disposed = false, suspended = false;
   const dialogs = new Set();
   let catalogAbort = new AbortController();
   let lifecycle = appLifecycle();
   const native = client || createNativeClient({
     host: 'com.natives.file_manager', timeoutMs: 20_000,
-    writeMethods: new Set(['apps:install_begin', 'apps:install_package', 'apps:install_commit',
-      'apps:install_abort', 'apps:uninstall', 'apps:clear_data', 'apps:recover', 'apps:set_enabled', 'apps:set_sidebar']),
+    writeMethods: new Set(['apps:install_begin', 'apps:install_chunk', 'apps:install_finish',
+      'apps:install_commit', 'apps:install_abort', 'apps:uninstall', 'apps:clear_data',
+      'apps:recover', 'apps:set_enabled', 'apps:set_sidebar']),
     onDisconnect: (error, intentional) => {
       state.host = null;
       if (!intentional && !disposed) { state.error = classifyAppError(error); render(); }
@@ -116,6 +135,10 @@ export function createAppCenter({
       if (disposed || attempt !== catalogAbort) return;
       state.catalog = catalog.apps;
       state.embedded = Boolean(catalog.embedded);
+      // v4: remember the verified raw catalog bytes + signature so the
+      // install flow can hand the SIGNED document to the Host for
+      // independent Ed25519 verification (contract §4.0).
+      state.signedCatalog = { bytes: catalog.rawBytes, signatureB64: catalog.rawSignatureB64 };
     } catch (error) {
       if (!disposed && attempt === catalogAbort && error.code !== 'APP_CANCELLED') {
         state.catalog = [];
@@ -283,15 +306,19 @@ export function createAppCenter({
         min_host_version: entry.minHostVersion || entry.minNativesVersion || null,
       };
       controller.signal.throwIfAborted();
+      // Protocol v4: the page sends the SIGNED catalog bytes; the Host
+      // verifies the Ed25519 signature and selects the package itself.
+      const signed = signedCatalogForInstall();
       const tx = await native.call('apps:install_begin', {
-        request: payloadToBase64(new TextEncoder().encode(JSON.stringify(request))),
+        catalogBase64: signed.catalogBase64,
+        signature: signed.signature,
       });
       installId = tx.install_id;
       let transferred = 0;
       const total = packages.reduce((sum, pkg) => sum + pkg.wire_size, 0);
       for (const pkg of packages) {
         busy.stage = 'appsDownloading'; render();
-        const data = await packageTransfer(pkg, { signal: controller.signal, onProgress: (bytes) => {
+        const artifact = await packageTransfer(pkg, { signal: controller.signal, onProgress: (bytes) => {
           busy.progress = (transferred + bytes) / total;
           if (globalThis.requestAnimationFrame) {
             progressFrame ??= requestAnimationFrame(() => { progressFrame = undefined; render(); });
@@ -299,8 +326,22 @@ export function createAppCenter({
         } });
         controller.signal.throwIfAborted();
         transferred += pkg.wire_size;
+        // Chunked upload: 256 KiB frames, sequential, one in flight; the
+        // Host owns every hash check and decompression (contract §4.0).
+        busy.stage = 'appsUploading'; render();
+        const chunkSize = tx.chunk_size || 262144;
+        for (let offset = 0; offset < artifact.byteLength; offset += chunkSize) {
+          const slice = artifact.subarray(offset, Math.min(offset + chunkSize, artifact.byteLength));
+          await native.call('apps:install_chunk', {
+            installId, packageId: pkg.package_id, offset,
+            dataBase64: payloadToBase64(slice),
+            chunkSha256: await sha256Hex(slice),
+          });
+        }
         busy.stage = 'appsVerifying'; render();
-        await native.call('apps:install_package', { installId, packageId: pkg.package_id, data });
+        await native.call('apps:install_finish', {
+          installId, packageId: pkg.package_id, artifactBytes: pkg.wire_size,
+        });
       }
       controller.signal.throwIfAborted();
       busy.stage = 'appsCommitting'; busy.committing = true; busy.progress = undefined; render();

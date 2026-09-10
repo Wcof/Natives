@@ -1,0 +1,14 @@
+[package]
+name = "sample-host-fixture"
+version = "1.0.0"
+edition = "2021"
+authors = ["Natives"]
+description = "A1/A2 standard sample app host fixture (test-only, not shipped)"
+publish = false
+
+[[bin]]
+name = "sample-host"
+path = "sample_host.rs"
+
+[dependencies]
+app-host-support = { path = "../../../../crates/app-host-support" }
