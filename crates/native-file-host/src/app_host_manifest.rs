@@ -19,9 +19,14 @@ pub fn chrome_manifest_dir() -> Option<PathBuf> {
     Some(home.join(".config/google-chrome/NativeMessagingHosts"))
 }
 
-/// Host manifest path inside `dir` (`<host>.json`).
+/// Host manifest path inside `dir` (`<host>.json`). Accepts both the
+/// production namespace (`com.natives.app.`) and the local-candidate
+/// namespace (`com.natives.local.app.`) so the two modes never share
+/// registration files (plan §5 P1 mode isolation).
 pub(crate) fn manifest_path_in(dir: &Path, host: &str) -> std::io::Result<PathBuf> {
-    if !host.starts_with("com.natives.app.")
+    let in_namespace =
+        host.starts_with("com.natives.app.") || host.starts_with("com.natives.local.app.");
+    if !in_namespace
         || host.len() > 128
         || host.split('.').any(|part| {
             part.is_empty()

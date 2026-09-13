@@ -859,6 +859,28 @@ B-Local 通过才称本机可用；完成 §8 T01–T24 和适用工程门禁。
 只更新本方案/PR 证据，不再生成第二份实施路线。
 ~~~
 
+## 10.1 实施证据记录（2026-09-13 本轮，滚动更新）
+
+本轮范围：P1 模式隔离/候选构建 + P3 引导重写 + P2 配置一致性联动 + P6 过时测试映射。基线 HEAD `b0ae91c3`（工作区含本轮未提交修改）。
+
+| 项 | 结果 | 证据 |
+|---|---|---|
+| local 完整候选构建 | pass | `rtk node scripts/installer-package.mjs --mode local` 退出 0；候选 `dist/installer/Natives-0.1.0-macOS-arm64-local.pkg` SHA-256 `796c7554bbc7969df77fd8be65133c02df33194ce54a858457308af744699180`；候选 DMG `dist/installer/Natives-0.1.0-macOS-arm64-local.dmg` SHA-256 `43f0f44477ee09c912c163a2ded78222c50f3bc41da9c23a1f15bef5705c1c33`；local 扩展 ID `fcemcngngoblajnpmoegpjfpdokiofie`（独立 key，与 production 不共用） |
+| verify.sh 候选展开核验（T02/T03） | pass | 退出 0：唯一主 .app、图标、引导页、双 NM 注册（按模式命名）、系统源、fund 载荷、产品清单均在位；第二 .app 检查生效 |
+| app_store 全量 Rust 测试 | pass | 44/44 通过（exit=0）；首跑一次并行时序抖动，复跑两次稳定通过 |
+| apps:integration（改写为产品语义） | pass | 协议 4；空表返回固定 fund 模块；8 个旧分发方法在变更前拒绝（APP_RETIRED_METHOD）；清数据需确认；扩展字节不变 |
+| apps:e2e（改写为产品语义） | pass | 5 场景：固定模块/旧链拒绝、fund-host 握手启动 0 下载、记账持仓重放、重启数据持久、显式停止保留 |
+| workspace Rust 测试 + fmt | pass | 195/195 通过（19+45+131），`cargo fmt --check` 通过 |
+
+本轮代码整改（对应 D 编号）：D01 模式隔离端到端（bundle ID/显示名/Host 名/URL scheme/扩展 key/数据根/Keychain 前缀/runtimeHost 命名空间，local= `com.natives.local.*` + `~/.natives-local`）；D02 已确认在位；D03/D04 launcher-main.m 重写（异步可取消、600 秒真实截止、删除 Chrome Preferences 读取与旧握手信任）；D06 已确认在位；D08/D09 product.rs 模式联动修正（bundleId/主入口路径按构建模式判定）；D11 verify.sh 按模式隔离修正。
+
+**Pending（如实记录，不虚构通过）：**
+- §6.2/6.3/T23：无发布授权（Developer ID/公证身份），真实 Release 发布与公开回下载实操未执行。
+- §7 基金业务验收（T17 黄金用例）与 T01–T24 全量实装：需干净系统/真实 Chrome 操作，本轮未执行（apps:e2e 直连进程只证明 Native/HTTP 集成，不等同 §6.3 实操）。
+- T05/T06 引导窗口实操：launcher-main.m 重写仅通过语法检查，真实双击/取消/超时行为需实装验证。
+- production 模式候选与正式信任根（D07）：未接通，需发布身份后实施。
+- `extension-id-key.local.b64` 为本轮生成，需随仓库提交固定，之后不得更换。
+
 ## 11. 依据
 
 - 用户最新决定：所有功能随 Natives 作为内置模块交付，取消独立下载安装路线；该决定取代引用会话中的独立应用包承诺。

@@ -59,7 +59,7 @@ A0 同步 Standards 后生效，不能先更改检查脚本绕过旧门禁：
 
 | 对象 | 预算 |
 |---|---|
-| Core 扩展估算包 | 保持现行 300 KiB hard gate；不包含业务 UI |
+| Core 扩展估算包 | 保持现行 360 KiB hard gate（2026-09-13 用户决定自 300 KiB 上调 20%，ADR-0024 修订）；不包含业务 UI |
 | native-file-host | 保持现行过渡 4 MiB hard gate、12 MB 空闲 RSS、0.5% 空闲 CPU |
 | 单个平台应用下载包 | wire ≤ 32 MiB；payload ≤ 128 MiB；精确长度和 hash 校验 |
 | 应用代码占用 | 活跃版本 + 上一版本；有界 staging，峰值至多三份载荷；个人数据另计 |

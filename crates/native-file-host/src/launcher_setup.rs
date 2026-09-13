@@ -84,7 +84,7 @@ fn chrome_installed() -> bool {
 fn natives_root() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
-        .join(".natives")
+        .join(crate::app_signing::natives_dir_name())
 }
 
 /// dispatch.rs 握手落盘使用；与 run() 共享同一根目录定义。

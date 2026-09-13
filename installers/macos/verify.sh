@@ -15,8 +15,18 @@ app=$(find "$payload/Applications" -mindepth 1 -maxdepth 1 -name '*.app' | head 
 [ -f "$app/Contents/Resources/natives.icns" ] || fail "app icon missing"
 [ -f "$app/Contents/Resources/onboarding/index.html" ] || fail "onboarding html missing"
 if grep -rq "__VERSION__\|__EXTENSION_DIR__" "$app/Contents/Resources/onboarding/"; then fail "onboarding placeholders"; fi
+# 模式隔离（plan §5 P1）：按主入口名称推断模式，核验对应唯一 .app、
+# 系统源与模式专属 Host 注册名；两种模式不得同时出现在同一候选内。
+case "$(basename "$app")" in
+  "Natives.app") nm_core=com.natives.file_manager; nm_model=com.natives.model_host;;
+  "Natives Local.app") nm_core=com.natives.local.file_manager; nm_model=com.natives.local.model_host;;
+  *) fail "unexpected main .app name: $(basename "$app")";;
+esac
+other=$(find "$payload/Applications" -mindepth 1 -maxdepth 1 -name '*.app' ! -name "$(basename "$app")")
+[ -z "$other" ] || fail "unexpected second .app in /Applications: $other"
 for browser in "Library/Google/Chrome/NativeMessagingHosts" "Library/Application Support/Chromium/NativeMessagingHosts"; do
-  [ -f "$payload/$browser/com.natives.file_manager.json" ] || fail "core NM manifest missing ($browser)"
+  [ -f "$payload/$browser/$nm_core.json" ] || fail "core NM manifest missing ($browser)"
+  [ -f "$payload/$browser/$nm_model.json" ] || fail "model NM manifest missing ($browser)"
 done
 [ -d "$payload/Library/Application Support/Natives-Local" ] || [ -d "$payload/Library/Application Support/Natives" ] || fail "system source missing"
 src=$(find "$payload/Library/Application Support" -maxdepth 1 -type d -name 'Natives*Local' -o -maxdepth 1 -type d -name 'Natives' | head -1)

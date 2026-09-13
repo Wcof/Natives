@@ -103,7 +103,7 @@
 - **等级**：MUST
 - **分类**：性能、分发、Apps
 - **规则**（详见 [托管应用契约 v1](../../contracts/managed-app-contract.md)）：
-  - 单个平台应用下载包（gzip 单载荷 `.nap`）wire ≤ 32 MiB、解压 payload ≤ 128 MiB，精确长度与双 SHA-256 校验；这是本方案对原生可执行载荷的新增目标上限，不是实测值。32/128 MiB 修改原因是交付物从纯资源变为可执行应用；Core 原有预算（R-P12 的扩展 300 KiB、native-file-host 4 MiB Gate、12 MB 空闲 RSS、0.5% 空闲 CPU）**不放宽**。
+  - 单个平台应用下载包（gzip 单载荷 `.nap`）wire ≤ 32 MiB、解压 payload ≤ 128 MiB，精确长度与双 SHA-256 校验；这是本方案对原生可执行载荷的新增目标上限，不是实测值。32/128 MiB 修改原因是交付物从纯资源变为可执行应用；Core 原有预算（R-P12 的扩展 360 KiB（2026-09-13 上调，ADR-0024 修订）、native-file-host 4 MiB Gate、12 MB 空闲 RSS、0.5% 空闲 CPU）**不放宽**。
   - 应用代码占用 = 活跃版本 + 上一版本；staging 有界，峰值至多三份载荷；个人数据/导入原件/迁移备份另计。超过 Gate 的 CI 必须直接失败；禁止 `ALLOW_OVERSIZE`/`SKIP_APP_SIZE_CHECK`/baseline waiver 等豁免；修改 Gate 数字本身必须新增 ADR。
   - 未启动或已停止应用的应用进程、监听端口、业务定时器必须为 0；EOF/停止至应用退出 ≤ 2 秒；标准样例启动 ready 同机 Release 5 次 p75 ≤ 2.5 秒。
   - 并发：每 appId 至多一个运行实例；每 OS 用户命名空间至多四个活动应用实例（共享运行槽文件锁保证，禁止仅用 tabs.query 做竞态数量检查）；到上限明确提示。

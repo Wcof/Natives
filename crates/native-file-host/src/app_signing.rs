@@ -65,6 +65,28 @@ pub fn is_production_build() -> bool {
     !cfg!(debug_assertions)
 }
 
+/// Private user data-root directory name, isolated per build mode
+/// (plan §5 P1 mode isolation / contract §4.2): production uses `~/.natives`,
+/// the local candidate uses `~/.natives-local` so the two modes can coexist
+/// without sharing data, locks, or Keychain-adjacent state.
+pub fn natives_dir_name() -> &'static str {
+    if is_production_build() {
+        ".natives"
+    } else {
+        ".natives-local"
+    }
+}
+
+/// Native Messaging host-name namespace prefix for per-app runtime hosts.
+/// Local candidates must never collide with production registrations.
+pub fn runtime_host_namespace() -> &'static str {
+    if is_production_build() {
+        "com.natives.app"
+    } else {
+        "com.natives.local.app"
+    }
+}
+
 /// Platform gatekeeper check for a managed_local executable. Returns the
 /// verification backend actually used, so evidence can name it. Isolated
 /// dev fixtures bypass this only through the explicit fixture flag.

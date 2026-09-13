@@ -242,26 +242,37 @@ impl AppStore {
                     .get("executableSha256")
                     .and_then(serde_json::Value::as_str),
             ) {
-                if bundle_id != "com.natives.app" {
+                // 模式隔离（plan §5 P1）：bundle ID 与主入口路径按构建模式
+                // 判定，与 build-pkg.sh 的 Info.plist / 组装器清单严格一致。
+                let local = !crate::app_signing::is_production_build();
+                let expected_bundle = if local {
+                    "com.natives.local.app"
+                } else {
+                    "com.natives.app"
+                };
+                let expected_exec = if local {
+                    "/Applications/Natives Local.app/Contents/MacOS/Natives"
+                } else {
+                    "/Applications/Natives.app/Contents/MacOS/Natives"
+                };
+                if bundle_id != expected_bundle {
                     return Err(AppError::InvalidState(
                         "APP_PACKAGE_INVALID: unexpected launcher bundle id".into(),
                     ));
                 }
-                verify_fixed(
-                    "/Applications/Natives.app/Contents/MacOS/Natives",
-                    sha,
-                    "launcher executable",
-                )?;
+                verify_fixed(expected_exec, sha, "launcher executable")?;
             }
             if let Some(sha) = launcher
                 .get("onboardingSha256")
                 .and_then(serde_json::Value::as_str)
             {
-                verify_fixed(
-                    "/Applications/Natives.app/Contents/Resources/onboarding/index.html",
-                    sha,
-                    "onboarding page",
-                )?;
+                let local = !crate::app_signing::is_production_build();
+                let expected_html = if local {
+                    "/Applications/Natives Local.app/Contents/Resources/onboarding/index.html"
+                } else {
+                    "/Applications/Natives.app/Contents/Resources/onboarding/index.html"
+                };
+                verify_fixed(expected_html, sha, "onboarding page")?;
             }
         }
         // D08：跨进程操作锁必须先于任何 staging 写入。

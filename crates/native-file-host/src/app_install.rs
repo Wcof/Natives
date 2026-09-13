@@ -13,10 +13,12 @@ use std::time::{Duration, Instant};
 
 use crate::app_store::types::AppError;
 
-/// Default install root: `~/.natives/apps` (ADR-0025 D16).
+/// Default install root: `~/.natives/apps` in production, `~/.natives-local/apps`
+/// for local candidates (mode isolation, plan §5 P1 / contract §4.2).
 pub fn default_app_root() -> PathBuf {
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-    home.join(".natives").join("apps")
+    home.join(crate::app_signing::natives_dir_name())
+        .join("apps")
 }
 
 /// Reject anything that could escape the app root: separators, `.`/`..`,

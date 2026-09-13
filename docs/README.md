@@ -65,6 +65,7 @@ AiNative
 | Legacy 删除 | `architecture/legacy-death-list.md`（死亡证明 + 待 cutover 路径） |
 | Home/Grid/Widget/Sidebar | Home Workspace Patch 的 00/08/13/16/20/24/31/33 + frontend/performance/ui-ux standards |
 | Files | `architecture/FILE_MANAGER_AUDIT.md` + data/backend/performance standards |
+| 现行规范、性能与内存回收一体化整改 | [完整方案](architecture/application-performance-remediation.md)（Standards v4、旧 Catalog/`.nap`/Seed 链死亡证明、S0–S4、M0–M5、Release/30 分钟真实 Chrome 验收）+ technical/04 |
 | Apps / 应用中心 V2 | `pm-context/apps-center-ai-requirements.md` + `creative-app-*` 现状文档 + layering/security/backend standards |
 | Usage/Data | `application-performance-remediation.md` + product/02 + performance standard |
 | 空间 AI 效能：独立成本/Token/会话组件、多 Agent 统计与可视化样式 | [总方案](development/ai-efficiency-components-plan.md) + [当前整改实施方案](development/ai-efficiency-remediation-implementation-plan.md)（E0–E8、逐工具验收、完整交付门槛）+ [ADR-0028](adr/0028-ai-performance-usage-widget-regression.md) + [ADR-0030](adr/0030-ai-usage-ledger-and-collection-boundaries.md) + ui-ux/01–02 + technical/04 |

@@ -103,18 +103,19 @@ pub(crate) fn run_bounded(
     Ok((status, stdout))
 }
 
-/// runtimeHost is computed by Core (contract §2): the contract-fixed prefix
-/// `com.natives.app.a` plus the full lowercase SHA-256 hex of the app_id.
-/// The `a` guards against app_ids beginning with a hyphen colliding with
-/// Native Messaging host-name rules. Persisted on the receipt; never guessed
-/// by the page or overridden by the catalog.
+/// runtimeHost is computed by Core (contract §2): the mode-scoped namespace
+/// prefix (`com.natives.app.a` in production, `com.natives.local.app.a` in the
+/// local candidate — plan §5 P1 mode isolation) plus the full lowercase SHA-256
+/// hex of the app_id. The `a` guards against app_ids beginning with a hyphen
+/// colliding with Native Messaging host-name rules. Persisted on the receipt;
+/// never guessed by the page or overridden by the catalog.
 pub fn runtime_host_name(app_id: &str) -> String {
     let digest = Sha256::digest(app_id.as_bytes());
     let mut hex = String::with_capacity(64);
     for byte in digest {
         hex.push_str(&format!("{byte:02x}"));
     }
-    format!("com.natives.app.a{hex}")
+    format!("{}.a{hex}", crate::app_signing::runtime_host_namespace())
 }
 
 /// Executable payload lands with the exec bit; group/other keep read only.
@@ -396,8 +397,13 @@ mod tests {
         let a = runtime_host_name("fund");
         let b = runtime_host_name("fund");
         assert_eq!(a, b);
-        assert!(a.starts_with("com.natives.app.a"));
-        assert_eq!(a.len(), "com.natives.app.a".len() + 64);
+        // Mode-scoped namespace (plan §5 P1): production prefix in release
+        // builds, local-candidate prefix in debug builds. The name is
+        // `<namespace>.a<64 hex>`.
+        let ns = crate::app_signing::runtime_host_namespace();
+        assert!(a.starts_with(&ns));
+        assert!(a[ns.len()..].starts_with(".a"));
+        assert_eq!(a.len(), ns.len() + 2 + 64);
         // Different ids never collide in the visible prefix space.
         assert_ne!(a, runtime_host_name("other"));
     }

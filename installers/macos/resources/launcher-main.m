@@ -1,18 +1,16 @@
-/* Natives 主入口包装（用户流程优化版）：
- * 1. 启动时先判断 Chrome 中是否已安装该扩展；
- * 2. 若已装载（正常启动）：直接在 Chrome 打开产品页进入系统；
- * 3. 若未装载：显示置顶步骤型弹窗：
- *    - 步骤 1：提示在 Chrome 开启开发者模式；提供【退出】与【打开 Chrome 扩展页面】按钮；
- *      点击后在 Chrome 打开扩展页，并切到步骤 2；
- *    - 步骤 2：自动在访达中高亮选中扩展目录，提示直接拖拽装载；提供【重新打开扩展文件夹】与【完成】按钮；
- *      点击【完成】直接关闭应用退出；
- * 4. 彻底不碰 ~/Downloads 目录，绝不触发下载权限弹窗。 */
+/* Natives 主入口包装（§1.1/§1.4，D03/D04 整改版）：
+ * - 双击后立即显示原生状态窗，主线程不执行同步 waitpid（D04）；
+ * - 入口三态判定交给 native-file-host（--launcher-default）：版本匹配的
+ *   握手 + 产品配置状态，包装进程不信任旧握手文件、不读取 Chrome 私有
+ *   profile Preferences（D03，§1.4 隐私边界）；
+ * - Host 调用全程异步（NSTask terminationHandler），窗口始终可取消；
+ *   单次检测总截止 600 秒，超时终止等待并提供"重新检测/退出"；
+ * - 未就绪时进入两步引导（打开扩展管理页 + 访达定位固定目录），
+ *   步骤 2 提供"重新检测"接续；成功后由 Host 打开产品页并退出。
+ * 不碰 ~/Downloads，不弹 Terminal，不创建常驻检测服务。 */
 #import <AppKit/AppKit.h>
-#include <spawn.h>
 #include <stdlib.h>
 #include <unistd.h>
-
-extern char **environ;
 
 #ifndef SOURCE_ROOT
 #define SOURCE_ROOT "/Library/Application Support/Natives-Local"
@@ -24,16 +22,38 @@ extern char **environ;
 #define SETUP_SCHEME "natives-setup-local"
 #endif
 
-static int run_host_sync(NSArray<NSString *> *args) {
+static NSTask *volatile hostTask = nil;
+
+/// 异步运行 Host；完成回调在主线程执行。取消 = terminate 当前任务。
+static void runHostAsync(NSArray<NSString *> *args,
+                         void (^onExit)(int code, NSString *stdoutText)) {
     NSTask *task = [[NSTask alloc] init];
     task.launchPath = [NSString stringWithFormat:@"%s/native-file-host", SOURCE_ROOT];
     task.arguments = args;
-    task.standardOutput = [NSPipe pipe];
+    NSPipe *outPipe = [NSPipe pipe];
+    task.standardOutput = outPipe;
     task.standardError = [NSPipe pipe];
     NSError *error = nil;
-    if (![task launchAndReturnError:&error]) return 127;
-    [task waitUntilExit];
-    return task.terminationStatus;
+    if (![task launchAndReturnError:&error]) {
+        dispatch_async(dispatch_get_main_queue(), ^{ onExit(127, @""); });
+        return;
+    }
+    hostTask = task;
+    task.terminationHandler = ^(NSTask *finished) {
+        // 进程已退出，管道 EOF 已就绪；同步读取不会阻塞界面。
+        NSData *data = [[outPipe fileHandleForReading] readDataToEndOfFile];
+        NSString *text = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] ?: @"";
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (hostTask == finished) hostTask = nil;
+            onExit(finished.terminationStatus, text);
+        });
+    };
+}
+
+static void cancelHostWait(void) {
+    NSTask *task = hostTask;
+    hostTask = nil;
+    [task terminate];
 }
 
 static BOOL chromeInstalled(void) {
@@ -48,69 +68,162 @@ static void openInChrome(NSString *target) {
     [task launchAndReturnError:nil];
 }
 
-// 直接在访达中高亮选中真实扩展目录，绝不碰 ~/Downloads，零权限索取
+// 在访达中高亮选中真实扩展目录（固定系统源，绝不碰 ~/Downloads）
 static void revealRealExtensionFolder(void) {
     NSString *extDir = [NSString stringWithFormat:@"%s/ChromeExtension", SOURCE_ROOT];
     NSURL *targetURL = [NSURL fileURLWithPath:extDir];
     [[NSWorkspace sharedWorkspace] activateFileViewerSelectingURLs:@[targetURL]];
-
     NSTask *task = [[NSTask alloc] init];
     task.launchPath = @"/usr/bin/osascript";
     task.arguments = @[@"-e", @"tell application \"Finder\" to activate"];
     [task launchAndReturnError:nil];
 }
 
-// 步骤 1：判断 Chrome 中是否已经安装了该扩展
-static BOOL isExtensionInstalledInChrome(void) {
-    // 1. 检查 Natives 握手标记记录
-    NSString *handshakePath = [NSHomeDirectory() stringByAppendingPathComponent:@".natives/extensions/chrome/handshake.json"];
-    if ([[NSFileManager defaultManager] fileExistsAtPath:handshakePath]) {
-        return YES;
+/// 从 Host stdout JSON 提取 step 字段。
+static NSString *stepFromOutput(NSString *output) {
+    NSData *data = [output dataUsingEncoding:NSUTF8StringEncoding];
+    if (!data) return nil;
+    id json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+    if ([json isKindOfClass:[NSDictionary class]]) {
+        id step = json[@"step"];
+        if ([step isKindOfClass:[NSString class]]) return step;
     }
-
-    // 2. 检查 Chrome 各 Profile 下的 Preferences 是否登记了该扩展 ID
-    NSString *chromeBase = [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/Google/Chrome"];
-    NSArray *profiles = @[@"Default", @"Profile 1", @"Profile 2", @"Profile 3", @"Profile 4", @"Profile 5"];
-    NSString *targetId = [NSString stringWithUTF8String:EXTENSION_ID];
-    for (NSString *profile in profiles) {
-        NSString *prefPath = [chromeBase stringByAppendingPathComponent:[NSString stringWithFormat:@"%@/Preferences", profile]];
-        NSData *data = [NSData dataWithContentsOfFile:prefPath];
-        if (data) {
-            NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-            if ([json isKindOfClass:[NSDictionary class]]) {
-                NSDictionary *settings = json[@"extensions"][@"settings"];
-                if (settings[targetId] != nil) {
-                    return YES;
-                }
-            }
-        }
-    }
-
-    // 3. 检查 Chromium 各 Profile
-    NSString *chromiumBase = [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/Chromium"];
-    for (NSString *profile in profiles) {
-        NSString *prefPath = [chromiumBase stringByAppendingPathComponent:[NSString stringWithFormat:@"%@/Preferences", profile]];
-        NSData *data = [NSData dataWithContentsOfFile:prefPath];
-        if (data) {
-            NSDictionary *json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-            if ([json isKindOfClass:[NSDictionary class]]) {
-                NSDictionary *settings = json[@"extensions"][@"settings"];
-                if (settings[targetId] != nil) {
-                    return YES;
-                }
-            }
-        }
-    }
-
-    // 4. 检查 Host 判定
-    int code = run_host_sync(@[@"--launcher-default", @"--no-open"]);
-    if (code == 0) {
-        return YES;
-    }
-
-    return NO;
+    return nil;
 }
 
+@class StatusController;
+@class WizardController;
+
+static StatusController *sharedStatus = nil;
+
+/// 检测状态窗：spinner 文案 + 取消按钮；600 秒总截止（D04：真正停止）。
+@interface StatusController : NSObject <NSWindowDelegate>
+@property(strong) NSWindow *window;
+@property(strong) NSTextField *statusText;
+@property(strong) NSButton *btnCancel;
+@property(strong) NSButton *btnRetry;
+@property() dispatch_block_t deadline;
+@end
+
+@implementation StatusController
+
+- (void)setupUI {
+    NSRect frame = NSMakeRect(0, 0, 440, 150);
+    self.window = [[NSWindow alloc] initWithContentRect:frame
+        styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable
+        backing:NSBackingStoreBuffered defer:NO];
+    self.window.title = @"Natives";
+    [self.window center];
+    self.window.delegate = self;
+    self.window.level = NSFloatingWindowLevel;
+    self.window.hidesOnDeactivate = NO;
+
+    NSImageView *iconView = [[NSImageView alloc] initWithFrame:NSMakeRect(24, 62, 56, 56)];
+    NSString *iconPath = [[NSBundle mainBundle] pathForResource:@"natives" ofType:@"icns"];
+    NSImage *appIcon = iconPath ? [[NSImage alloc] initWithContentsOfFile:iconPath] : nil;
+    if (!appIcon) appIcon = [NSImage imageNamed:NSImageNameApplicationIcon];
+    iconView.image = appIcon;
+    [self.window.contentView addSubview:iconView];
+
+    self.statusText = [[NSTextField alloc] initWithFrame:NSMakeRect(92, 84, 320, 40)];
+    self.statusText.editable = NO; self.statusText.bezeled = NO; self.statusText.drawsBackground = NO;
+    self.statusText.font = [NSFont systemFontOfSize:13.5];
+    self.statusText.stringValue = @"正在检测 Natives 扩展状态…";
+    [self.window.contentView addSubview:self.statusText];
+
+    self.btnCancel = [[NSButton alloc] initWithFrame:NSMakeRect(24, 18, 110, 30)];
+    self.btnCancel.title = @"退出";
+    self.btnCancel.bezelStyle = NSBezelStyleRounded;
+    self.btnCancel.target = self;
+    self.btnCancel.action = @selector(actExit);
+    [self.window.contentView addSubview:self.btnCancel];
+
+    self.btnRetry = [[NSButton alloc] initWithFrame:NSMakeRect(306, 18, 110, 30)];
+    self.btnRetry.title = @"重新检测";
+    self.btnRetry.bezelStyle = NSBezelStyleRounded;
+    self.btnRetry.keyEquivalent = @"\r";
+    self.btnRetry.target = self;
+    self.btnRetry.action = @selector(actRetry);
+    self.btnRetry.hidden = YES;
+    [self.window.contentView addSubview:self.btnRetry];
+
+    [self.window makeKeyAndOrderFront:nil];
+    [self.window orderFrontRegardless];
+}
+
+- (void)startDetection {
+    self.btnCancel.hidden = NO;
+    self.btnRetry.hidden = YES;
+    self.statusText.stringValue = @"正在检测 Natives 扩展状态…";
+    // 非 MRC 环境不用 __weak；block 持有 self 直到检测结束/取消，
+    // 进程生命周期短暂，无泄漏风险。
+    __block StatusController *blockSelf = self;
+    // 单次检测总截止：600 秒后终止 Host 等待（D04：真正停止，不循环续期）。
+    self.deadline = dispatch_block_create(DISPATCH_BLOCK_INHERIT_QOS_CLASS, ^{
+        [blockSelf hostTimedOut];
+    });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)600 * NSEC_PER_SEC),
+                   dispatch_get_main_queue(), self.deadline);
+    runHostAsync(@[@"--launcher-default"], ^(int code, NSString *output) {
+        [blockSelf hostFinished:code output:output];
+    });
+}
+
+- (void)hostFinished:(int)code output:(NSString *)output {
+    if (self.deadline) { dispatch_block_cancel(self.deadline); self.deadline = nil; }
+    NSString *step = stepFromOutput(output);
+    if (code == 0 && ([step isEqualToString:@"opened_natives"] || [step isEqualToString:@"opened_config"])) {
+        // Host 已打开产品页/配置页；成功交接后 Launcher 退出。
+        [NSApp terminate:nil];
+        return;
+    }
+    if (code == 2 && [step isEqualToString:@"setup_required"]) {
+        [self showWizard];
+        return;
+    }
+    // 错误/超时：如实显示，可重试（§1.4 错误可见）。
+    self.btnCancel.hidden = YES;
+    self.btnRetry.hidden = NO;
+    if ([step isEqualToString:@"setup_required"] || code == 2) {
+        self.statusText.stringValue = @"尚未检测到已加载的 Natives 扩展。请完成扩展加载后重新检测。";
+    } else {
+        self.statusText.stringValue = @"检测未完成。请确认已安装 Google Chrome，然后重新检测。";
+    }
+}
+
+- (void)hostTimedOut {
+    cancelHostWait();
+    self.btnCancel.hidden = YES;
+    self.btnRetry.hidden = NO;
+    self.statusText.stringValue = @"检测超时。请确认 Chrome 已打开且扩展已加载，然后重新检测。";
+}
+
+- (void)actRetry {
+    if (!chromeInstalled()) {
+        self.statusText.stringValue = @"未找到 Google Chrome。请安装后重新检测。";
+        openInChrome(@"https://www.google.com/chrome/");
+        return;
+    }
+    [self startDetection];
+}
+
+- (void)actExit {
+    [NSApp terminate:nil];
+}
+
+- (void)showWizard {
+    WizardController *wizard = [[WizardController alloc] init];
+    [wizard setupUI];
+    [self.window close];
+}
+
+- (void)windowWillClose:(NSNotification *)note {
+    [NSApp terminate:nil];
+}
+
+@end
+
+/// 两步引导：步骤 1 打开扩展管理页；步骤 2 访达定位 + 重新检测接续。
 @interface WizardController : NSObject <NSWindowDelegate>
 @property(strong) NSWindow *window;
 @property(strong) NSView *step1View;
@@ -127,8 +240,6 @@ static BOOL isExtensionInstalledInChrome(void) {
     self.window.title = @"Natives";
     [self.window center];
     self.window.delegate = self;
-
-    // 始终置顶（最上层图层，不被任何应用遮挡）
     self.window.level = NSFloatingWindowLevel;
     self.window.hidesOnDeactivate = NO;
 
@@ -140,38 +251,40 @@ static BOOL isExtensionInstalledInChrome(void) {
     [self.window orderFrontRegardless];
 }
 
-// ── 步骤 1 View ───────────────────────────────────────────
-- (void)createStep1View:(NSRect)frame {
-    self.step1View = [[NSView alloc] initWithFrame:frame];
+- (NSView *)newStepHeaderView:(NSRect)frame title:(NSString *)titleText desc:(NSString *)descText {
+    NSView *view = [[NSView alloc] initWithFrame:frame];
 
-    // 图标
     NSImageView *iconView = [[NSImageView alloc] initWithFrame:NSMakeRect(24, 154, 56, 56)];
     NSString *iconPath = [[NSBundle mainBundle] pathForResource:@"natives" ofType:@"icns"];
     NSImage *appIcon = iconPath ? [[NSImage alloc] initWithContentsOfFile:iconPath] : nil;
     if (!appIcon) appIcon = [NSImage imageNamed:NSImageNameApplicationIcon];
     iconView.image = appIcon;
-    [self.step1View addSubview:iconView];
+    [view addSubview:iconView];
 
-    // 标题与步骤指示
     NSTextField *title = [[NSTextField alloc] initWithFrame:NSMakeRect(92, 178, 380, 26)];
     title.editable = NO; title.bezeled = NO; title.drawsBackground = NO;
     title.font = [NSFont boldSystemFontOfSize:17];
-    title.stringValue = @"Natives 扩展安装引导 (步骤 1/2)";
-    [self.step1View addSubview:title];
+    title.stringValue = titleText;
+    [view addSubview:title];
 
-    NSTextField *desc = [[NSTextField alloc] initWithFrame:NSMakeRect(92, 106, 380, 64)];
+    NSTextField *desc = [[NSTextField alloc] initWithFrame:NSMakeRect(92, 98, 380, 72)];
     desc.editable = NO; desc.bezeled = NO; desc.drawsBackground = NO;
     desc.font = [NSFont systemFontOfSize:13.5];
     desc.textColor = [NSColor secondaryLabelColor];
-    desc.stringValue = @"未在 Chrome 中检测到已装载的 Natives 扩展。\n\n请点击下方按钮打开 Chrome 扩展管理页，并在页面右上角开启「开发者模式」开关。";
-    [self.step1View addSubview:desc];
+    desc.stringValue = descText;
+    [view addSubview:desc];
 
-    // 分割线
     NSBox *sep = [[NSBox alloc] initWithFrame:NSMakeRect(24, 75, 452, 1)];
     sep.boxType = NSBoxSeparator;
-    [self.step1View addSubview:sep];
+    [view addSubview:sep];
+    return view;
+}
 
-    // 按钮 1：【退出】
+- (void)createStep1View:(NSRect)frame {
+    self.step1View = [self newStepHeaderView:frame
+        title:@"Natives 扩展安装引导 (步骤 1/2)"
+        desc:@"未在 Chrome 中检测到已装载的 Natives 扩展。\n\n请点击下方按钮打开 Chrome 扩展管理页，并在页面右上角开启「开发者模式」开关。"];
+
     NSButton *btnExit = [[NSButton alloc] initWithFrame:NSMakeRect(24, 22, 120, 32)];
     btnExit.title = @"退出";
     btnExit.bezelStyle = NSBezelStyleRounded;
@@ -179,45 +292,20 @@ static BOOL isExtensionInstalledInChrome(void) {
     btnExit.action = @selector(actExit);
     [self.step1View addSubview:btnExit];
 
-    // 按钮 2：【打开 Chrome 扩展页面】(Primary)
     NSButton *btnOpen = [[NSButton alloc] initWithFrame:NSMakeRect(246, 22, 230, 32)];
     btnOpen.title = @"打开 Chrome 扩展页面";
     btnOpen.bezelStyle = NSBezelStyleRounded;
-    btnOpen.keyEquivalent = @"\r"; // 回车
+    btnOpen.keyEquivalent = @"\r";
     btnOpen.target = self;
     btnOpen.action = @selector(actStep1Next);
     [self.step1View addSubview:btnOpen];
 }
 
-// ── 步骤 2 View ───────────────────────────────────────────
 - (void)createStep2View:(NSRect)frame {
-    self.step2View = [[NSView alloc] initWithFrame:frame];
+    self.step2View = [self newStepHeaderView:frame
+        title:@"装载扩展文件夹 (步骤 2/2)"
+        desc:@"已在访达中为您高亮选中 ChromeExtension 文件夹。\n\n👉 请直接将该文件夹拖入 Chrome 扩展页面中即可秒速完成装载！"];
 
-    NSImageView *iconView = [[NSImageView alloc] initWithFrame:NSMakeRect(24, 154, 56, 56)];
-    NSString *iconPath = [[NSBundle mainBundle] pathForResource:@"natives" ofType:@"icns"];
-    NSImage *appIcon = iconPath ? [[NSImage alloc] initWithContentsOfFile:iconPath] : nil;
-    if (!appIcon) appIcon = [NSImage imageNamed:NSImageNameApplicationIcon];
-    iconView.image = appIcon;
-    [self.step2View addSubview:iconView];
-
-    NSTextField *title = [[NSTextField alloc] initWithFrame:NSMakeRect(92, 178, 380, 26)];
-    title.editable = NO; title.bezeled = NO; title.drawsBackground = NO;
-    title.font = [NSFont boldSystemFontOfSize:17];
-    title.stringValue = @"装载扩展文件夹 (步骤 2/2)";
-    [self.step2View addSubview:title];
-
-    NSTextField *desc = [[NSTextField alloc] initWithFrame:NSMakeRect(92, 98, 380, 72)];
-    desc.editable = NO; desc.bezeled = NO; desc.drawsBackground = NO;
-    desc.font = [NSFont systemFontOfSize:13.5];
-    desc.textColor = [NSColor labelColor];
-    desc.stringValue = @"已在访达中为您高亮选中 ChromeExtension 文件夹。\n\n👉 请直接将该文件夹拖入 Chrome 扩展页面中即可秒速完成装载！";
-    [self.step2View addSubview:desc];
-
-    NSBox *sep = [[NSBox alloc] initWithFrame:NSMakeRect(24, 75, 452, 1)];
-    sep.boxType = NSBoxSeparator;
-    [self.step2View addSubview:sep];
-
-    // 重新打开文件夹按钮
     NSButton *btnReopen = [[NSButton alloc] initWithFrame:NSMakeRect(24, 22, 190, 32)];
     btnReopen.title = @"重新打开扩展文件夹";
     btnReopen.bezelStyle = NSBezelStyleRounded;
@@ -225,7 +313,14 @@ static BOOL isExtensionInstalledInChrome(void) {
     btnReopen.action = @selector(actReopenFolder);
     [self.step2View addSubview:btnReopen];
 
-    // 【完成】按钮：关闭 APP
+    // 重新检测：加载完成后接续入口三态判定（§1.4）。
+    NSButton *btnRedetect = [[NSButton alloc] initWithFrame:NSMakeRect(226, 22, 110, 32)];
+    btnRedetect.title = @"重新检测";
+    btnRedetect.bezelStyle = NSBezelStyleRounded;
+    btnRedetect.target = self;
+    btnRedetect.action = @selector(actRedetect);
+    [self.step2View addSubview:btnRedetect];
+
     NSButton *btnFinish = [[NSButton alloc] initWithFrame:NSMakeRect(346, 22, 130, 32)];
     btnFinish.title = @"完成";
     btnFinish.bezelStyle = NSBezelStyleRounded;
@@ -239,13 +334,10 @@ static BOOL isExtensionInstalledInChrome(void) {
     [NSApp terminate:nil];
 }
 
-// 步骤 1 完成：打开 Chrome 扩展页面并切到步骤 2
 - (void)actStep1Next {
     openInChrome(@"chrome://extensions");
     [self.step1View removeFromSuperview];
     [self.window.contentView addSubview:self.step2View];
-
-    // 进入步骤 2 自动高亮扩展文件夹
     revealRealExtensionFolder();
 }
 
@@ -253,8 +345,15 @@ static BOOL isExtensionInstalledInChrome(void) {
     revealRealExtensionFolder();
 }
 
+- (void)actRedetect {
+    // 接续检测：成功（Host 打开产品页）后退出；仍未就绪回到状态窗重试。
+    sharedStatus = [StatusController new];
+    [sharedStatus setupUI];
+    [sharedStatus startDetection];
+    [self.window close];
+}
+
 - (void)actFinish {
-    // 点击完成，自动退出 APP
     [NSApp terminate:nil];
 }
 
@@ -283,16 +382,11 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    // 1. 判断 Chrome 中是否已经安装了该扩展
-    if (chromeInstalled() && isExtensionInstalledInChrome()) {
-        // 8. 已经安装：正常启动，直接在 Chrome 中打开空间产品页！
-        openInChrome([NSString stringWithFormat:@"chrome-extension://%s/space.html", EXTENSION_ID]);
-        return 0;
-    }
-
-    // 3. 未安装：打开置顶步骤型弹窗（步骤 1/2）
-    WizardController *wizard = [WizardController new];
-    [wizard setupUI];
+    // 入口判定交给 Host（异步）：版本匹配握手 + 产品配置三态；
+    // 包装进程不读旧握手文件、不读 Chrome 私有 profile（D03）。
+    sharedStatus = [StatusController new];
+    [sharedStatus setupUI];
+    [sharedStatus startDetection];
     [app run];
     return 0;
 }

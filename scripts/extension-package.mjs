@@ -16,18 +16,35 @@ const FILES = /^(manifest\.json|(?!(?:ui-harness|test-dom-mock|files-preview)\.j
 // manifest.json 注入固定 RSA 公钥（key 字段），Chrome 由此派生稳定 Extension ID，
 // 与加载路径无关；ID = SHA-256(SPKI DER) 前 16 字节映射 a–p。
 // 派生脚本一次性生成，密钥材料随仓库受版本控制，任何 Release 不得更换。
+// 模式隔离（方案 §5 P1/契约 §4.2）：local 候选使用独立 key/ID，绝不与
+// production 共用 Extension ID——两种模式可并存且互不覆盖。
 const EXTENSION_ID_KEY = readFileSync(join(ROOT, 'scripts/extension-id-key.b64'), 'utf8').trim();
-export const STABLE_EXTENSION_ID = (() => {
-  const hash = createHash('sha256').update(EXTENSION_ID_KEY, 'base64').digest();
+const EXTENSION_ID_KEY_LOCAL = readFileSync(join(ROOT, 'scripts/extension-id-key.local.b64'), 'utf8').trim();
+
+function extensionIdForKey(keyB64) {
+  const hash = createHash('sha256').update(keyB64, 'base64').digest();
   return [...hash.subarray(0, 16)]
     .map((b) => (b >> 4).toString(16) + (b & 15).toString(16))
     .map((h) => h.split('').map((d) => String.fromCharCode(97 + parseInt(d, 16))).join(''))
     .join('');
-})();
+}
 
-function manifestBytes(root) {
+export const STABLE_EXTENSION_ID = extensionIdForKey(EXTENSION_ID_KEY);
+export const LOCAL_EXTENSION_ID = extensionIdForKey(EXTENSION_ID_KEY_LOCAL);
+
+// local 模式的 Native Messaging Host 名称（与 build-pkg.sh 的注册文件名一致）。
+const HOST_NAME_SUBSTITUTIONS_LOCAL = [
+  ["'com.natives.file_manager'", "'com.natives.local.file_manager'"],
+  ["'com.natives.model_host'", "'com.natives.local.model_host'"],
+];
+
+function extensionKeyFor(mode) {
+  return mode === 'local' ? EXTENSION_ID_KEY_LOCAL : EXTENSION_ID_KEY;
+}
+
+function manifestBytes(root, mode = 'production') {
   const manifest = JSON.parse(readFileSync(join(root, 'extension/manifest.json'), 'utf8'));
-  manifest.key = EXTENSION_ID_KEY;
+  manifest.key = extensionKeyFor(mode);
   return Buffer.from(JSON.stringify(manifest));
 }
 const EXECUTABLE_MAGIC = new Set(['7f454c46', 'cffaedfe', 'cefaedfe', 'feedfacf', 'feedface', 'cafebabe', 'bebafeca']);
@@ -74,9 +91,20 @@ export function extensionFileBytes(file, root = ROOT) {
   return bytes;
 }
 
-export function buildExtension(destination = join(ROOT, 'dist/extension'), root = ROOT) {
+export function buildExtension(destination = join(ROOT, 'dist/extension'), root = ROOT, mode = 'production') {
+  const local = mode === 'local';
   const files = distributableFiles(root);
-  const output = files.map((file) => [file, file === 'manifest.json' ? manifestBytes(root) : extensionFileBytes(file, root)]);
+  const output = files.map((file) => {
+    let bytes = file === 'manifest.json' ? manifestBytes(root, mode) : extensionFileBytes(file, root);
+    // local 模式隔离：JS 内的 Core/Model Host 名替换为 local 命名空间，
+    // 与 build-pkg.sh 的 NM 注册文件名严格一致（plan §5 P1）。
+    if (local && file.endsWith('.js')) {
+      let text = bytes.toString('utf8');
+      for (const [from, to] of HOST_NAME_SUBSTITUTIONS_LOCAL) text = text.split(from).join(to);
+      bytes = Buffer.from(text, 'utf8');
+    }
+    return [file, bytes];
+  });
   rmSync(destination, { recursive: true, force: true });
   for (const [file, bytes] of output) {
     const path = join(destination, file);

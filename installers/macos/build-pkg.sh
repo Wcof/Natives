@@ -48,8 +48,19 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 case "$mode" in
-  local) source_name=Natives-Local; app_name="Natives Local.app"; setup_scheme=natives-setup-local;;
-  production) source_name=Natives; app_name="Natives.app"; setup_scheme=natives-setup;;
+  local)
+    source_name=Natives-Local; app_name="Natives Local.app"; setup_scheme=natives-setup-local
+    # 端到端模式隔离（方案 §5 P1 第 2 条 / 契约 §4.2）：local 使用独立
+    # bundle ID、显示名称、Native Messaging Host 名称与 URL scheme，
+    # 绝不与 production 共用注册命名空间。
+    bundle_id=com.natives.local.app; display_name="Natives Local"
+    nm_core=com.natives.local.file_manager; nm_model=com.natives.local.model_host
+    url_name=com.natives.local.setup;;
+  production)
+    source_name=Natives; app_name="Natives.app"; setup_scheme=natives-setup
+    bundle_id=com.natives.app; display_name="Natives"
+    nm_core=com.natives.file_manager; nm_model=com.natives.model_host
+    url_name=com.natives.setup;;
   *) echo 'error: --mode must be explicitly local or production' >&2; exit 1;;
 esac
 [ -n "$host" ] && [ -x "$host" ] || { echo 'error: --host must be an executable prebuilt Host' >&2; exit 1; }
@@ -90,9 +101,9 @@ cp -R "$onboarding_dir/" "$app_root/Contents/Resources/onboarding/"
 printf '%s\n' "<?xml version=\"1.0\" encoding=\"UTF-8\"?>
 <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">
 <plist version=\"1.0\"><dict>
-  <key>CFBundleName</key><string>Natives</string>
-  <key>CFBundleDisplayName</key><string>Natives</string>
-  <key>CFBundleIdentifier</key><string>com.natives.app</string>
+  <key>CFBundleName</key><string>__DISPLAY_NAME__</string>
+  <key>CFBundleDisplayName</key><string>__DISPLAY_NAME__</string>
+  <key>CFBundleIdentifier</key><string>__BUNDLE_ID__</string>
   <key>CFBundleVersion</key><string>$version</string>
   <key>CFBundleShortVersionString</key><string>$version</string>
   <key>CFBundleExecutable</key><string>Natives</string>
@@ -101,11 +112,11 @@ printf '%s\n' "<?xml version=\"1.0\" encoding=\"UTF-8\"?>
   <key>LSMinimumSystemVersion</key><string>11.0</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>CFBundleURLTypes</key><array><dict>
-    <key>CFBundleURLName</key><string>com.natives.setup</string>
+    <key>CFBundleURLName</key><string>__URL_NAME__</string>
     <key>CFBundleURLSchemes</key><array><string>__SETUP_SCHEME__</string></array>
   </dict></array>
 </dict></plist>" > "$app_root/Contents/Info.plist"
-sed -i '' "s/__SETUP_SCHEME__/$setup_scheme/" "$app_root/Contents/Info.plist"
+sed -i '' -e "s/__SETUP_SCHEME__/$setup_scheme/" -e "s/__BUNDLE_ID__/$bundle_id/" -e "s/__DISPLAY_NAME__/$display_name/" -e "s/__URL_NAME__/$url_name/" "$app_root/Contents/Info.plist"
 [ -z "$launcher" ] || install -m 755 "$launcher" "$source_root/natives-launcher"
 if [ -n "$model_host" ] && [ -x "$model_host" ]; then
   install -m 755 "$model_host" "$source_root/model-host"
@@ -116,7 +127,7 @@ cp -R "$extension_dir/" "$source_root/ChromeExtension/"
 cp -R "$modules_dir/" "$source_root/modules/"
 install -m 644 "$product_manifest" "$source_root/product-manifest.json"
 install -m 644 "$product_manifest.sig" "$source_root/product-manifest.sig"
-sed -e "s|__APP_PATH__|\"/Applications/$app_name\"|" -e "s|__SOURCE_ROOT__|\"/Library/Application Support/$source_name\"|" -e "s|__NM_CORE__|com.natives.file_manager|" -e "s|__NM_MODEL__|com.natives.model_host|" "$base/resources/uninstall-template.sh" > "$source_root/uninstall.sh"
+sed -e "s|__APP_PATH__|\"/Applications/$app_name\"|" -e "s|__SOURCE_ROOT__|\"/Library/Application Support/$source_name\"|" -e "s|__NM_CORE__|$nm_core|" -e "s|__NM_MODEL__|$nm_model|" "$base/resources/uninstall-template.sh" > "$source_root/uninstall.sh"
 chmod 755 "$source_root/uninstall.sh"
 printf '%s\n' "$extension_id" > "$source_root/extension-id"
 
@@ -126,10 +137,10 @@ printf '%s\n' "$extension_id" > "$source_root/extension-id"
 for browser in "$payload/Library/Google/Chrome/NativeMessagingHosts" \
                "$payload/Library/Application Support/Chromium/NativeMessagingHosts"; do
   sed -e "s/__EXTENSION_ID__/$extension_id/g" -e "s|__SOURCE_ROOT__|/Library/Application Support/$source_name|g" \
-    "$base/resources/native-host-manifest.json.in" > "$browser/com.natives.file_manager.json"
+    "$base/resources/native-host-manifest.json.in" > "$browser/$nm_core.json"
   if [ -n "$model_host" ] && [ -x "$model_host" ]; then
     sed -e "s/__EXTENSION_ID__/$extension_id/g" -e "s|__SOURCE_ROOT__|/Library/Application Support/$source_name|g" \
-      "$base/resources/native-model-host-manifest.json.in" > "$browser/com.natives.model_host.json"
+      "$base/resources/native-model-host-manifest.json.in" > "$browser/$nm_model.json"
   fi
 done
 
@@ -155,9 +166,10 @@ cp "$conclusion_dir/conclusion-zh.txt" "$resources/conclusion-zh.txt"
 cp "$conclusion_dir/conclusion-en.txt" "$resources/conclusion-en.txt"
 productbuild --synthesize --package "$component" "$tmp/distribution.xml"
 python3 -c "
+import sys
 p = '$tmp/distribution.xml'
 s = open(p).read()
-insert = '''    <title>Natives</title>
+insert = '''    <title>$display_name</title>
     <conclusion lang=\"zh_CN\" file=\"conclusion-zh.txt\" mime-type=\"text/plain\"/>
     <conclusion lang=\"en\" file=\"conclusion-en.txt\" mime-type=\"text/plain\"/>
 '''

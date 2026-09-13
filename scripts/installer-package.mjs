@@ -88,11 +88,12 @@ export async function buildInstaller({ mode = 'local', version, output, fundNap,
   }
   // 解压扩展目录：强制由 buildExtension 现场重建（manifest 注入稳定 key，
   // Chrome 按其派生固定 Extension ID，与加载路径无关），并核验 key 在位。
-  const { buildExtension, STABLE_EXTENSION_ID } = await import('./extension-package.mjs');
-  buildExtension(join(ROOT, 'dist/extension'));
+  // 模式隔离（plan §5 P1）：local 使用独立扩展 key/ID 与 local Host 名。
+  const { buildExtension, STABLE_EXTENSION_ID, LOCAL_EXTENSION_ID } = await import('./extension-package.mjs');
+  buildExtension(join(ROOT, 'dist/extension'), ROOT, mode);
   const packagedManifest = JSON.parse(readFileSync(join(ROOT, 'dist/extension/manifest.json'), 'utf8'));
   if (!packagedManifest.key) throw new Error('packaged extension manifest missing stable key');
-  const extensionId = STABLE_EXTENSION_ID;
+  const extensionId = mode === 'local' ? LOCAL_EXTENSION_ID : STABLE_EXTENSION_ID;
   rmSync(STAGING, { recursive: true, force: true });
   mkdirSync(STAGING, { recursive: true });
 
@@ -194,7 +195,9 @@ export async function buildInstaller({ mode = 'local', version, output, fundNap,
     }],
   };
   manifest.launcher = {
-    bundleId: 'com.natives.app',
+    // 模式隔离（plan §5 P1）：bundle ID 按模式写入，与 build-pkg.sh 的
+    // Info.plist 及 product.rs 的配置校验严格一致。
+    bundleId: mode === 'local' ? 'com.natives.local.app' : 'com.natives.app',
     executableSha256: digest(readFileSync(appExec)),
     onboardingSha256: digest(readFileSync(join(onboardingDir, 'index.html'))),
   };
