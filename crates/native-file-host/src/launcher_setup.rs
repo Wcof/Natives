@@ -380,15 +380,17 @@ pub fn run_launcher_default(args: &[String]) -> i32 {
 }
 
 /// 写入核心 Host 的 Chrome NM manifest。pkg 安装场景下系统级注册已由
-/// 安装引擎写入并指向真实系统源——用户级重复注册会遮蔽系统注册
-/// （方案 §3.3），此时跳过；开发运行（无系统注册）指向系统源真实
-/// 二进制（D06：不再使用 bundle 相对猜测路径）。
+/// 安装引擎写入并指向真实系统源。此时若存在用户级注册（例如历史开发留存），
+/// Chrome 会优先读取用户级目录从而遮蔽系统注册（方案 §3.3），导致
+/// "Access to the specified native messaging host is forbidden"；因此系统级
+/// 存在时清理遮蔽的用户级清单。无系统级时（纯便携/开发），写入当前稳定 ID。
 fn register_core_hosts() -> Result<(), String> {
     let dir =
         crate::app_host_manifest::chrome_manifest_dir().ok_or("cannot resolve Chrome NM dir")?;
     if Path::new("/Library/Google/Chrome/NativeMessagingHosts/com.natives.file_manager.json")
         .exists()
     {
+        clean_shadowing_user_manifests();
         return Ok(());
     }
     fs::create_dir_all(&dir).map_err(|e| format!("create NM dir: {e}"))?;
@@ -411,6 +413,30 @@ fn register_core_hosts() -> Result<(), String> {
         .map_err(|e| format!("write {host} manifest: {e}"))?;
     }
     Ok(())
+}
+
+/// 清理遮蔽系统级注册的用户级主 Host 清单（Chrome 与 Chromium）。
+/// 只删除确属于本产品的 com.natives.file_manager 与 com.natives.model_host，
+/// 绝不宽泛删除其他软件的清单。
+fn clean_shadowing_user_manifests() {
+    let home = dirs::home_dir();
+    let user_dirs = [
+        crate::app_host_manifest::chrome_manifest_dir(),
+        home.as_ref()
+            .map(|h| h.join("Library/Application Support/Chromium/NativeMessagingHosts")),
+    ];
+    for user_dir in user_dirs.into_iter().flatten() {
+        clean_shadowing_manifests_in(&user_dir);
+    }
+}
+
+fn clean_shadowing_manifests_in(dir: &Path) {
+    for host in ["com.natives.file_manager", "com.natives.model_host"] {
+        let file = dir.join(format!("{host}.json"));
+        if file.exists() {
+            let _ = fs::remove_file(&file);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -496,5 +522,27 @@ mod tests {
             .map(|n| char::from(b'a' + n as u8))
             .collect();
         assert_eq!(STABLE_EXTENSION_ID, derived);
+    }
+
+    #[test]
+    fn shadowing_user_manifests_are_cleaned_up() {
+        let root = std::env::temp_dir().join(format!(
+            "natives-shadow-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root).unwrap();
+        let fm = root.join("com.natives.file_manager.json");
+        let mh = root.join("com.natives.model_host.json");
+        let other = root.join("com.other.app.json");
+        fs::write(&fm, b"{}").unwrap();
+        fs::write(&mh, b"{}").unwrap();
+        fs::write(&other, b"{}").unwrap();
+        clean_shadowing_manifests_in(&root);
+        assert!(!fm.exists(), "com.natives.file_manager must be cleaned");
+        assert!(!mh.exists(), "com.natives.model_host must be cleaned");
+        assert!(other.exists(), "unrelated manifest must be preserved");
+        let _ = fs::remove_dir_all(&root);
     }
 }
