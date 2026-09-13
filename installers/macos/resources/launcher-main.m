@@ -58,7 +58,29 @@ static void openInChrome(NSString *target) {
 }
 
 static void revealFolder(void) {
-    run_host_sync(@[@"--reveal-extension-dir"]);
+    NSString *extDir = [NSString stringWithFormat:@"%s/ChromeExtension", SOURCE_ROOT];
+    NSString *downloads = [NSHomeDirectory() stringByAppendingPathComponent:@"Downloads"];
+    NSString *alias = [downloads stringByAppendingPathComponent:@"Natives-Extension"];
+    NSFileManager *fm = [NSFileManager defaultManager];
+
+    // 确保 Downloads/Natives-Extension 符号链接存在并指向系统扩展目录
+    BOOL isDir = NO;
+    if (![fm fileExistsAtPath:alias isDirectory:&isDir] || [[fm destinationOfSymbolicLinkAtPath:alias error:nil] length] > 0) {
+        [fm removeItemAtPath:alias error:nil];
+        [fm createSymbolicLinkAtPath:alias withDestinationPath:extDir error:nil];
+    }
+
+    NSString *targetPath = [fm fileExistsAtPath:alias] ? alias : extDir;
+    NSURL *targetURL = [NSURL fileURLWithPath:targetPath];
+
+    // 原生调用 Finder 定位并高亮该文件/文件夹
+    [[NSWorkspace sharedWorkspace] activateFileViewerSelectingURLs:@[targetURL]];
+
+    // 唤起 Finder 到前台，方便用户直接拖拽
+    NSTask *task = [[NSTask alloc] init];
+    task.launchPath = @"/usr/bin/osascript";
+    task.arguments = @[@"-e", @"tell application \"Finder\" to activate"];
+    [task launchAndReturnError:nil];
 }
 
 static void copyPath(void) {
@@ -231,7 +253,10 @@ static void showReadyWindow(void) {
     [win.contentView addSubview:btnUninstall];
 
     currentWindow = win;
+    win.level = NSFloatingWindowLevel;
+    win.hidesOnDeactivate = NO;
     [win makeKeyAndOrderFront:nil];
+    [win orderFrontRegardless];
 }
 
 // 2. 首次安装引导窗口 (Setup Guided Window)
@@ -258,7 +283,7 @@ static void showSetupWindow(void) {
     [win.contentView addSubview:b1];
 
     NSButton *b2 = [[NSButton alloc] initWithFrame:NSMakeRect(248, 108, 208, 32)];
-    b2.title = @"显示扩展文件夹";
+    b2.title = @"打开扩展文件夹 (拖入 Chrome)";
     b2.bezelStyle = NSBezelStyleRounded;
     b2.target = delegate; b2.action = @selector(actFolder:);
     [win.contentView addSubview:b2];
@@ -300,7 +325,10 @@ static void showSetupWindow(void) {
     }];
 
     currentWindow = win;
+    win.level = NSFloatingWindowLevel;
+    win.hidesOnDeactivate = NO;
     [win makeKeyAndOrderFront:nil];
+    [win orderFrontRegardless];
 }
 
 int main(int argc, char **argv) {

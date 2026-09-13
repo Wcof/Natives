@@ -58,7 +58,9 @@ fn main() -> io::Result<()> {
     // Launcher 引导流：检测/准备受管 Extension 目录、打开 Chrome 扩展页 +
     // Finder、有界轮询握手标记后退出（不常驻，方案 §Launcher）。
     let cli_args: Vec<String> = std::env::args().skip(1).collect();
-    if cli_args.first().map(String::as_str) == Some("--launcher-setup") {
+    if cli_args.first().map(String::as_str) == Some("--launcher-setup")
+        || cli_args.first().map(String::as_str) == Some("--reveal-extension-dir")
+    {
         std::process::exit(launcher_setup::run_cli(&cli_args));
     }
     if cli_args.first().map(String::as_str) == Some("--launcher-default") {
