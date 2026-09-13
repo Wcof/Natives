@@ -13,7 +13,13 @@ export class MockElement {
     this.id = '';
     this.type = '';
     this.value = '';
-    this.style = {};
+    this.style = {
+      // 真实 CSSStyleDeclaration 支持 setProperty；数据卡外观桥接（R2）
+      // 依赖它注入局部语义角色变量，mock 保持同形。
+      setProperty(name, value) {
+        this[name] = value;
+      },
+    };
     this.dataset = {};
     this.attributes = [];
     this.childNodes = [];
@@ -36,6 +42,14 @@ export class MockElement {
   set className(val) {
     this.classList._classes.clear();
     String(val).split(/\s+/).filter(Boolean).forEach((c) => this.classList._classes.add(c));
+  }
+
+  get parentElement() { return this.parentNode && this.parentNode.nodeType === globalThis.Node.ELEMENT_NODE ? this.parentNode : null; }
+  get nextSibling() {
+    if (!this.parentNode) return null;
+    const idx = this.parentNode.childNodes.indexOf(this);
+    if (idx === -1 || idx === this.parentNode.childNodes.length - 1) return null;
+    return this.parentNode.childNodes[idx + 1];
   }
 
   get children() { return this.childNodes.filter((n) => n.nodeType === globalThis.Node.ELEMENT_NODE); }
@@ -129,9 +143,31 @@ export class MockElement {
         textNode._textContent = String(n);
         n = textNode;
       }
+      if (n.parentNode) {
+        const idx = n.parentNode.childNodes.indexOf(n);
+        if (idx !== -1) n.parentNode.childNodes.splice(idx, 1);
+      }
       n.parentNode = this;
       this.childNodes.push(n);
     });
+  }
+  insertBefore(newNode, refNode) {
+    if (newNode.parentNode) {
+      const idx = newNode.parentNode.childNodes.indexOf(newNode);
+      if (idx !== -1) newNode.parentNode.childNodes.splice(idx, 1);
+    }
+    newNode.parentNode = this;
+    if (!refNode) {
+      this.childNodes.push(newNode);
+      return newNode;
+    }
+    const refIdx = this.childNodes.indexOf(refNode);
+    if (refIdx === -1) {
+      this.childNodes.push(newNode);
+    } else {
+      this.childNodes.splice(refIdx, 0, newNode);
+    }
+    return newNode;
   }
   replaceChildren(...nodes) {
     this.childNodes = [];

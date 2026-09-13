@@ -140,12 +140,15 @@ Natives 把不可信的第三方代码（插件）以 iframe 形式跑在用户�
 - **等级**：MUST
 - **分类**：安全、供应链、Apps
 - **规则**：
-  - App Catalog 必须为签名产物（Catalog v3，Ed25519，公钥固定于 Core 信任根）；Host 在可信边界重新验签原文、条目元数据并对实际字节计算摘要，禁止信任前端 alreadyVerified 或前端 hash。签名失败、hash 不匹配、平台/架构不符、超尺寸一律拒绝安装。
-  - 浏览器侧禁止在线下载执行代码（JS/WASM/远程 DSL 解释器、`eval`/`new Function`）；应用业务代码不进入扩展执行上下文，业务由独立官方 App Host（签名原生程序）承载。
-  - Native Host 名称（runtimeHost）由 Core 计算并持久化于安装收据；注册为受限 manifest，不接受页面/Catalog 提供的任意命令、绝对路径或 Host 名称。安装路径由 Core 统一决定于 `~/.natives/apps/<appId>/`；`../`、绝对路径、`C:\`、`~/`、symlink 逃逸必须被拒绝。
+  - App Catalog 必须为签名产物（Catalog v3，Ed25519，公钥固定于 Core 信任根）；Host 在可信边界重新验签原文、条目元数据并对实际字节计算摘要，禁止信任前端 alreadyVerified 或前端 hash。签名失败、hash 不匹配、平台/架构不符、超尺寸一律拒绝。2026-09-12 收敛：签名 Catalog/验签/事务能力只在完整产品安装/更新层使用，用于核验安装包内固定模块文件；不再存在运行时模块分发链路，无模块独立下载。
+  - 浏览器侧禁止在线下载执行代码（JS/WASM/远程 DSL 解释器、`eval`/`new Function`）；应用业务代码不进入扩展执行上下文，业务由独立官方 App Host（内置模块程序，随完整产品交付）承载。
+  - Native Host 名称（runtimeHost）由 Core 计算并持久化于安装收据；注册为受限 manifest，不接受页面/Catalog 提供的任意命令、绝对路径或 Host 名称。安装路径由 Core 统一决定于 `~/.natives/apps/<appId>/`；`../`、绝对路径、`C:\`、`~/`、symlink 逃逸必须被拒绝；禁止写入 `/Applications`、独立 `.app` bundle、系统 Dock 或 LaunchServices 产品注册。本机载荷不进入 `/Applications` 绝不等于免除代码签名、公证和权限校验：每个正式分发平台的构建载荷必须具有真实平台代码签名与可验证凭据（macOS 须 Developer ID 签名与公证，Windows 须 Authenticode，Linux 须官方发布验签与 ELF 权限控制），禁止通过移除 quarantine、关闭 Gatekeeper 或使用任意 shell 脚本规避安全机制，未使用正式平台身份签名的载荷仅限于下述隔离本地开发模式，macOS 本机代码保留 ad-hoc/开发签名。
   - app.html 应用 iframe sandbox 精确为 `allow-scripts allow-forms`，禁止 `allow-same-origin`/`allow-top-navigation`/`allow-popups`/downloads；会话鉴权（两阶段握手、≥128bit challenge、32 字节 CSPRNG bearer token、15 分钟上限、load/navigation 立即撤销）、CORS（仅 Origin: null + 指定 method/header + 有效 bearer，无 cookie/credentials）、Host header 校验、单帧 ≤ 512 KiB 与 HTTP 限额必须按[托管应用契约 v1](../../contracts/managed-app-contract.md) §5/§7 实现。旧通用路径前缀规则（插件 `/modules/{id}/`）不再适用于 Apps；Apps 改为每应用独立端口与资源域。
   - 应用专属 Secret（凭据/Token）只进 OS Keychain（namespace `com.natives.app.<id>`），禁止进入 `*.db`/`natives.db`/日志/前端/`chrome.storage`；Core 清理仅按精确 service/属性或带冒号分隔完整 target 前缀匹配。
   - 原生程序按用户权限运行，本防线不宣称对恶意原生程序有 OS 级沙箱；官方发布签名审查是信任前提，第三方 native 包明确拒绝。
+  - **统一套件（ADR-0029；2026-09-12 收敛为整包统一交付）**：套件本身被信任不替代内部可执行程序验证。完整产品安装包内的固定模块文件与 bundle manifest 必须验签并与实际字节核对；包内不能提供任意启动路径/安装脚本。系统目录只允许主程序/主 Host 和固定内置模块文件，Core 以当前用户权限完成注册与首次数据初始化；root 安装器不得运行用户业务或触碰其 DB/Keychain。源中路径逃逸、链接、错误 owner/权限均拒绝。
+  - **隔离本地开发（ADR-0029）**：无需 Developer ID/公证的例外必须由非生产构建身份、显式开发启动、独立根/注册/Keychain 命名空间与本机构建摘要共同限定，不能靠 fixture 字段或环境变量自授。生产构建拒绝开发信任根和开发包；本地模式仍验 Catalog、hash、格式、来源、权限、会话和数据恢复。开发钥匙可用于隔离 fixture，绝不能打进正式包。
+  - **证据不可混用**：A-Local/B-Local 不代表平台签名、公证或生产 A/B Gate 通过；系统拦截时报告实际文件路径、摘要及签名/评估结果，禁止无界重试、伪造成功或自动点击放行。只读诊断不修改隔离属性或系统信任设置。
 - **为什么**：独立原生应用引入可执行载荷供应链与本地服务攻击面；签名、Host 侧重验、sandbox、会话鉴权、限额与 Secret 隔离是不可缺的防线。
 - **检查方法**：`scripts/apps/check-catalog-signature.mjs`、`check-app-security.mjs`、`check-package-budget.mjs` 与契约黑盒套件全绿；Path Security Gate 测试覆盖逃逸向量；真实浏览器验证 sandbox/CORS/Token 撤销。
 

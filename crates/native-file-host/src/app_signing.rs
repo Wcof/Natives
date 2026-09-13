@@ -47,7 +47,22 @@ pub fn verify_catalog_signature(catalog: &[u8], signature_b64: &str) -> Result<(
     })?;
     trust_root()?.verify(catalog, &sig).map_err(|_| {
         AppError::InvalidState("APP_SIGNATURE_INVALID: catalog signature rejected".into())
-    })
+    })?;
+    // AC-13: production builds must fail closed rather than keep trusting the
+    // repository development root. Release rotation compiles a different
+    // root; until that happens a release build rejects dev-signed catalogs.
+    if is_production_build() {
+        return Err(AppError::InvalidState(
+            "APP_DEV_TRUST_ROOT_IN_PRODUCTION: release build rejects the development catalog trust root".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Production builds are release-profile binaries; isolated dev fixtures and
+/// the development trust root are rejected there (managed-app contract §4.2).
+pub fn is_production_build() -> bool {
+    !cfg!(debug_assertions)
 }
 
 /// Platform gatekeeper check for a managed_local executable. Returns the
@@ -58,6 +73,13 @@ pub fn verify_platform_signature(
     fixture: bool,
 ) -> Result<&'static str, AppError> {
     if fixture {
+        // Defense in depth: install only sets the fixture flag in debug
+        // builds, but the gate itself must also refuse in production.
+        if is_production_build() {
+            return Err(AppError::InvalidState(
+                "APP_FIXTURE_REJECTED_IN_PRODUCTION: fixture binaries are not installable in release builds".into(),
+            ));
+        }
         return Ok("fixture-unverified");
     }
     #[cfg(target_os = "macos")]

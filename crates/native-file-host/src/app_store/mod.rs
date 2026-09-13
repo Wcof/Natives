@@ -19,11 +19,17 @@
 mod cleanup;
 mod install;
 pub mod mutation;
+pub mod product;
 pub mod query;
+pub mod reconcile;
+mod recovery;
 pub mod schema;
+mod seed;
 pub mod types;
 
 #[cfg(test)]
 mod tests;
 
-pub use mutation::{AppStore, UninstallReceipt};
+pub use cleanup::{ClearDataReceipt, ClearDataScope};
+pub use mutation::AppStore;
+pub use reconcile::default_seeds_dirs;

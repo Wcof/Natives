@@ -6,9 +6,9 @@ import { setupTestDomEnvironment } from './test-dom-mock.js';
 
 setupTestDomEnvironment();
 
-console.log('--- 24 Space Widgets Structural & Baseline Verification ---');
+console.log('--- 25 Space Widgets Structural & Baseline Verification ---');
 
-assert.equal(WIDGET_KEYS.length, 24, 'Must register exactly 24 widgets');
+assert.equal(WIDGET_KEYS.length, 32, 'Must register exactly 32 widgets (25 legacy + 7 independent AI components)');
 const manifest = JSON.parse(readFileSync(new URL('./manifest.json', import.meta.url), 'utf8'));
 assert.deepEqual(manifest.optional_permissions?.sort(), ['bookmarks', 'topSites']);
 // Every host the network widgets fetch must stay declared, or real Chrome CORS-blocks them.
@@ -105,4 +105,4 @@ assert.doesNotMatch(dashboardStyles, /\.Weather[^}]*backdrop-filter/s);
 assert.doesNotMatch(dashboardStyles, /\.Notes[^}]*backdrop-filter/s);
 assert.doesNotMatch(dashboardStyles, /\.Trello[^}]*backdrop-filter/s);
 
-console.log('\nAll 24 widgets pass structural and DOM contract verification!');
+console.log('\nAll 25 widgets pass structural and DOM contract verification!');

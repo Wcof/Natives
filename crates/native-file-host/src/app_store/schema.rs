@@ -203,6 +203,28 @@ fn migrate_app_columns(conn: &Connection) -> Result<(), AppError> {
         purge_data INTEGER NOT NULL DEFAULT 0, updated_at INTEGER NOT NULL
     );",
     )?;
+    // AC-04 (ADR-0029 R-APP-21): durable user preinstall choice. Survives
+    // uninstall and cleanup; seed reconciliation must never reinstall an
+    // app the user removed.
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS app_user_intent (
+        app_id TEXT PRIMARY KEY NOT NULL, choice TEXT NOT NULL,
+        changed_at INTEGER NOT NULL
+    );",
+    )?;
+    // Plan §4.3: durable data-reset receipt, kept OUTSIDE the cleaned scope
+    // (natives.db, not apps/<appId>/) and separate from historical uninstall
+    // receipts. A completed requestId replays its original result without
+    // deleting anything; a pending one marks the module's writes blocked.
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS app_data_reset_receipts (
+        request_id TEXT PRIMARY KEY NOT NULL, app_id TEXT NOT NULL,
+        scope_json TEXT NOT NULL, state TEXT NOT NULL,
+        cleared_json TEXT NOT NULL DEFAULT '[]',
+        error_code TEXT, error_message TEXT,
+        created_at INTEGER NOT NULL, completed_at INTEGER
+    );",
+    )?;
     // ADR-0025 D13 ships the full V1 column set; this hook keeps later App
     // Store schema growth capability-based without touching user_version.
     let has_sidebar_order = match table_has_column(conn, "apps", "sidebar_order") {
@@ -261,6 +283,28 @@ fn migrate_v2_apps(conn: &Connection) -> Result<(), AppError> {
         )?;
         conn.execute(
             "INSERT INTO app_meta (key, value, revision) VALUES ('v2_migration', 'completed', 0)
+             ON CONFLICT(key) DO UPDATE SET value = 'completed'",
+            [],
+        )?;
+    }
+    let managed_v3_applied: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM app_meta WHERE key = 'managed_v3_migration' AND value = 'completed')",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap_or(false);
+    if !managed_v3_applied {
+        // Preserve legacy records and data, but never present their old
+        // resource/runtime payload as a runnable managed_local app.
+        conn.execute(
+            "UPDATE apps SET needs_migration = 1, host_registered = 0
+             WHERE kind = 'extension_app'
+                OR app_id IN (SELECT DISTINCT app_id FROM app_packages WHERE kind IN ('resource', 'runtime'))",
+            [],
+        )?;
+        conn.execute(
+            "INSERT INTO app_meta (key, value, revision) VALUES ('managed_v3_migration', 'completed', 0)
              ON CONFLICT(key) DO UPDATE SET value = 'completed'",
             [],
         )?;

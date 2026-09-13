@@ -1,0 +1,237 @@
+> node extension/check-syntax.mjs && node extension/screenshot.test.mjs && node extension/files-session.test.mjs && node extension/files-paths.test.mjs && node extension/files-markdown.test.mjs && node extension/native-client.test.mjs && node extension/model-settings.test.mjs && node extension/model-oauth-subviews.test.mjs && node extension/model-agent-view.test.mjs && node extension/plugins-cache.test.mjs && node extension/app-navigation-projection.test.mjs && node extension/apps.test.mjs && node extension/app-boot.test.mjs && node extension/demo-ui.test.mjs && node extension/app-download.test.mjs && node extension/catalog-client.test.mjs && node extension/space-modals.test.mjs && node extension/space-plugins-smoke.test.mjs && node extension/space-deep-verify.test.mjs && node extension/space-widgets-structural.test.mjs && node extension/space-inspector.test.mjs && node extension/space.test.mjs && node extension/ai-performance.test.mjs && node extension/tests/ai-drilldown.test.mjs && node extension/tests/ai-legacy-migration.test.mjs && node extension/check-lifecycle.mjs && node extension/dev.mjs --self-test
+✓ Syntax check passed for all 161 extension JavaScript files
+✓ Locale schema check passed for all _locales messages.json files
+--- Running Screenshot Engine & Coordinator Tests ---
+✓ Single viewport tile computation passed
+✓ Vertical scrolling and edge alignment passed
+✓ 2D grid scrolling full coverage without gaps or duplicates passed
+✓ Canvas chunking and segmenting passed
+✓ Filename sanitization passed
+✓ Capture limits (128 tiles / 128M pixels) validation passed
+✓ Quota rate limit constant verified
+✓ Protected URL rules passed
+✓ Tab validation rules passed
+✓ Screenshot stitcher tiling and DPR scale contract passed
+✓ Coordinator protected page rejection opens error preview tab
+All Screenshot Engine & Coordinator tests passed successfully!
+files session test passed
+files path helpers test passed
+✓ files markdown unit tests passed
+native client seam test passed
+model settings API, lazy-load, accessibility, and locale tests passed
+--- Model OAuth Sub-Views Test ---
+✓ OAuth Login View rendered successfully
+✓ Auth Files View rendered successfully
+✓ Quota View rendered successfully
+✓ Model OAuth CSS alignment and icon sizing contracts verified
+✓ Account Models Dialog for Auth File contract verified
+All model OAuth sub-views tests passed!
+--- Model Agent View Contract ---
+All model agent view tests passed!
+--- Plugins Cache Unit Tests ---
+✓ Basic set & get passed
+✓ TTL expiration passed
+✓ Update existing key passed
+✓ Capacity eviction passed
+✓ Expired entries purged on set passed
+✓ Clear cache passed
+--- Background Image Cache & Quota Tests ---
+✓ Background image LRU quota & resilience passed
+All plugins-cache tests passed!
+app-navigation-projection: Gate A3 checks passed (two-surface parity, uninstall removal, typed nav, 0-app rule)
+apps: Gate A4+A6 checks passed (catalog items, install cycle, D42, conflict, uninstall confirm, settings entry, locales, App Surface, demo host, unknown module)
+app boot: generic managed host, sandbox and EOF cleanup passed
+managed apps: no extension-bundled business UI or static registry
+app downloads: allowed sources, paired signatures, fallback, byte limits, timeout and cancellation passed
+catalog: official dev catalog verified
+catalog: tamper/unknown-key/empty-sig all rejected
+wire gate: 32MiB boundary enforced
+nap e2e: wire=1279B payload=65536B base64=87384B OK
+hash gate: artifact 1-byte tamper rejected
+hash gate: payload hash/size mismatch rejected
+bomb: payload above 128MiB rejected
+constants: wire 32MiB / payload 128MiB parity
+catalog-client: Gate A5 browser-side checks passed
+--- Space Modals Unit Tests ---
+✓ Name modal create confirmed passed
+✓ Name modal rename cancelled passed
+✓ Name modal empty name rejection passed
+✓ Delete modal cancel passed
+✓ Delete modal confirm passed
+✓ Reset modal template selection passed
+All space-modals tests passed!
+--- Space Plugins Behavior Smoke Tests ---
+Testing 32 Widgets:
+  ✓ Widget widget/aiPerformance smoke passed
+  ✓ Widget widget/aiCost smoke passed
+  ✓ Widget widget/aiTokens smoke passed
+  ✓ Widget widget/aiSessions smoke passed
+  ✓ Widget widget/aiRequests smoke passed
+  ✓ Widget widget/aiLimits smoke passed
+  ✓ Widget widget/aiAttention smoke passed
+  ✓ Widget widget/aiSavings smoke passed
+  ✓ Widget widget/binaryTime smoke passed
+  ✓ Widget widget/bookmarks smoke passed
+  ✓ Widget widget/countdown smoke passed
+  ✓ Widget widget/css smoke passed
+  ✓ Widget widget/currencyRates smoke passed
+  ✓ Widget widget/customText smoke passed
+  ✓ Widget widget/github smoke passed
+  ✓ Widget widget/greeting smoke passed
+  ✓ Widget widget/html smoke passed
+  ✓ Widget widget/ipInfo smoke passed
+  ✓ Widget widget/links smoke passed
+  ✓ Widget widget/message smoke passed
+  ✓ Widget widget/notes smoke passed
+  ✓ Widget widget/palette smoke passed
+  ✓ Widget widget/quote smoke passed
+  ✓ Widget widget/search smoke passed
+  ✓ Widget widget/since smoke passed
+  ✓ Widget widget/tallyCounter smoke passed
+  ✓ Widget widget/time smoke passed
+  ✓ Widget widget/todo smoke passed
+  ✓ Widget widget/topSites smoke passed
+  ✓ Widget widget/trello smoke passed
+  ✓ Widget widget/weather smoke passed
+  ✓ Widget widget/workHours smoke passed
+Testing 9 Backgrounds:
+  ✓ Background background/apod smoke passed
+  ✓ Background background/bing smoke passed
+  ✓ Background background/colour smoke passed
+  ✓ Background background/giphy smoke passed
+  ✓ Background background/gradient smoke passed
+  ✓ Background background/media smoke passed
+  ✓ Background background/online smoke passed
+  ✓ Background background/unsplash smoke passed
+  ✓ Background background/wikimedia smoke passed
+All 29 widgets and 9 backgrounds passed behavioral smoke testing!
+=== Personal Space Deep Verification Suite ===
+--- Batch A: Verifying 9 Backgrounds ---
+✓ background/bing live wallpaper passed
+✓ background/apod live APOD passed
+✓ background/wikimedia live POTD passed
+✓ background/colour custom colour passed
+✓ background/gradient custom gradient passed
+✓ background/online valid URL passed
+✓ background/unsplash query passed
+✓ background/giphy key guard passed
+✓ background/media render passed
+--- Batch B: Verifying 29 Widgets ---
+✓ widget/weather open-meteo integration passed
+✓ widget/currencyRates live exchange rate passed
+✓ widget/ipInfo public IP passed
+✓ widget/workHours percentage computation passed
+✓ widget/search multi-engine provider passed
+✓ widget/palette color palette & rotation passed
+✓ widget/links list rendering passed
+✓ widget/todo delete and inline edit passed
+✓ widget/notes auto-save callback passed
+✓ widget/html DOM sanitization security check passed
+✓ widget/css Shadow DOM isolation passed
+✓ widget/bookmarks Chrome permission binding passed
+✓ widget/topSites Chrome permission binding passed
+✓ optional bookmark and top-sites permission flows passed
+✓ widget/time and widget/greeting localized formatting passed
+✓ widget/countdown and widget/since date calculations passed
+✓ widget/tallyCounter counter mutation passed
+✓ widget/binaryTime smoke and logic passed
+✓ widget/customText smoke and logic passed
+✓ widget/message smoke and logic passed
+✓ widget/quote smoke and logic passed
+✓ widget/trello smoke and logic passed
+✓ widget/github activity calendar passed
+--- Batch C: Immediate Settings Persistence ---
+✓ C1 widget settings save immediately
+✓ C1b todo editor expands on selection only
+✓ C2 currencyRates decimals:0 and amount:0 preserved
+✓ C2 settings round-trip keeps decimals:0 / amount:0
+✓ C3 numeric guards clamp without || fallback
+✓ C4 serial queue uses per-space latest revision
+✓ C6 background changes save immediately
+✓ C8 Bing next wallpaper renders and saves immediately
+======================================================
+ALL 24 WIDGETS AND 9 BACKGROUNDS PASS DEEP VERIFICATION!
+======================================================
+--- 25 Space Widgets Structural & Baseline Verification ---
+  ✓ Widget widget/aiPerformance passed structural contract verification
+  ✓ Widget widget/aiCost passed structural contract verification
+  ✓ Widget widget/aiTokens passed structural contract verification
+  ✓ Widget widget/aiSessions passed structural contract verification
+  ✓ Widget widget/aiRequests passed structural contract verification
+  ✓ Widget widget/aiLimits passed structural contract verification
+  ✓ Widget widget/aiAttention passed structural contract verification
+  ✓ Widget widget/aiSavings passed structural contract verification
+  ✓ Widget widget/binaryTime passed structural contract verification
+  ✓ Widget widget/bookmarks passed structural contract verification
+  ✓ Widget widget/countdown passed structural contract verification
+  ✓ Widget widget/css passed structural contract verification
+  ✓ Widget widget/currencyRates passed structural contract verification
+  ✓ Widget widget/customText passed structural contract verification
+  ✓ Widget widget/github passed structural contract verification
+  ✓ Widget widget/greeting passed structural contract verification
+  ✓ Widget widget/html passed structural contract verification
+  ✓ Widget widget/ipInfo passed structural contract verification
+  ✓ Widget widget/links passed structural contract verification
+  ✓ Widget widget/message passed structural contract verification
+  ✓ Widget widget/notes passed structural contract verification
+  ✓ Widget widget/palette passed structural contract verification
+  ✓ Widget widget/quote passed structural contract verification
+  ✓ Widget widget/search passed structural contract verification
+  ✓ Widget widget/since passed structural contract verification
+  ✓ Widget widget/tallyCounter passed structural contract verification
+  ✓ Widget widget/time passed structural contract verification
+  ✓ Widget widget/todo passed structural contract verification
+  ✓ Widget widget/topSites passed structural contract verification
+  ✓ Widget widget/trello passed structural contract verification
+  ✓ Widget widget/weather passed structural contract verification
+  ✓ Widget widget/workHours passed structural contract verification
+All 25 widgets pass structural and DOM contract verification!
+--- Space Inspector & Toolbar State Machine Test ---
+✓ Initial closed state verified
+✓ Overview route verified
+✓ Catalog route verified
+✓ Widget settings route verified
+✓ Background settings route verified
+✓ Close and focus anchor restoration verified
+✓ Backdrop click closes the inspector
+--- Inspector Live Pointer Drag Reorder Test ---
+✓ Inspector live pointer drag and reorder passed
+--- Inspector Compact Controls & Plugins Structure Contract ---
+✓ Compact controls and plugin settings contracts verified
+All space-inspector and toolbar tests passed!
+--- Space Plugin Registry & Modals Test ---
+✓ All 29 widget and 9 background plugin contracts verified
+--- Space & Native Client Integration Test ---
+✓ workspace_session call passed
+✓ workspace_snapshot call passed
+✓ workspace_widget_upsert call passed
+--- Background Persistence Across Widget Clicks ---
+✓ Background preserved across widget clicks and updates
+✓ Widget class and disposer lifecycle passed
+--- Settings Menu Anchor Click Test ---
+✓ Settings menu anchor toggle passed
+--- Standalone Global Search Modal Test ---
+✓ Standalone global search modal passed
+--- Space Dashboard Slot DOM Reordering Test ---
+✓ Space dashboard slot DOM reordering passed
+All space tests passed!
+--- AI Performance Widget Tests ---
+  ✓ metric mapping (token/cost/request/session/sub-metrics/timeline/table)
+  ✓ render → load → destroy releases shared Model Host port
+  ✓ render Timeline chart with actual event stream
+  ✓ render Table comparison chart
+  ✓ destroy cancels in-flight load
+  ✓ invalid config normalized to defaults
+  ✓ explicit empty / error states
+  ✓ settings exposes metric / subMetric / chart / range
+  ✓ registry integration
+  ✓ real Host fixture contract (requestedAt / costStatus / successRate 0-100)
+  ✓ shared query merge + revision invalidation (T7)
+  ✓ six preset views rendered and data bound (tools/billing/attention/limits/ledger/savings)
+  ✓ toolIds forwarded as sources across overview/analysis/events/sessions
+All AI Performance widget tests passed!
+AI drilldown tests: 6 passed
+ai-legacy-migration: 4 passed
+extension lifecycle checks passed
+dev launcher self-test passed (kooobajbofcajlblcannmdckihiejdec)
+apps install failed: sample APP_INVALID_STATE private backend detail

@@ -21,10 +21,10 @@
   ```
   ~/.natives/
   ├── natives.db        # SQLite（WAL）
-  ├── modules/          # 已安装模块
-  ├── apps/             # Extension App 数据与资源（ADR-0026）
+  ├── modules/          # 历史模块数据，仅迁移/清理，不新增模块安装体系
+  ├── apps/             # 官方子应用代码与私有数据（ADR-0027/0029）
   │   └── <appId>/
-  │       ├── packages/<version>/ # 只读 data/resource 包
+  │       ├── runtime/<version>/  # 已验证的活动/上版载荷，旧 packages 仅迁移
   │       ├── data/            # App 私有用户数据；由受限领域接口访问
   │       ├── cache/  imports/  staging/
   ├── migrations/       # 可恢复迁移 checkpoint（禁止明文 Secret）
@@ -32,7 +32,8 @@
   ```
   Secret **必须**按 R-S12 进入 OS Keychain；DB 只保存 opaque reference。**禁止**把其它用户数据散落到项目目录或任意路径；**禁止**用 env 变量随意覆盖此根目录（除非有受控测试夹具）。
 
-  **App 数据分账（ADR-0027，取代 ADR-0026/ADR-0025 对应决策，2026-09-09 生效）**：`natives.db` 内的 App Store 表是 App 安装状态、收据与 Native Host 注册的唯一权威，只由 `native-file-host` 写入；应用自有业务库独立存放于 `apps/<appId>/data/`，由官方 App Host 独占写入并独立迁移（`data/.migration.json` journal、一致性备份、`backups/<migrationId>/` 有界保留）。App Store 与业务库分别写、分别迁移：应用禁止连接 natives.db 写业务表，Core 禁止创建应用业务表（如 portfolio/transactions/nav）。代码升级不覆盖用户数据；卸载默认保留 `data/`、`imports/` 与迁移备份；「删除应用及全部个人数据」必须二次确认。不依赖 beforeunload 保存业务数据：未落盘成功即视为未保存。
+  **App 数据分账（ADR-0027，取代 ADR-0026/ADR-0025 对应决策，2026-09-09 生效；2026-09-12 收敛为内置模块随完整产品交付）**：`natives.db` 内的 App Store 表是安装状态、收据与 Native Host 注册的唯一权威，只由 `native-file-host` 写入；应用自有业务库独立存放于 `apps/<appId>/data/`，由官方 App Host 独占写入并独立迁移（`data/.migration.json` journal、一致性备份、`backups/<migrationId>/` 有界保留）。App Store 与业务库分别写、分别迁移：应用禁止连接 natives.db 写业务表，Core 禁止创建应用业务表（如 portfolio/transactions/nav）。代码升级不覆盖用户数据；产品级卸载默认保留 `data/`、`imports/` 与迁移备份；「删除应用及全部个人数据」必须二次确认。不依赖 beforeunload 保存业务数据：未落盘成功即视为未保存。模块代码随完整 Natives 安装包交付，不进入用户数据目录之外的独立可升级安装根。
+  **统一套件的数据边界（ADR-0029；2026-09-12 收敛为整包统一交付）**：系统目录 `/Library/Application Support/Natives/` 只允许主程序/主 Host 与固定内置模块文件，不是用户数据根；相应 local-development 系统源使用独立 `Natives-Local` 目录。Core 按 OS 用户分别初始化 App Store；安装器不得猜测登录用户、向其 HOME 写 DB 或运行迁移。安装来源、收据及用户移除选择通过现有 App Store 增量迁移记录，不创建并行 Registry；产品重装不降级、不清数据/Keychain、不撤销用户移除选择。受控本地开发数据根与 Keychain 必须与正式空间分开，不自动复制真实基金记录或凭据。
 - **为什么**：dotfile 目录模式与兄弟项目（CodePilot/Natives2）一致，便于备份、迁移、清理。
 - **检查方法**：新增持久化路径时核对是否在 `~/.natives/` 下。
 

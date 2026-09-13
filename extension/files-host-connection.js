@@ -10,6 +10,13 @@ export function createFilesHostConnection({
   const client = createNativeClient({
     host,
     writeMethods,
+    // Launcher 引导流：首包 version 握手上报扩展版本，Host 据此写
+    // 握手标记（~/.natives/extensions/chrome/handshake.json），
+    // 供 `native-file-host --launcher-setup` 验证用户已完成加载。
+    handshake: {
+      method: 'version',
+      params: { extensionVersion: globalThis.chrome?.runtime?.getManifest?.().version || '' },
+    },
     onMessage,
     onDisconnect: (error, wasIntentional) => {
       onDisconnect(error, wasIntentional);

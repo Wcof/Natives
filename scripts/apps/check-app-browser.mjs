@@ -10,8 +10,10 @@ import { CATALOG_URL, CATALOG_SIG_URL, verifyCatalogSignature } from '../../exte
 const { chromium } = await import(process.env.NATIVES_PLAYWRIGHT_MODULE || 'playwright');
 const output = resolve('dist/app-browser-evidence');
 mkdirSync(output, { recursive: true });
-const catalogBytes = readFileSync('dist/app-release/catalog-v2.json');
-const signature = readFileSync('dist/app-release/catalog-v2.sig', 'utf8');
+// AC-12: browser evidence must exercise the CURRENT Catalog v3 wire
+// format and the v4 install transaction, not the retired v2 catalog.
+const catalogBytes = readFileSync('dist/app-release/catalog-v3.json');
+const signature = readFileSync('dist/app-release/catalog-v3.sig', 'utf8');
 await verifyCatalogSignature({ catalogBytes, signatureB64: signature });
 const entry = JSON.parse(catalogBytes).apps[0];
 const fixture = appFixture();
@@ -31,7 +33,16 @@ const pagePorts = new Map(), closing = new Set(), errors = [], calls = [], reque
 let packageMode = 'ok';
 const heldDownloads = [];
 try {
-  browser = await chromium.launch({ headless: true, channel: process.env.NATIVES_BROWSER_CHANNEL || undefined });
+  // playwright-core has no browser registry: point it at the cached
+  // ms-playwright chromium build explicitly.
+  // The loopback app server must be reachable from the page: bypass the
+  // system proxy for loopback addresses only (route interception still
+  // covers every https URL the harness serves).
+  const launchOptions = { headless: true, args: ['--proxy-bypass-list=<-loopback>'] };
+  if (process.env.NATIVES_BROWSER_EXECUTABLE) launchOptions.executablePath = process.env.NATIVES_BROWSER_EXECUTABLE;
+  else if (!process.env.NATIVES_BROWSER_CHANNEL) launchOptions.channel = undefined;
+  if (process.env.NATIVES_BROWSER_CHANNEL) launchOptions.channel = process.env.NATIVES_BROWSER_CHANNEL;
+  browser = await chromium.launch(launchOptions);
   const context = await browser.newContext({ viewport: { width: 1280, height: 900 }, locale: 'zh-CN' });
   context.on('page', (page) => {
     page.on('pageerror', (error) => errors.push(error.message));
@@ -86,8 +97,9 @@ try {
   }, { messages, base });
   await context.route('https://**/*', async (route) => {
     const url = route.request().url(); requests.push(url);
-    // Exercise the fixed mirror path without depending on public network availability.
-    if (url.startsWith('https://github.com/')) return route.abort('internetdisconnected');
+    // Serve the signed v3 catalog/artifacts FIRST (the release source is on
+    // github.com, so these must be matched before the network-blackhole rule
+    // below) — exercising the fixed mirror path without public network.
     if (url.endsWith(new URL(CATALOG_URL).pathname)) return route.fulfill({ body: catalogBytes, contentType: 'application/json' });
     if (url.endsWith(new URL(CATALOG_SIG_URL).pathname)) return route.fulfill({ body: signature, contentType: 'text/plain' });
     if (url.endsWith('.nap')) {
@@ -98,19 +110,26 @@ try {
       const bytes = readFileSync(join('dist/app-release', new URL(url).pathname.split('/').at(-1)));
       return route.fulfill({ body: packageMode === 'corrupt' ? Buffer.alloc(bytes.length) : bytes, contentType: 'application/octet-stream' });
     }
+    // Blackhole everything else (the release host is github.com; catalog,
+    // signature and .nap requests were already served above).
+    if (url.startsWith('https://github.com/')) return route.abort('internetdisconnected');
     return route.abort();
   });
   const page = await context.newPage();
+  page.on('console', (m) => { if (m.text().includes('[app-diag]')) console.error('DIAG:', m.text()); });
   await page.goto(base + '/apps.html');
   const card = page.locator(`[data-app-id="${entry.app_id}"]`);
   const button = (name) => card.getByRole('button', { name, exact: true });
   const waitButton = async (name) => { await button(name).waitFor({ state: 'visible', timeout: 15_000 }); };
   await waitButton('安装');
   packageMode = 'blocked';
-  const downloading = page.waitForRequest((request) => request.url().startsWith('https://ghproxy.net/') && request.url().endsWith('.nap'));
+  // artifactSources serves the direct release URL (no third-party mirror).
+  const downloading = page.waitForRequest((request) => request.url().endsWith('.nap'));
   await button('安装').click();
   await downloading;
-  await button('取消').click();
+  // The cancel aborts the install and the card re-renders, detaching the
+  // button mid-click; tolerate the detachment and wait for recovery instead.
+  await button('取消').click({ force: true }).catch(() => {});
   await waitButton('安装');
   await Promise.all(heldDownloads.splice(0).map((release) => release()));
   assert.equal(calls.filter((request) => request.method === 'apps:install_commit').length, 0);
@@ -124,12 +143,18 @@ try {
   packageMode = 'ok';
   await button('安装').click();
   await waitButton('打开');
-  assert.ok(requests.some((url) => url.startsWith('https://ghproxy.net/')));
+  assert.ok(requests.some((url) => url.endsWith('.nap')), 'package download must use the signed release URL');
   await page.screenshot({ path: join(output, 'center-desktop.png'), fullPage: true });
   const opened = context.waitForEvent('page');
   await button('打开').click();
   const app = await opened;
-  await app.locator('#demo-host-status.ok').waitFor({ timeout: 10_000 });
+  app.on('console', (m) => { if (m.text().includes('[app-diag]')) console.error('DIAG-APP:', m.text()); });
+  // The v1 sample UI renders its own status element inside the sandboxed
+  // iframe (opaque origin): #status flips to 就绪 once the session token is
+  // accepted and the loopback API answers (AC-12: real app v1 DOM, not the
+  // retired demo host page).
+  const demoFrame = app.frameLocator('iframe.managed-app-frame');
+  await demoFrame.locator('#status').filter({ hasText: '就绪' }).waitFor({ timeout: 15_000 });
   await app.screenshot({ path: join(output, 'demo-desktop.png'), fullPage: true });
   await app.setViewportSize({ width: 390, height: 844 });
   await app.screenshot({ path: join(output, 'demo-mobile.png'), fullPage: true });

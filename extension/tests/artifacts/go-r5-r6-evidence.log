@@ -1,0 +1,20 @@
+=== RUN   TestBillingEntryKindValidation
+--- PASS: TestBillingEntryKindValidation (0.01s)
+=== RUN   TestReconcileSeparatesThreeImpacts
+--- PASS: TestReconcileSeparatesThreeImpacts (0.02s)
+=== RUN   TestBillingEntryUpsertByIdempotent
+--- PASS: TestBillingEntryUpsertByIdempotent (0.02s)
+=== RUN   TestInsightsEngine
+--- PASS: TestInsightsEngine (0.01s)
+=== RUN   TestCalculateCostCacheBucketsNonOverlapping
+--- PASS: TestCalculateCostCacheBucketsNonOverlapping (0.01s)
+=== RUN   TestBillingAtomDedup
+--- PASS: TestBillingAtomDedup (0.02s)
+=== RUN   TestGetSessionsDistinctSemantics
+--- PASS: TestGetSessionsDistinctSemantics (0.03s)
+=== RUN   TestAcknowledgeAttention
+--- PASS: TestAcknowledgeAttention (0.02s)
+=== RUN   TestAttentionOrderPriority
+--- PASS: TestAttentionOrderPriority (0.03s)
+PASS
+ok  	github.com/ldh/natives/model-host/internal/usage	1.633s

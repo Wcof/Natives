@@ -7,7 +7,7 @@
 
 use serde::{Deserialize, Serialize};
 
-/// V1 only allows `extension_app` (ADR-0025 D13).
+/// Legacy migration marker; Core Apps v4 cannot install or run this kind.
 pub const KIND_EXTENSION_APP: &str = "extension_app";
 
 /// ADR-0027: official managed apps ship one native executable payload
@@ -33,12 +33,12 @@ pub const PACKAGE_MAX_PAYLOAD_BYTES: u64 = 20 * 1024 * 1024;
 /// sub-packaging around the 5 MiB gate).
 pub const REQUIRED_MAX_PACKAGES: u64 = 3;
 
-/// Total wire size of the required package set: 15 MiB.
-pub const REQUIRED_MAX_TOTAL_WIRE_BYTES: u64 = 15 * 1024 * 1024;
+/// Total wire size of the required package set: 32 MiB.
+pub const REQUIRED_MAX_TOTAL_WIRE_BYTES: u64 = 32 * 1024 * 1024;
 
 /// Total package count per app (required + optional): 16.
 pub const MAX_TOTAL_PACKAGES: u64 = 16;
-pub const APP_MAX_INSTALLED_BYTES: u64 = 50 * 1024 * 1024;
+pub const APP_MAX_INSTALLED_BYTES: u64 = 128 * 1024 * 1024;
 
 pub fn platform() -> &'static str {
     if cfg!(target_os = "macos") {
@@ -86,7 +86,7 @@ pub const CATALOG_MAX_BYTES: usize = 256 * 1024;
 pub const CATALOG_SIGNATURE_MAX_BASE64_BYTES: usize = 128;
 
 /// Complete App Registry row (`apps` table).
-#[derive(Serialize)]
+#[derive(Debug, Serialize)]
 pub struct App {
     pub app_id: String,
     pub kind: String,
@@ -101,10 +101,15 @@ pub struct App {
     pub installed_at: i64,
     pub updated_at: i64,
     pub revision: i64,
-    /// Legacy migration-only field. V2 resource installs always leave it false.
+    /// True only after Core wrote a restricted managed_local Host manifest.
     pub host_registered: bool,
+    /// Core-derived runtimeHost name for managed_local apps
+    /// (`com.natives.app.<sha256(app_id)>`); app.html takes it from this
+    /// authoritative projection, never from a static UI mapping.
+    pub runtime_host: Option<String>,
     pub recovery_pending: bool,
     pub needs_migration: bool,
+    pub activation_generation: Option<u64>,
 }
 
 /// Installed package receipt row (`app_packages` table, ADR-0025 D7/D13).
@@ -366,6 +371,52 @@ pub struct InstallFinishResult {
     pub ready: bool,
 }
 
+/// Signed suite manifest (AC-03): each seed app is expressed as a full
+/// Ed25519-signed Catalog v3 plus the on-disk artifact file name. The
+/// manifest carries no self-declared hashes — identity comes only from the
+/// signed catalog, verified through the same online trust chain.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SuiteManifest {
+    pub schema_version: u32,
+    pub suite_id: String,
+    pub version: String,
+    pub apps: Vec<SuiteManifestEntry>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SuiteManifestEntry {
+    pub app_id: String,
+    pub catalog_base64: String,
+    pub signature_base64: String,
+    /// Bare file name inside the seeds directory; no separators, no "..".
+    pub artifact: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SeedReconcileItem {
+    pub app_id: String,
+    pub status: String,
+    pub version: String,
+    pub detail: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SeedReconciliationReport {
+    pub ok: bool,
+    pub items: Vec<SeedReconcileItem>,
+}
+
+/// Abstract Package Source for unified installation transactions (Phase 2, P2-1).
+#[derive(Debug)]
+pub enum PackageSource {
+    RemoteCatalog {
+        catalog_base64: String,
+        signature_base64: String,
+        app_id: String,
+    },
+}
+
 /// Catalog-derived app metadata.
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -430,7 +481,10 @@ impl AppMeta {
         for (value, allowed) in [
             (&self.runtime_spec, &["version"][..]),
             (&self.surface, &["route", "icon"][..]),
-            (&self.manifest, &["permissions", "schemaVersion"][..]),
+            (
+                &self.manifest,
+                &["permissions", "schemaVersion", "fixture", "runtimeType"][..],
+            ),
         ] {
             let object = value
                 .as_object()

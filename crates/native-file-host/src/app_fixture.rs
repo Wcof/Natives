@@ -27,6 +27,9 @@ pub(crate) fn run() -> io::Result<()> {
     store.set_manifest_dir(manifests);
     store.set_caller_origin(Some(&origin));
     store.recover_interrupted().map_err(io::Error::other)?;
+    // AC-07: no startup seed reconciliation here either — the browser page
+    // drives `apps:suite_prepare` on the verified foreground connection,
+    // exactly like production.
     let mut input = io::stdin().lock();
     let writer = Arc::new(Mutex::new(io::stdout()));
     while let Some(bytes) = protocol::read_frame(&mut input) {

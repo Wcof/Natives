@@ -56,9 +56,15 @@ func kernelVersionLess(current, latest string) bool {
 	left, right := parse(current), parse(latest)
 	for i := 0; i < len(left) || i < len(right); i++ {
 		lv, rv := 0, 0
-		if i < len(left) { lv = left[i] }
-		if i < len(right) { rv = right[i] }
-		if lv != rv { return lv < rv }
+		if i < len(left) {
+			lv = left[i]
+		}
+		if i < len(right) {
+			rv = right[i]
+		}
+		if lv != rv {
+			return lv < rv
+		}
 	}
 	return false
 }

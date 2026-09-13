@@ -18,21 +18,59 @@
   `model-host` authorized by ADR-0020. `src/`, `src-tauri/`,
   `src-agent-daemon/`, Agent/Harness/Capability crates, Jobs, Assistant, and
   Plugin Runtime have been deleted; do not recreate them.
-- **Official managed apps exception (ADR-0027, 2026-09-09; supersedes the
-  ADR-0026 Apps decisions)**: official apps are delivered as independent
-  signed native executables (business code and build-time UI embedded in the
-  program). The Core App Store (`crates/native-file-host`) owns installation,
-  receipts, signature verification, and restricted Native Host registration;
-  the generic `extension/app.html` is each app's owner page — a short Core
+- **Official managed apps exception (ADR-0027, 2026-09-09; converged 2026-09-12 to
+  built-in modules in one complete product; supersedes the ADR-0026 Apps
+  decisions)**: Natives is the single user-facing product. Fund and other
+  official features are **built-in modules** delivered inside the complete
+  Natives installer — no module download, install, update, uninstall, Catalog
+  release, or fund `.nap`/Release outside the product. Internal modules
+  (portfolio, ledger, nav, import, migration) belong to the package and do not
+  have separate install records or product identities. Module code is built
+  with Natives and enters the full product package; installation, updates, and
+  repairs happen only at product level ("update Natives"). The Core App Store
+  (`crates/native-file-host`) verifies, registers, and signs checks at product
+  install/update time; active app payloads and data stay within
+  `~/.natives/apps/<appId>/`, while minimal Host manifests use the
+  browser-prescribed registration directories; writing to `/Applications`,
+  independent `.app` bundles, Dock, or LaunchServices is strictly forbidden.
+  The generic `extension/app.html` is each package's owner page — a short Core
   verification connection, then a direct Native Port to the app host, with the
   app UI in a restricted sandbox iframe over the app's 127.0.0.1 loopback
-  server. The shared runtime library is `crates/app-host-support`. New/upgraded
-  apps MUST NOT require re-publishing the extension or Core. This exception
-  does NOT authorize third-party web URLs, third-party native packages,
-  Agent/Harness/Jobs, generic Plugin Runtime, Service Worker ports/polling, or
-  any fund-specific logic inside the extension/Core. Until migration (A3—A5)
-  completes, the legacy resource-package path remains the production fallback;
-  do not keep two production chains afterward.
+  server. The shared runtime library is `crates/app-host-support`. The App
+  Center only offers open/show-hide/preferences/data management for built-in
+  modules; adding modules requires a new complete Natives version. First use
+  does data initialization only — no code download, no "installing fund".
+  This exception does NOT authorize third-party web URLs, third-party native
+  packages, Agent/Harness/Jobs, generic Plugin Runtime, Service Worker
+  ports/polling, or any fund-specific logic inside the extension/Core. Legacy
+  dynamic-registration/module-distribution paths must not remain as silent
+  fallbacks; until migration completes, do not keep two production chains.
+- **Unified suite delivery (ADR-0029, 2026-09-11; converged 2026-09-12 to
+  single-product built-in modules)**: the Natives installer is one complete
+  product containing the thin launcher entry, the Chrome extension component,
+  main Hosts, and all built-in modules (fund in the first complete candidate).
+  First use of a module does data initialization only, as the current OS user;
+  there is no offline seed/seed-reconciliation chain and no second download.
+  The package installer never writes user DBs/activation or runs app
+  migrations as root. A root-owned macOS system source under
+  `/Library/Application Support/Natives/` may hold the thin launcher, main
+  Hosts, and fixed built-in module files, not user data or a second App
+  Registry. Do not restore the old Workbench.app. A sole thin Natives
+  launcher (open Chrome, locate the extension directory, brief diagnostics,
+  then exit) is the precise ADR-0020 exception. Reinstall/update/repair must
+  preserve module display/hide preferences, disabled/removed choices, user
+  data, and Keychain; implicit downgrades are rejected. Module business stays
+  built with the product; internal modules are never separately installed.
+- **Local and release gates**: A-Local must pass with the real built-in fund
+  inside the complete product candidate before B0—B3; B-Local must pass before
+  calling the local suite usable. Existing independent samples serve only as
+  low-level test fixtures for shared logic. Local builds may use ad-hoc/development signatures only under the explicit,
+  isolated non-production policy in the managed-app contract. Release rejects
+  development keys/fixtures and still requires full A/B production evidence,
+  platform signatures/notarization and separate publication authorization.
+  Never call A-Local/B-Local full A-Gate/B-Gate, weaken sandbox/data controls,
+  remove quarantine or disable Gatekeeper. Reuse the existing dev entry and
+  single installation engine, not another production chain.
 - The extension's `newtab.html` is static, while `files.html` directly owns its
   Native Messaging Port. The Host owns filesystem access and never exposes
   arbitrary paths, processes, SQLite, or Secret plaintext to the page.

@@ -46,8 +46,20 @@ type Event struct {
 	ReasoningTokens  int64       `json:"reasoningTokens"`
 	TotalTokens      int64       `json:"totalTokens"`
 	CostMicro        int64       `json:"costMicro"` // in millionths of USD ($0.000001)
-	ServiceTier      string      `json:"serviceTier,omitempty"`
-	CreatedAt        time.Time   `json:"createdAt"`
+	// CostStatus 区分"未计价"与合法零价：priced=价格命中（金额可为 0）；
+	// unpriced=当前目录无该 (provider, model) 价格。读时判定，由 handler 注解。
+	// BillingAtom 是唯一计费原子（ADR-0030 决策 2）：同一请求跨来源
+	//（Proxy/原生日志/OTel）只计一次；空串表示旧数据/未知来源不参与去重。
+	BillingAtom string `json:"billingAtom,omitempty"`
+	SessionID   string `json:"sessionId,omitempty"`
+	// 三元来源实例身份（方案 §4.1）：会话唯一键 =
+	// (tool_id, source_instance_id, session_id)。实例 ID 由授权根目录摘要
+	// 派生或为 legacy-default；不得以空字符串冒充实例语义。
+	ToolID           string    `json:"toolId,omitempty"`
+	SourceInstanceID string    `json:"sourceInstanceId,omitempty"`
+	CostStatus       string    `json:"costStatus,omitempty"`
+	ServiceTier      string    `json:"serviceTier,omitempty"`
+	CreatedAt        time.Time `json:"createdAt"`
 }
 
 type Price struct {
@@ -71,10 +83,13 @@ type Filter struct {
 	Sources      []string     `json:"sources,omitempty"`
 	AccessKeyIDs []string     `json:"accessKeyIds,omitempty"`
 	Result       *EventResult `json:"result,omitempty"`
-	Offset       int          `json:"offset,omitempty"`
-	Limit        int          `json:"limit,omitempty"`
-	SortBy       string       `json:"sortBy,omitempty"`  // "requested_at", "latency", "tokens", "cost"
-	SortDir      string       `json:"sortDir,omitempty"` // "asc", "desc"
+	// Timezone 为用户 IANA 时区（方案 §4.2）：活跃天数/日桶/today 范围按它
+	// 计算；不识别的时区在 handler 校验时报参数错误，不静默退回 UTC。
+	Timezone string `json:"timezone,omitempty"`
+	Offset   int    `json:"offset,omitempty"`
+	Limit    int    `json:"limit,omitempty"`
+	SortBy   string `json:"sortBy,omitempty"`  // "requested_at", "latency", "tokens", "cost"
+	SortDir  string `json:"sortDir,omitempty"` // "asc", "desc"
 }
 
 type MetricCards struct {
@@ -135,6 +150,43 @@ type EventsResult struct {
 	HasMore  bool    `json:"hasMore"`
 }
 
+// SessionStat 为一次真实会话聚合（R3，方案 §4.1.1）。
+// Key 是 (toolId, sourceInstanceId, sessionId) 的稳定三元组合键；
+// 同 session ID 跨工具、跨 profile/安装实例不合并。
+type SessionStat struct {
+	Key              string  `json:"key"`
+	ToolID           string  `json:"toolId,omitempty"`
+	SourceInstanceID string  `json:"sourceInstanceId,omitempty"`
+	Source           string  `json:"source,omitempty"`
+	Requests         int64   `json:"requests"`
+	Tokens           int64   `json:"tokens"`
+	CostUSD          float64 `json:"costUsd"`
+	FirstAt          string  `json:"firstAt,omitempty"`
+	LastAt           string  `json:"lastAt,omitempty"`
+}
+
+// DayCount 为单日 distinct 会话数；每日独立去重，不得跨日相加当区间总数。
+type DayCount struct {
+	Date     string `json:"date"`
+	Sessions int64  `json:"sessions"`
+}
+
+// SessionsResult 为 model_usage_sessions 的返回：真实 distinct 会话统计，
+// 与请求数严格分开；无 session_id 的记录只计入 Unattributed，不造会话。
+type SessionsResult struct {
+	Status        string        `json:"status"`
+	TotalSessions int64         `json:"totalSessions"`
+	ActiveDays    int64         `json:"activeDays"`
+	Unattributed  int64         `json:"unattributedRequests"`
+	ByDay         []DayCount    `json:"byDay,omitempty"`
+	BySource      []RankItem    `json:"bySource,omitempty"`
+	Sessions      []SessionStat `json:"sessions,omitempty"`
+	Total         int64         `json:"total"`
+	Page          int           `json:"page"`
+	PageSize      int           `json:"pageSize"`
+	HasMore       bool          `json:"hasMore"`
+}
+
 type PricingResult struct {
 	Prices                []Price `json:"prices"`
 	CatalogVersion        string  `json:"catalogVersion"`
@@ -151,4 +203,8 @@ type ImportPreviewResult struct {
 	PricesCount    int64  `json:"pricesCount"`
 	DuplicateCount int64  `json:"duplicateCount"`
 	Error          string `json:"error,omitempty"`
+	// billing_csv 预览附加字段（§7.1）：币种三口径与逐行错误。
+	CurrencySummaries []ReconciliationSummary `json:"currencySummaries,omitempty"`
+	Kinds             map[string]int64        `json:"kinds,omitempty"`
+	LineErrors        []BillingPreviewLine    `json:"lineErrors,omitempty"`
 }

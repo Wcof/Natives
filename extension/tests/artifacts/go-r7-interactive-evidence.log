@@ -1,0 +1,10 @@
+=== RUN   TestInsightsEngine
+--- PASS: TestInsightsEngine (0.02s)
+=== RUN   TestIngestToolEventIdempotent
+--- PASS: TestIngestToolEventIdempotent (0.01s)
+=== RUN   TestAcknowledgeAttention
+--- PASS: TestAcknowledgeAttention (0.01s)
+=== RUN   TestAttentionOrderPriority
+--- PASS: TestAttentionOrderPriority (0.02s)
+PASS
+ok  	github.com/ldh/natives/model-host/internal/usage	0.544s

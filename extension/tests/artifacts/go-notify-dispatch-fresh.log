@@ -1,0 +1,10 @@
+=== RUN   TestDispatchNotificationDedupesByGlobalEventID
+--- PASS: TestDispatchNotificationDedupesByGlobalEventID (0.01s)
+=== RUN   TestDispatchNotificationFailedStateRecordedNoAutoRetry
+--- PASS: TestDispatchNotificationFailedStateRecordedNoAutoRetry (0.01s)
+=== RUN   TestDispatchPendingAttentionSubmitsNewSkipsDispatched
+--- PASS: TestDispatchPendingAttentionSubmitsNewSkipsDispatched (0.01s)
+=== RUN   TestDispatchNotificationMissingAlert
+--- PASS: TestDispatchNotificationMissingAlert (0.01s)
+PASS
+ok  	github.com/ldh/natives/model-host/internal/usage	0.873s

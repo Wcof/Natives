@@ -156,6 +156,8 @@ func NewEngine(repo *domain.Repository, secretStore secrets.Store, emit func(nat
 		oauthTimeout:      6 * time.Minute,
 	}
 	clipcore.SetGlobalModelRegistryHook(oauthCatalogHook{engine: engine})
+	// §7.5：不做启动隐式扫描。采集只由显式 model_usage_collect 触发；
+	// 隐式启动扫描既违反"授权采集与纯查询分离"，也会在空闲期占用 CPU。
 	return engine, nil
 }
 
@@ -255,10 +257,36 @@ func (e *Engine) dispatch(ctx context.Context, method string, raw json.RawMessag
 		return e.getUsageOverview(raw)
 	case "model_usage_analysis":
 		return e.getUsageAnalysis(raw)
+	case "model_usage_sessions":
+		return e.getUsageSessions(raw)
 	case "model_usage_events":
 		return e.getUsageEvents(raw)
 	case "model_usage_pricing":
 		return e.getUsagePricing()
+	case "model_usage_sources":
+		return e.getUsageSources()
+	case "model_usage_budgets":
+		return e.getUsageBudgets()
+	case "model_usage_budget_upsert":
+		return e.upsertUsageBudget(raw)
+	case "model_usage_insights":
+		return e.getUsageInsights()
+	case "model_usage_insight_dismiss":
+		return e.dismissUsageInsight(raw)
+	case "model_tool_event_ingest":
+		return e.ingestToolEvent(raw)
+	case "model_usage_attention":
+		return e.getUsageAttention(raw)
+	case "model_usage_attention_ack":
+		return e.ackUsageAttention(raw)
+	case "model_usage_subjects":
+		return e.getUsageSubjects(raw)
+	case "model_usage_billing":
+		return e.getUsageBilling(raw)
+	case "model_usage_billing_entry_upsert":
+		return e.upsertUsageBillingEntry(raw)
+	case "model_usage_collect":
+		return e.collectUsage()
 	case "model_usage_price_upsert":
 		return e.upsertUsagePrice(raw)
 	case "model_usage_price_delete":

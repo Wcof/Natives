@@ -13,6 +13,9 @@ import { tmpdir } from 'node:os';
 const { chromium } = await import(process.env.NATIVES_PLAYWRIGHT_MODULE || 'playwright-core');
 const CHROME = process.env.NATIVES_CHROME_EXECUTABLE;
 if (!CHROME) throw new Error('NATIVES_CHROME_EXECUTABLE 必须指向真实 Chrome/Chromium 可执行文件（不得用 mock 代替）');
+// Chrome for Testing works headless; a locally installed Chrome needs a
+// visible window on some macOS builds before it permits extension URLs.
+const HEADLESS = process.env.NATIVES_CHROME_HEADLESS !== '0';
 
 const FIXTURE_DIR = resolve('scripts/apps/fixtures/sample-host');
 const HOST_NAME = 'com.natives.app.sample';
@@ -33,8 +36,10 @@ copyFileSync(builtBinary, hostBinary);
 // ---- 隔离数据根与注册 ----
 const appsRoot = join(root, 'natives-root', 'apps');
 mkdirSync(join(appsRoot, 'sample', 'data'), { recursive: true });
-const manifestDir = join(root, 'profile', 'NativeMessagingHosts');
-mkdirSync(manifestDir, { recursive: true });
+const profileDir = join(root, 'profile');
+const secondProfileDir = join(root, 'profile-2');
+const manifestDirs = [profileDir, secondProfileDir].map((profile) => join(profile, 'NativeMessagingHosts'));
+for (const dir of manifestDirs) mkdirSync(dir, { recursive: true });
 
 // 扩展 origin：用固定 key 计算真实扩展 ID（与 check-chrome-native.mjs 同法）。
 const { generateKeyPairSync } = await import('node:crypto');
@@ -43,6 +48,19 @@ const extensionId = createHash('sha256').update(pair.publicKey).digest().subarra
   .replace(/[0-9a-f]/g, (n) => String.fromCharCode(97 + Number.parseInt(n, 16)));
 const origin = `chrome-extension://${extensionId}/`;
 
+// 激活投影（契约 §3.1：Core 生成，Host 启动核验）
+writeFileSync(join(appsRoot, 'sample', 'activation.json'), JSON.stringify({
+  receiptVersion: 1,
+  appId: 'sample',
+  runtimeHost: HOST_NAME,
+  activeVersion: '1.0.0',
+  generation: 1,
+  activationState: 'ready',
+  enabled: true,
+  appProtocolVersion: 1,
+  allowedOrigins: [origin],
+}), { mode: 0o600 });
+
 const manifest = {
   name: HOST_NAME,
   description: 'A1 standard sample app host (test fixture)',
@@ -50,15 +68,15 @@ const manifest = {
   type: 'stdio',
   allowed_origins: [origin],
 };
-const manifestPath = join(manifestDir, HOST_NAME + '.json');
-writeFileSync(manifestPath, JSON.stringify(manifest), { flag: 'wx', mode: 0o600 });
+const manifestPaths = manifestDirs.map((dir) => join(dir, HOST_NAME + '.json'));
+for (const path of manifestPaths) writeFileSync(path, JSON.stringify(manifest), { flag: 'wx', mode: 0o600 });
 
 // ---- launcher：把 NATIVES_APPS_ROOT 指向隔离目录 ----
 const launcher = join(root, 'sample-host-launcher');
 const quote = (v) => "'" + v.replaceAll("'", "'\\''") + "'";
 writeFileSync(launcher, `#!/bin/sh\nNATIVES_APPS_ROOT=${quote(appsRoot)} exec ${quote(hostBinary)} "$@" 2>>${quote(join(root, 'host.stderr.log'))}\n`, { mode: 0o700 });
 manifest.path = launcher;
-writeFileSync(manifestPath, JSON.stringify(manifest), { flag: 'w', mode: 0o600 });
+for (const path of manifestPaths) writeFileSync(path, JSON.stringify(manifest), { flag: 'w', mode: 0o600 });
 
 // ---- 构建最小扩展壳页面（不加载 Natives 生产扩展；只验证承载链路）----
 // 承载页等价物：真实 chrome.runtime.connectNative + sandbox iframe（与 app.html 同构的最小验证页）。
@@ -103,6 +121,12 @@ async function run() {
   const hs = await call('app:handshake', { protocolVersion: 1, expectedAppId: 'sample' });
   results.handshake = hs.ok === true && hs.result.appId === 'sample' && hs.result.protocolVersion === 1;
   const start = await call('app:start', { requestId: 's1' });
+  if (!start.ok) {
+    results.startError = start.error?.code || String(start.error || 'APP_START_FAILED');
+    state.textContent = 'start-error';
+    window.__done = true;
+    return;
+  }
   results.start = start.ok === true && typeof start.result.port === 'number' && start.result.port > 0
     && start.result.state === 'ready';
   instanceId = start.result.instanceId;
@@ -145,26 +169,28 @@ writeFileSync(join(extensionDir, 'shell.html'), `<!doctype html>
 </body></html>`);
 
 // ---- 启动真实 Chromium ----
-const evidence = { chrome: CHROME, platform: process.platform, arch: process.arch, checks: {} };
-let context;
+const evidence = { chrome: CHROME, headless: HEADLESS, platform: process.platform, arch: process.arch, checks: {} };
+let context, secondContext;
 let page;
 let exitTimer;
 const hostExit = new Promise((done) => {
   // Host 由 Chrome 启动，进程退出无法直接观测；用 manifest path 的 launcher 包装记录退出。
   const wrapper = join(root, 'recording-launcher');
-  writeFileSync(wrapper, `#!/bin/sh\n${quote(launcher)} "$@" <&0 &\nPID=$!\necho $PID > ${quote(join(root, 'host.pid'))}\nwait $PID\nEXIT=$?\necho $EXIT > ${quote(join(root, 'host.exit'))}\nexit $EXIT\n`, { mode: 0o700 });
+  writeFileSync(wrapper, `#!/bin/sh\n${quote(launcher)} "$@" <&0 &\nPID=$!\necho $PID >> ${quote(join(root, 'host.pids'))}\nwait $PID\nEXIT=$?\necho "$PID:$EXIT" >> ${quote(join(root, 'host.exits'))}\nexit $EXIT\n`, { mode: 0o700 });
   manifest.path = wrapper;
-  writeFileSync(manifestPath, JSON.stringify(manifest), { flag: 'w', mode: 0o600 });
+  for (const path of manifestPaths) writeFileSync(path, JSON.stringify(manifest), { flag: 'w', mode: 0o600 });
   done();
 });
 await hostExit;
 
 try {
-  context = await chromium.launchPersistentContext(join(root, 'profile'), {
+  const chromeArgs = [`--disable-extensions-except=${extensionDir}`, `--load-extension=${extensionDir}`];
+  if (HEADLESS) chromeArgs.push('--headless=new');
+  context = await chromium.launchPersistentContext(profileDir, {
     executablePath: CHROME,
-    headless: true,
+    headless: false,
     viewport: { width: 1280, height: 900 },
-    args: [`--disable-extensions-except=${extensionDir}`, `--load-extension=${extensionDir}`],
+    args: chromeArgs,
   });
   // 扩展页面通过 chrome-extension:// URL 访问。
   page = await context.newPage();
@@ -200,6 +226,24 @@ try {
   evidence.checks.authorizedData = withToken.ok;
   assert.ok(evidence.checks.authorizedData, 'authorized bearer request must succeed');
 
+  const saved = await fetch(base + '/api/value', {
+    method: 'POST', body: 'persisted sample',
+    headers: { Authorization: 'Bearer ' + token, Origin: 'null' },
+  });
+  const reopened = await fetch(base + '/api/value', {
+    headers: { Authorization: 'Bearer ' + token, Origin: 'null' },
+  }).then((response) => response.json());
+  evidence.checks.realSaveAndRead = saved.ok && reopened.value === 'persisted sample';
+  assert.ok(evidence.checks.realSaveAndRead, 'sample value must persist through the real app API');
+  const operation = await fetch(base + '/api/operation/start', {
+    method: 'POST', headers: { Authorization: 'Bearer ' + token, Origin: 'null' },
+  }).then((response) => response.json());
+  const cancelled = await fetch(base + '/api/operation/cancel', {
+    method: 'POST', headers: { Authorization: 'Bearer ' + token, Origin: 'null' },
+  }).then((response) => response.json());
+  evidence.checks.cancellableOperation = typeof operation.operationId === 'string' && cancelled.cancelled === true;
+  assert.ok(evidence.checks.cancellableOperation, 'sample operation must be cancellable');
+
   // 错 token 必须拒绝。
   const badToken = await fetch(base + '/api/value', {
     headers: { Authorization: 'Bearer ' + 'A'.repeat(43) + 'B', Origin: 'null' },
@@ -229,11 +273,35 @@ try {
       setTimeout(() => done({ probe: 'timeout' }), 5000);
     });
   }).catch(() => ({ probe: 'unavailable' }));
-  // 夹具 UI 未实现 probe-capabilities；隔离以 sandbox 属性 + CSP 断言代替。
   const sandboxAttr = await page.evaluate(() => document.getElementById('frame').getAttribute('sandbox'));
   evidence.checks.sandboxExact = sandboxAttr === 'allow-scripts allow-forms';
   assert.equal(sandboxAttr, 'allow-scripts allow-forms', 'sandbox must be exactly allow-scripts allow-forms');
   evidence.iframeProbe = iframeIsolated;
+  evidence.checks.iframeCapabilitiesIsolated = iframeIsolated?.type === 'probe-result'
+    && iframeIsolated.chromeRuntime === false && iframeIsolated.parentReadable === false
+    && iframeIsolated.externalFetch === false;
+  assert.ok(evidence.checks.iframeCapabilitiesIsolated, 'sandbox UI must have no extension, parent, or external-network capability');
+
+  // 同 appId 只允许一个业务实例；第二个真实页面必须得到明确竞争错误。
+  const secondPage = await context.newPage();
+  await secondPage.goto(origin + 'shell.html');
+  await secondPage.waitForFunction(() => window.__done === true, null, { timeout: 15_000 });
+  const secondError = await secondPage.evaluate(() => window.results.startError);
+  evidence.checks.secondPageRejected = secondError === 'APP_RUNNING_ELSEWHERE';
+  assert.ok(evidence.checks.secondPageRejected, 'second page must get APP_RUNNING_ELSEWHERE');
+
+  secondContext = await chromium.launchPersistentContext(secondProfileDir, {
+    executablePath: CHROME,
+    headless: false,
+    viewport: { width: 1280, height: 900 },
+    args: chromeArgs,
+  });
+  const otherProfilePage = await secondContext.newPage();
+  await otherProfilePage.goto(origin + 'shell.html');
+  await otherProfilePage.waitForFunction(() => window.__done === true, null, { timeout: 15_000 });
+  const otherProfileError = await otherProfilePage.evaluate(() => window.results.startError);
+  evidence.checks.secondProfileRejected = otherProfileError === 'APP_RUNNING_ELSEWHERE';
+  assert.ok(evidence.checks.secondProfileRejected, 'second profile must get APP_RUNNING_ELSEWHERE');
 
   // stop → 断连（EOF 路径）。记录 stop 到 port disconnect 的真实耗时。
   await page.evaluate(() => {
@@ -248,7 +316,7 @@ try {
   evidence.eofDisconnectMs = eofMs;
 
   // PID 退出证据：host.exit 文件在进程退出后出现。
-  const pidFile = join(root, 'host.exit');
+  const pidFile = join(root, 'host.exits');
   const exitDeadline = Date.now() + 5000;
   let exitSeen = false;
   while (Date.now() < exitDeadline) {
@@ -258,6 +326,10 @@ try {
   evidence.checks.hostProcessExited = exitSeen;
   evidence.hostExitCode = exitSeen ? readFileSync(pidFile, 'utf8').trim() : null;
   assert.ok(exitSeen, 'host process must exit after stop (real PID evidence)');
+
+  // 关闭第二页将其 Native stdin 置 EOF；同时覆盖双页清理而不依赖 mock。
+  await secondPage.close();
+  evidence.checks.secondPageEOF = true;
 
   // 数据目录未被清。
   evidence.checks.userDataRetained = existsSync(join(appsRoot, 'sample', 'data'));
@@ -280,9 +352,9 @@ try {
         raw: window.__raw ?? null,
       })).catch((e) => ({ diagError: String(e).slice(0, 200) }));
     }
-    const exitFile = join(root, 'host.exit');
+    const exitFile = join(root, 'host.exits');
     if (existsSync(exitFile)) evidence.diagHostExit = readFileSync(exitFile, 'utf8').trim();
-    const pidFile = join(root, 'host.pid');
+    const pidFile = join(root, 'host.pids');
     if (existsSync(pidFile)) evidence.diagHostPid = readFileSync(pidFile, 'utf8').trim();
     const stderrLog = join(root, 'host.stderr.log');
     if (existsSync(stderrLog)) evidence.diagHostStderr = readFileSync(stderrLog, 'utf8').slice(0, 2000);
@@ -294,10 +366,11 @@ try {
   throw error;
 } finally {
   await context?.close().catch(() => {});
+  await secondContext?.close().catch(() => {});
   clearTimeout(exitTimer);
   // 清理注册与进程；失败时保留现场供检查（catch 里已记录 keptRoot）。
   if (evidence.checks.hostProcessExited) {
-    for (const file of [manifestPath]) {
+    for (const file of manifestPaths) {
       if (existsSync(file)) {
         const registration = JSON.parse(readFileSync(file, 'utf8'));
         if (registration.path.startsWith(root)) rmSync(file);

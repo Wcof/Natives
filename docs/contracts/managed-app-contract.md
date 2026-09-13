@@ -1,20 +1,23 @@
 # 官方托管应用契约 v1
 
 > 状态：active-target；随 [ADR-0027](../adr/0027-managed-apps-independent-delivery.md) 在实施方案 A0 提交生效（accepted-target 同批；active-target 表示可据此实施并修改生产路径，不代表实现已完成）。
-> 验收前不豁免现行 MUST；实现状态与 A-Gate/B-Gate 证据见实施方案，不写在本文。
+> 2026-09-11 按 [ADR-0029](../adr/0029-unified-suite-preinstalled-apps.md) 增补统一套件、预装和分级验收；本地签名例外仅按 §4.2 生效，其他 MUST 不豁免。实现与验收证据见唯一实施方案。
+> **2026-09-12 路线收敛（用户最终决定）**：Natives 是一个完整应用，基金等均为**内置模块**，随完整安装包一起安装、更新和修复；取消模块独立下载/安装/更新/卸载、在线 Catalog 驱动新 appId 与 Fund 独立 nap 发布。本文中与该决定冲突的表述按以下语义执行：签名 Catalog/验签/安装事务能力只在**完整产品安装/更新层**核验组合清单内的固定模块文件；应用中心的模块操作只剩打开/显示隐藏/设置/数据管理；更新统一为"更新 Natives"。数据、Keychain、沙箱、会话鉴权、锁与 EOF 回收 MUST 全部保留。凡冲突处以此注记为准。
 > 本文是应用中心与应用开发者共享的接口唯一来源；实现状态和任务进度不写在本文。
 > 范围：官方 managed_local 应用。外部 Web URL 仅保留类型语义，本期不得注册或执行。
 > 版本：Catalog v3 / Core Apps protocol v4 / App protocol v1。实现前检查当前 HEAD，若号码已占用则顺延并同步全部 fixture，禁止覆盖已发布协议。
 
 ## 1. 产品对象与权威
 
+Natives 是唯一的用户产品。托管扩展包是 Natives 应用中心管理的可选组成部分，内部模块（如持仓、账本、净值等）不拥有独立安装对象或产品身份。
+
 | 对象 | 含义 | 唯一权威 |
 |---|---|---|
-| AppDefinition | 应用身份、发布者、用途、兼容要求与交付声明 | 已验证签名 Catalog |
-| Installation | 已安装版本、包收据、启用状态、侧栏设置 | Core App Store |
-| RuntimeInstance | 一次真实应用进程、锁、会话与当前工作状态 | 持有运行锁的应用 Host |
-| Surface | 通用 app.html 中一个应用呈现会话 | 该 app.html 页面 |
-| UserData | 用户业务记录与导入原件 | 对应应用的业务库/数据目录 |
+| AppDefinition | 应用身份、用途、兼容要求与交付声明 | 签名产品组合清单（2026-09-12 收敛：不再有独立签名 Catalog） |
+| Installation | 扩展包安装记录（已安装版本、包收据、启用状态、侧栏设置），不是 Mac 应用安装记录 | Core App Store |
+| RuntimeInstance | 实现层进程/端口实例（一次真实应用进程、锁、会话与当前工作状态），不是新的产品 | 持有运行锁的应用 Host |
+| Surface | Natives 内的应用呈现会话（通用 app.html 中一个应用呈现会话） | 该 app.html 页面 |
+| UserData | 用户业务记录与导入原件；由扩展包拥有，但只能经扩展包接口访问 | 对应扩展包的业务库/数据目录 |
 | Credential | 外部服务凭据 | OS Keychain，业务库仅保存 opaque reference |
 
 安装状态与运行状态分离；Core DB 不通过持久化 running 布尔值判断进程存活。
@@ -22,12 +25,17 @@
 
 ## 2. 应用声明
 
-Catalog 使用已有 app_id 命名风格，不引入第二 App Registry。schema 字段由协议代码生成校验资料，禁止扩展页面和 Host 各维护不同枚举。
+组合清单沿用已有 app_id 命名风格，不引入第二 App Registry（2026-09-12 收敛：不再发布独立签名 Catalog）。schema 字段由协议代码生成校验资料，禁止扩展页面和 Host 各维护不同枚举。
 
 | 字段 | 要求 |
 |---|---|
+| parentProduct | 固定为 `"natives"`；声明归属于 Natives 主产品，不是独立桌面软件 |
+| packageRole | 固定为 `"managed_extension"` 或 `"managed-app"`；声明为 Natives 托管子应用/扩展包 |
 | app_id | 稳定且全局唯一；沿用现有合法 ID，fund 不改名 |
 | kind | 当前只接受 managed_local；web_link 是未来语义，当前返回 unsupported |
+| runtimeImplementation | 声明为 `managed-native-host`；由受控独立 Native Host（如 fund-host）承载业务代码与构建期嵌入的 UI，Core 管控其生命周期；禁止将业务编译进 Core（禁止 Fund builtin），亦不引入 WASM |
+| package_id / app-exec | `app-exec` 仅表示 Package Internal Runtime Entry（包内部受控运行入口），绝对不得解释为 Standalone Application、独立 .app 或独立用户安装对象 |
+| moduleManifest | 非权威描述性清单，仅列出包内模块及其说明（如 portfolio、ledger、nav、import、storage、migration）；不产生新的安装对象，不构成强制逐模块版本协议，Core 不据此校验；缺失或与实际不符不阻塞安装，仅作为审查参考 |
 | name / description | 真实名称及 zh_CN/en 文案 |
 | publisher | 官方发布身份；绑定本地信任根，不仅依赖一个 official 标签 |
 | version | 应用 SemVer，与 Core/App 协议版本分离 |
@@ -35,25 +43,46 @@ Catalog 使用已有 app_id 命名风格，不引入第二 App Registry。schema
 | appProtocolVersion | 1；独立运行协议 |
 | dataSchema | 当前版本及可读/可写版本范围；用于决定代码回退是否安全 |
 | permissions | 实际使用的能力声明；只展示或约束确实实现的能力 |
-| packages | 每个目标 platform/arch 恰好一个 required runtime 载荷 |
+| packages | 每目标平台恰好一个 runtime 载荷（gzip 单载荷格式，wire ≤ 32 MiB、payload ≤ 128 MiB，精确长度与双 SHA-256 校验）；2026-09-12 收敛后该载荷是完整产品包内的构建产物，摘要登记进产品组合清单，不再独立发布或下载；禁止额外可执行文件、动态库、`.app` bundle 或脚本进入载荷 |
+| runtimeApiVersion | 1；独立运行协议版本，随契约 §5 演进 |
+| minCoreVersion | 包要求的最低 Core 版本（安装管理端协商用） |
+| entryRoute | 包 UI 入口路由，如 `"app.html?app=<appId>"` |
 | publishedAt / changelog | 有来源的发布时间和变更说明 |
 | runtime budgets | 声明内存/请求/缓存限额，不能提升 Core 的绝对上限 |
 
+### 2.1 runtime 载荷与 manifest 约束（ADR-0027 修订，2026-09-12）
+
+每个官方包以受控独立 Native Host 载荷交付：`runtimeType: "managed-native-host"`，业务代码与构建期嵌入的 UI 在载荷内，Chrome 按连接按需启动，Core 只管安装/登记/激活/生命周期，不执行包业务。manifest 收敛为：`appId`、`runtimeType`、`runtimeApiVersion`、`minCoreVersion`、`capabilities`、`entryRoute`、`packages`（每平台一个 `.nap` runtime 载荷）。示例（仅为示例性，具体 schema 以协议代码生成的校验资料为准）：
+
+~~~json
+{
+  "appId": "fund",
+  "runtimeType": "managed-native-host",
+  "runtimeApiVersion": 1,
+  "minCoreVersion": "x.x.x",
+  "capabilities": [],
+  "entryRoute": "app.html?app=fund",
+  "packages": { "darwin-arm64": { "artifactSha256": "…", "wireSize": 0, "payloadSha256": "…" } }
+}
+~~~
+
+不存在 Core 内 builtin dispatch：Core 不再提供 `app:invoke` 业务分发生产入口，也不持有任何包业务静态依赖（单 Runtime/ManagedApp Registry 路线已由 ADR-0027 取代并从生产代码移除）。业务请求路径为：app.html 短连 Core 核验安装记录 → 直连包 Native Port → 包自身 loopback 业务接口。
+
+载荷安全不放松：artifact_sha256/payload_sha256、Ed25519 catalog 签名、包身份、版本与 origin 校验对 managed-native-host 载荷同样适用，全部保留。
+
 不允许声明任意系统路径、shell 命令、启动参数、安装脚本、任意 Native Host 名称或扩展脚本 URL。
 
-runtimeHost 由 Core 计算：com.natives.app.a + app_id 的完整 SHA-256 小写十六进制。避免 app_id 中的连字符与 Native Host 命名限制产生冲突；Keychain namespace 仍沿用 com.natives.app.<appId> 语义，fund 保持 com.natives.app.fund。映射结果持久化在安装收据中，不由页面猜测或 Catalog 覆盖。
+正式 runtimeHost 由 Core 计算：com.natives.app.a + app_id 的完整 SHA-256 小写十六进制。避免 app_id 中的连字符与 Native Host 命名限制产生冲突；Keychain namespace 仍沿用 com.natives.app.<appId> 语义，fund 保持 com.natives.app.fund。映射结果持久化在安装收据中，不由页面猜测或 Catalog 覆盖。本地开发使用 §4.2 的隔离前缀，由同一共享命名函数计算，不由页面或 Catalog 切换。
 
 ## 3. 包与目录
 
-首版一个平台包就是 gzip 单载荷 .nap，载荷为平台原生可执行程序；UI 的 HTML/CSS/JS/图片在构建时嵌入该程序。没有压缩目录树，没有安装时 npm/pip/cargo，也不要求用户预装语言运行时。
+首版一个平台包就是 gzip 单载荷 .nap，载荷为平台原生可执行程序；UI 的 HTML/CSS/JS/图片在构建时嵌入该程序。没有压缩目录树，没有安装时 npm/pip/cargo，也不要求用户预装语言运行时。该描述属 legacy executable 路线：整改后普通 .nap 是 Managed App Resource Package（manifest.json、ui/、assets/、migrations/、metadata/），生产包内禁止 app-exec、fund-host、*.app、*.dylib、Mach-O executable；仅当 runtimeType=native-exec（默认禁止，见 §2）时才允许原生可执行载荷。
 
-每个包必须包含版本、平台、架构、wire_size、payload_size、artifact_sha256、payload_sha256。先做平台代码签名/公证，再计算最终载荷 hash 和压缩包 hash；签名后修改二进制会使发布失败。
+每个包必须包含版本、平台、架构、wire_size、payload_size、artifact_sha256、payload_sha256。先做所选分发模式要求的平台签名处理，再计算最终载荷 hash 和压缩包 hash；正式模式还须完成适用的公证与实际平台验证。签名/哈希后修改二进制会使交付失败。
 
-首版统一从现有 Wcof/Natives 的 GitHub Releases 交付 Catalog 和应用资产；基金可以独立构建，再把候选交给该发布仓库，不要求 Core 重新构建。浏览器仅接受签名条目中的 github.com/Wcof/Natives/releases/download/... 初始 URL，最终 response.url 仅接受 HTTPS 的 github.com、release-assets.githubusercontent.com、objects.githubusercontent.com 或 releases.githubusercontent.com。请求 credentials=omit、referrerPolicy=no-referrer，禁止未经签名的镜像替换与 HTTP 降级；页面 CSP/host_permissions 同步限定来源。
+2026-09-12 收敛：完整产品（Natives）的首次使用**没有模块获取链路**——不存在在线 Catalog、模块资产下载或"未随附应用在线获取"，本节原有的浏览器模块下载 URL 校验规则随之取消（仅作历史记录）。首用只做当前用户产品配置（§3.2）：从已验证的系统源核验组合清单，为全部固定模块准备私有活动载荷、浏览器注册与 activation，不做任何代码下载。产品更新统一为"更新 Natives"完整产品版本，其来源与网络校验由实施方案 P5 定义，不继承已取消的模块下载语义。
 
-浏览器负责网络请求和可观测的初始/最终 URL 校验；普通 Fetch 不能报告所有中间重定向时，不宣称已逐跳审计。A1 必须验证跨来源、HTTP 降级、循环重定向、超时和响应上限；Core 不发起该 HTTP 请求，只验证签名选择与实际 artifact 字节，不能假称它观察了网络链。新增下载域或更强网络策略属于显式兼容变化，本期不承诺任意仓库接入。
-
-Host 在可信边界重新验证签名 Catalog 原文、选择的条目与所有元数据，并对实际字节计算摘要。不能只信任前端 alreadyVerified 或前端传来的 hash。签名私钥只在发布凭据中，禁止进源码、安装包或测试证据。
+Host 在可信边界核验签名产品组合清单原文与全部固定模块文件的实际字节摘要。不能只信任前端 alreadyVerified 或前端传来的 hash。签名私钥只在发布凭据中，禁止进源码、安装包或测试证据。（2026-09-12 收敛：模块 Catalog/资产的浏览器下载链路取消；产品级更新通道的网络校验规则由实施方案 P5 另行定义。）
 
 目录由 Core/支持库根据标准用户根路径和签名身份计算：
 
@@ -67,16 +96,16 @@ Host 在可信边界重新验证签名 Catalog 原文、选择的条目与所有
     <appId>/
       activation.json                # Core 生成的只读激活投影，不是第二权威
       runtime/<version>/app[.exe]     # 已验证可执行程序，受限权限
-      data/                          # 应用独占；升级与默认卸载保留
+      data/                          # 应用独占；升级、重装与修复保留（无模块卸载）
       imports/                       # 用户导入原件；默认保留
       cache/                         # 有界、可清理
       staging/<installId>/           # 失败可恢复，最多一个安装事务
       backups/<migrationId>/         # 业务 schema 迁移备份，有界保留
 ~~~
 
-Native Host manifest 与 Windows 注册表属于 Core 的安装收据，不允许应用自己随意登记。Chrome/Chromium、实际扩展 origin 和 OS 平台差异由现有安装器机制统一处理，不接受请求体自报 origin 授权。
+Native Host manifest 与 Windows 注册表属于 Core 的安装收据，不允许应用自己随意登记。**受限浏览器注册例外**：活动包代码、数据和收据只存在于 Natives 私有根 `~/.natives/apps/<appId>/`；浏览器发现 Host 所需的最小注册元数据是明确例外——macOS/Linux 写入相应浏览器的 Native Messaging Hosts 指定目录（Chrome、Chromium、Chrome for Testing 分别核验，CfT 从 146 起默认位置不同），Windows 注册表仅指向 manifest JSON；manifest 再指向 Natives 私有目录内的受验签载荷。禁止任意注册路径、任意 Host 名称，禁止广泛删除不属于本产品收据的其他注册项。实际扩展 origin 和 OS 平台差异由现有安装器机制统一处理，不接受请求体自报 origin 授权。
 
-原生程序按用户权限运行。namespace 是数据组织约定，不能宣称阻止恶意原生程序访问其他用户文件。官方发布审查是当前信任前提，第三方 native 包明确拒绝。
+原生程序按用户权限运行。namespace 是数据组织约定，不能宣称阻止恶意原生程序访问其他用户文件。官方发布审查是当前信任前提，第三方 native 包明确拒绝。活动载荷安装目录仅属于 Natives 私有数据根（`~/.natives/apps/<appId>/`）；严禁写入 `/Applications`、独立 `.app` bundle、系统 Dock 图标或 LaunchServices 产品注册，不得伪装成独立桌面软件。
 
 ### 3.1 激活投影的读取契约
 
@@ -92,11 +121,48 @@ catalogEvidenceSha256 指向标准 apps/.catalog-evidence/<sha256>.json 与同�
 
 每次变更先写持久 journal，再将投影原子改为 maintenance；随后修改注册与 DB，最后写与已提交收据一致的 ready 投影。整个过程持有 install→runtime 锁。崩溃时 App Host 遇到缺失/maintenance/不一致即拒绝启动，由 Core recover 恢复；不能推测启用或自行修复投影。停用写 enabled=false；卸载写 removed/删除投影，均先阻断新启动。catalog-evidence 仅在没有当前/上版收据与 journal 引用时清理。
 
+### 3.2 统一套件、只读系统源与产品配置
+
+一个完整产品包含 Core Files Host、现有 Model Host、薄打开入口、稳定的扩展身份与安装说明、签名产品组合清单、固定解压扩展目录及全部固定内置模块文件（2026-09-12 收敛：无预装清单、无逐应用包）。首个完整候选必须包含真实 fund；独立样例仅作为覆盖共享底层规则的低层测试 fixture，必须标为测试，不宣称基金可用。
+
+macOS 正式系统源为 `/Library/Application Support/Natives/`，本地候选为 `/Library/Application Support/Natives-Local/`。目录及父级由系统安装器保护，root-owned、普通用户不可写；只存薄打开入口、主 Host、固定扩展目录 `ChromeExtension/`（含 manifest.json 的完整解压目录，用户按安装说明在 Chrome 中加载该目录）与全部固定内置模块文件；不存离线种子，不存用户数据库、activation 或业务数据。活动应用载荷仍在每用户私有根，Native Messaging 注册仅在浏览器指定位置。不得创建 Workbench.app、独立 `.app`、Dock 入口、LaunchServices 或其他桌面产品。Windows/Linux 的套件位置及权限必须在对应平台实际验收后声明支持，不用 macOS 结果代替。
+
+`bundle-manifest.json`（签名产品组合清单）≤256 KiB，旁置 Ed25519 detached signature；沿用既有信任根与签名工具，不创建第二套密钥协议（2026-09-12 收敛：清单只描述完整产品内固定文件与固定模块，无 Catalog 条目、无模块下载 URL）。最小字段为：
+
+| 字段 | 要求 |
+|---|---|
+| bundleSchemaVersion / suiteVersion | 1 / 套件 SemVer；与各应用版本独立 |
+| distribution / platform / arch | production 或 local-development；精确匹配当前构建身份与机器 |
+| extensionId / minExtensionVersion | 真实、稳定、可核验的扩展身份与最低版本；不使用假商店 ID |
+| hosts | role（file/model）、version、relativePath、payloadSha256；主 Host 校验适用平台身份 |
+| modules | appId、version、entryRoute、多语言名称/说明、artifactPath、payloadSha256；与包内固定模块文件精确匹配，无独立安装记录或下载 URL |
+
+所有相对路径限制在该受信系统源目录内，拒绝绝对路径、..、符号链接/重解析点逃逸、重复 ID 和不受支持的字段；不允许命令或安装脚本。清单只描述不可变交付资产，不记录 enabled/running/用户数据，不是第二 App Registry。签名公钥可分发，私钥禁止随包；本地开发系统源的来源摘要还须满足 §4.2。
+
+系统安装器只安装文件及必要主 Host 注册，不能猜测 `$SUDO_USER` 的家目录并写其业务数据/activation，也不运行子应用或迁移。首次配置在扩展的现有产品配置页完成：经过真实扩展 origin 校验的前台主 Host 连接，在当前 OS 用户权限下执行一次幂等「完成 Natives 配置」——校验当前签名组合清单，为全部固定模块准备私有活动载荷、浏览器注册与 activation，绑定同一 `productGeneration`；全部必需模块与注册验证成功后才标记本用户产品就绪，完成前不提供虚假「打开」，应用中心不触发配置、不显示「安装基金」。普通安装包不能替用户绕过浏览器扩展安装/启用政策，这一步在产品安装说明中明确一次性完成。
+
+产品配置在 Core 内从已验证系统源读取固定模块文件，复用既有安装事务的验证、锁、journal、health、commit 和 recover 原语，不经另一套复制后写 DB 的捷径（2026-09-12 收敛：无种子字节流、无首次连接预装事务）。不开放网页传任意本地包路径的 RPC。当前用户连接关闭则取消或安全收尾，下一次前台连接恢复；沿用每事务十分钟上限，不启动 Service Worker Port、常驻配置 daemon 或后台重试。health 不运行基金业务或迁移。
+
+在现有 App Store 元数据/收据上持久化已配置的 `productGeneration`、已处理的产品版本与用户显示/停用偏好，供通用状态投影使用；不另建注册库，无预装来源语义。新增投影字段应通过协议类型统一生成并做兼容检查；名称和枚举不得由 UI 自行发明。
+
+| 当前状态 | 同一或更新产品的处理 |
+|---|---|
+| 首次、未配置 | 完成一次产品配置：校验组合清单并准备全部固定模块载荷/注册/activation，绑定同一 productGeneration；不自动运行业务 |
+| 同版本且摘要一致 | 校验/恢复所需注册与投影，不重复配置、不重置偏好 |
+| 系统源版本低于已配置产品 | 拒绝隐式降级，提示获取能承接数据的完整新版；不重置偏好与数据 |
+| 系统源版本更高 | 属于产品更新流程（维护窗口与整包切换，见实施方案 P5），不由应用中心或模块 open 隐式补装 |
+| 同版本但摘要不同 | 报冲突，拒绝覆盖 |
+| 用户曾移除或停用 | 保留选择并转为入口关闭偏好；整包更新不自动打开，开启入口只改偏好，代码已随产品交付 |
+| 运行锁占用、未完事务或损坏投影 | 显示 busy/需要恢复；按既有 recover 处理，不强杀或猜测成功 |
+| 新清单没有原应用 | 不自动卸载，不清除其数据 |
+
+全部固定模块与注册在同一 `productGeneration` 事务内核验；任一必需模块失败则产品不标记就绪，并提示「完成/修复 Natives 配置」，不能部分成功却展示整体可用。重装主产品不等于恢复业务备份。旧用户级主 Host 注册可能遮蔽系统注册：只在校验既有 Natives 身份和目标后提示/修复，禁止宽泛删除浏览器目录或其他 Host。所有实际支持的浏览器及 profile 必须分别验证。
+
 ## 4. 安装、更新与清理
 
-管理方法沿用 apps:install_begin / install_chunk / install_finish / install_commit / install_abort / recover / uninstall / clear_data / set_enabled 等现有语义，修改现有协议类型，不创建 parallel v2 store。
+2026-09-12 收敛：本节的验证、流式落盘、锁、journal、health、commit、recover 与清理机制**只在完整产品安装/更新与当前用户产品配置层使用**，核验组合清单内的固定模块文件。`apps:install_begin / install_chunk / install_finish / install_commit / install_abort / suite_prepare / uninstall / rollback` 不再对模块分发开放——页面发起的此类请求必须在任何存储/网络/注册变更前返回固定协议错误码并提示「更新 Natives/重新加载扩展」，不得静默回退在线 Catalog。`apps:clear_data` 与 `apps:uninstall` 分离：清数据只处理用户确认的数据范围，保留代码、注册、activation 与显示/启用/排序偏好，不写 removed 意图（数据重置细则见实施方案 §4.3）。管理实现修改现有协议类型，不创建 parallel v2 store。
 
-> 实现注记：v4 传输协议落地后，`install_begin` 只接受签名 Catalog（`catalogBase64` + `signature`，Ed25519 固定信任根验签，Core 自行选包）；旧的无签名整包 `install_package` 方法已删除，不再保留两条生产链路。分块方法实现为 `install_chunk`。
+> 实现注记：v4 传输协议落地后，`install_begin` 曾只接受签名 Catalog（`catalogBase64` + `signature`，Ed25519 固定信任根验签，Core 自行选包）；旧的无签名整包 `install_package` 方法已删除。2026-09-12 收敛后这些方法仅作为产品层复用的传输/校验机制保留，模块分发语义见上。分块方法实现为 `install_chunk`。
 
 ### 4.0 安装传输协议（Core Apps v4）
 
@@ -126,18 +192,18 @@ finish 前崩溃以 journal 和实际文件长度恢复；发现半 chunk 截回
 6. journal 记录旧 manifest/注册表/版本指针/收据。原子激活候选；任一步失败均按 journal 恢复。文件与 DB 不能假称一个原子事务，recover 必须覆盖每个崩溃切点。
 7. 提交后保留一个上版代码，清理更旧版本及 staging。运行锁在整个版本切换后释放；不得在持 DB Mutex guard 时调用再次加锁的 snapshot/query。
 8. 更新不会自动运行应用。第一次真实打开时，应用自行完成业务库备份、迁移与验证后才进入 ready。
-9. 默认卸载移除程序、注册和入口，保留 data/imports/业务备份；清缓存可独立执行。清除用户数据和 Keychain 是另一个显式危险操作，沿用二次确认。
+9. 模块卸载语义已取消（2026-09-12 收敛）；历史卸载收据仅在受控产品迁移中按 journal 收尾。清除用户数据和 Keychain 是独立的显式危险操作，与代码操作分离，沿用二次确认。
 10. Windows 被占用文件、锁住的 Keychain 或无法删除注册表：显示 retryable cleanup_pending，保留清理收据；禁止返回成功再默默留下残留。
 
 平台安全提示正常展示。禁止通过移除 quarantine、关闭签名验证或使用任意 shell 安装器实现“无感安装”。
 
-平台检查必须区分：macOS 为 Developer ID 签名、固定发布者 Team ID、notarytool 的已接受公证产物及实际 Gatekeeper 启动证据；安装时校验代码完整性和身份，不把 Catalog 自报 notarized=true 当公证验证。裸 CLI 的公证/离线票据支持在 A1 核验，不把不适用的 spctl/stapler 输出当成功；首次离线无法验证则明确不可用，不移除 quarantine。Windows 为 WinVerifyTrust/Authenticode 与固定发布者身份校验，签名/吊销状态不确定不静默接受。Linux 不要求不存在的统一 OS 签名机制，以官方 Ed25519 发布签名、载荷 hash、ELF 架构和受限文件权限作为验收。平台验证调用限时 30 秒并回收；无签名仅允许隔离开发 fixture，不能加入正式 Catalog。
+正式分发的平台检查必须区分：macOS 为 Developer ID 签名、固定发布者 Team ID、notarytool 的已接受公证产物及实际 Gatekeeper 启动证据；安装时校验代码完整性和身份，不把 Catalog 自报 notarized=true 当公证验证。裸 CLI 的公证/离线票据支持在 A1 核验，不把不适用的 spctl/stapler 输出当成功；首次离线无法验证则明确不可用，不移除 quarantine。Windows 为 WinVerifyTrust/Authenticode 与固定发布者身份校验，签名/吊销状态不确定不静默接受。Linux 不要求不存在的统一 OS 签名机制，以官方 Ed25519 发布签名、载荷 hash、ELF 架构和受限文件权限作为验收。平台验证调用限时 30 秒并回收；本地模式的例外仅见 §4.2，开发资产不能进入正式产品组合。
 
 ### 4.1 业务迁移失败与代码回退
 
 应用支持库在 data/.migration.json 记录 migrationId、from/toSchema、from/toAppVersion、state、backupId、hasCommittedNewWrites；状态为 prepared→migrating→verified→committed，失败为 restored/failed。字段不含业务内容或 Secret，原子写入。业务 DB 的 schema version 是实际数据版本权威，journal 负责记录跨步骤恢复；二者不一致时先恢复/修复，禁止 ready。
 
-第一次迁移在接收任何用户写入前完成；备份在 backups/<migrationId>/，使用一致性快照。升级成功后最多保留两份已验证迁移备份；失败中/恢复未完成的备份禁止自动清除，也不再发起另一迁移堆积备份，要求先修复。备份和其他个人数据一样，默认卸载保留。
+第一次迁移在接收任何用户写入前完成；备份在 backups/<migrationId>/，使用一致性快照。升级成功后最多保留两份已验证迁移备份；失败中/恢复未完成的备份禁止自动清除，也不再发起另一迁移堆积备份，要求先修复。备份和其他个人数据一样默认保留（模块代码随整包交付，无模块卸载）。
 
 App Host 必须实现固定只读模式 --inspect-data：Core 在持 install→runtime 锁时执行，限时五秒、输出不超过 64 KiB；该模式不再获取 runtime 锁、不迁移、不联网、不访问 Keychain，只返回实际 schema、journal 状态、最后写入版本、已提交新写入标记和可验证的兼容性。禁止页面提供可执行路径或任意参数。
 
@@ -147,12 +213,33 @@ App Host 必须实现固定只读模式 --inspect-data：Core 在持 install→r
 
 迁移失败且新写入尚未开放时，由候选应用恢复其备份，报告 APP_MIGRATION_FAILED 并退出；Core 保持候选版本为需要修复，用户可以重试修复或执行通过上述核验的“回退上一版本”。不能只恢复 DB 后仍把安装卡片显示正常。崩溃发生在迁移/恢复中则先以当前版本重开执行 journal 恢复，成功前禁用业务写入和不安全代码回退。
 
+### 4.2 本地开发、候选与正式分发
+
+本地例外仅解决 Developer ID/公证凭据缺失，不保证系统一定放行；真实 Gatekeeper/Native Host 失败仍是失败。不得自动删除 quarantine、关闭系统校验或脚本代点“仍要打开”。
+
+| 项目 | local-development | production |
+|---|---|---|
+| 构建 | 专用非生产构建身份 + 显式开发入口；可为性能测试使用优化构建 | 正式构建，不能运行时切成开发策略 |
+| macOS 身份 | 本机 ad-hoc/开发签名；不要求 Developer ID/公证 | 固定 Developer ID/Team ID、适用公证及真实启动证据 |
+| 组合清单 / bundle | 开发信任根验签 + 精确本机构建摘要核验 | 仅正式信任根；拒绝开发根、fixture 和开发载荷 |
+| 校验 | wire/payload/hash/平台/架构/路径/权限/协议全部保留 | 同左，加正式平台身份 |
+| 注册与数据 | 独立命名空间，不触碰日常环境 | 固定正式身份和既有数据 |
+| 完成含义 | A-Local/B-Local，仅限记录的机器/浏览器/构建 | 原完整 A/B 门禁及所有声明平台 Release Gate |
+
+本地候选数据根为 `~/.natives-local/`，系统源见 §3.2。现有 `apps:dev` 可继续使用 `dist/apps-dev/state/` 等专用临时根，但必须由受控开发入口固定，不能将页面/普通环境变量自报路径当授权，也不能指向正式根。开发源可位于受控构建目录，验其所有权、路径边界和本次实际构建摘要；任意下载文件不能仅改成 fixture 就被接受。
+
+共享身份函数区分分发模式：正式 runtimeHost 保持 `com.natives.app.a<sha256(appId)>`，开发为 `com.natives.local.app.a<sha256(appId)>`；主 file/model Host、扩展身份也使用相互不遮蔽的开发身份。开发 Keychain namespace 为 `com.natives.local.app.<appId>`，正式沿用 `com.natives.app.<appId>`，由支持库与 Core 共用命名和精确清理 fixture；Model Host 的本地测试凭据同样隔离。不得自动导入或删除正式数据/凭据。
+
+必须有反向测试：正式构建拒绝开发 Catalog/清单/载荷、仅传开发环境变量仍拒绝、源被替换/hash 不符拒绝、开发注册不会覆盖正式注册、开发清理不影响正式数据和 Keychain。非生产构建策略不得进入正式二进制；可用同一代码中的受控构建配置实现，不新建平行运行时。
+
+A-Local 用真实内置基金验证完整产品组合的所选本机平台工程链路（2026-09-12 收敛：取消"先独立样例再进入 B"的前置条件；已有独立样例仅作为覆盖共享底层规则的低层测试 fixture）。B-Local 包含真实基金与完整产品组合的端到端业务。Developer ID、公证、生产浏览器身份/审核及其他平台 pending 单列为 Release Gate，不伪造 passed，也不阻止无依赖的本地工作。完整门禁矩阵与证据仅维护于 [实施方案](../development/app-center-fund-implementation-plan.md)。
+
 ## 5. 运行协议
 
 ### 5.1 启动顺序
 
 1. app.html 从 URL 只读取 appId。
-2. 短连 Core apps:get，核验已安装/启用/兼容性，返回appId、activeVersion、runtimeHost、activationGeneration、enabled及安装状态；随后关闭 Core Port。
+2. 短连 Core apps:get，核验已安装/启用/兼容性，返回appId、activeVersion、runtimeHost、activationGeneration、enabled及安装状态；随后关闭 Core Port。`activationGeneration` 是**单调递增的无符号整数（u64，从 1 起，Core 在每次启用/停用/升级/回滚/恢复投影变更时 +1）**，来源为激活投影 `activation.json` 的 `generation` 字段；它与 App Store 管理用的安装 `revision`（另一独立计数器）是两个不同概念，**禁止混用或互相替代**——页面/壳不得把 revision 当作 activationGeneration，Host 启动校验只使用投影 generation。
 3. 同 profile 查找已有同 appId 页面并激活。手工复制页面或同时打开时仍由 OS runtime 锁防止第二个业务实例。
 4. app.html 使用 runtime.connectNative(runtimeHost)，Chrome 启动应用。
 5. 应用支持库从 Chrome 启动实参核验 origin，并与 Core 安装的受限注册信息匹配；页面参数不能覆盖。
@@ -262,4 +349,4 @@ Core App Store 和应用业务库分别迁移、分别写入。应用不能连�
 
 至少支持：APP_UNSUPPORTED_PLATFORM、APP_INCOMPATIBLE、APP_SIGNATURE_INVALID、APP_PACKAGE_INVALID、APP_INSTALL_FAILED、APP_INSTALLATION_CHANGED、APP_CLEANUP_PENDING、APP_BUSY、APP_ALREADY_RUNNING、APP_RUNNING_ELSEWHERE、APP_RUNTIME_LIMIT、APP_START_FAILED、APP_PROTOCOL_MISMATCH、APP_SESSION_INVALID、APP_MIGRATION_FAILED、APP_DATA_SCHEMA_INCOMPATIBLE、APP_KEYCHAIN_LOCKED。APP_RUNNING_ELSEWHERE仅表示当前profile无法控制的另一会话，不暴露无法核验的具体profile身份。现有错误可兼容映射，不强制换名重写无关文件。
 
-每个应用必须通过同一组黑盒契约检查：签名安装、激活投影的每个崩溃切点、离线重开、错 origin/协议、并发打开、非法本地请求、停止/EOF/崩溃、隐藏回收、未保存草稿、更新失败恢复、数据迁移失败与显式代码回退、卸载保留、确认清除、资源增长与独立发布。结果必须区分 mock、真实 Native Host、真实浏览器、平台签名和线上发布状态。
+每个应用必须通过同一组黑盒契约检查：签名安装、激活投影的每个崩溃切点、离线重开、错 origin/协议、并发打开、非法本地请求、停止/EOF/崩溃、隐藏回收、未保存草稿、更新失败恢复、数据迁移失败与显式代码回退、整包更新与修复保留、确认清除、资源增长。结果必须区分 mock、真实 Native Host、真实浏览器、平台签名和线上发布状态。

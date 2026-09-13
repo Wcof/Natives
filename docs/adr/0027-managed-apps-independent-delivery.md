@@ -1,22 +1,36 @@
-# ADR-0027：官方托管应用独立交付与页面拥有生命周期
+# ADR-0027：官方托管扩展包独立交付与页面拥有生命周期
 
 - 状态：accepted-target（A0 规范同步提交合入执行分支即生效；生效点与例外范围见 §5。accepted-target 表示目标架构与预算已批准并可据此实施 A1—A5，不代表生产迁移完成——当前生产仍是 ADR-0026 路线，直至 A3—A5 实际替换）。
 - 日期：2026-09-09。
-- 最近修订：2026-09-10。
-- 产品依据：用户确认轻量 Core、应用独立扩展、按需运行与回收；先改造应用中心，再适配基金应用；允许修订冲突的 ADR-0026。
+- 2026-09-11 补充：[ADR-0029](0029-unified-suite-preinstalled-apps.md) 决定统一套件预装、受限系统安装源与本地/发布分级验收，取代本文冲突的逐包获取含义和无条件私有根表述；独立运行/更新、Core 单一安装权威及其余安全规则不变。本文保留原决策背景，具体新增规则以 0029 与当前 Standards/契约为准。
+- 2026-09-11 架构整改明确（Managed Multiple Hosts）：重新定义“独立交付”（Independent Delivery）为五维独立：独立源码（Independent Source）、独立构建（Independent Build）、独立版本（Independent Version）、独立更新（Independent Update）、独立回滚（Independent Rollback）。同时明确：**Independent Delivery != Independent User Installation**。官方托管子应用的首发版本（Initial Release）随 Natives Suite Seed 统一交付，无需用户进行远端二次下载；受控独立 Native Host（如 fund-host）保留作为托管子应用运行载荷，禁止将业务编译进 Core（禁止 Fund builtin 化），Core 统一管控其生命周期。
+- 2026-09-12 路线收敛（用户最终决定，取代本文冲突的独立交付语义）：Natives 是唯一产品，基金等均为**内置模块**，全部随 Natives 完整安装包一起构建、安装、更新和修复。**取消模块独立下载、独立安装、独立升级、独立回滚、独立 Release、在线 Catalog 驱动新 appId 与 Fund 独立 nap 发布**；应用中心不再有"可添加/应用商店"语义。新增模块只能通过新的完整 Natives 版本交付。本文其余安全、数据、生命周期与沙箱约束继续有效；凡与本次收敛冲突的"独立发布/独立更新/不重发 Core/不重发扩展"表述一律以本注记为准，配套 MUST 同步见 [实施方案 §5 P0](../development/app-center-fund-implementation-plan.md)。
+- 最近修订：2026-09-12。
+- 产品依据：用户确认轻量 Core、应用独立扩展、按需运行与回收；先改造应用中心，再适配基金扩展包；明确 Natives 是唯一产品，托管扩展包是 Natives 的组成部分；允许修订冲突的 ADR-0026。
 - 技术选择：本 ADR 是本轮提出的落地方案，不把技术细节写成用户已经逐项确认的事实。
 - 执行入口：[两阶段实施方案](../development/app-center-fund-implementation-plan.md)。
 - 接口唯一来源：[托管应用契约 v1](../contracts/managed-app-contract.md)。
 
 ## 1. 决策
 
-Natives 的应用中心与通用 app.html 保留在 Chrome/Chromium 扩展中。官方应用独立发布一个原生可执行程序，程序内包含其业务代码和构建后的 UI 静态资源。应用中心安装、校验、更新该程序，并为其登记受限的 Native Messaging Host。
+Natives 是唯一的用户产品。托管扩展包（如基金扩展包）是 Natives 应用中心管理的可选扩展能力，属于 Natives 的组成部分，不是独立桌面产品；扩展包内部的持仓、账本、净值、导入和数据迁移等是包的内部模块，不应分别变成可安装应用或拥有独立产品身份。
 
-app.html 先短连接 Core 核验安装、启用、版本与已登记 Host，然后直接连接该应用 Host。Chrome 启动应用进程。应用进程在 127.0.0.1 动态端口提供自身 UI 和自身业务接口，app.html 用受限 sandbox iframe 呈现 UI。业务代码不进入扩展执行上下文。
+官方托管扩展包的源码可以按清晰领域边界独立构建与维护，但**不再独立发布**：基金等内置模块代码随 Natives 完整安装包一起构建、安装、更新和修复，用户版本、安装包和 Release 与 Natives 联动。应用中心只保留内置功能打开、导航显示/隐藏、偏好设置与数据管理；不存在模块安装/下载/升级/卸载语义，也不再更新签名 Catalog 来交付新扩展包。新增 Core 公共能力仍需要 Core 版本升级。
 
-安装不会启动业务。有效协议范围内的新应用、UI 更新和业务更新不要求重新构建或发布扩展/Core；应用中心只更新签名 Catalog 和安装记录。新增 Core 公共能力仍需要 Core 版本升级。
+硬约束：
+1. 安装目录只属于 Natives 私有数据根（`~/.natives/apps/<appId>/`）；严禁写入 `/Applications`、独立 `.app` bundle、独立 Dock 图标或 LaunchServices 系统产品注册。
+2. 若要做到“下载后在扩展上下文执行新的 JS”，必须先另立安全 ADR；本项目当前不允许以此绕过浏览器远程代码限制。
+3. 应用中心只做内置功能入口与偏好管理（打开/显示隐藏/设置/数据管理），不包含任何业务判断、应用商店语义或特定扩展包专用代码。
+4. 2026-09-12 收敛：不保留任何“模块独立下载/安装/更新/卸载”的生产入口或配置开关；旧动态注册不得作为静默 fallback 继续运行。
 
-首版仅交付官方托管应用。第三方 Web URL 是后续接入类型，本次不实现第三方代码下载、任意 URL 嵌入或第三方原生程序安装。
+### 运行实现机制
+
+运行时是否使用本机进程属于实现细节，不出现在产品名称、导航、安装文案或数据模型的产品层：
+- Natives 的应用中心与通用 `app.html` 保留在 Chrome/Chromium 扩展中。
+- 官方托管扩展包的运行载荷由受控本机实现承载，载荷内包含其业务代码和构建后的 UI 静态资源。模块文件随完整产品安装/更新交付，由产品安装链路验签、健康检查并登记受限的 Native Messaging Host；首用只核验当前产品版本并初始化业务数据，无代码下载。
+- `app.html` 作为每个扩展包的通用呈现会话（Surface），先短连接 Core 核验安装、启用、版本与已登记 Host，然后直接连接该扩展包 Host。Chrome 按需启动应用进程。
+- 应用进程在 127.0.0.1 动态端口提供自身 UI 和自身业务接口，`app.html` 用受限 sandbox iframe 呈现 UI。业务代码不进入扩展执行上下文。
+- 首版仅交付官方托管扩展包。第三方 Web URL 是后续接入类型，本次不实现第三方代码下载、任意 URL 嵌入或第三方原生程序安装。
 
 ## 2. 职责与安全
 
@@ -31,9 +45,11 @@ app.html 先短连接 Core 核验安装、启用、版本与已登记 Host，然
 
 ## 3. 交付与更新
 
-沿用 gzip 单载荷 .nap、签名 Catalog、双重 SHA-256、安装事务和数据保留机制；新增 managed_local 类型。每个目标平台的应用包只有一个原生可执行载荷，UI 嵌入该可执行程序，不增加 ZIP/TAR 解包器或在安装时运行包内脚本。
+沿用 gzip 单载荷 .nap、签名 Catalog、双重 SHA-256、安装事务和数据保留机制；新增 managed_local 类型。每个目标平台的应用包只有一个原生可执行载荷，UI 嵌入该可执行程序，不增加 ZIP/TAR 解包器或在安装时运行包内脚本。此为 legacy executable 路线描述；单 Runtime 整改完成后，普通 Managed App Package（.nap）为资源包，不含 Mach-O executable、*.dylib、*.app、app-exec 或 fund-host。
 
-Catalog v3、Core Apps protocol v4、独立 App protocol v1 分别管理目录、安装管理和运行兼容性。协议变更与应用业务版本分离。Native Host 名称、注册路径和安装路径由 Core 计算，不接受目录或页面提供的任意命令、绝对路径或 Host 名称。
+2026-09-12 收敛：上述验证与事务能力**只在完整产品安装/更新层使用**，用于核验安装包内固定模块文件；不再作为运行时 Catalog 分发链路。不存在独立的应用包 Release 或在线 Catalog 更新。
+
+Catalog v3、Core Apps protocol v4、独立 App protocol v1 分别管理目录、安装管理和运行兼容性。协议变更与应用业务版本分离。Native Host 名称、注册路径和安装路径由 Core 计算，不接受目录或页面提供的任意命令、绝对路径或 Host 名称。运行时不再出现"更新签名 Catalog 交付新扩展包"语义。
 
 升级仅在应用停止后进行。安装程序不接触业务库；候选程序的健康检查不执行生产数据迁移。首次启动业务版本前由应用自己备份并迁移业务库；失败恢复备份。已经接受新写入后不得静默恢复旧备份。代码回退必须同时满足数据 schema 的向后兼容性。
 
@@ -59,7 +75,7 @@ A0 同步 Standards 后生效，不能先更改检查脚本绕过旧门禁：
 
 A0 必须在同一个文档提交内同步下列内容，之后才修改生产路径：
 
-- ADR-0026：取代“共享 file Host 承载应用业务、UI/逻辑内置、纯资源包、禁止独立应用 Host”全部目标决策；保留其供应链、原子安装、数据保留和 Secret 原则。标注 superseded by ADR-0027，保留历史原因，不篡改当时结论。
+- ADR-0026：取代“共享 file Host 承载应用业务、UI/逻辑内置、纯资源包、禁止独立应用 Host”全部目标决策；保留其供应链、原子安装、数据保留和 Secret 原则。旧 ADR-0026 只保留历史原因，不恢复其旧生产链路；旧“Extension App UI 必须 build-time 进入扩展包”的 MUST 规则不能与新的独立发布目标并存，在此明确被 ADR-0027 取代。标注 superseded by ADR-0027，保留历史原因，不篡改当时结论。
 - ADR-0025：取代构建期 UI 白名单、旧 Catalog/协议、旧包预算与旧运行呈现方式；可复用独立 Host 注册与事务思路，不恢复旧代码整包。
 - ADR-0020 §4/§5 与生产范围：添加“官方托管应用”这个有界例外；继续禁止 Agent/Harness/Planner/Jobs、通用 Plugin Runtime 和旧 Tauri 产品路径。
 - ADR-0023：Files 保持原约束。扩展页面仍是管理壳；仅 app.html 内的官方应用 sandbox 与应用自有 loopback 被本 ADR 授权，不给 Files/Core 增加通用 HTTP 服务。
@@ -77,6 +93,7 @@ A0 必须在同一个文档提交内同步下列内容，之后才修改生产�
 - 每个应用独立 Native Host 直接复用 Chrome 的进程启动/连接机制，避免在 Core 内再建设一层应用子进程守护与跨进程路由。
 - UI 使用隔离上下文，不在扩展页动态执行下载代码。Chrome Web Store 对隔离上下文有政策例外；是否通过真实审核仍属于发布门禁，不能凭本 ADR 宣称已获准。
 - 应用 Host 的通用协议、鉴权、限额、退出和锁逻辑作为小型编译期支持库，由标准样例与基金共用；不提供动态插件加载、任意方法代理或通用业务框架。
+- 承认独立 Native Host 进程路线的 macOS 信任成本：未签名或按包分发的原生载荷会被 syspolicyd/Gatekeeper 评估，并可能被 SIGKILL 终止；这一信任与运维成本是转向单 Runtime builtin 模式的直接动因之一。
 
 ## 7. 验证依据
 

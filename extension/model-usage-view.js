@@ -6,6 +6,7 @@ export function renderUsageView(container, {
   analyticsData,
   eventsData,
   pricingData,
+  billingData,
   currentFilter = { range: '4h' },
   filterOptions,
   t,
@@ -22,6 +23,7 @@ export function renderUsageView(container, {
       <button type="button" class="model-subnav-tab ${activeSubTab === 'analytics' ? 'active' : ''}" data-action="select-usage-tab" data-tab="analytics">${escapeText(t('modelUsageAnalytics', '透视分析'))}</button>
       <button type="button" class="model-subnav-tab ${activeSubTab === 'events' ? 'active' : ''}" data-action="select-usage-tab" data-tab="events">${escapeText(t('modelUsageEvents', '明细记录'))}</button>
       <button type="button" class="model-subnav-tab ${activeSubTab === 'pricing' ? 'active' : ''}" data-action="select-usage-tab" data-tab="pricing">${escapeText(t('modelUsagePricing', '价格与费率'))}</button>
+      <button type="button" class="model-subnav-tab ${activeSubTab === 'billing' ? 'active' : ''}" data-action="select-usage-tab" data-tab="billing">${escapeText(t('modelUsageBilling', '账单与支出'))}</button>
     </div>
   `;
   container.append(subnav);
@@ -53,7 +55,14 @@ export function renderUsageView(container, {
   customRange.className = 'model-filter-bar model-filter-bar-custom';
   customRange.dataset.role = 'usage-custom-range-form';
   customRange.hidden = currentFilter.range !== 'custom';
-  customRange.innerHTML = `<label>${escapeText(t('modelStartTime', '开始时间'))}<input type="datetime-local" name="startTime" required></label><label>${escapeText(t('modelEndTime', '结束时间'))}<input type="datetime-local" name="endTime" required></label><button class="primary" type="submit">${escapeText(t('apply', '应用'))}</button>`;
+  // 自定义周期：回显当前筛选的起止（AI 卡片自定义周期钻取带同一时间窗）。
+  const toLocalInput = (iso) => {
+    const d = new Date(iso);
+    if (!iso || Number.isNaN(d.getTime())) return '';
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+  };
+  customRange.innerHTML = `<label>${escapeText(t('modelStartTime', '开始时间'))}<input type="datetime-local" name="startTime" required value="${escapeText(toLocalInput(currentFilter.startTime))}"></label><label>${escapeText(t('modelEndTime', '结束时间'))}<input type="datetime-local" name="endTime" required value="${escapeText(toLocalInput(currentFilter.endTime))}"></label><button class="primary" type="submit">${escapeText(t('apply', '应用'))}</button>`;
   container.append(customRange);
 
   const importer = document.createElement('div');
@@ -71,6 +80,8 @@ export function renderUsageView(container, {
     renderEventsTab(content, eventsData, currentFilter, t);
   } else if (activeSubTab === 'pricing') {
     renderPricingTab(content, pricingData, t);
+  } else if (activeSubTab === 'billing') {
+    renderBillingTab(content, billingData, t);
   }
 
   container.append(content);
@@ -350,4 +361,95 @@ function formatTime(isoStr) {
 
 function escapeText(value) {
   return String(value ?? '').replace(/[&<>'"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]);
+}
+
+
+// 账单与支出 tab（整改 E5，方案 §7.1/§7.2）：三口径对账汇总、条目列表、
+// 账单 CSV 导入与手动确认支出录入。三口径严格分列，多币种不合并。
+function renderBillingTab(container, data, t) {
+  const summaries = (data && data.summaries) || [];
+  const entries = (data && data.entries) || [];
+
+  const summary = document.createElement('div');
+  summary.className = 'model-metric-grid';
+  if (!summaries.length) {
+    summary.innerHTML = `<div class="model-metric-card"><span class="muted">${escapeText(t('modelBillingEmpty', '暂无账务条目'))}</span><strong>—</strong></div>`;
+  } else {
+    summary.innerHTML = summaries.map((s) => `
+      <div class="model-metric-card">
+        <span class="muted">${escapeText(t('modelBillingServiceSpend', '已确认服务消耗'))} (${escapeText(s.currency || 'USD')})</span>
+        <strong>${formatMicro(s.recognizedServiceSpend)}</strong>
+      </div>
+      <div class="model-metric-card">
+        <span class="muted">${escapeText(t('modelBillingCashOutflow', '现金流出'))} (${escapeText(s.currency || 'USD')})</span>
+        <strong>${formatMicro(s.cashOutflow)}</strong>
+      </div>
+      <div class="model-metric-card">
+        <span class="muted">${escapeText(t('modelBillingCreditDelta', 'Credits/余额变化'))} (${escapeText(s.currency || 'USD')})</span>
+        <strong>${formatMicro(s.creditBalanceDelta)}</strong>
+      </div>`).join('');
+  }
+  container.append(summary);
+
+  const toolbar = document.createElement('div');
+  toolbar.className = 'model-filter-bar';
+  toolbar.innerHTML = `
+    <button type="button" class="model-filter-import-btn" data-action="pick-billing-file">${escapeText(t('modelImportBilling', '导入账单 CSV'))}</button>
+    <button type="button" class="model-filter-import-btn" data-action="show-billing-entry-form">${escapeText(t('modelAddBillingEntry', '手动确认支出'))}</button>
+    <input type="file" accept=".csv" data-role="billing-file-input" hidden>`;
+  container.append(toolbar);
+
+  const entryForm = document.createElement('form');
+  entryForm.className = 'model-filter-bar';
+  entryForm.dataset.role = 'billing-entry-form';
+  entryForm.hidden = true;
+  const kindOptions = [
+    ['subscription', t('modelBillingKindSubscription', '订阅')],
+    ['service_usage', t('modelBillingKindServiceUsage', 'API 扣款')],
+    ['topup', t('modelBillingKindTopup', '充值')],
+    ['credit_delta', t('modelBillingKindCreditDelta', 'Credits 变化')],
+    ['refund', t('modelBillingKindRefund', '退款')],
+    ['discount', t('modelBillingKindDiscount', '折扣')],
+    ['tax', t('modelBillingKindTax', '税费')],
+    ['prepay_expiry', t('modelBillingKindPrepayExpiry', '预付余额到期')],
+  ].map(([value, label]) => `<option value="${value}">${escapeText(label)}</option>`).join('');
+  entryForm.innerHTML = `
+    <label>${escapeText(t('modelBillingProvider', '提供方'))}<input type="text" name="provider" placeholder="cursor" required></label>
+    <label>${escapeText(t('modelBillingAccount', '账户'))}<input type="text" name="billingAccount" required></label>
+    <label>${escapeText(t('modelBillingKind', '类型'))}<select name="kind">${kindOptions}</select></label>
+    <label>${escapeText(t('modelBillingAmount', '金额'))}<input type="number" step="any" name="amount" required></label>
+    <label>${escapeText(t('modelBillingCurrency', '币种'))}<input type="text" name="currency" value="USD" maxlength="8" required></label>
+    <label>${escapeText(t('modelBillingDate', '日期'))}<input type="date" name="date" required></label>
+    <label>${escapeText(t('modelBillingPeriodEnd', '到期日（订阅/预付）'))}<input type="date" name="periodEnd"></label>
+    <label>${escapeText(t('modelBillingNote', '备注'))}<input type="text" name="note"></label>
+    <button class="primary" type="submit">${escapeText(t('apply', '应用'))}</button>`;
+  container.append(entryForm);
+
+  if (entries.length) {
+    const table = document.createElement('div');
+    table.className = 'model-table-wrapper';
+    table.innerHTML = `<table class="model-table"><thead><tr>
+      <th>${escapeText(t('modelBillingDate', '日期'))}</th>
+      <th>${escapeText(t('modelBillingKind', '类型'))}</th>
+      <th>${escapeText(t('modelBillingProvider', '提供方'))}</th>
+      <th>${escapeText(t('modelBillingAmount', '金额'))}</th>
+      <th>${escapeText(t('modelBillingEvidence', '证据'))}</th>
+    </tr></thead><tbody>${entries.map((e) => `<tr>
+      <td>${escapeText(e.periodStart || '-')}</td>
+      <td>${escapeText(e.kind || '-')}</td>
+      <td>${escapeText(e.provider || '-')}</td>
+      <td>${formatMicro(serviceImpactOf(e) || cashImpactOf(e) || creditImpactOf(e))} ${escapeText(e.currency || '')}</td>
+      <td>${escapeText(e.evidenceLevel || '-')}</td>
+    </tr>`).join('')}</tbody></table>`;
+    container.append(table);
+  }
+}
+
+function serviceImpactOf(e) { return Number(e.serviceCostImpact) || 0; }
+function cashImpactOf(e) { return Number(e.cashImpact) || 0; }
+function creditImpactOf(e) { return Number(e.creditBalanceImpact) || 0; }
+
+function formatMicro(micro) {
+  const value = (Number(micro) || 0) / 1_000_000;
+  return value.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }

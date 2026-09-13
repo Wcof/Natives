@@ -1,0 +1,31 @@
+{
+  "generatedAt": "2026-09-12T00:41:53.824Z",
+  "note": "测试数据 fixture，非生产数据",
+  "before": {
+    "nativeCalls": 1,
+    "cardColour": "",
+    "fontSize": "22px",
+    "fontWeight": "700",
+    "valueText": "$0.00"
+  },
+  "after1": {
+    "nativeCalls": 1,
+    "cardColour": "",
+    "fontSize": "22px",
+    "fontWeight": "700",
+    "valueText": "$0.00"
+  },
+  "after2": {
+    "nativeCalls": 1,
+    "cardColour": "",
+    "fontSize": "32px",
+    "fontWeight": "700",
+    "valueText": "$0.00"
+  },
+  "assertions": {
+    "queriesUnchanged": true,
+    "styleChanged": true,
+    "valueStable": true
+  },
+  "pass": true
+}

@@ -1,0 +1,4 @@
+=== RUN   TestNativeOnlyCollectionWithoutProxy
+--- PASS: TestNativeOnlyCollectionWithoutProxy (0.01s)
+PASS
+ok  	github.com/ldh/natives/model-host/internal/usage	1.529s

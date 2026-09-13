@@ -1,5 +1,4 @@
 import { artifactSources, transferError } from './app-download.js';
-import { isKnownUiModule } from './app-module-registry.js';
 
 const stable = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 const hash = /^[a-f0-9]{64}$/i;
@@ -11,9 +10,9 @@ export function compareAppVersions(a, b) {
 }
 
 export function resolveAppPackages(entry, host, extensionVersion) {
-  if (!isKnownUiModule(entry.app_id)) return { reason: 'appsNeedsUpdate', packages: [] };
   if (!host) return { reason: 'appsHostOffline', packages: [] };
-  if (host.appsProtocolVersion !== 3) return { reason: 'appsNeedsUpdate', packages: [] };
+  if (host.appsProtocolVersion !== 4) return { reason: 'appsNeedsUpdate', packages: [] };
+  if (entry.kind !== 'managed_local' || entry.appProtocolVersion !== 1) return { reason: 'appsNeedsUpdate', packages: [] };
   if (entry.published === false) return { reason: 'appsNotReleased', packages: [] };
   if (entry.minNativesVersion && compareAppVersions(host.version, entry.minNativesVersion) !== 0
       && compareAppVersions(host.version, entry.minNativesVersion) !== 1) {
@@ -36,10 +35,10 @@ export function resolveAppPackages(entry, host, extensionVersion) {
   let wire = 0, payload = 0, required = 0;
   for (const pkg of packages) {
     if (!/^[a-z0-9][a-z0-9._-]{0,127}$/.test(pkg.package_id) || ids.has(pkg.package_id)
-        || !['data', 'resource'].includes(pkg.kind) || pkg.version !== entry.version
+        || !['managed_local', 'data', 'resource'].includes(pkg.kind) || pkg.version !== entry.version
         || !hash.test(pkg.artifact_sha256) || !hash.test(pkg.payload_sha256)
-        || !Number.isSafeInteger(pkg.wire_size) || pkg.wire_size <= 0 || pkg.wire_size > 5 * 1024 * 1024
-        || !Number.isSafeInteger(pkg.payload_size) || pkg.payload_size <= 0 || pkg.payload_size > 20 * 1024 * 1024) {
+        || !Number.isSafeInteger(pkg.wire_size) || pkg.wire_size <= 0 || pkg.wire_size > (pkg.kind === 'managed_local' ? 32 : 5) * 1024 * 1024
+        || !Number.isSafeInteger(pkg.payload_size) || pkg.payload_size <= 0 || pkg.payload_size > (pkg.kind === 'managed_local' ? 128 : 20) * 1024 * 1024) {
       throw transferError('APP_PACKAGE_INVALID', 'invalid package descriptor');
     }
     artifactSources(pkg.url);
@@ -47,7 +46,8 @@ export function resolveAppPackages(entry, host, extensionVersion) {
     payload += pkg.payload_size;
     if (pkg.required !== false) { required++; wire += pkg.wire_size; }
   }
-  if (packages.length > 16 || required > 3 || wire > 15 * 1024 * 1024 || payload > 50 * 1024 * 1024) {
+  if (!packages.some((pkg) => pkg.kind === 'managed_local')) return { reason: 'appsUnsupportedPlatform', packages: [] };
+  if (packages.length > 16 || required > 3 || wire > 32 * 1024 * 1024 || payload > 128 * 1024 * 1024) {
     throw transferError('APP_SIZE_LIMIT', 'app package set exceeds budget');
   }
   return { packages, reason: null };

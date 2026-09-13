@@ -12,10 +12,27 @@ const APP_COLUMNS: &str = "app_id, kind, name, version, enabled, show_in_sidebar
      OR (recovery.state = 'installed' AND recovery.rollback_json != ''))), \
      needs_migration";
 
-fn map_app(row: &rusqlite::Row<'_>) -> rusqlite::Result<App> {
+fn map_app(row: &rusqlite::Row<'_>, apps_root: Option<&std::path::Path>) -> rusqlite::Result<App> {
+    let app_id: String = row.get(0)?;
+    let kind: String = row.get(1)?;
+    let host_registered: bool = row.get::<_, i64>(13)? != 0;
+    // Core-derived runtimeHost (contract §2): managed_local apps expose
+    // `com.natives.app.<sha256(app_id)>` in this authoritative projection;
+    // app.html must never read it from a static UI mapping.
+    let runtime_host = if kind == super::types::KIND_MANAGED_LOCAL && host_registered {
+        Some(crate::app_activation::runtime_host_name(&app_id))
+    } else {
+        None
+    };
+    let activation_generation = apps_root.and_then(|root| {
+        crate::app_activation::read_activation_projection(root, &app_id)
+            .ok()
+            .flatten()
+            .and_then(|v| v.get("generation").and_then(serde_json::Value::as_u64))
+    });
     Ok(App {
-        app_id: row.get(0)?,
-        kind: row.get(1)?,
+        app_id,
+        kind,
         name: row.get(2)?,
         version: row.get(3)?,
         enabled: row.get::<_, i64>(4)? != 0,
@@ -27,18 +44,23 @@ fn map_app(row: &rusqlite::Row<'_>) -> rusqlite::Result<App> {
         installed_at: row.get(10)?,
         updated_at: row.get(11)?,
         revision: row.get(12)?,
-        host_registered: row.get::<_, i64>(13)? != 0,
+        host_registered,
+        runtime_host,
         recovery_pending: row.get::<_, i64>(14)? != 0,
         needs_migration: row.get::<_, i64>(15)? != 0,
+        activation_generation,
     })
 }
 
 /// All registered apps, sidebar order first (ADR-0025 D38).
-pub(crate) fn apps(conn: &Connection) -> Result<Vec<App>, AppError> {
+pub(crate) fn apps(
+    conn: &Connection,
+    apps_root: Option<&std::path::Path>,
+) -> Result<Vec<App>, AppError> {
     let mut stmt = conn.prepare(&format!(
         "SELECT {APP_COLUMNS} FROM apps ORDER BY sidebar_order, app_id"
     ))?;
-    let rows = stmt.query_map([], map_app)?;
+    let rows = stmt.query_map([], |row| map_app(row, apps_root))?;
     let mut out = Vec::new();
     for row in rows {
         out.push(row?);
@@ -47,11 +69,15 @@ pub(crate) fn apps(conn: &Connection) -> Result<Vec<App>, AppError> {
 }
 
 /// One app row.
-pub(crate) fn app(conn: &Connection, app_id: &str) -> Result<App, AppError> {
+pub(crate) fn app(
+    conn: &Connection,
+    app_id: &str,
+    apps_root: Option<&std::path::Path>,
+) -> Result<App, AppError> {
     conn.query_row(
         &format!("SELECT {APP_COLUMNS} FROM apps WHERE app_id = ?1"),
         [app_id],
-        map_app,
+        |row| map_app(row, apps_root),
     )
     .map_err(|error| match error {
         rusqlite::Error::QueryReturnedNoRows => AppError::NotFound(app_id.to_string()),

@@ -3,7 +3,6 @@ import { readFileSync } from 'node:fs';
 import { setupTestDomEnvironment } from './test-dom-mock.js';
 import { createAppCenter } from './apps.js';
 import { createAppShell, parseAppId } from './app.js';
-import { APP_UI_MODULES, isKnownUiModule } from './app-module-registry.js';
 import { appHostFor } from './native-app-client.js';
 
 setupTestDomEnvironment();
@@ -16,64 +15,54 @@ const t = (key, fallback) => messages[key]?.message || fallback || key;
 const tick = () => new Promise((resolve) => setTimeout(resolve, 25));
 const shells = [];
 const makeShell = (options) => { const shell = createAppShell({ t, ...options }); shells.push(shell); return shell; };
-const demo = {
-  app_id: 'com.natives.app.demo', name: 'Demo', version: '1.0.0', icon: 'grid', permissions: [],
-  runtime_spec: {}, surface: { icon: 'grid' },
-  packages: [{ package_id: 'demo-data', kind: 'data', version: '1.0.0', platform: 'any', arch: 'any',
-    wire_size: 10, payload_size: 10, artifact_sha256: 'a'.repeat(64), payload_sha256: 'b'.repeat(64), required: true,
-    url: 'https://github.com/Wcof/Natives/releases/download/apps-demo-v1.0.0/demo.nap' }],
+
+// Fixed built-in module projection as the Host returns it (plan §3.4): the
+// definition comes from the product manifest, never from a catalog.
+const FUND_MODULE = {
+  appId: 'fund',
+  name: { zh_CN: '基金', en: 'Fund' },
+  description: { zh_CN: '个人基金记账、持仓与收益', en: 'Personal fund ledger, positions and returns' },
+  entryRoute: 'app.html?app=fund',
+  present: true, configured: false, enabled: true, showInSidebar: true, sidebarOrder: 0,
 };
-const catalog = {
-  catalogVersion: 2, apps: [demo, { app_id: 'fund', name: '基金', version: '0.1.0', published: false, packages: [] }],
-  // v4: the install flow forwards these signed bytes to the Host verbatim;
-  // the fixture Host just decodes them again (contract §4.0).
-  rawBytes: new TextEncoder().encode(JSON.stringify({ catalogVersion: 2, apps: [demo] })),
-  rawSignatureB64: 'c2lnbmF0dXJlLXN0dWIK',
-};
-function clientFixture({ failCommit = false } = {}) {
-  const calls = [], apps = [];
-  let request, staged = false;
-  return { calls, apps, disconnected: false,
+
+function clientFixture() {
+  const calls = [], apps = [], modules = [JSON.parse(JSON.stringify(FUND_MODULE))];
+  let lastClear = null;
+  let product = { version: '', generation: 0, configured: false, sourcePresent: true, sourceVersion: '1.0.0' };
+  return {
+    calls, apps, modules,
+    get lastClear() { return lastClear; },
+    get product() { return product; },
+    disconnected: false,
     disconnect() { this.disconnected = true; },
     async call(method, params = {}) {
       calls.push({ method, params });
-      if (method === 'apps:handshake') return { platform: 'darwin', arch: 'arm64', version: '0.1.0', appsProtocolVersion: 3 };
-      if (method === 'apps:list') return { apps: [...apps], revision: calls.length, retainedData: [] };
-      if (method === 'apps:install_begin') {
-        // v4: signed catalog + Ed25519 signature; the fixture does not
-        // re-verify, it only asserts the signed document is what arrived.
-        assert.equal(typeof params.catalogBase64, 'string');
-        assert.equal(typeof params.signature, 'string');
-        const catalogDoc = JSON.parse(Buffer.from(params.catalogBase64, 'base64'));
-        assert.ok(Array.isArray(catalogDoc.apps));
-        const catalogEntry = catalogDoc.apps.find((candidate) => candidate.app_id === 'com.natives.app.demo');
-        assert.ok(catalogEntry, 'signed catalog must contain the app being installed');
-        request = { app: catalogEntry, packages: demo.packages };
-        staged = false;
-        return { install_id: 'tx-1', chunk_size: 262144, next_offset: 0 };
+      if (method === 'apps:handshake') return { platform: 'darwin', arch: 'arm64', version: '0.1.0', appsProtocolVersion: 4 };
+      if (method === 'apps:list') return {
+        apps: [...apps], modules: JSON.parse(JSON.stringify(modules)),
+        product: { ...product }, pendingDataResets: [],
+        revision: calls.length, retainedData: [],
+      };
+      if (method === 'apps:product_configure') {
+        // Host contract (plan §3.3): one transaction prepares every fixed
+        // module for this user and binds one productGeneration.
+        product = { version: '1.0.0', generation: 1, configured: true, sourcePresent: true, sourceVersion: '1.0.0' };
+        modules[0].configured = true;
+        if (!apps.some((entry) => entry.app_id === 'fund')) {
+          apps.push({ app_id: 'fund', name: '基金', version: '1.0.0', enabled: true, show_in_sidebar: true, host_registered: true });
+        }
+        return { ...product };
       }
-      if (method === 'apps:install_chunk') {
-        assert.equal(params.installId, 'tx-1');
-        assert.equal(params.offset, staged ? 10 : 0, 'chunks are sequential');
-        assert.ok(params.dataBase64);
-        assert.equal(params.chunkSha256.length, 64);
-        staged = true;
-        return { next_offset: params.offset + 10 };
+      if (method === 'apps:clear_data') {
+        // Host contract (plan §4.3): confirmation + requestId + scope flags.
+        assert.equal(params.confirmPurge, true);
+        assert.ok(params.requestId?.startsWith(`${params.appId}:`), 'requestId is app-scoped and unique');
+        lastClear = { ...params };
+        const index = apps.findIndex((entry) => entry.app_id === params.appId);
+        if (index >= 0) apps.splice(index, 1);
+        return { receipt: { request_id: params.requestId, app_id: params.appId, state: 'completed', cleared: ['data', 'imports', 'cache', 'logs'], data_preserved: true }, revision: calls.length };
       }
-      if (method === 'apps:install_finish') {
-        assert.ok(staged, 'finish must follow chunk transfer');
-        staged = 'finished';
-        return { install_id: 'tx-1', package_id: 'demo-data', ready: true };
-      }
-      if (method === 'apps:install_commit') {
-        assert.ok(staged === 'finished', 'commit must follow finish');
-        if (failCommit) throw Object.assign(new Error('private backend detail'), { code: 'APP_INVALID_STATE' });
-        const app = { ...request.app, host_registered: false, runtime_spec_json: JSON.stringify(request.app.runtime_spec) };
-        const index = apps.findIndex((entry) => entry.app_id === app.app_id);
-        if (index < 0) apps.push(app); else apps[index] = app;
-        return app;
-      }
-      if (method === 'apps:uninstall') apps.splice(apps.findIndex((entry) => entry.app_id === params.appId), 1);
       return {};
     },
   };
@@ -85,29 +74,29 @@ function makeDom() {
   }
   return { list: document.getElementById('apps-list'), toast: document.getElementById('apps-toast') };
 }
-// v4: packageTransfer returns the RAW gzip artifact bytes; the Host owns
-// decompression and hash verification (contract §4.0).
-const transfer = async (_, { onProgress }) => {
-  onProgress?.(10);
-  return new TextEncoder().encode('payload-gzip-artifact');
-};
+
+// Direction check 1 (plan §5): the center only handshakes and reads the
+// fixed module list — catalog loads and suite_prepare calls are zero, and
+// a failed handshake stops every dependent call.
 {
   const dom = makeDom(), client = clientFixture();
   const call = client.call.bind(client);
   client.call = (method, params) => method === 'apps:handshake'
     ? Promise.resolve({ version: '0.1.0' }) : call(method, params);
-  const center = createAppCenter({ t, client, catalogLoader: async () => catalog });
+  const center = createAppCenter({ t, client });
   await center.ready;
-  assert.equal(center.state.error, 'appsNeedsUpdate', 'list refresh must preserve the incompatible Host error');
+  assert.equal(center.state.error, 'appsNeedsUpdate', 'incompatible Host error must be preserved');
   assert.ok(dom.list.textContent.includes(t('appsNeedsUpdate')));
+  assert.ok(!client.calls.some((c) => c.method === 'apps:list'), 'failed handshake must stop dependent calls');
+  assert.ok(!client.calls.some((c) => c.method === 'apps:suite_prepare'));
   center.dispose();
 }
+// bfcache: hidden page keeps no connection; restore re-handshakes and reads.
 {
   makeDom();
   globalThis.window = new EventTarget();
   const client = clientFixture();
-  let loads = 0;
-  const center = createAppCenter({ t, client, catalogLoader: async () => { loads++; return catalog; } });
+  const center = createAppCenter({ t, client });
   await center.ready;
   window.dispatchEvent(new Event('pagehide'));
   const before = client.calls.length;
@@ -117,79 +106,86 @@ const transfer = async (_, { onProgress }) => {
   Object.defineProperty(restored, 'persisted', { value: true });
   window.dispatchEvent(restored);
   await tick();
-  assert.equal(loads, 2, 'restored page must reload its verified catalog');
-  assert.ok(client.calls.length > before, 'restored page must refresh the Host registry');
+  assert.ok(client.calls.length > before, 'restored page must re-handshake and refresh');
+  assert.ok(client.calls.slice(before).some((c) => c.method === 'apps:handshake'));
   center.dispose();
   delete globalThis.window;
 }
+// Direction check 2 (plan §5): an empty install table still shows the
+// built-in fund module, with zero install/uninstall semantics.
 {
   const dom = makeDom(), client = clientFixture();
-  const center = createAppCenter({ t, client, catalogLoader: async () => catalog, packageTransfer: transfer });
+  const center = createAppCenter({ t, client });
   await center.ready;
-  assert.equal(dom.list.querySelectorAll('.app-card').length, 2);
-  assert.equal(dom.list.querySelectorAll('.action.primary').length, 1, 'unreleased Fund must not be installable');
-  await center.install(demo);
-  assert.deepEqual(client.calls.filter((call) => call.method.startsWith('apps:install_')).map((call) => call.method),
-    ['apps:install_begin', 'apps:install_chunk', 'apps:install_finish', 'apps:install_commit']);
-  assert.equal(client.apps.length, 1);
-  // v4: the version comes from the SIGNED catalog, so the update ships a
-  // re-signed catalog with the new version.
-  const next = { ...demo, version: '1.1.0', packages: demo.packages.map((pkg) => ({ ...pkg, version: '1.1.0' })) };
-  catalog.rawBytes = new TextEncoder().encode(JSON.stringify({ catalogVersion: 2, apps: [next] }));
-  await center.reloadCatalog();
-  await center.install(next);
-  assert.equal(client.apps[0].version, '1.1.0');
-  assert.ok(!client.calls.some((call) => call.method === 'apps:uninstall'), 'update must never uninstall the old version first');
-  await center.uninstall(demo.app_id, { purgeData: true, confirmPurge: true });
-  const uninstall = client.calls.find((call) => call.method === 'apps:uninstall');
-  assert.deepEqual(uninstall.params, { appId: demo.app_id, purgeData: true, confirmPurge: true });
+  assert.equal(dom.list.querySelectorAll('.app-card').length, 1, 'empty install table still shows fund');
+  assert.ok(dom.list.textContent.includes('基金'));
+  assert.ok(dom.list.textContent.includes('个人基金记账、持仓与收益'));
+  assert.ok(!dom.list.textContent.includes(t('appsInstall')));
+  assert.ok(!dom.list.textContent.includes(t('appsUninstall')));
+  assert.ok(!dom.list.textContent.includes(t('appsUpdate')));
+  assert.equal(client.calls.filter((c) => c.method === 'apps:suite_prepare').length, 0);
+  assert.ok(!client.calls.some((c) => c.method.startsWith('apps:install_')));
+  // The explicit product setup bar is shown; configuration never happens
+  // as an implicit side effect of loading or opening (plan §3.3).
+  assert.ok(dom.list.textContent.includes(t('appsProductConfigure')));
+  assert.ok(dom.list.textContent.includes(t('appsProductConfigRequired')));
+  assert.equal(client.calls.filter((c) => c.method === 'apps:product_configure').length, 0);
   center.dispose();
   assert.ok(client.disconnected);
 }
-{
-  const dom = makeDom(), client = clientFixture({ failCommit: true });
-  const center = createAppCenter({ t, client, catalogLoader: async () => catalog, packageTransfer: transfer });
-  await center.ready;
-  await assert.rejects(center.install(demo));
-  assert.ok(client.calls.some((call) => call.method === 'apps:install_abort'));
-  assert.ok(dom.list.textContent.includes(t('appsOperationFailed')));
-  assert.ok(!dom.list.textContent.includes('private backend detail'));
-  assert.equal(client.apps.length, 0);
-  center.dispose();
-}
+// Product setup (plan §3.3): the explicit action configures every fixed
+// module once; afterwards the center shows the ready module without it.
 {
   const dom = makeDom(), client = clientFixture();
-  let retries = 0;
-  const center = createAppCenter({ t, client, catalogLoader: async () => {
-    if (!retries++) throw Object.assign(new Error('offline'), { code: 'APP_NETWORK' });
-    return catalog;
-  } });
+  const center = createAppCenter({ t, client });
   await center.ready;
-  assert.ok(dom.list.textContent.includes(t('appsNetworkError')));
-  assert.ok(dom.list.textContent.includes(t('retry')));
-  await center.reloadCatalog();
-  assert.equal(center.state.catalogError, null);
-  assert.equal(dom.list.querySelectorAll('.app-card').length, 2);
+  const setupButton = [...dom.list.querySelectorAll('.action.primary')]
+    .find((button) => button.textContent === t('appsProductConfigure'));
+  assert.ok(setupButton, 'product setup action is offered');
+  setupButton.onclick();
+  await tick();
+  await tick();
+  assert.equal(client.calls.filter((c) => c.method === 'apps:product_configure').length, 1);
+  assert.equal(center.state.product.configured, true);
+  assert.ok(!dom.list.textContent.includes(t('appsProductConfigure')), 'setup bar disappears once configured');
+  assert.ok(dom.list.textContent.includes(t('appsReady')), 'fund card is ready after configuration');
   center.dispose();
 }
+// Data management (plan §4.3): double confirmation, credentials opt-in,
+// apps:clear_data with requestId — and no uninstall method anywhere.
 {
   const dom = makeDom(), client = clientFixture();
-  client.apps.push({ ...demo, enabled: true, show_in_sidebar: true, host_registered: true });
-  const center = createAppCenter({ t, client, catalogLoader: async () => catalog });
+  client.apps.push({ app_id: 'fund', name: '基金', version: '0.1.0', enabled: true, show_in_sidebar: true, host_registered: true });
+  const center = createAppCenter({ t, client });
   await center.ready;
   const pending = dom.list.querySelector('.app-card .action.danger').onclick();
   await tick();
   let dialog = document.querySelector('.apps-dialog');
-  const checkbox = dialog.querySelector('input');
-  assert.ok(checkbox && !checkbox.checked, 'uninstall preserves data by default');
-  checkbox.checked = true; checkbox.onchange();
+  assert.ok(dialog.textContent.includes(t('appsClearDataScope')), 'confirmation lists the actual scope');
+  const credentials = dialog.querySelector('input');
+  assert.ok(credentials && !credentials.checked, 'credentials are kept by default');
+  credentials.checked = true; credentials.onchange();
   dialog.querySelector('[data-role="ok"]').onclick();
   await tick();
-  assert.ok(!client.calls.some((call) => call.method === 'apps:uninstall'), 'first confirmation cannot purge');
+  assert.ok(!client.calls.some((c) => c.method === 'apps:clear_data'), 'first confirmation alone cannot purge');
   dialog = document.querySelector('.apps-dialog');
   dialog.querySelector('[data-role="cancel"]').onclick();
   await pending;
-  assert.equal(client.apps.length, 1, 'second confirmation cancellation preserves the app');
+  assert.equal(client.apps.length, 1, 'second confirmation cancellation preserves the module');
+
+  const confirmed = dom.list.querySelector('.app-card .action.danger').onclick();
+  await tick();
+  dialog = document.querySelector('.apps-dialog');
+  dialog.querySelector('[data-role="ok"]').onclick();
+  await tick();
+  dialog = document.querySelector('.apps-dialog');
+  dialog.querySelector('[data-role="ok"]').onclick();
+  await confirmed;
+  assert.ok(client.lastClear, 'confirmed flow reaches apps:clear_data');
+  assert.equal(client.lastClear.appId, 'fund');
+  assert.equal(client.lastClear.deleteCredentials, false, 'credentials kept unless separately confirmed');
+  assert.equal(client.apps.length, 0);
+  assert.ok(!client.calls.some((c) => c.method === 'apps:uninstall'), 'uninstall is retired, not an alias');
   center.dispose();
 }
 
@@ -197,22 +193,23 @@ const transfer = async (_, { onProgress }) => {
 
 const DEMO_DETAIL = {
   app: {
-    app_id: 'com.natives.app.demo',
-    kind: 'extension_app',
+    app_id: 'sample',
+    kind: 'managed_local',
     name: 'Demo',
     version: '2.0.0',
     enabled: true,
-    host_registered: false,
+    host_registered: true,
+    runtime_host: 'com.natives.app.hash',
     show_in_sidebar: true,
     sidebar_order: 0,
     runtime_spec_json: '{"version":"2.0.0"}',
-    surface_json: '{"icon":"grid","route":"app.html?app=com.natives.app.demo"}',
+    surface_json: '{"icon":"grid","route":"app.html?app=sample"}',
     manifest_json: '{}',
     installed_at: 1,
     updated_at: 1,
     revision: 1,
   },
-  packages: [{ package_id: 'demo-data' }, { package_id: 'demo-image' }],
+  packages: [{ package_id: 'app-exec' }],
   permissions: [],
 };
 
@@ -257,22 +254,11 @@ function fakeHostClient() {
     calls,
     async call(method, params = {}) {
       calls.push({ method, params });
-      if (method === 'apps:read_resource') {
-        const bytes = params.packageId === 'demo-image'
-          ? Buffer.from('89504e470d0a1a0a', 'hex')
-          : Buffer.from('{"demo":"中文"}');
-        return {
-          ok: true,
-          app_id: params.appId,
-          package_id: params.packageId,
-          version: '2.0.0',
-          format: params.packageId === 'demo-image' ? 'png' : 'json',
-          total_size: bytes.length,
-          offset: params.offset,
-          length: bytes.length,
-          data: bytes.toString('base64'),
-        };
-      }
+      if (method === 'app:handshake') return { protocolVersion: 1, appId: 'sample', appVersion: '2.0.0' };
+      if (method === 'app:start') return { state: 'ready', port: 49152, instanceId: 'i'.repeat(22), generation: 'g'.repeat(22) };
+      if (method === 'app:session' && params.op === 'rotate') return { newGeneration: 'n'.repeat(22) };
+      if (method === 'app:session' && params.op === 'issue') return { generation: 'n'.repeat(22), token: 't'.repeat(43), expiresAt: 900 };
+      if (method === 'app:stop') return { stopped: true };
       return {};
     },
     disconnect() {},
@@ -284,7 +270,7 @@ assert.equal(parseAppId('?app=com.natives.app.demo'), 'com.natives.app.demo');
 assert.equal(parseAppId('app=fund'), 'fund');
 assert.equal(parseAppId('?other=x'), '');
 assert.equal(parseAppId(''), '');
-assert.equal(appHostFor(DEMO_DETAIL.app), 'com.natives.file_manager', 'apps share native-file-host');
+assert.equal(appHostFor(DEMO_DETAIL.app), 'com.natives.app.hash', 'managed app uses its registered host');
 assert.equal(appHostFor({ app_id: 'fund' }), 'com.natives.file_manager', 'apps share native-file-host');
 
 // A6.2 installed + enabled → demo-ui mounts and reads resource via shared host
@@ -292,7 +278,7 @@ assert.equal(appHostFor({ app_id: 'fund' }), 'com.natives.file_manager', 'apps s
   const domA = makeSurfaceDom();
   const hostA = fakeHostClient();
   const shellA = makeShell({
-    appId: 'com.natives.app.demo',
+    appId: 'sample',
     stage: domA.stage,
     getNativeClient: () => surfaceClient(DEMO_DETAIL),
     createHostClient: () => hostA,
@@ -300,15 +286,15 @@ assert.equal(appHostFor({ app_id: 'fund' }), 'com.natives.file_manager', 'apps s
   await shellA.open();
   await tick();
   assert.equal(domA.title.textContent, 'Demo', 'Surface 标题来自权威 App 记录');
-  const badge = domA.stage.querySelectorAll('#demo-host-status');
-  assert.equal(badge.length, 1, 'demo UI 已挂载');
-  assert.ok(badge[0].classList.contains('ok'), 'host 在线徽标');
-  assert.equal(badge[0].textContent, '在线');
-  assert.ok(hostA.calls.some((c) => c.method === 'apps:read_resource'), 'demo-ui 调用 apps:read_resource');
+  const iframe = domA.stage.querySelector('iframe');
+  assert.ok(iframe, '通用壳创建应用 sandbox');
+  assert.equal(iframe.getAttribute('sandbox'), 'allow-scripts allow-forms');
+  assert.equal(iframe.src, 'http://127.0.0.1:49152/');
+  assert.ok(hostA.calls.some((c) => c.method === 'app:start'), '通用壳直属 App Host');
   await shellA.open(); // retry path: idempotent remount must not throw
 }
 
-// A6.3 unknown UI module → "需要更新 Natives" + no host port is opened
+// A6.3 a new appId opens without an extension registry entry
 {
   const domB = makeSurfaceDom();
   let hostCreated = 0;
@@ -317,12 +303,13 @@ assert.equal(appHostFor({ app_id: 'fund' }), 'com.natives.file_manager', 'apps s
     appId: 'com.example.mystery',
     stage: domB.stage,
     getNativeClient: () => surfaceClient(detailB),
-    createHostClient: () => { hostCreated += 1; return fakeHostClient(); },
+    createHostClient: () => { hostCreated += 1; const client = fakeHostClient();
+      const call = client.call.bind(client); client.call = (method, params) => method === 'app:handshake'
+        ? Promise.resolve({ protocolVersion: 1, appId: 'com.example.mystery', appVersion: '2.0.0' }) : call(method, params); return client; },
   });
   await shellB.open();
-  assert.ok(domB.stage.textContent.includes('需要更新 Natives'), '未知模块必须提示更新 Natives');
-  assert.equal(hostCreated, 0, '未知模块不得打开任何 app host');
-  assert.ok(domB.stage.textContent.includes('打开应用中心'), '提供打开应用中心入口');
+  assert.equal(hostCreated, 1, '新 appId 使用同一通用承载链路');
+  assert.ok(domB.stage.querySelector('iframe'), '新 appId 无需扩展内置 UI');
 }
 
 // A6.4 disabled app → 已停用 state, no host port
@@ -331,13 +318,13 @@ assert.equal(appHostFor({ app_id: 'fund' }), 'com.natives.file_manager', 'apps s
   let hostCreated = 0;
   const detailC = { ...DEMO_DETAIL, app: { ...DEMO_DETAIL.app, enabled: false } };
   const shellC = makeShell({
-    appId: 'com.natives.app.demo',
+    appId: 'sample',
     stage: domC.stage,
     getNativeClient: () => surfaceClient(detailC),
     createHostClient: () => { hostCreated += 1; return fakeHostClient(); },
   });
   await shellC.open();
-  assert.ok(domC.stage.textContent.includes('应用已停用'), '停用应用必须显示停用状态');
+  assert.ok(domC.stage.textContent.includes('已停用'), '停用应用必须显示停用状态');
   assert.equal(hostCreated, 0, '停用应用不得打开 app host');
 }
 
@@ -351,11 +338,11 @@ assert.equal(appHostFor({ app_id: 'fund' }), 'com.natives.file_manager', 'apps s
     createHostClient: () => fakeHostClient(),
   });
   await shellD.open();
-  assert.ok(domD.stage.textContent.includes('应用无法打开'), '未安装应用必须显示错误状态');
+  assert.ok(domD.stage.textContent.includes('无法打开'), '未安装应用必须显示错误状态');
   assert.ok(domD.toast.textContent.length > 0, '错误必须进 toast');
 }
 
-// A6.6 fund placeholder: mounted, zero host traffic
+// A6.6 legacy extension_app placeholders are not a production fallback
 {
   const domE = makeSurfaceDom();
   let hostCreated = 0;
@@ -375,25 +362,16 @@ assert.equal(appHostFor({ app_id: 'fund' }), 'com.natives.file_manager', 'apps s
   });
   await shellE.open();
   await tick();
-  assert.ok(domE.stage.textContent.includes('基金应用已安装'), 'explicit zero-package apps mount without external resources');
-  assert.equal(hostCreated, 0, 'zero-package fund app must not open a Host port');
+  assert.ok(domE.stage.textContent.includes('无法打开'));
+  assert.equal(hostCreated, 0, 'legacy placeholder must not open a Host port');
 }
 
-// A6.7 D2: registry is build-time only — no remote code URL anywhere
+// A6.7 static business registry and modules are gone
 {
-  assert.ok(isKnownUiModule('com.natives.app.demo'), 'demo 模块必须 build-time 存在');
-  assert.ok(!isKnownUiModule('com.example.mystery'), '目录之外的 appId 必须未知');
   const appJs = readFileSync(new URL('./app.js', import.meta.url), 'utf8');
-  for (const file of Object.values(APP_UI_MODULES)) {
-    const src = readFileSync(new URL(`./${file}`, import.meta.url), 'utf8');
-    assert.ok(src.includes('export function mountApp'), `${file} 必须导出 mountApp`);
-  }
-  // D2: every module path is a build-time RELATIVE path — no remote code URL.
-  for (const [appId, path] of Object.entries(APP_UI_MODULES)) {
-    assert.ok(path.startsWith('./apps/'), `${appId} 的模块路径必须是包内相对路径`);
-    assert.ok(!path.includes('http'), `${appId} 的模块路径不得是远程 URL（D2）`);
-  }
-  assert.ok(!appJs.includes('com.natives.app.demo'), 'app.js 不得点名 demo host（D50）');
+  assert.ok(!appJs.includes('app-module-registry'));
+  assert.ok(!appJs.includes('demo-ui'));
+  assert.ok(!appJs.includes('fund-ui'));
 }
 
 // A6.8 app.html declares the Surface containers
@@ -422,6 +400,6 @@ assert.equal(appHostFor({ app_id: 'fund' }), 'com.natives.file_manager', 'apps s
   }
 }
 
-console.log('apps: Gate A4+A6 checks passed (catalog items, install cycle, D42, conflict, uninstall confirm, settings entry, locales, App Surface, demo host, unknown module)');
+console.log('apps: built-in module projection, handshake-stop, data management and App Surface checks passed');
 
 for (const shell of shells) shell.dispose();

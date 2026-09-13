@@ -5,17 +5,17 @@ import { loadVerifiedCatalog } from './catalog-client.js';
 
 const url = 'https://github.com/Wcof/Natives/releases/download/apps-demo-v1.1.0/demo.nap';
 const sources = artifactSources(url);
-assert.equal(sources.length, 2);
+assert.equal(sources.length, 1);
 for (const bad of ['https://example.com/host.nap', 'http://github.com/a', `${url}?token=x`, 'file:///etc/passwd']) {
   assert.throws(() => artifactSources(bad));
 }
 const attempted = [];
-assert.deepEqual(await fetchFromSources(sources, { limit: 16, fetchImpl: async (source) => {
+assert.deepEqual(await fetchFromSources([...sources, ...sources], { limit: 16, fetchImpl: async (source) => {
   attempted.push(source);
-  if (source === sources[0]) throw new TypeError('offline');
+  if (attempted.length === 1) throw new TypeError('offline');
   return new Response(new Uint8Array([1, 2, 3]));
 } }), new Uint8Array([1, 2, 3]));
-assert.deepEqual(attempted, sources);
+assert.deepEqual(attempted, [...sources, ...sources]);
 
 let calls = 0;
 await assert.rejects(fetchFromSources(sources, { limit: 1, fetchImpl: async () => {
@@ -30,17 +30,18 @@ await assert.rejects(fetchBytes(url, { limit: 16, timeoutMs: 10,
   fetchImpl: async () => new Response(new ReadableStream({ start() {} })),
 }), { code: 'APP_NETWORK' }, 'a stalled response body must time out');
 
-const catalog = readFileSync(new URL('./apps/catalog-v2.json', import.meta.url));
-const signature = readFileSync(new URL('./apps/catalog-v2.sig', import.meta.url));
+const catalog = readFileSync(new URL('./apps/catalog-v3.json', import.meta.url));
+const signature = readFileSync(new URL('./apps/catalog-v3.sig', import.meta.url));
 const urls = [];
-const loaded = await loadVerifiedCatalog({ fetchImpl: async (source) => {
+const loaded = await loadVerifiedCatalog({ allowEmbedded: true, fetchImpl: async (source) => {
   urls.push(source);
   if (source.startsWith(CATALOG_SOURCES[0])) throw new TypeError('offline');
   return new Response(source.endsWith('.sig') ? signature : catalog);
 } });
-assert.equal(loaded.catalogVersion, 2);
-assert.ok(loaded.source.startsWith(CATALOG_SOURCES[1]));
-assert.deepEqual(urls.slice(1), ['catalog-v2.json', 'catalog-v2.sig'].map((name) => CATALOG_SOURCES[1] + name));
+assert.equal(loaded.catalogVersion, 3);
+assert.ok(loaded.embedded);
+assert.deepEqual(urls.slice(1), [new URL('./apps/catalog-v3.json', import.meta.url).href,
+  new URL('./apps/catalog-v3.sig', import.meta.url).href]);
 let reads = 0;
 await assert.rejects(loadVerifiedCatalog({ fetchImpl: async (source) => {
   reads++;

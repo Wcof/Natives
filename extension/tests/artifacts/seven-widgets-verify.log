@@ -1,0 +1,5 @@
+SEVEN-WIDGET SPACE VERIFY PASSED
+  space-dark: 7 widgets mounted, derived default contrast >= 4.5:1 against #101210
+  space-light: 7 widgets mounted, derived default contrast >= 4.5:1 against #f4f1e8
+  global-light-space-dark-reverse: 7 widgets mounted, derived default contrast >= 4.5:1 against #20242c
+  explicit-colours-dark: 7 widgets mounted, explicit per-card colours preserved

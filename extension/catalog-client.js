@@ -1,7 +1,7 @@
 import { CATALOG_SOURCES, artifactSources, fetchBytes, fetchFromSources } from './app-download.js';
 // ADR-0025 D8/D43/D44: signed catalog client (browser side).
 //
-// The catalog-v2 pair is fetched from a
+// The Catalog v3 pair is fetched from a
 // BUILD-TIME fixed URL, the Ed25519 signature is verified with WebCrypto
 // against a COMPILED-IN public key, and only then is the catalog parsed.
 // No user-configurable URL, no user-configurable key, no network code
@@ -16,13 +16,13 @@ import { CATALOG_SOURCES, artifactSources, fetchBytes, fetchFromSources } from '
 // Raw 32-byte Ed25519 public key (base64). The release signer must match
 // this compiled key. Key rotation requires an extension update.
 export const CATALOG_PUBLIC_KEY_B64 =
-  '1QP+08RLgHdsf1Y2Oiv2K1ON5MtAFtz5sRbt0IuD1Iw=';
+  'smbNuEwYpj1zaZBhEuw1viy2U0wh0qE7QWx8WojFyvI=';
 
 // Build-time fixed catalog URL (D44). Changing it requires an extension update.
-export const CATALOG_URL = `${CATALOG_SOURCES[0]}catalog-v2.json`;
-export const CATALOG_SIG_URL = `${CATALOG_SOURCES[0]}catalog-v2.sig`;
+export const CATALOG_URL = `${CATALOG_SOURCES[0]}catalog-v3.json`;
+export const CATALOG_SIG_URL = `${CATALOG_SOURCES[0]}catalog-v3.sig`;
 
-const CATALOG_MAX_BYTES = 1024 * 1024; // catalog is metadata; 1 MiB is generous
+const CATALOG_MAX_BYTES = 256 * 1024;
 
 function b64ToBytes(b64) {
   const bin = atob(b64);
@@ -99,11 +99,11 @@ export async function loadVerifiedCatalog({
   signal, allowEmbedded = false,
 } = {}) {
   const sources = catalogUrl ? [[catalogUrl, sigUrl]] : CATALOG_SOURCES.map((base) => [
-    base + 'catalog-v2.json', base + 'catalog-v2.sig',
+    base + 'catalog-v3.json', base + 'catalog-v3.sig',
   ]);
   if (allowEmbedded) sources.push([
-    new URL('apps/catalog-v2.json', import.meta.url).href,
-    new URL('apps/catalog-v2.sig', import.meta.url).href,
+    new URL('apps/catalog-v3.json', import.meta.url).href,
+    new URL('apps/catalog-v3.sig', import.meta.url).href,
   ]);
   let failure;
   for (const [jsonUrl, signatureUrl] of sources) {
@@ -114,7 +114,7 @@ export async function loadVerifiedCatalog({
       let catalog;
       try { catalog = JSON.parse(new TextDecoder().decode(catalogBytes)); }
       catch { throw newSignatureError('catalog is not valid JSON'); }
-      if (catalog?.catalogVersion !== 2 || !Array.isArray(catalog.apps) || catalog.apps.length > 128) {
+      if (catalog?.catalogVersion !== 3 || !Array.isArray(catalog.apps) || catalog.apps.length > 128) {
         throw newSignatureError('unsupported catalog structure');
       }
       // v4: expose the verified raw bytes + signature so the install flow
@@ -133,14 +133,11 @@ export async function loadVerifiedCatalog({
 }
 
 // ── Package transfer (D3/D8/D10) ─────────────────────────────────────
-// downloadAndStagePackage runs the browser half of the install chain:
-//   fetch (streaming ≤5 MiB) → artifactSha256 → gzip decompress (≤20 MiB)
-//   → payloadSha256 → base64 → returned to the caller, which sends it to
-//   apps:install_package. All gates fail CLOSED; the host re-checks size
-//   and payload hash independently.
+// Browser downloads only the bounded raw managed-app artifact. Core performs
+// decompression plus both signed hash checks during install_finish.
 
-export const PACKAGE_MAX_WIRE_BYTES = 5 * 1024 * 1024;
-export const PACKAGE_MAX_PAYLOAD_BYTES = 20 * 1024 * 1024;
+export const PACKAGE_MAX_WIRE_BYTES = 32 * 1024 * 1024;
+export const PACKAGE_MAX_PAYLOAD_BYTES = 128 * 1024 * 1024;
 
 export function newPackageError(message) {
   const error = new Error(message);
@@ -156,7 +153,7 @@ export async function downloadNapPackage({
   digest = (bytes) => globalThis.crypto.subtle.digest('SHA-256', bytes),
 } = {}) {
   if (!Number.isSafeInteger(wireSize) || wireSize <= 0 || wireSize > PACKAGE_MAX_WIRE_BYTES) {
-    throw newPackageError('wire size exceeds the 5 MiB gate');
+    throw newPackageError('wire size exceeds the 32 MiB gate');
   }
   const artifact = await fetchFromSources(artifactSources(url), {
     limit: PACKAGE_MAX_WIRE_BYTES, fetchImpl, signal, onProgress,
@@ -203,7 +200,7 @@ export async function decompressNap(
         if (size > PACKAGE_MAX_PAYLOAD_BYTES) {
           await reader.cancel().catch(() => {});
           throw newPackageError(
-            `payload exceeded the ${PACKAGE_MAX_PAYLOAD_BYTES} byte (20 MiB) gate`,
+            `payload exceeded the ${PACKAGE_MAX_PAYLOAD_BYTES} byte (128 MiB) gate`,
           );
         }
         chunks.push(value);
@@ -218,7 +215,7 @@ export async function decompressNap(
   } else {
     throw newPackageError('DecompressionStream unavailable');
   }
-  if (payload.byteLength > PACKAGE_MAX_PAYLOAD_BYTES) throw newPackageError('payload exceeds the 20 MiB gate');
+  if (payload.byteLength > PACKAGE_MAX_PAYLOAD_BYTES) throw newPackageError('payload exceeds the 128 MiB gate');
   if (typeof payloadSize === 'number' && payload.byteLength !== payloadSize) {
     throw newPackageError(
       `payload size ${payload.byteLength} != catalog payloadSize ${payloadSize}`,

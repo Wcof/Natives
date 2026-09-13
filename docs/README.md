@@ -53,7 +53,7 @@ AiNative
 
 | 任务 | 先读 |
 |---|---|
-| 应用中心与基金两阶段重构（2026-09-09 目标方案） | [实施方案](development/app-center-fund-implementation-plan.md) + [ADR-0027](adr/0027-managed-apps-independent-delivery.md)（accepted-target）+ [托管应用契约 v1](contracts/managed-app-contract.md)（active-target）；A0 已完成规范同步，生产迁移在 A3—A5 完成前仍按 ADR-0026 运行 |
+| Natives 单一应用与内置模块（2026-09-13 复核） | [唯一实施方案](development/app-center-fund-implementation-plan.md)（§2 当前缺口/检查证据、§3 固定模块与产品配置、§4 数据清理/交互、§5 P0–P6、§6 整包发布、§8 T01–T24、§10 Agent 指令）；当前代码尚不符合预期，仍有 Catalog/预装/分块安装，清数据复用卸载，整包与发布未验收。沿用已采纳内置模块决定，P0 清理 [ADR-0027](adr/0027-managed-apps-independent-delivery.md)、[ADR-0029](adr/0029-unified-suite-preinstalled-apps.md)、[现有契约](contracts/managed-app-contract.md) 的冲突正文；本轮只交付审计与方案 |
 | 任何编码 | `standards/README.md` + 相关 1–3 篇 |
 | Apps Framework / 应用中心 / App 打包分发 | **ADR-0027**（取代 ADR-0026/ADR-0025 Apps 目标决策）+ `standards/technical/06-sub-apps.md` + [托管应用契约 v1](contracts/managed-app-contract.md) + `standards/technical/02` (R-S14) + `standards/technical/04` (R-P13) + `standards/technical/03` (R-D1) |
 | 全局产品/IA/Legacy | ADR-0020 + `standards/product/01-positioning.md` |
@@ -67,6 +67,7 @@ AiNative
 | Files | `architecture/FILE_MANAGER_AUDIT.md` + data/backend/performance standards |
 | Apps / 应用中心 V2 | `pm-context/apps-center-ai-requirements.md` + `creative-app-*` 现状文档 + layering/security/backend standards |
 | Usage/Data | `application-performance-remediation.md` + product/02 + performance standard |
+| 空间 AI 效能：独立成本/Token/会话组件、多 Agent 统计与可视化样式 | [总方案](development/ai-efficiency-components-plan.md) + [当前整改实施方案](development/ai-efficiency-remediation-implementation-plan.md)（E0–E8、逐工具验收、完整交付门槛）+ [ADR-0028](adr/0028-ai-performance-usage-widget-regression.md) + [ADR-0030](adr/0030-ai-usage-ledger-and-collection-boundaries.md) + ui-ux/01–02 + technical/04 |
 | 旧 Daemon/Agent 删除 | `NATIVE-DAEMON-CAPABILITY-MAP.md`、`NATIVE_ENGINE_FULL_REMEDIATION.md` 仅作引用清单 + ADR-0020 death proof |
 | Release Gate | `development/natives-agent-t12-release-gate-report.md`（旧基线）+ ADR-0020 新 Gate；不得把旧绿灯当新架构完成 |
 

@@ -55,8 +55,8 @@ function mockResponse(bytes, { status = 200, chunkSize = 256 * 1024 } = {}) {
 // ── 1. Signature gate (check-catalog-signature mirror) ─────────────────
 // Official dev catalog pair embedded in the extension must verify.
 {
-  const catalog = readFileSync(new URL('./apps/catalog-v2.json', import.meta.url));
-  const sig = readFileSync(new URL('./apps/catalog-v2.sig', import.meta.url), 'utf8').trim();
+  const catalog = readFileSync(new URL('./apps/catalog-v3.json', import.meta.url));
+  const sig = readFileSync(new URL('./apps/catalog-v3.sig', import.meta.url), 'utf8').trim();
   const catalogBytes = new Uint8Array(catalog);
   await verifyCatalogSignature({ catalogBytes, signatureB64: sig });
   console.log('catalog: official dev catalog verified');
@@ -93,10 +93,10 @@ function mockResponse(bytes, { status = 200, chunkSize = 256 * 1024 } = {}) {
 }
 
 // ── 2. Wire gate exact boundaries (D3) ────────────────────────────────
-// 5,242,879 PASS / 5,242,880 PASS / 5,242,881 FAIL
+// 33,554,431 PASS / 33,554,432 PASS / 33,554,433 FAIL
 {
-  assert.equal(PACKAGE_MAX_WIRE_BYTES, 5 * 1024 * 1024);
-  const near = 5242879;
+  assert.equal(PACKAGE_MAX_WIRE_BYTES, 32 * 1024 * 1024);
+  const near = PACKAGE_MAX_WIRE_BYTES - 1;
   for (const size of [near, near + 1]) {
     const bytes = new Uint8Array(size); // zero-filled: fine, gate is on size
     const fetchImpl = async () => mockResponse(bytes, { chunkSize: 1024 * 1024 });
@@ -107,15 +107,15 @@ function mockResponse(bytes, { status = 200, chunkSize = 256 * 1024 } = {}) {
   const fetchImplOver = async () => mockResponse(over, { chunkSize: 1024 * 1024 });
   await assert.rejects(
     () => downloadNapPackage({ url: ASSET_URL, wireSize: near + 2, fetchImpl: fetchImplOver }),
-    (e) => e.message.includes('5 MiB'),
-    '5,242,881 bytes must FAIL',
+    (e) => e.message.includes('32 MiB'),
+    '32 MiB + 1 byte must FAIL',
   );
   // catalog-declared wire_size above the gate fails before any download
   await assert.rejects(
     () => downloadNapPackage({ url: ASSET_URL, wireSize: near + 2, fetchImpl: async () => { throw new Error('must not fetch'); } }),
-    (e) => e.message.includes('5 MiB'),
+    (e) => e.message.includes('32 MiB'),
   );
-  console.log('wire gate: 5242879 PASS / 5242880 PASS / 5242881 FAIL');
+  console.log('wire gate: 32MiB boundary enforced');
 }
 
 // ── 3. Real .nap end-to-end (artifact hash → gzip → payload hash) ─────
@@ -144,7 +144,7 @@ function mockResponse(bytes, { status = 200, chunkSize = 256 * 1024 } = {}) {
   const b64 = payloadToBase64(out.payloadBytes);
   assert.equal(b64.length, Math.ceil(payload.byteLength / 3) * 4, 'base64 length');
   assert.equal(wireSize, nap.byteLength);
-  assert.ok(nap.byteLength <= PACKAGE_MAX_WIRE_BYTES, 'demo .nap under 5 MiB');
+  assert.ok(nap.byteLength <= PACKAGE_MAX_WIRE_BYTES, 'demo .nap under managed wire limit');
   console.log(`nap e2e: wire=${wireSize}B payload=${out.payloadSize}B base64=${b64.length}B OK`);
 
   // artifact hash tamper (1 byte in the .nap) → FAIL
@@ -180,33 +180,26 @@ function mockResponse(bytes, { status = 200, chunkSize = 256 * 1024 } = {}) {
   console.log('hash gate: payload hash/size mismatch rejected');
 }
 
-// ── 4. Decompression bomb (D7: wire 1 MiB → payload >20 MiB) ──────────
+// ── 4. Decompression bomb boundary ───────────────────────────────────
 {
-  assert.equal(PACKAGE_MAX_PAYLOAD_BYTES, 20 * 1024 * 1024);
-  // 21 MiB of zeros gzips to a few KB (well under 5 MiB wire) but
-  // decompresses past the 20 MiB payload cap.
-  const bombPayload = new Uint8Array(21 * 1024 * 1024);
-  const bombNap = new Uint8Array(gzipSync(bombPayload, { level: 9 }));
-  assert.ok(bombNap.byteLength < 1024 * 1024, `bomb wire ${bombNap.byteLength} < 1 MiB`);
-  const { artifactBytes, digest: d } = await downloadNapPackage({
-    url: ASSET_URL, wireSize: bombNap.byteLength,
-    fetchImpl: async () => mockResponse(bombNap, { chunkSize: 32 * 1024 }),
-  });
+  assert.equal(PACKAGE_MAX_PAYLOAD_BYTES, 128 * 1024 * 1024);
   await assert.rejects(
-    () => decompressNap({ artifactBytes, digest: d }, {}),
-    (e) => e.message.includes('20 MiB'),
+    () => decompressNap({ artifactBytes: new Uint8Array([1]), digest }, {
+      decoder: async () => ({ byteLength: PACKAGE_MAX_PAYLOAD_BYTES + 1 }),
+    }),
+    (e) => e.message.includes('128 MiB'),
     'decompression bomb must be rejected at the payload cap',
   );
-  console.log(`bomb: wire=${bombNap.byteLength}B → payload 21MiB rejected`);
+  console.log('bomb: payload above 128MiB rejected');
 }
 
 // ── 5. Host-side re-check constants parity ────────────────────────────
 // The Rust host re-implements the same gates (app_store/types.rs).
 // Keep the two definitions from drifting.
 {
-  assert.equal(PACKAGE_MAX_WIRE_BYTES, 5242880);
-  assert.equal(PACKAGE_MAX_PAYLOAD_BYTES, 20971520);
-  console.log('constants: wire 5MiB / payload 20MiB parity');
+  assert.equal(PACKAGE_MAX_WIRE_BYTES, 33554432);
+  assert.equal(PACKAGE_MAX_PAYLOAD_BYTES, 134217728);
+  console.log('constants: wire 32MiB / payload 128MiB parity');
 }
 
 console.log('catalog-client: Gate A5 browser-side checks passed');

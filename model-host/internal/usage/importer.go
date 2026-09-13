@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -30,7 +31,19 @@ type ImportSession struct {
 	ReceivedSize int64
 	TotalChunks  int
 	File         *os.File
+	// importKind 决定 commit 语义（方案 §7.1：复用同一分块协议，不建第二套上传）：
+	//   usage_events（默认）= 既有 SQLite usage_events 迁移导入；
+	//   billing_csv         = cursor-billing-csv/1 账单 CSV，commit 走 ImportBillingCSV。
+	importKind string
+	provider   string
+	account    string
 }
+
+// ImportKind 词表。
+const (
+	ImportKindUsageEvents = "usage_events"
+	ImportKindBillingCSV  = "billing_csv"
+)
 
 type Importer struct {
 	store      *Store
@@ -52,13 +65,45 @@ func NewImporter(store *Store, calculator ...*Calculator) *Importer {
 }
 
 func (imp *Importer) BeginSession(fileName string, fileSize int64) (*ImportSession, error) {
+	return imp.BeginSessionWithKind(ImportKindUsageEvents, fileName, fileSize, "", "")
+}
+
+// BeginSessionWithKind 开启一个带 importKind 的导入会话；billing_csv 必须固定
+// provider/account（§7.1 begin 输入），证据等级由账单文件本身（actual_charge）
+// 或手动录入（user_confirmed）决定。
+func (imp *Importer) BeginSessionWithKind(kind, fileName string, fileSize int64, provider, account string) (*ImportSession, error) {
+	if kind == "" {
+		kind = ImportKindUsageEvents
+	}
+	switch kind {
+	case ImportKindUsageEvents:
+	case ImportKindBillingCSV:
+		if strings.TrimSpace(provider) == "" {
+			return nil, fmt.Errorf("billing csv import requires provider")
+		}
+		if strings.TrimSpace(account) == "" {
+			return nil, fmt.Errorf("billing csv import requires account")
+		}
+	default:
+		return nil, fmt.Errorf("unknown importKind %q", kind)
+	}
 	buffer := make([]byte, 16)
 	if _, err := rand.Read(buffer); err != nil {
 		return nil, fmt.Errorf("create import session: %w", err)
 	}
 	uploadID := "up_" + hex.EncodeToString(buffer)
-	return imp.beginWithID(uploadID, fileName, fileSize)
+	session, err := imp.beginWithID(uploadID, fileName, fileSize)
+	if err != nil {
+		return nil, err
+	}
+	session.importKind = kind
+	session.provider = strings.TrimSpace(provider)
+	session.account = strings.TrimSpace(account)
+	return session, nil
 }
+
+// ImportKind 返回会话的导入类型。
+func (s *ImportSession) ImportKind() string { return s.importKind }
 
 func (imp *Importer) beginWithID(id, fileName string, fileSize int64) (*ImportSession, error) {
 	imp.mu.Lock()
@@ -156,6 +201,16 @@ func (imp *Importer) Preview(uploadID string) (*ImportPreviewResult, error) {
 		session.File = nil
 	}
 
+	// billing_csv：解析 CSV 并返回合法行数、重复、币种三口径与逐行错误
+	// （§7.1 preview 契约）；不写入账本。
+	if session.importKind == ImportKindBillingCSV {
+		data, err := os.ReadFile(session.StagingPath)
+		if err != nil {
+			return &ImportPreviewResult{Valid: false, Error: "read staged csv: " + err.Error()}, nil
+		}
+		return imp.store.PreviewBillingCSV(data, session.provider, session.account), nil
+	}
+
 	db, err := sql.Open("sqlite", session.StagingPath)
 	if err != nil {
 		return &ImportPreviewResult{Valid: false, Error: "invalid sqlite file"}, nil
@@ -215,6 +270,17 @@ func (imp *Importer) Commit(uploadID string) (int64, error) {
 		session.File = nil
 	}
 	defer os.Remove(session.StagingPath)
+
+	// billing_csv：原子提交到既有 ImportBillingCSV（内容指纹幂等，
+	// 重复导入同一文件不增加金额，§7.1/§11.2）。
+	if session.importKind == ImportKindBillingCSV {
+		data, err := os.ReadFile(session.StagingPath)
+		if err != nil {
+			return 0, fmt.Errorf("read staged csv: %w", err)
+		}
+		imported, _, err := imp.store.ImportBillingCSV(data, session.provider, session.account)
+		return int64(imported), err
+	}
 
 	srcDb, err := sql.Open("sqlite", session.StagingPath)
 	if err != nil {

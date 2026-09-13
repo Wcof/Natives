@@ -6,8 +6,8 @@ import { ROOT } from '../extension-package.mjs';
 
 export const ORIGIN = 'chrome-extension://abcdefghijklmnopabcdefghijklmnop/';
 export const CORE_HOST = 'com.natives.file_manager';
-export function nativePort(binary, args = []) {
-  const child = spawn(binary, args, { stdio: ['pipe', 'pipe', 'pipe'] });
+export function nativePort(binary, args = [], options = {}) {
+  const child = spawn(binary, args, { ...options, stdio: ['pipe', 'pipe', 'pipe'] });
   const pending = new Map();
   let buffer = Buffer.alloc(0), sequence = 0, stderr = '';
   const exit = new Promise((resolveExit) => child.once('exit', (code, signal) => resolveExit({ code, signal })));
@@ -39,9 +39,13 @@ export function nativePort(binary, args = []) {
     return promise;
   }
   return { child, exit, raw,
+    get stderr() { return stderr; },
     async call(method, params = {}) {
       const response = await raw({ method, params });
-      if (!response.ok) throw new Error(response.error);
+      if (!response.ok) {
+        const msg = typeof response.error === 'object' ? JSON.stringify(response.error) : String(response.error);
+        throw new Error(msg);
+      }
       return response.result;
     },
     async close() {
@@ -70,7 +74,9 @@ export function appFixture() {
         const manifest = JSON.parse(readFileSync(join(root, 'manifests', host + '.json')));
         const runtime = resolve(manifest.path);
         if (!runtime.startsWith(join(root, 'apps') + sep) || manifest.allowed_origins[0] !== ORIGIN) throw new Error('invalid runtime registration');
-        port = nativePort(runtime, [ORIGIN]);
+        port = nativePort(runtime, [ORIGIN], {
+          env: { ...process.env, NATIVES_APPS_ROOT: join(root, 'apps') },
+        });
       }
       ports.add(port);
       return port;

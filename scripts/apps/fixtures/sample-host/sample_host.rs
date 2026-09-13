@@ -3,20 +3,22 @@
 // 运行锁/运行槽、127.0.0.1 动态端口 loopback 服务、bearer 会话鉴权、EOF 两秒退出。
 // 安全协议（framing 限额、锁、会话、随机数）复用 crates/app-host-support；
 // 本夹具只保留 HTTP 服务、内嵌 UI 与方法分发，作为支持库的第二接入范例。
-use app_host_support::lock::{runtime_lock_path, slot_lock_path, FileLock};
-use app_host_support::protocol::{
-    INSTANCE_ID_BYTES, MAX_FRAME_BYTES, MAX_RUNTIME_SLOTS, SESSION_TOKEN_BYTES,
-};
-use app_host_support::session::{base64url, random_bytes, SessionManager};
-use std::io::{Read, Write};
+use app_host_support::framing::{read_frame, write_frame};
+use app_host_support::http::{write_preflight, write_response as write_http_response, HttpRequest};
+use app_host_support::lock::{acquire_runtime, RuntimeLease, RuntimeUnavailable};
+use app_host_support::origin::chrome_extension_origin;
+use app_host_support::session::{random_id, SessionManager};
+use std::io::Read;
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-const APP_ID: &str = "sample";
-const SAMPLE_VERSION: &str = "1.0.0";
+fn package_identity() -> (String, String) {
+    app_host_support::layout::installed_identity()
+        .unwrap_or_else(|| ("sample".into(), "1.0.0".into()))
+}
 
 // ---------- 极简 JSON（仅覆盖契约固定形状，夹具专用） ----------
 
@@ -74,16 +76,25 @@ fn json_get_str(input: &str, key: &str) -> Option<String> {
     None
 }
 
-// ---------- 随机 ID/token：复用支持库 CSPRNG ----------
-
-fn random_token() -> Option<String> {
-    let mut bytes = [0u8; SESSION_TOKEN_BYTES];
-    random_bytes(&mut bytes).then(|| base64url(&bytes))
-}
-
-fn random_id_128() -> Option<String> {
-    let mut bytes = [0u8; INSTANCE_ID_BYTES];
-    random_bytes(&mut bytes).then(|| base64url(&bytes))
+/// 提取顶层对象的正整数字段值（支持数字或引号包裹的数字；夹具输入均为受控 JSON）。
+fn json_get_u64(input: &str, key: &str) -> Option<u64> {
+    let needle = format!("\"{key}\"");
+    let start = input.find(&needle)? + needle.len();
+    let rest = &input[start..];
+    let colon = rest.find(':')?;
+    let rest = rest[colon + 1..].trim_start();
+    if rest.starts_with('"') {
+        let end = rest[1..].find('"')?;
+        rest[1..=end].parse::<u64>().ok()
+    } else {
+        let end = rest
+            .find(|c: char| !c.is_ascii_digit())
+            .unwrap_or(rest.len());
+        if end == 0 {
+            return None;
+        }
+        rest[..end].parse::<u64>().ok()
+    }
 }
 
 // ---------- 状态 ----------
@@ -111,14 +122,15 @@ struct Shared {
     app_id: String,
     app_version: String,
     origin: String,
+    apps_root: PathBuf,
     data_dir: PathBuf,
     stopping: AtomicBool,
     instance: Mutex<Option<Instance>>,
     server_shutdown: Arc<AtomicBool>,
 }
 
-// 锁随进程生命周期存在；Drop（含崩溃由 OS 释放）保证清理。
-type HeldLocks = (Mutex<Option<FileLock>>, Vec<Mutex<Option<FileLock>>>);
+// 真实 start 后才持有 app 锁和一个全局槽；Drop（含崩溃）保证释放。
+type HeldLocks = Mutex<Option<RuntimeLease>>;
 
 fn now_epoch() -> u64 {
     SystemTime::now()
@@ -141,13 +153,8 @@ fn write_response(id: &str, ok: bool, body: &str) {
             body
         )
     };
-    let bytes = payload.as_bytes();
-    let mut buf = Vec::with_capacity(4 + bytes.len());
-    buf.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
-    buf.extend_from_slice(bytes);
     let mut out = std::io::stdout().lock();
-    let _ = out.write_all(&buf);
-    let _ = out.flush();
+    let _ = write_frame(&mut out, payload.as_bytes());
 }
 
 fn error_body(code: &str, message: &str) -> String {
@@ -186,47 +193,13 @@ fn serve_http(shared: Arc<Shared>, listener: TcpListener) {
 
 fn handle_conn(shared: Arc<Shared>, mut stream: TcpStream) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(10)));
-    let mut buf = Vec::new();
-    let mut chunk = [0u8; 4096];
-    // 只读头部（有界），请求体不含敏感逻辑（夹具只有 GET / 与 GET /api/value）。
-    loop {
-        match stream.read(&mut chunk) {
-            Ok(0) => break,
-            Ok(n) => {
-                buf.extend_from_slice(&chunk[..n]);
-                if buf.windows(4).any(|w| w == b"\r\n\r\n") || buf.len() > 16 * 1024 {
-                    break;
-                }
-            }
-            Err(_) => break,
-        }
-    }
-    let text = String::from_utf8_lossy(&buf);
-    let mut lines = text.split("\r\n");
-    let request_line = lines.next().unwrap_or("");
-    let mut method = "";
-    let mut path = "";
-    let mut host_header = "";
-    let mut auth = "";
-    for line in lines.by_ref() {
-        if let Some((k, v)) = line.split_once(": ") {
-            let kl = k.to_ascii_lowercase();
-            match kl.as_str() {
-                "host" => host_header = v,
-                "authorization" => auth = v,
-                _ => {}
-            }
-        }
-    }
-    {
-        let mut parts = request_line.split_whitespace();
-        method = parts.next().unwrap_or("");
-        path = parts.next().unwrap_or("");
-    }
+    let request = match HttpRequest::read(&mut stream) {
+        Ok(request) => request,
+        Err(_) => return,
+    };
 
     // Host header 必须是 127.0.0.1:<port>（防 DNS rebinding / 代理伪装）。
-    let bound = format!("127.0.0.1:{}", shared_port(&shared));
-    if !host_header.eq_ignore_ascii_case(&bound) {
+    if !request.has_loopback_host(shared_port(&shared)) {
         let _ = write_http(
             &mut stream,
             403,
@@ -238,14 +211,20 @@ fn handle_conn(shared: Arc<Shared>, mut stream: TcpStream) {
     }
 
     // CORS preflight：sandbox iframe 带 Authorization 头会先发 OPTIONS。
-    if method == "OPTIONS" {
-        let preflight = "HTTP/1.1 204 No Content\r\nAccess-Control-Allow-Origin: null\r\nAccess-Control-Allow-Methods: GET\r\nAccess-Control-Allow-Headers: Authorization\r\nAccess-Control-Max-Age: 600\r\nConnection: close\r\n\r\n";
-        let _ = stream.write_all(preflight.as_bytes());
-        let _ = stream.flush();
+    if request.method == "OPTIONS" {
+        if write_preflight(&mut stream, &request).is_err() {
+            let _ = write_http(
+                &mut stream,
+                403,
+                "Forbidden",
+                "text/plain",
+                b"bad CORS preflight",
+            );
+        }
         return;
     }
 
-    let route = path.split('?').next().unwrap_or(path);
+    let route = request.path.split('?').next().unwrap_or(&request.path);
     if route == "/healthz" {
         let _ = write_http(&mut stream, 200, "OK", "application/json", b"{\"ok\":true}");
         return;
@@ -253,7 +232,7 @@ fn handle_conn(shared: Arc<Shared>, mut stream: TcpStream) {
 
     // UI 静态资源：无 token 也可读（初始化页面不能含敏感业务数据）。
     if route == "/" || route == "/index.html" {
-        let body = embedded_ui();
+        let body = embedded_ui(&shared.app_version);
         let _ = write_http(
             &mut stream,
             200,
@@ -270,12 +249,15 @@ fn handle_conn(shared: Arc<Shared>, mut stream: TcpStream) {
         match guard.as_ref() {
             Some(instance) => instance
                 .sessions
-                .authorize(instance.sessions.generation(), auth)
+                .authorize(
+                    instance.sessions.generation(),
+                    request.header("authorization").unwrap_or(""),
+                )
                 .is_ok(),
             None => false,
         }
     };
-    if !authorized {
+    if !request.sandbox_origin() || !authorized {
         let _ = write_http(
             &mut stream,
             401,
@@ -286,8 +268,64 @@ fn handle_conn(shared: Arc<Shared>, mut stream: TcpStream) {
         return;
     }
     if route == "/api/value" {
+        if request.method == "POST" {
+            if request.body.len() > 4096 || std::str::from_utf8(&request.body).is_err() {
+                let _ = write_http(
+                    &mut stream,
+                    400,
+                    "Bad Request",
+                    "text/plain",
+                    b"invalid value",
+                );
+            } else if write_saved_value(&shared.data_dir, &request.body).is_ok() {
+                let _ = write_http(
+                    &mut stream,
+                    200,
+                    "OK",
+                    "application/json",
+                    b"{\"saved\":true}",
+                );
+            } else {
+                let _ = write_http(
+                    &mut stream,
+                    500,
+                    "Internal Server Error",
+                    "text/plain",
+                    b"save failed",
+                );
+            }
+            return;
+        }
         let value = read_saved_value(&shared.data_dir).unwrap_or_default();
         let body = format!("{{\"value\":{}}}", json_str(&value));
+        let _ = write_http(&mut stream, 200, "OK", "application/json", body.as_bytes());
+        return;
+    }
+    if route == "/api/operation/start" && request.method == "POST" {
+        let mut guard = shared.instance.lock().unwrap();
+        if let Some(instance) = guard.as_mut() {
+            let id = random_id().unwrap_or_else(|| "unavailable".into());
+            instance.operation = Some(serde_value::Operation {
+                id: id.clone(),
+                kind: "sample_wait",
+                cancellable: true,
+                started_at: now_epoch(),
+                deadline_at: now_epoch() + 30,
+            });
+            let body = format!(
+                "{{\"operationId\":{},\"state\":\"running\"}}",
+                json_str(&id)
+            );
+            let _ = write_http(&mut stream, 200, "OK", "application/json", body.as_bytes());
+        }
+        return;
+    }
+    if route == "/api/operation/cancel" && request.method == "POST" {
+        let mut guard = shared.instance.lock().unwrap();
+        let cancelled = guard
+            .as_mut()
+            .is_some_and(|instance| instance.operation.take().is_some());
+        let body = format!("{{\"cancelled\":{cancelled}}}");
         let _ = write_http(&mut stream, 200, "OK", "application/json", body.as_bytes());
         return;
     }
@@ -306,15 +344,14 @@ fn write_http(
     ctype: &str,
     body: &[u8],
 ) -> std::io::Result<()> {
-    // sandbox iframe 为 opaque origin：CORS 仅允许 Origin: null。
-    let cors = "Access-Control-Allow-Origin: null\r\nAccess-Control-Allow-Methods: GET\r\nAccess-Control-Allow-Headers: Authorization\r\n";
-    let head = format!(
-        "HTTP/1.1 {code} {reason}\r\nContent-Type: {ctype}\r\nContent-Length: {}\r\nCache-Control: no-store\r\n{cors}Connection: close\r\n\r\n",
-        body.len()
-    );
-    stream.write_all(head.as_bytes())?;
-    stream.write_all(body)?;
-    stream.flush()
+    write_http_response(
+        stream,
+        code,
+        reason,
+        ctype,
+        body,
+        "default-src 'none'; script-src 'unsafe-inline'; connect-src 'self'; style-src 'unsafe-inline'; form-action 'none'; base-uri 'none'; frame-ancestors chrome-extension:",
+    )
 }
 
 fn read_saved_value(data_dir: &std::path::Path) -> Option<String> {
@@ -326,9 +363,17 @@ fn read_saved_value(data_dir: &std::path::Path) -> Option<String> {
     Some(trimmed)
 }
 
+fn write_saved_value(data_dir: &std::path::Path, value: &[u8]) -> std::io::Result<()> {
+    std::fs::create_dir_all(data_dir)?;
+    let path = data_dir.join("value.txt");
+    let temp = data_dir.join("value.txt.tmp");
+    std::fs::write(&temp, value)?;
+    std::fs::rename(temp, path)
+}
+
 // ---------- 内嵌 UI（构建期嵌在一起的静态 HTML/JS；无外联、无模块加载） ----------
 
-fn embedded_ui() -> String {
+fn embedded_ui(version: &str) -> String {
     // sandbox iframe 为 opaque origin：应用自身 CSP 禁止外联脚本，UI JS 构建期内联。
     format!(
         r#"<!doctype html>
@@ -344,12 +389,14 @@ fn embedded_ui() -> String {
 <p>协议 <span id="proto">1</span></p>
 <label>保存值 <input id="input"></label>
 <button id="save">保存</button>
+<button id="start-op">开始可取消操作</button>
+<button id="cancel-op">取消操作</button>
 <p id="status">加载中…</p>
 <p id="value"></p>
 <script>{}</script>
 </body>
 </html>"#,
-        SAMPLE_VERSION,
+        version,
         embedded_ui_js()
     )
 }
@@ -357,10 +404,18 @@ fn embedded_ui() -> String {
 fn embedded_ui_js() -> String {
     r#"(function () {
   var token = null;
-  var pending = null;
   function send(msg) { parent.postMessage(msg, '*'); }
   window.addEventListener('message', function (e) {
     var data = e.data || {};
+    if (data.type === 'probe-capabilities') {
+      var parentReadable = true;
+      try { void parent.location.href; } catch (_) { parentReadable = false; }
+      fetch('https://example.com/', { mode: 'no-cors' }).then(
+        function () { send({ type: 'probe-result', chromeRuntime: !!(window.chrome && chrome.runtime), parentReadable: parentReadable, externalFetch: true }); },
+        function () { send({ type: 'probe-result', chromeRuntime: !!(window.chrome && chrome.runtime), parentReadable: parentReadable, externalFetch: false }); }
+      );
+      return;
+    }
     if (data.type === 'init' && data.generation && data.challenge) {
       send({ type: 'hello', generation: data.generation, challenge: data.challenge });
     } else if (data.type === 'welcome' && data.token) {
@@ -368,8 +423,11 @@ fn embedded_ui_js() -> String {
       load();
     }
   });
-  function api(path) {
-    return fetch(path, { headers: { Authorization: 'Bearer ' + token }, cache: 'no-store' });
+  function api(path, options) {
+    options = options || {};
+    options.headers = Object.assign({}, options.headers, { Authorization: 'Bearer ' + token });
+    options.cache = 'no-store';
+    return fetch(path, options);
   }
   function load() {
     api('/api/value').then(function (r) { return r.ok ? r.json() : Promise.reject(r.status); })
@@ -381,15 +439,25 @@ fn embedded_ui_js() -> String {
   }
   document.getElementById('save').addEventListener('click', function () {
     var v = document.getElementById('input').value;
-    pending = { cancel: function () { document.getElementById('status').textContent = '已取消'; } };
-    send({ type: 'busy', operation: { id: 'save-' + Date.now(), kind: 'save', cancellable: true } });
-    // 夹具：保存为演示行为（真实保存接口随 A2/A3 支持库落地）。
-    setTimeout(function () {
-      document.getElementById('value').textContent = '值: ' + v;
-      document.getElementById('status').textContent = '已保存（演示）';
-      pending = null;
-      send({ type: 'busy', operation: null });
-    }, 400);
+    api('/api/value', { method: 'POST', body: v }).then(function (r) {
+      if (!r.ok) throw new Error(String(r.status));
+      document.getElementById('status').textContent = '已保存';
+      load();
+    }).catch(function () { document.getElementById('status').textContent = '保存失败'; });
+  });
+  document.getElementById('start-op').addEventListener('click', function () {
+    api('/api/operation/start', { method: 'POST' }).then(function (r) { return r.json(); })
+      .then(function (op) {
+        document.getElementById('status').textContent = '操作进行中';
+        send({ type: 'busy', operation: { id: op.operationId, kind: 'sample_wait', cancellable: true } });
+      });
+  });
+  document.getElementById('cancel-op').addEventListener('click', function () {
+    api('/api/operation/cancel', { method: 'POST' }).then(function (r) { return r.json(); })
+      .then(function (result) {
+        document.getElementById('status').textContent = result.cancelled ? '已取消' : '没有进行中的操作';
+        send({ type: 'busy', operation: null });
+      });
   });
 })();"#.to_string()
 }
@@ -398,25 +466,50 @@ fn embedded_ui_js() -> String {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    let (app_id, app_version) = package_identity();
     if args.iter().any(|a| a == "--health") {
         // 健康检查：包完整性自检，不取运行锁、不联网、不迁移。
-        println!("{{\"ok\":true,\"appId\":\"sample\",\"protocol\":1}}");
+        println!(
+            "{{\"ok\":true,\"appId\":{},\"protocol\":1}}",
+            json_str(&app_id)
+        );
         return;
     }
     if args.iter().any(|a| a == "--inspect-data") {
-        println!("{{\"currentSchema\":1,\"migrationState\":\"committed\",\"hasCommittedNewWrites\":false,\"previousVersionCompatible\":true}}");
+        let apps_root = std::env::var("NATIVES_APPS_ROOT")
+            .map(PathBuf::from)
+            .unwrap_or_else(|_| {
+                app_host_support::layout::installed_apps_root()
+                    .unwrap_or_else(|| dirs_home().join(".natives").join("apps"))
+            });
+        let data_dir = apps_root.join(&app_id).join("data");
+        let migration_file = data_dir.join(".migration.json");
+        let value_file = data_dir.join("value.txt");
+        let has_new_writes = value_file.exists();
+        let (schema, migration_state, prev_compatible) = if migration_file.exists() {
+            let bytes = std::fs::read(&migration_file).unwrap_or_default();
+            let text = String::from_utf8_lossy(&bytes);
+            let schema = json_get_str(&text, "currentSchema")
+                .and_then(|s| s.parse::<u32>().ok())
+                .unwrap_or(1);
+            let state = json_get_str(&text, "state").unwrap_or_else(|| "committed".into());
+            let comp = !text.contains("\"previousVersionCompatible\":false");
+            (schema, state, comp)
+        } else {
+            (1, "committed".to_string(), true)
+        };
+        println!(
+            "{{\"currentSchema\":{schema},\"migrationState\":{},\"hasCommittedNewWrites\":{has_new_writes},\"previousVersionCompatible\":{prev_compatible}}}",
+            json_str(&migration_state)
+        );
         return;
     }
 
     // 契约 §5.1：Chrome 启动实参中的 origin，页面参数不可覆盖。
-    let origin = match args
-        .iter()
-        .filter(|a| a.starts_with("chrome-extension://"))
-        .next_back()
-    {
-        Some(o) => o.clone(),
-        None => {
-            eprintln!("sample-host: missing origin argument");
+    let origin = match chrome_extension_origin(&args) {
+        Ok(origin) => origin,
+        Err(error) => {
+            eprintln!("sample-host: {}", error.message);
             std::process::exit(2);
         }
     };
@@ -424,33 +517,24 @@ fn main() {
     // 数据根：NATIVES_APPS_ROOT/<appId>（测试由 harness 指向隔离目录）。
     let apps_root = std::env::var("NATIVES_APPS_ROOT")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| dirs_home().join(".natives").join("apps"));
+        .unwrap_or_else(|_| {
+            app_host_support::layout::installed_apps_root()
+                .unwrap_or_else(|| dirs_home().join(".natives").join("apps"))
+        });
     eprintln!(
         "sample-host: started, origin={origin}, apps_root={}",
         apps_root.display()
     );
-    let data_dir = apps_root.join(APP_ID).join("data");
+    let data_dir = apps_root.join(&app_id).join("data");
     let _ = std::fs::create_dir_all(&data_dir);
 
-    // 运行锁 + 运行槽：复用支持库（OS 排他 flock，崩溃由 OS 释放）。
-    let runtime_lock = FileLock::try_acquire(runtime_lock_path(&apps_root, APP_ID))
-        .ok()
-        .flatten();
-    let slot_locks: Vec<Mutex<Option<FileLock>>> = (0..MAX_RUNTIME_SLOTS)
-        .map(|i| {
-            Mutex::new(
-                FileLock::try_acquire(slot_lock_path(&apps_root, i))
-                    .ok()
-                    .flatten(),
-            )
-        })
-        .collect();
-    let held: Arc<HeldLocks> = Arc::new((Mutex::new(runtime_lock), slot_locks));
+    let held: Arc<HeldLocks> = Arc::new(Mutex::new(None));
 
     let shared = Arc::new(Shared {
-        app_id: APP_ID.to_string(),
-        app_version: SAMPLE_VERSION.to_string(),
-        origin,
+        app_id,
+        app_version,
+        origin: origin.clone(),
+        apps_root,
         data_dir,
         stopping: AtomicBool::new(false),
         instance: Mutex::new(None),
@@ -458,27 +542,12 @@ fn main() {
     });
 
     let mut input = std::io::stdin().lock();
-    let mut buffer = Vec::new();
     while !shared.stopping.load(Ordering::SeqCst) {
-        let mut header = [0u8; 4];
-        match input.read_exact(&mut header) {
-            Ok(()) => {}
-            Err(_) => break, // stdin EOF：走关闭路径
-        }
-        let len = u32::from_le_bytes(header) as usize;
-        eprintln!("sample-host: frame {len} bytes");
-        if len > MAX_FRAME_BYTES {
-            break; // 超长帧：直接退出
-        }
-        buffer.clear();
-        if input
-            .by_ref()
-            .take(len as u64)
-            .read_to_end(&mut buffer)
-            .is_err()
-        {
-            break;
-        }
+        let buffer = match read_frame(&mut input) {
+            Ok(Some(frame)) => frame,
+            Ok(None) | Err(_) => break, // EOF/半帧/超限：共用关闭路径
+        };
+        eprintln!("sample-host: frame {} bytes", buffer.len());
         let text = String::from_utf8_lossy(&buffer).to_string();
         let id = json_get_str(&text, "id").unwrap_or_default();
         let method = json_get_str(&text, "method").unwrap_or_default();
@@ -497,7 +566,7 @@ fn main() {
             instance.state = "stopping";
         }
     }
-    drop(held);
+    held.lock().unwrap().take();
     std::process::exit(0);
 }
 
@@ -531,18 +600,80 @@ fn handle_method(
             ));
         }
         "app:start" => {
-            // 运行锁 + 运行槽：任一不可得即拒绝（复用支持库锁语义）。
-            let runtime_ok = held.0.lock().unwrap().is_some();
-            let slot_free = held.1.iter().any(|slot| slot.lock().unwrap().is_some());
-            if !runtime_ok || !slot_free {
+            let expected_gen = json_get_u64(params, "expectedActivationGeneration");
+            if let Err((err_code, msg)) = app_host_support::verify_activation_with_generation(
+                &shared.apps_root,
+                &shared.app_id,
+                &shared.app_version,
+                Some(&shared.origin),
+                expected_gen,
+            ) {
+                eprintln!("sample-host: pre-lock activation check failed: {err_code:?} - {msg}");
+                write_response(id, false, &error_body(err_code.as_str(), &msg));
+                return;
+            }
+            if let Some(existing) = shared.instance.lock().unwrap().as_ref() {
                 write_response(
                     id,
-                    false,
-                    &error_body("APP_RUNTIME_LIMIT", "no free runtime slot"),
+                    true,
+                    &format!(
+                        "{{\"instanceId\":{},\"port\":{},\"generation\":{},\"state\":\"ready\"}}",
+                        json_str(&existing.instance_id),
+                        existing.port,
+                        json_str(existing.sessions.generation())
+                    ),
                 );
                 return;
             }
-            let instance_id = match random_id_128() {
+            let lease = match acquire_runtime(&shared.apps_root, &shared.app_id) {
+                Ok(Ok(lease)) => lease,
+                Ok(Err(RuntimeUnavailable::AlreadyRunning)) => {
+                    write_response(
+                        id,
+                        false,
+                        &error_body("APP_RUNNING_ELSEWHERE", "app is running elsewhere"),
+                    );
+                    return;
+                }
+                Ok(Err(RuntimeUnavailable::Busy)) => {
+                    write_response(
+                        id,
+                        false,
+                        &error_body("APP_BUSY", "app is being installed or upgraded"),
+                    );
+                    return;
+                }
+                Ok(Err(RuntimeUnavailable::Limit)) => {
+                    write_response(
+                        id,
+                        false,
+                        &error_body("APP_RUNTIME_LIMIT", "no free runtime slot"),
+                    );
+                    return;
+                }
+                Err(_) => {
+                    write_response(
+                        id,
+                        false,
+                        &error_body("APP_START_FAILED", "runtime lock failed"),
+                    );
+                    return;
+                }
+            };
+            // 先检查、取得锁后再检查，消除检查后被停用/更新的窗口
+            if let Err((err_code, msg)) = app_host_support::verify_activation_with_generation(
+                &shared.apps_root,
+                &shared.app_id,
+                &shared.app_version,
+                Some(&shared.origin),
+                expected_gen,
+            ) {
+                drop(lease);
+                eprintln!("sample-host: post-lock activation check failed: {err_code:?} - {msg}");
+                write_response(id, false, &error_body(err_code.as_str(), &msg));
+                return;
+            }
+            let instance_id = match random_id() {
                 Some(value) => value,
                 None => {
                     write_response(
@@ -575,15 +706,6 @@ fn handle_method(
             let port = listener.local_addr().map(|a| a.port()).unwrap_or(0);
             {
                 let mut guard = shared.instance.lock().unwrap();
-                if let Some(existing) = guard.as_ref() {
-                    // 幂等 start：同一连接重复 start 返回同一实例。
-                    let existing_generation = existing.sessions.generation().to_string();
-                    write_response(id, true, &format!(
-                        "{{\"instanceId\":{},\"port\":{},\"generation\":{},\"state\":\"ready\"}}",
-                        json_str(&existing.instance_id), existing.port, json_str(&existing_generation)
-                    ));
-                    return;
-                }
                 *guard = Some(Instance {
                     instance_id: instance_id.clone(),
                     sessions,
@@ -592,6 +714,7 @@ fn handle_method(
                     operation: None,
                 });
             }
+            *held.lock().unwrap() = Some(lease);
             let server_shared = Arc::clone(shared);
             std::thread::spawn(move || serve_http(server_shared, listener));
             write_response(
@@ -607,15 +730,24 @@ fn handle_method(
         "app:status" => {
             let guard = shared.instance.lock().unwrap();
             match guard.as_ref() {
-                Some(instance) => write_response(
-                    id,
-                    true,
-                    &format!(
-                        "{{\"instanceId\":{},\"state\":\"{}\",\"operation\":null}}",
-                        json_str(&instance.instance_id),
-                        instance.state
-                    ),
-                ),
+                Some(instance) => {
+                    let operation = instance.operation.as_ref().map_or_else(
+                        || "null".to_string(),
+                        |op| format!(
+                            "{{\"id\":{},\"kind\":{},\"cancellable\":{},\"startedAt\":{},\"deadlineAt\":{}}}",
+                            json_str(&op.id), json_str(op.kind), op.cancellable, op.started_at, op.deadline_at
+                        ),
+                    );
+                    write_response(
+                        id,
+                        true,
+                        &format!(
+                            "{{\"instanceId\":{},\"state\":\"{}\",\"operation\":{operation}}}",
+                            json_str(&instance.instance_id),
+                            instance.state
+                        ),
+                    )
+                }
                 None => write_response(id, false, &error_body("APP_START_FAILED", "no instance")),
             }
         }

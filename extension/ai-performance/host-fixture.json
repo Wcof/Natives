@@ -1,0 +1,83 @@
+{
+  "events": {
+    "events": [
+      {
+        "id": "evt_contract_unpriced",
+        "requestedAt": "2026-09-12T21:00:00Z",
+        "latencyMs": 0,
+        "ttftMs": 0,
+        "provider": "openai",
+        "model": "model-without-price",
+        "source": "Codex",
+        "result": "failed",
+        "httpStatus": 500,
+        "inputTokens": 0,
+        "outputTokens": 0,
+        "cacheReadTokens": 0,
+        "cacheWriteTokens": 0,
+        "reasoningTokens": 0,
+        "totalTokens": 5200,
+        "costMicro": 0,
+        "costStatus": "unpriced",
+        "createdAt": "2026-09-12T21:00:00Z"
+      },
+      {
+        "id": "evt_contract_priced",
+        "requestedAt": "2026-09-10T09:00:00Z",
+        "latencyMs": 0,
+        "ttftMs": 0,
+        "provider": "anthropic",
+        "model": "claude-3-5-sonnet-20241022",
+        "source": "Claude Code",
+        "result": "success",
+        "httpStatus": 0,
+        "inputTokens": 200000,
+        "outputTokens": 0,
+        "cacheReadTokens": 800000,
+        "cacheWriteTokens": 0,
+        "reasoningTokens": 0,
+        "totalTokens": 1000000,
+        "costMicro": 0,
+        "costStatus": "priced",
+        "createdAt": "2026-09-10T09:00:00Z"
+      }
+    ],
+    "total": 2,
+    "page": 1,
+    "pageSize": 50,
+    "hasMore": false
+  },
+  "overview": {
+    "status": "ready",
+    "totalEventsCount": 2,
+    "metrics": {
+      "totalRequests": 2,
+      "totalTokens": 1005200,
+      "successRate": 50,
+      "tps": 4.6537037037037035,
+      "cacheHitRate": 80,
+      "estimatedCostUsd": 0
+    },
+    "trend": [
+      {
+        "timestamp": "2026-09-10T00:00:00Z",
+        "requests": 1,
+        "tokens": 1000000,
+        "costUsd": 0
+      },
+      {
+        "timestamp": "2026-09-12T00:00:00Z",
+        "requests": 1,
+        "tokens": 5200,
+        "costUsd": 0
+      }
+    ],
+    "tokens": {
+      "input": 200000,
+      "output": 0,
+      "cacheRead": 800000,
+      "cacheWrite": 0,
+      "reasoning": 0
+    }
+  }
+}

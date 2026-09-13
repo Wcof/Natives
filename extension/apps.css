@@ -67,6 +67,7 @@ body {
 .app-card .desc { color:var(--muted); margin:2px 0 8px; }
 .app-card .meta { display:flex; flex-wrap:wrap; gap:6px 14px; color:var(--muted); font-size:12px; }
 .app-card .meta span { display:inline-flex; align-items:center; gap:5px; }
+.app-card .apps-changelog { margin:8px 0 0; color:var(--muted); font-size:12px; white-space:pre-line; }
 .app-card .actions { display:flex; flex-direction:column; gap:6px; flex:none; }
 .app-card .status { font-size:12px; color:var(--muted); }
 .app-card .status .error { color:var(--danger); }

@@ -20,7 +20,6 @@
     "https://release-assets.githubusercontent.com/*",
     "https://objects.githubusercontent.com/*",
     "https://releases.githubusercontent.com/*",
-    "https://ghproxy.net/*",
     "https://api.open-meteo.com/*",
     "https://geocoding-api.open-meteo.com/*",
     "https://www.bing.com/*",
@@ -49,6 +48,9 @@
     }
   },
   "background": { "service_worker": "background.js", "type": "module" },
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'none'; frame-src http://127.0.0.1:*"
+  },
   "content_scripts": [
     {
       "matches": ["file:///*"],

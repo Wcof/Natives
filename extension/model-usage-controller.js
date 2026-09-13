@@ -112,6 +112,64 @@ async function importFile(controller, file) {
   }
 }
 
+// billing_csv 导入流（§7.1）：先固定 provider/account，再上传、预览、确认。
+async function importBillingFile(controller, file) {
+  if (!file) return;
+  controller.pendingBillingFile = file;
+  const previewNode = controller.view.dialog.querySelector('[data-role="importer-preview"]');
+  const progress = controller.view.dialog.querySelector('[data-role="importer-progress"]');
+  if (previewNode) {
+    previewNode.hidden = false;
+    previewNode.innerHTML = `<form class="model-importer-preview-card" data-role="usage-billing-csv-begin-form">
+      <h4>${escapeText(controller.t('modelBillingImportTitle', '导入账单 CSV（cursor-billing-csv/1）'))}</h4>
+      <p class="muted">${escapeText(controller.t('modelBillingSchemaHint', '表头：date,kind,amount,currency[,period_start,period_end,note]'))}</p>
+      <label>${escapeText(controller.t('modelBillingProvider', '提供方'))}<input type="text" name="provider" required></label>
+      <label>${escapeText(controller.t('modelBillingAccount', '账户'))}<input type="text" name="account" required></label>
+      <div class="model-form-actions"><button type="submit" class="primary">${escapeText(controller.t('modelUploadPreview', '上传并预览'))}</button><button type="button" data-role="cancel-import">${escapeText(controller.t('cancel', '取消'))}</button></div>
+    </form>`;
+    previewNode.querySelector('[data-role="cancel-import"]').onclick = () => {
+      previewNode.hidden = true;
+      controller.pendingBillingFile = null;
+    };
+    // 表单提交走统一 submit 管道（handleUsageSubmit）。
+  }
+}
+
+// billing preview 渲染：合法记录、重复、币种三口径、逐行错误（§7.1）。
+function renderBillingPreview(controller, preview) {
+  const previewNode = controller.view.dialog.querySelector('[data-role="importer-preview"]');
+  if (!previewNode) return;
+  if (!preview || !preview.valid) {
+    previewNode.innerHTML = `<div class="model-importer-preview-card"><h4>${escapeText(controller.t('modelImportPreview', '导入数据概览'))}</h4>
+      <p class="text-danger">${escapeText(preview?.error || controller.t('modelImportInvalid', '文件校验未通过，未写入账本'))}</p>
+      <div class="model-form-actions"><button type="button" data-role="cancel-import">${escapeText(controller.t('cancel', '取消'))}</button></div></div>`;
+    previewNode.querySelector('[data-role="cancel-import"]').onclick = () => { controller.billingWizard?.cancel(); previewNode.hidden = true; };
+    return;
+  }
+  const currencyLines = (preview.currencySummaries || []).map((s) => `<li>${escapeText(s.currency || 'USD')}: ${escapeText(t3(controller, s))}</li>`).join('');
+  const lineErrors = (preview.lineErrors || []).map((le) => `<li class="text-danger">${escapeText(`#${le.line}: ${le.message}`)}</li>`).join('');
+  previewNode.innerHTML = `<div class="model-importer-preview-card"><h4>${escapeText(controller.t('modelImportPreview', '导入数据概览'))}</h4>
+    <p>${escapeText(controller.t('modelTotalRecords', '总记录数'))}: ${Number(preview.totalRecords) || 0}
+       · ${escapeText(controller.t('modelBillingDuplicates', '已存在重复'))}: ${Number(preview.duplicateCount) || 0}</p>
+    <p>${escapeText(controller.t('modelBillingPeriod', '账期'))}: ${escapeText(preview.earliestRecord || '-')} ~ ${escapeText(preview.latestRecord || '-')}</p>
+    <ul>${currencyLines}</ul>
+    ${lineErrors ? `<ul>${lineErrors}</ul>` : ''}
+    <div class="model-form-actions"><button type="button" class="primary" data-role="confirm-import">${escapeText(controller.t('modelConfirmImport', '确认合并导入'))}</button><button type="button" data-role="cancel-import">${escapeText(controller.t('cancel', '取消'))}</button></div></div>`;
+  previewNode.querySelector('[data-role="confirm-import"]').onclick = () => busy(controller, async () => {
+    const result = await controller.billingWizard.commit();
+    controller.view.showNotice(controller.t('modelBillingImportSuccess', '账单已导入（重复条目已按内容指纹跳过）'));
+    previewNode.hidden = true;
+    await controller.loadUsageData();
+    return result;
+  });
+  previewNode.querySelector('[data-role="cancel-import"]').onclick = () => { controller.billingWizard?.cancel(); previewNode.hidden = true; };
+}
+
+function t3(controller, s) {
+  const fmt = (v) => ((Number(v) || 0) / 1_000_000).toFixed(2);
+  return `${controller.t('modelBillingServiceSpend', '已确认服务消耗')} ${fmt(s.recognizedServiceSpend)} / ${controller.t('modelBillingCashOutflow', '现金流出')} ${fmt(s.cashOutflow)} / ${controller.t('modelBillingCreditDelta', 'Credits/余额变化')} ${fmt(s.creditBalanceDelta)}`;
+}
+
 function escapeText(value) {
   return String(value ?? '').replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[char]);
 }

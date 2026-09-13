@@ -210,13 +210,20 @@ export function createSpaceInspector({
       empty.textContent = t('noWidgetsInWorkspace', '当前空间暂无卡片');
       widgetList.append(empty);
     } else {
-      let draggedIndex = null;
+      function updateOrderBadges() {
+        const rows = widgetList.querySelectorAll?.('.inspector-row') || [];
+        rows.forEach((r, idx) => {
+          const badge = r.querySelector?.('.inspector-row-order');
+          if (badge) badge.textContent = String(idx + 1);
+        });
+      }
+
       let isDragging = false;
       widgets.forEach((w, index) => {
         const row = document.createElement('div');
         row.className = `inspector-row ${w.enabled ? '' : 'disabled'}`;
         row.setAttribute('role', 'listitem');
-        row.draggable = true;
+        row.dataset.widgetId = w.id;
         const name = pluginName(w.key, language, widgetPlugins[w.key]?.name || w.key);
         row.innerHTML = `
           <span class="inspector-row-order" title="${t('dragToReorder', '按住拖拽排序')}">${index + 1}</span>
@@ -225,89 +232,116 @@ export function createSpaceInspector({
           <svg class="icon chev" aria-hidden="true"><use href="#i-chevron-right" /></svg>
         `;
 
-        row.ondragstart = (e) => {
-          if (e.target?.closest?.('.row-action-toggle')) {
-            e.preventDefault?.();
-            return;
+        row.onpointerdown = (e) => {
+          if (e.button !== 0 || e.target?.closest?.('.row-action-toggle')) return;
+          const startY = Number(e.clientY) || 0;
+          let hasMoved = false;
+          const initialOrder = Array.from(widgetList.querySelectorAll?.('.inspector-row') || []).map((r) => r.dataset?.widgetId);
+
+          const onPointerMove = (moveEv) => {
+            const currentY = Number(moveEv.clientY) || 0;
+            if (!hasMoved) {
+              if (Math.abs(currentY - startY) < 4) return;
+              hasMoved = true;
+              isDragging = true;
+              row.classList.add('dragging');
+              widgetList.classList?.add?.('is-dragging');
+            }
+
+            const siblings = Array.from(widgetList.querySelectorAll?.('.inspector-row') || []).filter((r) => r !== row);
+            let targetSibling = null;
+
+            for (const sib of siblings) {
+              const rect = typeof sib.getBoundingClientRect === 'function' ? sib.getBoundingClientRect() : { top: 0, height: 36 };
+              const mid = rect.top + rect.height / 2;
+              if (currentY < mid) {
+                targetSibling = sib;
+                break;
+              }
+            }
+
+            if (targetSibling) {
+              if (row.nextSibling !== targetSibling) {
+                widgetList.insertBefore(row, targetSibling);
+                updateOrderBadges();
+              }
+            } else {
+              if (row.nextSibling !== null) {
+                widgetList.append(row);
+                updateOrderBadges();
+              }
+            }
+          };
+
+          const onPointerUp = (upEv) => {
+            try {
+              row.releasePointerCapture?.(e.pointerId);
+            } catch {}
+            if (typeof window !== 'undefined' && typeof window.removeEventListener === 'function') {
+              window.removeEventListener('pointermove', onPointerMove);
+              window.removeEventListener('pointerup', onPointerUp);
+              window.removeEventListener('pointercancel', onPointerUp);
+            }
+            row.classList.remove('dragging');
+            widgetList.classList?.remove?.('is-dragging');
+
+            if (hasMoved) {
+              const newOrderedIds = Array.from(widgetList.querySelectorAll?.('.inspector-row') || [])
+                .map((r) => r.dataset?.widgetId)
+                .filter(Boolean);
+
+              const changed = newOrderedIds.some((id, idx) => id !== initialOrder[idx]);
+              if (changed) {
+                if (typeof queueWorkspaceMutation === 'function') {
+                  queueWorkspaceMutation(activeWorkspaceId, async (latestSnapshot) => {
+                    return nativeCall('workspace_widget_reorder', {
+                      workspaceId: activeWorkspaceId,
+                      orderedIds: newOrderedIds,
+                      expectedRevision: latestSnapshot.revision,
+                    });
+                  }).then(() => broadcastRevision()).catch(() => {});
+                } else {
+                  nativeCall('workspace_widget_reorder', {
+                    workspaceId: activeWorkspaceId,
+                    orderedIds: newOrderedIds,
+                    expectedRevision: currentSnapshot?.revision ?? 0,
+                  }).then(() => broadcastRevision()).catch(() => {});
+                }
+              }
+              setTimeout(() => { isDragging = false; }, 60);
+            } else {
+              isDragging = false;
+            }
+          };
+
+          try {
+            row.setPointerCapture?.(e.pointerId);
+          } catch {}
+          if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {
+            window.addEventListener('pointermove', onPointerMove);
+            window.addEventListener('pointerup', onPointerUp);
+            window.addEventListener('pointercancel', onPointerUp);
           }
-          draggedIndex = index;
-          isDragging = true;
-          row.classList.add('dragging');
-          if (e.dataTransfer) {
-            e.dataTransfer.effectAllowed = 'move';
-            e.dataTransfer.setData('text/plain', String(index));
-          }
-        };
-
-        row.ondragover = (e) => {
-          if (draggedIndex === null || draggedIndex === index) return;
-          e.preventDefault?.();
-          if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
-          const rect = typeof row.getBoundingClientRect === 'function' ? row.getBoundingClientRect() : { top: 0, height: 36 };
-          const midY = rect.top + rect.height / 2;
-          const clientY = Number(e.clientY) || 0;
-          if (clientY < midY) {
-            row.classList.add('drag-over-top');
-            row.classList.remove('drag-over-bottom');
-          } else {
-            row.classList.add('drag-over-bottom');
-            row.classList.remove('drag-over-top');
-          }
-        };
-
-        row.ondragleave = () => {
-          row.classList.remove('drag-over-top', 'drag-over-bottom');
-        };
-
-        row.ondrop = (e) => {
-          e.preventDefault?.();
-          row.classList.remove('drag-over-top', 'drag-over-bottom');
-          if (draggedIndex === null || draggedIndex === index) return;
-          const fromIndex = draggedIndex;
-          const rect = typeof row.getBoundingClientRect === 'function' ? row.getBoundingClientRect() : { top: 0, height: 36 };
-          const clientY = Number(e.clientY) || 0;
-          const insertBefore = clientY < (rect.top + rect.height / 2);
-
-          const nextWidgets = [...widgets];
-          const [moved] = nextWidgets.splice(fromIndex, 1);
-          let targetIndex = nextWidgets.findIndex((item) => item.id === w.id);
-          if (!insertBefore) {
-            targetIndex += 1;
-          }
-          nextWidgets.splice(targetIndex, 0, moved);
-
-          const orderedIds = nextWidgets.map((item) => item.id);
-          queueWorkspaceMutation(activeWorkspaceId, async (latestSnapshot) => {
-            return nativeCall('workspace_widget_reorder', {
-              workspaceId: activeWorkspaceId,
-              orderedIds,
-              expectedRevision: latestSnapshot.revision,
-            });
-          }).then(() => broadcastRevision()).catch(() => {});
-        };
-
-        row.ondragend = () => {
-          row.classList.remove('dragging');
-          widgetList.querySelectorAll?.('.inspector-row')?.forEach?.((r) => {
-            r.classList?.remove?.('dragging', 'drag-over-top', 'drag-over-bottom');
-          });
-          draggedIndex = null;
-          setTimeout(() => { isDragging = false; }, 50);
         };
 
         row.onclick = (e) => {
           if (isDragging) return;
-          if (e.target.closest('.row-action-toggle')) {
+          if (e.target?.closest?.('.row-action-toggle')) {
             e.stopPropagation();
-            queueWorkspaceMutation(activeWorkspaceId, async (latestSnapshot) => {
-              const latestWidget = (latestSnapshot.widgets || []).find((item) => item.id === w.id);
+            const doToggle = async (latestSnapshot) => {
+              const latestWidget = (latestSnapshot?.widgets || []).find((item) => item.id === w.id);
               if (!latestWidget) throw new Error(t('widgetMissing', '卡片不存在'));
               return nativeCall('workspace_widget_upsert', {
                 workspaceId: activeWorkspaceId,
                 widget: { ...latestWidget, enabled: !latestWidget.enabled },
-                expectedRevision: latestSnapshot.revision,
+                expectedRevision: latestSnapshot?.revision ?? 0,
               });
-            }).then(() => broadcastRevision()).catch(() => {});
+            };
+            if (typeof queueWorkspaceMutation === 'function') {
+              queueWorkspaceMutation(activeWorkspaceId, doToggle).then(() => broadcastRevision()).catch(() => {});
+            } else {
+              doToggle(currentSnapshot).then(() => broadcastRevision()).catch(() => {});
+            }
             return;
           }
           routeTo('widget', w.id);

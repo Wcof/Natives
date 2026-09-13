@@ -5,6 +5,138 @@
   "addWidget": {
     "message": "Add widget"
   },
+  "aiPerfChartBar": {
+    "message": "Ranking"
+  },
+  "aiPerfChartHeatmap": {
+    "message": "Activity heatmap"
+  },
+  "aiPerfChartLine": {
+    "message": "Trend line"
+  },
+  "aiPerfChartNumber": {
+    "message": "Number card"
+  },
+  "aiPerfChartTable": {
+    "message": "Comparison table"
+  },
+  "aiPerfChartTimeline": {
+    "message": "Call timeline"
+  },
+  "aiPerfColName": {
+    "message": "Item"
+  },
+  "aiPerfColRequests": {
+    "message": "Requests"
+  },
+  "aiPerfColTokens": {
+    "message": "Tokens"
+  },
+  "aiPerfDimModel": {
+    "message": "By Model"
+  },
+  "aiPerfDimProvider": {
+    "message": "By Provider"
+  },
+  "aiPerfDimSource": {
+    "message": "By Source"
+  },
+  "aiPerfEmpty": {
+    "message": "No AI usage records in this range"
+  },
+  "aiPerfLoadFailed": {
+    "message": "Failed to load usage data"
+  },
+  "aiPerfLoading": {
+    "message": "Loading usage data…"
+  },
+  "aiPerfMetricCost": {
+    "message": "AI cost"
+  },
+  "aiPerfMetricRequest": {
+    "message": "Requests"
+  },
+  "aiPerfMetricSession": {
+    "message": "Usage activity"
+  },
+  "aiPerfMetricToken": {
+    "message": "Token usage"
+  },
+  "aiPerfNoHeatmap": {
+    "message": "No activity data in this range"
+  },
+  "aiPerfNoRank": {
+    "message": "No ranking data in this range"
+  },
+  "aiPerfNoTable": {
+    "message": "No comparison data"
+  },
+  "aiPerfNoTimeline": {
+    "message": "No recent AI events"
+  },
+  "aiPerfNoTrend": {
+    "message": "No trend data in this range"
+  },
+  "aiPerfRange24h": {
+    "message": "Last 24 hours"
+  },
+  "aiPerfRange30d": {
+    "message": "Last 30 days"
+  },
+  "aiPerfRange7d": {
+    "message": "Last 7 days"
+  },
+  "aiPerfRangeAll": {
+    "message": "All"
+  },
+  "aiPerfSettingChart": {
+    "message": "Visualization"
+  },
+  "aiPerfSettingDimension": {
+    "message": "Dimension"
+  },
+  "aiPerfSettingHint": {
+    "message": "Data comes from Model Host usage stats; import history in Settings › Data & Usage"
+  },
+  "aiPerfSettingMetric": {
+    "message": "Metric"
+  },
+  "aiPerfSettingRange": {
+    "message": "Range"
+  },
+  "aiPerfSettingSubMetric": {
+    "message": "Sub-metric"
+  },
+  "aiPerfSubCostTotal": {
+    "message": "Estimated cost"
+  },
+  "aiPerfSubReqRate": {
+    "message": "Success rate"
+  },
+  "aiPerfSubReqTotal": {
+    "message": "Total requests"
+  },
+  "aiPerfSubSessionActivity": {
+    "message": "Call frequency"
+  },
+  "aiPerfSubTokenInput": {
+    "message": "Input tokens"
+  },
+  "aiPerfSubTokenOutput": {
+    "message": "Output tokens"
+  },
+  "aiPerfSubTokenTotal": {
+    "message": "Total tokens"
+  },
+  "aiPerfTimelineUnsupported": {
+    "message": "Timeline view is coming in a later version"
+  },
+  "aiPerfTokens": {
+    "message": "Tokens"
+  },
+  "aiPerfUnpriced": {
+    "message": "Unpriced"
+  },
   "appName": {
     "message": "Natives Files"
   },
@@ -2141,6 +2273,48 @@
   "clickToAuthorize": {
     "message": "Click to grant permission"
   },
+  "plugin_widget_aiPerformance": {
+    "message": "AI Performance (legacy)"
+  },
+  "desc_aiPerformance": {
+    "message": "Display AI usage, token counts, and cost metrics"
+  },
+  "plugin_widget_aiCost": {
+    "message": "AI Cost"
+  },
+  "plugin_widget_aiTokens": {
+    "message": "Token Usage"
+  },
+  "plugin_widget_aiSessions": {
+    "message": "Session Activity"
+  },
+  "plugin_widget_aiRequests": {
+    "message": "Request Stats"
+  },
+  "plugin_widget_aiLimits": {
+    "message": "Quota & Budget"
+  },
+  "plugin_widget_aiAttention": {
+    "message": "Needs Attention"
+  },
+  "plugin_widget_aiSavings": {
+    "message": "Savings Insights"
+  },
+  "aiPerfMetricSessions": {
+    "message": "Session Activity"
+  },
+  "aiPerfSubSessionCount": {
+    "message": "Active sessions"
+  },
+  "aiPerfSubSessionDays": {
+    "message": "Active days"
+  },
+  "aiPerfInsightDismiss": {
+    "message": "Dismiss (7 days)"
+  },
+  "catAiPerformance": {
+    "message": "AI Performance"
+  },
   "catTimeAndClocks": {
     "message": "Time & Clocks"
   },
@@ -2352,25 +2526,25 @@
     "message": "App Center"
   },
   "appsCenterSub": {
-    "message": "Manage optional Natives apps"
+    "message": "Use Natives built-in modules"
   },
   "appsList": {
-    "message": "App List"
+    "message": "Extension Packages"
   },
   "appSurfaceNotFound": {
-    "message": "App not found or uninstalled"
+    "message": "Extension package not found or removed"
   },
   "appSurfaceOpenFailed": {
-    "message": "App cannot be opened"
+    "message": "Extension package cannot be opened"
   },
   "appSurfaceNeedsUpdate": {
-    "message": "Update Natives to open this app"
+    "message": "Update Natives to open this extension package"
   },
   "appSurfaceNeedsUpdateBody": {
-    "message": "This version of Natives has no UI module for this app. Update Natives and retry."
+    "message": "This version of Natives protocol is not compatible with this extension package. Update Natives and retry."
   },
   "appSurfaceDisabled": {
-    "message": "App disabled"
+    "message": "Extension package disabled"
   },
   "appSurfaceDisabledBody": {
     "message": "Re-enable it in App Center to open it."
@@ -2436,13 +2610,13 @@
     "message": "Back"
   },
   "appsEmpty": {
-    "message": "No apps available"
+    "message": "No extension packages available"
   },
   "appsHostOffline": {
     "message": "Native host offline. Make sure Natives is running."
   },
   "appsCatalogUnavailable": {
-    "message": "Catalog unavailable. Installed apps only."
+    "message": "Catalog unavailable. Installed extension packages only."
   },
   "appsNotInstalled": {
     "message": "Not installed"
@@ -2471,6 +2645,54 @@
   "appsOpen": {
     "message": "Open"
   },
+  "appsStop": {
+    "message": "Stop"
+  },
+  "appsStoppedToast": {
+    "message": "Extension package stopped"
+  },
+  "appsStopRequested": {
+    "message": "Stop requested. If it is active in another browser session, stop it there and retry."
+  },
+  "appsRepair": {
+    "message": "Repair"
+  },
+  "appsRepairRequired": {
+    "message": "Repair required"
+  },
+  "appsPublisher": {
+    "message": "Publisher"
+  },
+  "appsOfficialPublisher": {
+    "message": "Natives official"
+  },
+  "appsSource": {
+    "message": "Source"
+  },
+  "appsOfficialSignedSource": {
+    "message": "Signed official catalog"
+  },
+  "appsPermissions": {
+    "message": "Permissions"
+  },
+  "appsDownloadSize": {
+    "message": "Download size"
+  },
+  "appsCodeUsage": {
+    "message": "Runtime payload"
+  },
+  "appsCompatibility": {
+    "message": "Compatibility"
+  },
+  "appsCompatible": {
+    "message": "Compatible"
+  },
+  "appsUserDataUsage": {
+    "message": "Personal data usage"
+  },
+  "appsUsageNotReported": {
+    "message": "Not reported by the current runtime"
+  },
   "appsResolving": {
     "message": "Resolving catalog…"
   },
@@ -2487,16 +2709,16 @@
     "message": "Committing to registry…"
   },
   "appsInstalledToast": {
-    "message": "App installed"
+    "message": "Extension package installed"
   },
   "appsUninstalledToast": {
-    "message": "App uninstalled (personal data preserved)"
+    "message": "Extension package removed (personal data preserved)"
   },
   "appsUninstallTitle": {
-    "message": "Uninstall app?"
+    "message": "Remove extension package?"
   },
   "appsUninstallBody": {
-    "message": "Removes the runtime and registration. Personal data is kept by default and can be deleted separately later."
+    "message": "Removes the extension package and registration. Personal data is kept by default and can be deleted separately later."
   },
   "appsUpdateHint": {
     "message": "V1 update: uninstall the current version, then install the new one (personal data preserved)"
@@ -2551,6 +2773,33 @@
   },
   "appsDataDeleted": {
     "message": "App and personal data deleted"
+  },
+  "appsLoading": {
+    "message": "Loading built-in modules…"
+  },
+  "appsReady": {
+    "message": "Ready"
+  },
+  "appsProductConfigRequired": {
+    "message": "Finish Natives setup first"
+  },
+  "appsClearing": {
+    "message": "Clearing data…"
+  },
+  "appsClearDataScope": {
+    "message": "Clears the module's data directory, imported originals, cache and logs; program files, registration and display/enable preferences are kept."
+  },
+  "appsDeleteCredentials": {
+    "message": "Also delete sign-in credentials (Keychain)"
+  },
+  "appsProductConfigure": {
+    "message": "Finish Natives setup"
+  },
+  "appsProductConfigured": {
+    "message": "Natives setup complete — all built-in modules ready"
+  },
+  "appsProductSourceMissing": {
+    "message": "No verified product source found; follow the install guide to finish installing Natives"
   },
   "appsPurgeChoice": {
     "message": "Also delete all personal data, settings and credentials"
@@ -2635,5 +2884,221 @@
   },
   "dragToReorder": {
     "message": "Drag to reorder"
+  },
+  "aiPerfCapHistorical": {
+    "message": "History"
+  },
+  "aiPerfCapLive": {
+    "message": "Live events"
+  },
+  "aiPerfCapBilling": {
+    "message": "Billing"
+  },
+  "aiPerfCapQuota": {
+    "message": "Quota"
+  },
+  "aiPerfCapAttribution": {
+    "message": "Attribution"
+  },
+  "aiPerfCapNotification": {
+    "message": "Alerts"
+  },
+  "aiPerfSourceEnabled": {
+    "message": "Enabled"
+  },
+  "aiPerfNoSources": {
+    "message": "Capability matrix is empty"
+  },
+  "aiPerfBillingEmpty": {
+    "message": "No billing entries yet; provider bills require import or manual confirmation"
+  },
+  "aiPerfServiceSpend": {
+    "message": "Service spend"
+  },
+  "aiPerfCashOut": {
+    "message": "Cash outflow"
+  },
+  "aiPerfCreditDelta": {
+    "message": "Balance change"
+  },
+  "aiPerfBillingNote": {
+    "message": "Three ledgers are kept separate; top-ups count toward cash and balance, never service spend"
+  },
+  "aiPerfAttentionEmpty": {
+    "message": "Nothing needs your attention"
+  },
+  "aiPerfAck": {
+    "message": "Mark as seen"
+  },
+  "aiPerfViewPending": {
+    "message": "Data foundations are ready; this card will appear once the budget engine is enabled"
+  },
+  "aiPerfLimitsEmpty": {
+    "message": "No budget rules configured yet; daily/monthly API estimation and threshold alerts supported"
+  },
+  "aiPerfBudgetUsed": {
+    "message": "Used"
+  },
+  "aiPerfLedgerEmpty": {
+    "message": "No usage event records found"
+  },
+  "aiPerfSavingsEmpty": {
+    "message": "Deterministic monitors normal; no significant context spike, cost concentration, or cache drop detected"
+  },
+  "aiPerfSettingView": {
+    "message": "View Mode"
+  },
+  "aiPerfViewUsage": {
+    "message": "Usage & Spend (Default)"
+  },
+  "aiPerfViewTools": {
+    "message": "Tools & Sources"
+  },
+  "aiPerfViewBilling": {
+    "message": "Billing & Reconciliation"
+  },
+  "aiPerfViewAttention": {
+    "message": "Attention Needed"
+  },
+  "aiPerfViewLimits": {
+    "message": "Limits & Budgets"
+  },
+  "aiPerfViewLedger": {
+    "message": "Usage Ledger"
+  },
+  "aiPerfViewSavings": {
+    "message": "Cost Savings"
+  },
+  "desc_aiCost": {
+    "message": "Estimated AI model usage cost and billing basis"
+  },
+  "desc_aiTokens": {
+    "message": "AI token input/output/total statistics"
+  },
+  "desc_aiSessions": {
+    "message": "Distinct active sessions and active days with real activity"
+  },
+  "desc_aiRequests": {
+    "message": "AI request count, success rate, and result breakdown"
+  },
+  "desc_aiLimits": {
+    "message": "Account quota windows and budget thresholds"
+  },
+  "desc_aiAttention": {
+    "message": "Permission/input waits, errors, and turn completions"
+  },
+  "desc_aiSavings": {
+    "message": "Evidence-based cost saving suggestions with follow-up"
+  },
+  "modelUsageBilling": {
+    "message": "Billing & Spend"
+  },
+  "modelBillingEmpty": {
+    "message": "No billing entries yet"
+  },
+  "modelBillingServiceSpend": {
+    "message": "Confirmed service spend"
+  },
+  "modelBillingCashOutflow": {
+    "message": "Cash outflow"
+  },
+  "modelBillingCreditDelta": {
+    "message": "Credits/balance change"
+  },
+  "modelImportBilling": {
+    "message": "Import billing CSV"
+  },
+  "modelAddBillingEntry": {
+    "message": "Add confirmed expense"
+  },
+  "modelBillingKindSubscription": {
+    "message": "Subscription"
+  },
+  "modelBillingKindServiceUsage": {
+    "message": "API charge"
+  },
+  "modelBillingKindTopup": {
+    "message": "Top-up"
+  },
+  "modelBillingKindCreditDelta": {
+    "message": "Credits change"
+  },
+  "modelBillingKindRefund": {
+    "message": "Refund"
+  },
+  "modelBillingKindDiscount": {
+    "message": "Discount"
+  },
+  "modelBillingKindTax": {
+    "message": "Tax"
+  },
+  "modelBillingKindPrepayExpiry": {
+    "message": "Prepaid expiry"
+  },
+  "modelBillingProvider": {
+    "message": "Provider"
+  },
+  "modelBillingAccount": {
+    "message": "Account"
+  },
+  "modelBillingKind": {
+    "message": "Kind"
+  },
+  "modelBillingAmount": {
+    "message": "Amount"
+  },
+  "modelBillingCurrency": {
+    "message": "Currency"
+  },
+  "modelBillingDate": {
+    "message": "Date"
+  },
+  "modelBillingPeriodEnd": {
+    "message": "Renewal/expiry date (subscription/prepaid)"
+  },
+  "modelBillingNote": {
+    "message": "Note"
+  },
+  "modelBillingEvidence": {
+    "message": "Evidence"
+  },
+  "modelBillingImportTitle": {
+    "message": "Import billing CSV (cursor-billing-csv/1)"
+  },
+  "modelBillingSchemaHint": {
+    "message": "Header: date,kind,amount,currency[,period_start,period_end,note]"
+  },
+  "modelBillingDuplicates": {
+    "message": "Existing duplicates"
+  },
+  "modelBillingPeriod": {
+    "message": "Period"
+  },
+  "modelBillingImportSuccess": {
+    "message": "Billing imported (duplicate entries skipped by content fingerprint)"
+  },
+  "modelBillingInvalidAmount": {
+    "message": "Amount must not be zero"
+  },
+  "modelBillingEntrySaved": {
+    "message": "Billing entry confirmed"
+  },
+  "modelImportInvalid": {
+    "message": "File failed validation; nothing was written"
+  },
+  "modelUploadPreview": {
+    "message": "Upload and preview"
+  },
+  "suitePrepareFailed": {
+    "message": "Suite app preparation did not fully complete; retry or repair from the App Center"
+  },
+  "aiPerfRangeCustom": {
+    "message": "Custom"
+  },
+  "aiPerfRangeStart": {
+    "message": "Start time"
+  },
+  "aiPerfRangeEnd": {
+    "message": "End time"
   }
 }

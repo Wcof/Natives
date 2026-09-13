@@ -1,0 +1,10 @@
+=== RUN   TestParseHermesStateDBProjection
+--- PASS: TestParseHermesStateDBProjection (0.01s)
+=== RUN   TestParseHermesStateDBRejectsNonProfileDB
+--- PASS: TestParseHermesStateDBRejectsNonProfileDB (0.00s)
+=== RUN   TestParsePiSessionJSONLFixture
+--- PASS: TestParsePiSessionJSONLFixture (0.00s)
+=== RUN   TestParsePiSessionJSONLCacheWrite1h
+--- PASS: TestParsePiSessionJSONLCacheWrite1h (0.00s)
+PASS
+ok  	github.com/ldh/natives/model-host/internal/usage	0.504s

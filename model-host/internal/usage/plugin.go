@@ -96,7 +96,15 @@ func (p *NativesUsagePlugin) processRecord(record cliproxyusage.Record) {
 	detail := cliproxyusage.EnsureTokenBreakdownForProvider(record.Detail, record.Provider, record.ExecutorType)
 	bd := detail.TokenBreakdown
 
-	inputToks := bd.Input.TotalTokens
+	// 计费输入使用互斥桶：Input.TotalTokens = Uncached + CacheRead + CacheWrite。
+	// 若把 TotalTokens 直接乘普通输入价再叠加缓存价会重复计入缓存部分
+	//（契约示例：输入 1M 含 0.8M 缓存读应为 $0.28，而非 $1.08）。
+	// 存储 Event.InputTokens 同步采用 uncached 口径， importer 重算才一致。
+	inputToks := bd.Input.UncachedTokens
+	if inputToks == 0 && bd.Input.CacheReadTokens == 0 && bd.Input.CacheWriteTokens == 0 {
+		// 兼容未拆桶的旧 Provider 明细：无缓存时 Total 即 uncached。
+		inputToks = bd.Input.TotalTokens
+	}
 	outputToks := bd.Output.TotalTokens
 	cacheRead := bd.Input.CacheReadTokens
 	cacheWrite := bd.Input.CacheWriteTokens

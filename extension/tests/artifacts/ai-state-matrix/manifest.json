@@ -1,0 +1,174 @@
+{
+  "generatedAt": "2026-09-12T00:51:33.474Z",
+  "note": "测试数据基准截图（fixture），不进生产数据",
+  "entries": [
+    {
+      "card": "aiCost",
+      "chart": "number",
+      "state": "ready",
+      "file": "aiCost-number-ready.png",
+      "bytes": 3351,
+      "note": "测试数据 fixture，非生产数据"
+    },
+    {
+      "card": "aiCost",
+      "chart": "number",
+      "state": "empty",
+      "file": "aiCost-number-empty.png",
+      "bytes": 4249,
+      "note": "测试数据 fixture，非生产数据"
+    },
+    {
+      "card": "aiCost",
+      "chart": "number",
+      "state": "error",
+      "file": "aiCost-number-error.png",
+      "bytes": 5298,
+      "note": "测试数据 fixture，非生产数据"
+    },
+    {
+      "card": "aiCost",
+      "chart": "number",
+      "state": "loading",
+      "file": "aiCost-number-loading.png",
+      "bytes": 3083,
+      "note": "测试数据 fixture，非生产数据"
+    },
+    {
+      "card": "aiCost",
+      "chart": "number",
+      "state": "unpriced",
+      "file": "aiCost-number-unpriced.png",
+      "bytes": 3351,
+      "note": "测试数据 fixture，非生产数据"
+    },
+    {
+      "card": "aiTokens",
+      "chart": "number",
+      "state": "ready",
+      "file": "aiTokens-number-ready.png",
+      "bytes": 3819,
+      "note": "测试数据 fixture，非生产数据"
+    },
+    {
+      "card": "aiTokens",
+      "chart": "number",
+      "state": "empty",
+      "file": "aiTokens-number-empty.png",
+      "bytes": 4249,
+      "note": "测试数据 fixture，非生产数据"
+    },
+    {
+      "card": "aiTokens",
+      "chart": "number",
+      "state": "error",
+      "file": "aiTokens-number-error.png",
+      "bytes": 5298,
+      "note": "测试数据 fixture，非生产数据"
+    },
+    {
+      "card": "aiTokens",
+      "chart": "number",
+      "state": "loading",
+      "file": "aiTokens-number-loading.png",
+      "bytes": 3083,
+      "note": "测试数据 fixture，非生产数据"
+    },
+    {
+      "card": "aiTokens",
+      "chart": "number",
+      "state": "unpriced",
+      "file": "aiTokens-number-unpriced.png",
+      "bytes": 3819,
+      "note": "测试数据 fixture，非生产数据"
+    },
+    {
+      "card": "aiSessions",
+      "chart": "number",
+      "state": "ready",
+      "file": "aiSessions-number-ready.png",
+      "bytes": 3105,
+      "note": "测试数据 fixture，非生产数据"
+    },
+    {
+      "card": "aiSessions",
+      "chart": "number",
+      "state": "empty",
+      "file": "aiSessions-number-empty.png",
+      "bytes": 4249,
+      "note": "测试数据 fixture，非生产数据"
+    },
+    {
+      "card": "aiSessions",
+      "chart": "number",
+      "state": "error",
+      "file": "aiSessions-number-error.png",
+      "bytes": 5298,
+      "note": "测试数据 fixture，非生产数据"
+    },
+    {
+      "card": "aiSessions",
+      "chart": "number",
+      "state": "loading",
+      "file": "aiSessions-number-loading.png",
+      "bytes": 3083,
+      "note": "测试数据 fixture，非生产数据"
+    },
+    {
+      "card": "aiSessions",
+      "chart": "number",
+      "state": "unpriced",
+      "file": "aiSessions-number-unpriced.png",
+      "bytes": 3105,
+      "note": "测试数据 fixture，非生产数据"
+    },
+    {
+      "card": "aiCost",
+      "chart": "line",
+      "state": "empty",
+      "file": "aiCost-line-empty.png",
+      "bytes": 4249,
+      "note": "测试数据 fixture，非生产数据"
+    },
+    {
+      "card": "aiTokens",
+      "chart": "line",
+      "state": "empty",
+      "file": "aiTokens-line-empty.png",
+      "bytes": 4249,
+      "note": "测试数据 fixture，非生产数据"
+    },
+    {
+      "card": "aiCost",
+      "chart": "line",
+      "state": "error",
+      "file": "aiCost-line-error.png",
+      "bytes": 5298,
+      "note": "测试数据 fixture，非生产数据"
+    },
+    {
+      "card": "aiTokens",
+      "chart": "line",
+      "state": "error",
+      "file": "aiTokens-line-error.png",
+      "bytes": 5298,
+      "note": "测试数据 fixture，非生产数据"
+    },
+    {
+      "card": "aiCost",
+      "chart": "line",
+      "state": "loading",
+      "file": "aiCost-line-loading.png",
+      "bytes": 3083,
+      "note": "测试数据 fixture，非生产数据"
+    },
+    {
+      "card": "aiTokens",
+      "chart": "line",
+      "state": "loading",
+      "file": "aiTokens-line-loading.png",
+      "bytes": 3083,
+      "note": "测试数据 fixture，非生产数据"
+    }
+  ]
+}

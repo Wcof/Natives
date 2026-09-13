@@ -1,0 +1,582 @@
+{
+  "generatedAt": "2026-09-12T03:57:41.878Z",
+  "scenarios": [
+    {
+      "scenario": "space-dark",
+      "background": "#101210",
+      "records": [
+        {
+          "widgetId": "w-0",
+          "textSample": "用量数据加载失败: Cannot read properties of undefined (reading 'conn",
+          "injectedTextVar": "#f4f6f0",
+          "computedColor": "rgb(244, 246, 240)",
+          "effectiveColor": {
+            "r": 244,
+            "g": 246,
+            "b": 240,
+            "a": 1
+          },
+          "effectiveFrom": "DIV.ai-perf-error",
+          "fontSize": "16px"
+        },
+        {
+          "widgetId": "w-1",
+          "textSample": "用量数据加载失败: Cannot read properties of undefined (reading 'conn",
+          "injectedTextVar": "#f4f6f0",
+          "computedColor": "rgb(244, 246, 240)",
+          "effectiveColor": {
+            "r": 244,
+            "g": 246,
+            "b": 240,
+            "a": 1
+          },
+          "effectiveFrom": "DIV.ai-perf-error",
+          "fontSize": "16px"
+        },
+        {
+          "widgetId": "w-2",
+          "textSample": "用量数据加载失败: Cannot read properties of undefined (reading 'conn",
+          "injectedTextVar": "#f4f6f0",
+          "computedColor": "rgb(244, 246, 240)",
+          "effectiveColor": {
+            "r": 244,
+            "g": 246,
+            "b": 240,
+            "a": 1
+          },
+          "effectiveFrom": "DIV.ai-perf-error",
+          "fontSize": "16px"
+        },
+        {
+          "widgetId": "w-3",
+          "textSample": "用量数据加载失败: Cannot read properties of undefined (reading 'conn",
+          "injectedTextVar": "#f4f6f0",
+          "computedColor": "rgb(244, 246, 240)",
+          "effectiveColor": {
+            "r": 244,
+            "g": 246,
+            "b": 240,
+            "a": 1
+          },
+          "effectiveFrom": "DIV.ai-perf-error",
+          "fontSize": "16px"
+        },
+        {
+          "widgetId": "w-4",
+          "textSample": "用量数据加载失败: Cannot read properties of undefined (reading 'conn",
+          "injectedTextVar": "#f4f6f0",
+          "computedColor": "rgb(244, 246, 240)",
+          "effectiveColor": {
+            "r": 244,
+            "g": 246,
+            "b": 240,
+            "a": 1
+          },
+          "effectiveFrom": "DIV.ai-perf-error",
+          "fontSize": "16px"
+        },
+        {
+          "widgetId": "w-5",
+          "textSample": "用量数据加载失败: Cannot read properties of undefined (reading 'conn",
+          "injectedTextVar": "#f4f6f0",
+          "computedColor": "rgb(244, 246, 240)",
+          "effectiveColor": {
+            "r": 244,
+            "g": 246,
+            "b": 240,
+            "a": 1
+          },
+          "effectiveFrom": "DIV.ai-perf-error",
+          "fontSize": "16px"
+        },
+        {
+          "widgetId": "w-6",
+          "textSample": "用量数据加载失败: Cannot read properties of undefined (reading 'conn",
+          "injectedTextVar": "#f4f6f0",
+          "computedColor": "rgb(244, 246, 240)",
+          "effectiveColor": {
+            "r": 244,
+            "g": 246,
+            "b": 240,
+            "a": 1
+          },
+          "effectiveFrom": "DIV.ai-perf-error",
+          "fontSize": "16px"
+        }
+      ],
+      "contrastRatios": [
+        {
+          "widgetId": "w-0",
+          "from": "DIV.ai-perf-error",
+          "ratio": 17.281855542057098
+        },
+        {
+          "widgetId": "w-1",
+          "from": "DIV.ai-perf-error",
+          "ratio": 17.281855542057098
+        },
+        {
+          "widgetId": "w-2",
+          "from": "DIV.ai-perf-error",
+          "ratio": 17.281855542057098
+        },
+        {
+          "widgetId": "w-3",
+          "from": "DIV.ai-perf-error",
+          "ratio": 17.281855542057098
+        },
+        {
+          "widgetId": "w-4",
+          "from": "DIV.ai-perf-error",
+          "ratio": 17.281855542057098
+        },
+        {
+          "widgetId": "w-5",
+          "from": "DIV.ai-perf-error",
+          "ratio": 17.281855542057098
+        },
+        {
+          "widgetId": "w-6",
+          "from": "DIV.ai-perf-error",
+          "ratio": 17.281855542057098
+        }
+      ]
+    },
+    {
+      "scenario": "space-light",
+      "background": "#f4f1e8",
+      "records": [
+        {
+          "widgetId": "w-0",
+          "textSample": "用量数据加载失败: Cannot read properties of undefined (reading 'conn",
+          "injectedTextVar": "#1c2018",
+          "computedColor": "rgb(28, 32, 24)",
+          "effectiveColor": {
+            "r": 28,
+            "g": 32,
+            "b": 24,
+            "a": 1
+          },
+          "effectiveFrom": "DIV.ai-perf-error",
+          "fontSize": "16px"
+        },
+        {
+          "widgetId": "w-1",
+          "textSample": "用量数据加载失败: Cannot read properties of undefined (reading 'conn",
+          "injectedTextVar": "#1c2018",
+          "computedColor": "rgb(28, 32, 24)",
+          "effectiveColor": {
+            "r": 28,
+            "g": 32,
+            "b": 24,
+            "a": 1
+          },
+          "effectiveFrom": "DIV.ai-perf-error",
+          "fontSize": "16px"
+        },
+        {
+          "widgetId": "w-2",
+          "textSample": "用量数据加载失败: Cannot read properties of undefined (reading 'conn",
+          "injectedTextVar": "#1c2018",
+          "computedColor": "rgb(28, 32, 24)",
+          "effectiveColor": {
+            "r": 28,
+            "g": 32,
+            "b": 24,
+            "a": 1
+          },
+          "effectiveFrom": "DIV.ai-perf-error",
+          "fontSize": "16px"
+        },
+        {
+          "widgetId": "w-3",
+          "textSample": "用量数据加载失败: Cannot read properties of undefined (reading 'conn",
+          "injectedTextVar": "#1c2018",
+          "computedColor": "rgb(28, 32, 24)",
+          "effectiveColor": {
+            "r": 28,
+            "g": 32,
+            "b": 24,
+            "a": 1
+          },
+          "effectiveFrom": "DIV.ai-perf-error",
+          "fontSize": "16px"
+        },
+        {
+          "widgetId": "w-4",
+          "textSample": "用量数据加载失败: Cannot read properties of undefined (reading 'conn",
+          "injectedTextVar": "#1c2018",
+          "computedColor": "rgb(28, 32, 24)",
+          "effectiveColor": {
+            "r": 28,
+            "g": 32,
+            "b": 24,
+            "a": 1
+          },
+          "effectiveFrom": "DIV.ai-perf-error",
+          "fontSize": "16px"
+        },
+        {
+          "widgetId": "w-5",
+          "textSample": "用量数据加载失败: Cannot read properties of undefined (reading 'conn",
+          "injectedTextVar": "#1c2018",
+          "computedColor": "rgb(28, 32, 24)",
+          "effectiveColor": {
+            "r": 28,
+            "g": 32,
+            "b": 24,
+            "a": 1
+          },
+          "effectiveFrom": "DIV.ai-perf-error",
+          "fontSize": "16px"
+        },
+        {
+          "widgetId": "w-6",
+          "textSample": "用量数据加载失败: Cannot read properties of undefined (reading 'conn",
+          "injectedTextVar": "#1c2018",
+          "computedColor": "rgb(28, 32, 24)",
+          "effectiveColor": {
+            "r": 28,
+            "g": 32,
+            "b": 24,
+            "a": 1
+          },
+          "effectiveFrom": "DIV.ai-perf-error",
+          "fontSize": "16px"
+        }
+      ],
+      "contrastRatios": [
+        {
+          "widgetId": "w-0",
+          "from": "DIV.ai-perf-error",
+          "ratio": 14.650506396283408
+        },
+        {
+          "widgetId": "w-1",
+          "from": "DIV.ai-perf-error",
+          "ratio": 14.650506396283408
+        },
+        {
+          "widgetId": "w-2",
+          "from": "DIV.ai-perf-error",
+          "ratio": 14.650506396283408
+        },
+        {
+          "widgetId": "w-3",
+          "from": "DIV.ai-perf-error",
+          "ratio": 14.650506396283408
+        },
+        {
+          "widgetId": "w-4",
+          "from": "DIV.ai-perf-error",
+          "ratio": 14.650506396283408
+        },
+        {
+          "widgetId": "w-5",
+          "from": "DIV.ai-perf-error",
+          "ratio": 14.650506396283408
+        },
+        {
+          "widgetId": "w-6",
+          "from": "DIV.ai-perf-error",
+          "ratio": 14.650506396283408
+        }
+      ]
+    },
+    {
+      "scenario": "global-light-space-dark-reverse",
+      "background": "#20242c",
+      "records": [
+        {
+          "widgetId": "w-0",
+          "textSample": "用量数据加载失败: Cannot read properties of undefined (reading 'conn",
+          "injectedTextVar": "#f4f6f0",
+          "computedColor": "rgb(244, 246, 240)",
+          "effectiveColor": {
+            "r": 244,
+            "g": 246,
+            "b": 240,
+            "a": 1
+          },
+          "effectiveFrom": "DIV.ai-perf-error",
+          "fontSize": "16px"
+        },
+        {
+          "widgetId": "w-1",
+          "textSample": "用量数据加载失败: Cannot read properties of undefined (reading 'conn",
+          "injectedTextVar": "#f4f6f0",
+          "computedColor": "rgb(244, 246, 240)",
+          "effectiveColor": {
+            "r": 244,
+            "g": 246,
+            "b": 240,
+            "a": 1
+          },
+          "effectiveFrom": "DIV.ai-perf-error",
+          "fontSize": "16px"
+        },
+        {
+          "widgetId": "w-2",
+          "textSample": "用量数据加载失败: Cannot read properties of undefined (reading 'conn",
+          "injectedTextVar": "#f4f6f0",
+          "computedColor": "rgb(244, 246, 240)",
+          "effectiveColor": {
+            "r": 244,
+            "g": 246,
+            "b": 240,
+            "a": 1
+          },
+          "effectiveFrom": "DIV.ai-perf-error",
+          "fontSize": "16px"
+        },
+        {
+          "widgetId": "w-3",
+          "textSample": "用量数据加载失败: Cannot read properties of undefined (reading 'conn",
+          "injectedTextVar": "#f4f6f0",
+          "computedColor": "rgb(244, 246, 240)",
+          "effectiveColor": {
+            "r": 244,
+            "g": 246,
+            "b": 240,
+            "a": 1
+          },
+          "effectiveFrom": "DIV.ai-perf-error",
+          "fontSize": "16px"
+        },
+        {
+          "widgetId": "w-4",
+          "textSample": "用量数据加载失败: Cannot read properties of undefined (reading 'conn",
+          "injectedTextVar": "#f4f6f0",
+          "computedColor": "rgb(244, 246, 240)",
+          "effectiveColor": {
+            "r": 244,
+            "g": 246,
+            "b": 240,
+            "a": 1
+          },
+          "effectiveFrom": "DIV.ai-perf-error",
+          "fontSize": "16px"
+        },
+        {
+          "widgetId": "w-5",
+          "textSample": "用量数据加载失败: Cannot read properties of undefined (reading 'conn",
+          "injectedTextVar": "#f4f6f0",
+          "computedColor": "rgb(244, 246, 240)",
+          "effectiveColor": {
+            "r": 244,
+            "g": 246,
+            "b": 240,
+            "a": 1
+          },
+          "effectiveFrom": "DIV.ai-perf-error",
+          "fontSize": "16px"
+        },
+        {
+          "widgetId": "w-6",
+          "textSample": "用量数据加载失败: Cannot read properties of undefined (reading 'conn",
+          "injectedTextVar": "#f4f6f0",
+          "computedColor": "rgb(244, 246, 240)",
+          "effectiveColor": {
+            "r": 244,
+            "g": 246,
+            "b": 240,
+            "a": 1
+          },
+          "effectiveFrom": "DIV.ai-perf-error",
+          "fontSize": "16px"
+        }
+      ],
+      "contrastRatios": [
+        {
+          "widgetId": "w-0",
+          "from": "DIV.ai-perf-error",
+          "ratio": 14.285365708372836
+        },
+        {
+          "widgetId": "w-1",
+          "from": "DIV.ai-perf-error",
+          "ratio": 14.285365708372836
+        },
+        {
+          "widgetId": "w-2",
+          "from": "DIV.ai-perf-error",
+          "ratio": 14.285365708372836
+        },
+        {
+          "widgetId": "w-3",
+          "from": "DIV.ai-perf-error",
+          "ratio": 14.285365708372836
+        },
+        {
+          "widgetId": "w-4",
+          "from": "DIV.ai-perf-error",
+          "ratio": 14.285365708372836
+        },
+        {
+          "widgetId": "w-5",
+          "from": "DIV.ai-perf-error",
+          "ratio": 14.285365708372836
+        },
+        {
+          "widgetId": "w-6",
+          "from": "DIV.ai-perf-error",
+          "ratio": 14.285365708372836
+        }
+      ]
+    },
+    {
+      "scenario": "explicit-colours-dark",
+      "background": "#101210",
+      "records": [
+        {
+          "widgetId": "w-0",
+          "textSample": "用量数据加载失败: Cannot read properties of undefined (reading 'conn",
+          "injectedTextVar": "#ffffff",
+          "computedColor": "rgb(255, 255, 255)",
+          "effectiveColor": {
+            "r": 255,
+            "g": 255,
+            "b": 255,
+            "a": 1
+          },
+          "effectiveFrom": "DIV.ai-perf-error",
+          "fontSize": "16px"
+        },
+        {
+          "widgetId": "w-1",
+          "textSample": "用量数据加载失败: Cannot read properties of undefined (reading 'conn",
+          "injectedTextVar": "#ffd166",
+          "computedColor": "rgb(255, 209, 102)",
+          "effectiveColor": {
+            "r": 255,
+            "g": 209,
+            "b": 102,
+            "a": 1
+          },
+          "effectiveFrom": "DIV.ai-perf-error",
+          "fontSize": "16px"
+        },
+        {
+          "widgetId": "w-2",
+          "textSample": "用量数据加载失败: Cannot read properties of undefined (reading 'conn",
+          "injectedTextVar": "#ffffff",
+          "computedColor": "rgb(255, 255, 255)",
+          "effectiveColor": {
+            "r": 255,
+            "g": 255,
+            "b": 255,
+            "a": 1
+          },
+          "effectiveFrom": "DIV.ai-perf-error",
+          "fontSize": "16px"
+        },
+        {
+          "widgetId": "w-3",
+          "textSample": "用量数据加载失败: Cannot read properties of undefined (reading 'conn",
+          "injectedTextVar": "#ffd166",
+          "computedColor": "rgb(255, 209, 102)",
+          "effectiveColor": {
+            "r": 255,
+            "g": 209,
+            "b": 102,
+            "a": 1
+          },
+          "effectiveFrom": "DIV.ai-perf-error",
+          "fontSize": "16px"
+        },
+        {
+          "widgetId": "w-4",
+          "textSample": "用量数据加载失败: Cannot read properties of undefined (reading 'conn",
+          "injectedTextVar": "#ffffff",
+          "computedColor": "rgb(255, 255, 255)",
+          "effectiveColor": {
+            "r": 255,
+            "g": 255,
+            "b": 255,
+            "a": 1
+          },
+          "effectiveFrom": "DIV.ai-perf-error",
+          "fontSize": "16px"
+        },
+        {
+          "widgetId": "w-5",
+          "textSample": "用量数据加载失败: Cannot read properties of undefined (reading 'conn",
+          "injectedTextVar": "#ffd166",
+          "computedColor": "rgb(255, 209, 102)",
+          "effectiveColor": {
+            "r": 255,
+            "g": 209,
+            "b": 102,
+            "a": 1
+          },
+          "effectiveFrom": "DIV.ai-perf-error",
+          "fontSize": "16px"
+        },
+        {
+          "widgetId": "w-6",
+          "textSample": "用量数据加载失败: Cannot read properties of undefined (reading 'conn",
+          "injectedTextVar": "#ffffff",
+          "computedColor": "rgb(255, 255, 255)",
+          "effectiveColor": {
+            "r": 255,
+            "g": 255,
+            "b": 255,
+            "a": 1
+          },
+          "effectiveFrom": "DIV.ai-perf-error",
+          "fontSize": "16px"
+        }
+      ],
+      "contrastRatios": [
+        {
+          "widgetId": "w-0",
+          "from": "DIV.ai-perf-error",
+          "ratio": 18.816590119894247
+        },
+        {
+          "widgetId": "w-1",
+          "from": "DIV.ai-perf-error",
+          "ratio": 13.04979586110629
+        },
+        {
+          "widgetId": "w-2",
+          "from": "DIV.ai-perf-error",
+          "ratio": 18.816590119894247
+        },
+        {
+          "widgetId": "w-3",
+          "from": "DIV.ai-perf-error",
+          "ratio": 13.04979586110629
+        },
+        {
+          "widgetId": "w-4",
+          "from": "DIV.ai-perf-error",
+          "ratio": 18.816590119894247
+        },
+        {
+          "widgetId": "w-5",
+          "from": "DIV.ai-perf-error",
+          "ratio": 13.04979586110629
+        },
+        {
+          "widgetId": "w-6",
+          "from": "DIV.ai-perf-error",
+          "ratio": 18.816590119894247
+        }
+      ]
+    }
+  ],
+  "appearanceToggle": {
+    "scenario": "appearance-toggle",
+    "callsBefore": 0,
+    "callsAfter": 0
+  },
+  "fontSettings": {
+    "scenario": "font-settings",
+    "checked": 3
+  },
+  "chartSwitch": {
+    "scenario": "chart-switch",
+    "rounds": 4
+  }
+}

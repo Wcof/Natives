@@ -1,5 +1,5 @@
 
-
+import { aiComponentDefinitions, aiPerformanceWidget } from '../../ai-performance/widget.js';
 import { binaryTimeWidget } from './binary-time.js';
 import { bookmarksWidget } from './bookmarks.js';
 import { countdownWidget } from './countdown.js';
@@ -26,6 +26,15 @@ import { weatherWidget } from './weather.js';
 import { workHoursWidget } from './work-hours.js';
 
 export const widgetPlugins = {
+  [aiPerformanceWidget.key]: aiPerformanceWidget,
+  // R1：七个独立 AI 效能组件（与旧 aiPerformance 共享 renderer/查询/样式）。
+  [aiComponentDefinitions.aiCost.key]: aiComponentDefinitions.aiCost,
+  [aiComponentDefinitions.aiTokens.key]: aiComponentDefinitions.aiTokens,
+  [aiComponentDefinitions.aiSessions.key]: aiComponentDefinitions.aiSessions,
+  [aiComponentDefinitions.aiRequests.key]: aiComponentDefinitions.aiRequests,
+  [aiComponentDefinitions.aiLimits.key]: aiComponentDefinitions.aiLimits,
+  [aiComponentDefinitions.aiAttention.key]: aiComponentDefinitions.aiAttention,
+  [aiComponentDefinitions.aiSavings.key]: aiComponentDefinitions.aiSavings,
   [binaryTimeWidget.key]: binaryTimeWidget,
   [bookmarksWidget.key]: bookmarksWidget,
   [countdownWidget.key]: countdownWidget,

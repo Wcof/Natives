@@ -29,6 +29,13 @@ function createMockEl(id = '') {
     dataset: {},
     children: [],
     attributes: [],
+    parentElement: null,
+    get nextSibling() {
+      if (!this.parentElement) return null;
+      const idx = this.parentElement.children.indexOf(this);
+      if (idx === -1 || idx === this.parentElement.children.length - 1) return null;
+      return this.parentElement.children[idx + 1];
+    },
     classList: {
       toggle(cls, state) {
         if (state) this.classes.add(cls);
@@ -36,23 +43,121 @@ function createMockEl(id = '') {
       },
       add(cls) { this.classes.add(cls); },
       remove(cls) { this.classes.delete(cls); },
+      contains(cls) { return this.classes.has(cls); },
       classes: new Set(),
     },
     setAttribute(k, v) { this[k] = v; },
     getAttribute(k) { return this[k]; },
-    append(...nodes) { this.children.push(...nodes); },
-    replaceChildren(...nodes) { this.children = [...nodes]; },
+    set innerHTML(html) {
+      this._innerHTML = html;
+      const orderMatch = html.match(/class="inspector-row-order"[^>]*>([^<]+)<\/span>/);
+      if (orderMatch) {
+        const orderEl = createMockEl();
+        orderEl.className = 'inspector-row-order';
+        orderEl.textContent = orderMatch[1];
+        this.append(orderEl);
+      }
+    },
+    get innerHTML() {
+      return this._innerHTML || '';
+    },
+    append(...nodes) {
+      for (const n of nodes) {
+        if (n && typeof n === 'object') {
+          n.parentElement = this;
+          const idx = this.children.indexOf(n);
+          if (idx !== -1) this.children.splice(idx, 1);
+        }
+      }
+      this.children.push(...nodes);
+    },
+    replaceChildren(...nodes) {
+      for (const n of nodes) {
+        if (n && typeof n === 'object') n.parentElement = this;
+      }
+      this.children = [...nodes];
+    },
+    insertBefore(newNode, refNode) {
+      if (newNode && typeof newNode === 'object') {
+        newNode.parentElement = this;
+        const existingIdx = this.children.indexOf(newNode);
+        if (existingIdx !== -1) this.children.splice(existingIdx, 1);
+      }
+      if (!refNode) {
+        this.children.push(newNode);
+        return newNode;
+      }
+      const refIdx = this.children.indexOf(refNode);
+      if (refIdx === -1) {
+        this.children.push(newNode);
+      } else {
+        this.children.splice(refIdx, 0, newNode);
+      }
+      return newNode;
+    },
     querySelector(sel) {
       if (sel.startsWith('#')) {
         const targetId = sel.slice(1);
-        return this.children.find((c) => c.id === targetId) || createMockEl(targetId);
+        const found = this.children.find((c) => c.id === targetId);
+        if (found) return found;
+        const created = createMockEl(targetId);
+        this.append(created);
+        return created;
       }
-      return this.children[0] || createMockEl();
+      if (sel.startsWith('.')) {
+        const cls = sel.slice(1);
+        const found = this.children.find((c) => c.classList?.classes?.has(cls) || (c.className && c.className.includes(cls)));
+        if (found) return found;
+        const created = createMockEl();
+        created.className = cls;
+        this.append(created);
+        return created;
+      }
+      const created = this.children[0] || createMockEl();
+      if (!this.children.includes(created)) this.append(created);
+      return created;
     },
-    querySelectorAll() { return this.children; },
+    querySelectorAll(sel) {
+      const results = [];
+      function collect(node) {
+        for (const c of node.children || []) {
+          if (!sel) {
+            results.push(c);
+          } else if (sel.startsWith('.')) {
+            const cls = sel.slice(1);
+            if (c.classList?.classes?.has(cls) || (c.className && c.className.split(/\s+/).includes(cls))) {
+              results.push(c);
+            }
+          } else {
+            results.push(c);
+          }
+          collect(c);
+        }
+      }
+      collect(this);
+      return results;
+    },
+    setPointerCapture() {},
+    releasePointerCapture() {},
     focus() { this.focused = true; },
   };
 }
+
+const windowListeners = new Map();
+globalThis.window = {
+  addEventListener(event, fn) {
+    if (!windowListeners.has(event)) windowListeners.set(event, []);
+    windowListeners.get(event).push(fn);
+  },
+  removeEventListener(event, fn) {
+    const list = windowListeners.get(event) || [];
+    windowListeners.set(event, list.filter((f) => f !== fn));
+  },
+  trigger(event, data) {
+    const list = windowListeners.get(event) || [];
+    list.forEach((fn) => fn(data));
+  },
+};
 
 globalThis.document = {
   createElement(tag) {
@@ -101,6 +206,15 @@ const mockNativeCall = async (method, params) => {
     };
     return updated;
   }
+  if (method === 'workspace_widget_reorder') {
+    const nextWidgets = params.orderedIds.map((id) => currentSnapshot.widgets.find((w) => w.id === id)).filter(Boolean);
+    const updated = {
+      ...currentSnapshot,
+      widgets: nextWidgets,
+      revision: currentSnapshot.revision + 1,
+    };
+    return updated;
+  }
   if (method === 'workspace_reset') {
     return {
       ...currentSnapshot,
@@ -118,6 +232,11 @@ const inspector = createSpaceInspector({
   t,
   language: 'zh_CN',
   nativeCall: mockNativeCall,
+  queueWorkspaceMutation: async (wsId, fn) => {
+    const res = await fn(currentSnapshot);
+    if (res) currentSnapshot = res;
+    return res;
+  },
   broadcastRevision: () => {},
   updateSnapshot: (snap) => { currentSnapshot = snap; },
   onCloseFocusAnchor: () => { closedFocusCalled = true; },
@@ -164,6 +283,72 @@ inspector.open('overview');
 backdropEl.onclick();
 assert.equal(inspector.isOpen, false);
 console.log('✓ Backdrop click closes the inspector');
+
+// 6c. Live pointer drag reordering (pull down / pull up without releasing mouse, sequence updates dynamically)
+console.log('--- Inspector Live Pointer Drag Reorder Test ---');
+const multiWidgetSnapshot = {
+  name: 'Multi Widget Space',
+  backgroundJson: { key: 'background/colour', display: { colour: '#101010' } },
+  widgets: [
+    { id: 'w-time-1', key: 'widget/time', order: 0, enabled: true, configJson: {}, displayJson: { position: 'middleCentre' } },
+    { id: 'w-todo-2', key: 'widget/todo', order: 1, enabled: true, configJson: {}, displayJson: { position: 'middleCentre' } },
+    { id: 'w-notes-3', key: 'widget/notes', order: 2, enabled: true, configJson: {}, displayJson: { position: 'middleCentre' } },
+  ],
+  revision: 1,
+};
+currentSnapshot = multiWidgetSnapshot;
+inspector.sync(multiWidgetSnapshot, 'ws-1');
+inspector.open('overview');
+
+// Locate the rendered widget rows
+const widgetRows = inspectorBody.querySelectorAll('.inspector-row');
+assert.equal(widgetRows.length, 3, 'Must render 3 widget rows');
+
+// Mock getBoundingClientRect for mid-point calculations
+widgetRows[0].getBoundingClientRect = () => ({ top: 100, height: 40 }); // mid 120
+widgetRows[1].getBoundingClientRect = () => ({ top: 140, height: 40 }); // mid 160
+widgetRows[2].getBoundingClientRect = () => ({ top: 180, height: 40 }); // mid 200
+
+// Verify initial order badges
+assert.equal(widgetRows[0].querySelector('.inspector-row-order').textContent, '1');
+assert.equal(widgetRows[1].querySelector('.inspector-row-order').textContent, '2');
+assert.equal(widgetRows[2].querySelector('.inspector-row-order').textContent, '3');
+
+// 1) Pointer down on first row
+widgetRows[0].onpointerdown({ button: 0, clientY: 100, pointerId: 1, target: widgetRows[0] });
+
+// 2) Drag downwards past row 1's midpoint (clientY 170 > 160, < 200) without releasing
+globalThis.window.trigger('pointermove', { clientY: 170 });
+assert.ok(widgetRows[0].classList.contains('dragging'), 'Dragging row must have dragging class');
+
+// Check dynamic real-time DOM position: row 0 is now between row 1 and row 2
+const currentOrder1 = inspectorBody.querySelectorAll('.inspector-row').map((r) => r.dataset.widgetId);
+assert.deepEqual(currentOrder1, ['w-todo-2', 'w-time-1', 'w-notes-3'], 'Row 0 must dynamically move between row 1 and 2');
+
+// Check dynamic badge updates in real time
+assert.equal(widgetRows[1].querySelector('.inspector-row-order').textContent, '1');
+assert.equal(widgetRows[0].querySelector('.inspector-row-order').textContent, '2');
+assert.equal(widgetRows[2].querySelector('.inspector-row-order').textContent, '3');
+
+// 3) Drag further downwards past row 2's midpoint (clientY 210 > 200) without releasing
+globalThis.window.trigger('pointermove', { clientY: 210 });
+const currentOrder2 = inspectorBody.querySelectorAll('.inspector-row').map((r) => r.dataset.widgetId);
+assert.deepEqual(currentOrder2, ['w-todo-2', 'w-notes-3', 'w-time-1'], 'Row 0 must dynamically move to the bottom');
+
+// 4) Drag upwards ("上拉调整顺序") back above row 2's midpoint (clientY 150 < 160) without releasing
+globalThis.window.trigger('pointermove', { clientY: 150 });
+const currentOrder3 = inspectorBody.querySelectorAll('.inspector-row').map((r) => r.dataset.widgetId);
+assert.deepEqual(currentOrder3, ['w-time-1', 'w-todo-2', 'w-notes-3'], 'Row 0 must dynamically move back to top when pulled up');
+
+// 5) Drag down between row 1 and row 2, and release mouse ("松手")
+globalThis.window.trigger('pointermove', { clientY: 170 });
+globalThis.window.trigger('pointerup', { clientY: 170, pointerId: 1 });
+assert.equal(widgetRows[0].classList.contains('dragging'), false, 'Dragging class must be removed on pointerup');
+
+// Verify workspace_widget_reorder was queued and committed
+assert.equal(lastCall.method, 'workspace_widget_reorder');
+assert.deepEqual(lastCall.params.orderedIds, ['w-todo-2', 'w-time-1', 'w-notes-3']);
+console.log('✓ Inspector live pointer drag and reorder passed');
 
 // 7. Toolbar shortcuts & state sync
 let toolbarSettingsToggled = false;

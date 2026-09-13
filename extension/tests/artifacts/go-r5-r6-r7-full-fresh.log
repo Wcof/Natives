@@ -1,0 +1,132 @@
+=== RUN   TestBillingEntryKindValidation
+--- PASS: TestBillingEntryKindValidation (0.02s)
+=== RUN   TestReconcileSeparatesThreeImpacts
+--- PASS: TestReconcileSeparatesThreeImpacts (0.01s)
+=== RUN   TestBillingEntryUpsertByIdempotent
+--- PASS: TestBillingEntryUpsertByIdempotent (0.01s)
+=== RUN   TestBudgetThresholdDedupAcrossPeriods
+--- PASS: TestBudgetThresholdDedupAcrossPeriods (0.01s)
+=== RUN   TestBudgetSuppressAlertsForHistoryImport
+--- PASS: TestBudgetSuppressAlertsForHistoryImport (0.01s)
+=== RUN   TestEvidenceLevelsNeverMergedInReconcile
+--- PASS: TestEvidenceLevelsNeverMergedInReconcile (0.01s)
+=== RUN   TestInsightsEngine
+--- PASS: TestInsightsEngine (0.01s)
+=== RUN   TestDumpCapabilityMatrixForEvidence
+    sources_matrix_dump_test.go:184: TOOL             | HIST | LIVE | BILL | QUOTA | ATTR | NOTIF | PRIVACY
+    sources_matrix_dump_test.go:184: -----------------+------+------+------+-------+------+------+-----------
+    sources_matrix_dump_test.go:184: claude-code      | IMPL | IMPL | UNAVL | UNAVL | PART | IMPL  | metadata_only
+    sources_matrix_dump_test.go:184: codex            | IMPL | PART | UNAVL | UNAVL | PART | PART  | metadata_only
+    sources_matrix_dump_test.go:184: opencode         | IMPL | UNSUP | UNAVL | UNAVL | PART | UNSUP | metadata_only
+    sources_matrix_dump_test.go:184: pi               | IMPL | UNSUP | UNAVL | UNAVL | PART | UNSUP | metadata_only
+    sources_matrix_dump_test.go:184: kimi-code        | UNSUP | UNSUP | UNAVL | UNAVL | UNSUP | UNSUP | metadata_only
+    sources_matrix_dump_test.go:184: zcode            | IMPL | UNSUP | UNAVL | UNAVL | UNSUP | UNSUP | metadata_only
+    sources_matrix_dump_test.go:184: deepseek-harness | UNSUP | UNSUP | UNAVL | UNAVL | UNSUP | UNSUP | metadata_only
+    sources_matrix_dump_test.go:184: claude-desktop   | UNSUP | UNSUP | UNAVL | UNAVL | UNSUP | UNSUP | metadata_only
+    sources_matrix_dump_test.go:184: grok-build       | UNSUP | UNSUP | UNAVL | UNAVL | UNSUP | UNSUP | metadata_only
+    sources_matrix_dump_test.go:184: openclaw         | UNSUP | UNSUP | UNAVL | UNAVL | UNSUP | UNSUP | metadata_only
+    sources_matrix_dump_test.go:184: hermes           | IMPL | UNSUP | UNAVL | UNAVL | PART | UNSUP | metadata_only
+    sources_matrix_dump_test.go:184: cursor           | UNAVL | UNAVL | UNAVL | UNAVL | UNAVL | UNAVL | metadata_only
+    sources_matrix_dump_test.go:184: atomcode         | UNAVL | UNAVL | UNAVL | UNAVL | UNAVL | UNAVL | metadata_only
+    sources_matrix_dump_test.go:184: 
+    sources_matrix_dump_test.go:184: -- 逐格原因（非 IMPL 格）--
+    sources_matrix_dump_test.go:184: claude-code.BILL [UNAVL]: Provider 账单需 Console/Admin 导入，本机无接口
+    sources_matrix_dump_test.go:184: claude-code.QUOTA [UNAVL]: OAuth 兼容端点未在本环境核验
+    sources_matrix_dump_test.go:184: claude-code.ATTR [PART]: JSONL sessionId/stable ID 可用；OTel skill/plugin 维度按 ADR-0030 需显式开启，未启用
+    sources_matrix_dump_test.go:184: codex.LIVE [PART]: notify 仅覆盖已验证事件；App Server account/usage 未核验
+    sources_matrix_dump_test.go:184: codex.BILL [UNAVL]: OpenAI Admin usage 需组织权限
+    sources_matrix_dump_test.go:184: codex.QUOTA [UNAVL]: rateLimits 端点未在本环境核验
+    sources_matrix_dump_test.go:184: codex.ATTR [PART]: session/turn 稳定 ID 可用；agent 关系无 trace 证据时不建树
+    sources_matrix_dump_test.go:184: codex.NOTIF [PART]: notify 结束事件已接入；事件覆盖按安装版本验证
+    sources_matrix_dump_test.go:184: opencode.LIVE [UNSUP]: server/SSE 为文档证据，版本化事件未实现（交付缺口，非产品限制）
+    sources_matrix_dump_test.go:184: opencode.BILL [UNAVL]: Provider 账单无本机接口；本地价格为估算口径
+    sources_matrix_dump_test.go:184: opencode.QUOTA [UNAVL]: 多数账户额度无本地来源，显式 unknown
+    sources_matrix_dump_test.go:184: opencode.ATTR [PART]: session_id 稳定归属可用；plugin/tool 关系未采集
+    sources_matrix_dump_test.go:184: opencode.NOTIF [UNSUP]: plugin permission/session 事件未接线（交付缺口）
+    sources_matrix_dump_test.go:184: pi.LIVE [UNSUP]: extension agent_settled 事件未实现（交付缺口）
+    sources_matrix_dump_test.go:184: pi.BILL [UNAVL]: Provider 账单无本机接口；usage.cost 仅本地参考
+    sources_matrix_dump_test.go:184: pi.QUOTA [UNAVL]: 无通用额度来源，显式 unknown
+    sources_matrix_dump_test.go:184: pi.ATTR [PART]: session/entry/responseId 稳定 ID 可用；分支不并树
+    sources_matrix_dump_test.go:184: pi.NOTIF [UNSUP]: 无可靠结束/等待事件来源（按 §6.3 不制造提醒）
+    sources_matrix_dump_test.go:184: kimi-code.HIST [UNSUP]: 本机未安装；sessions/server API 待安装版本冻结 wire schema 与脱敏 fixture（环境缺口）
+    sources_matrix_dump_test.go:184: kimi-code.LIVE [UNSUP]: 本机未安装；版本化 server/event 未核验（环境缺口）
+    sources_matrix_dump_test.go:184: kimi-code.BILL [UNAVL]: OAuth usage/wallet 未核验
+    sources_matrix_dump_test.go:184: kimi-code.QUOTA [UNAVL]: 未核验
+    sources_matrix_dump_test.go:184: kimi-code.ATTR [UNSUP]: wire relation 未采集
+    sources_matrix_dump_test.go:184: kimi-code.NOTIF [UNSUP]: schema 变更告警机制未实现（环境缺口）
+    sources_matrix_dump_test.go:184: zcode.LIVE [UNSUP]: rollout 为 model-io 事件流，无实时事件来源
+    sources_matrix_dump_test.go:184: zcode.BILL [UNAVL]: Provider/账单回退无本机接口
+    sources_matrix_dump_test.go:184: zcode.QUOTA [UNAVL]: 无额度来源，显式 unknown
+    sources_matrix_dump_test.go:184: zcode.ATTR [UNSUP]: model_io 行含 requestId/sessionId，归因投影未接线（交付缺口）
+    sources_matrix_dump_test.go:184: zcode.NOTIF [UNSUP]: 无结束/等待事件来源
+    sources_matrix_dump_test.go:184: deepseek-harness.HIST [UNSUP]: 本机未安装（~/.deepseek 缺失）；待安装版本 session/usage fixture（环境缺口）
+    sources_matrix_dump_test.go:184: deepseek-harness.LIVE [UNSUP]: 同上，事件来源须核验
+    sources_matrix_dump_test.go:184: deepseek-harness.BILL [UNAVL]: Provider/账单回退无本机数据
+    sources_matrix_dump_test.go:184: deepseek-harness.QUOTA [UNAVL]: 未核验
+    sources_matrix_dump_test.go:184: deepseek-harness.ATTR [UNSUP]: 未采集
+    sources_matrix_dump_test.go:184: deepseek-harness.NOTIF [UNSUP]: 无事件来源
+    sources_matrix_dump_test.go:184: claude-desktop.HIST [UNSUP]: 2026-09-12 独立审计：local-agent-mode-sessions 仅含 remote_cowork_plugins/manifest.json，无结构化用量文件；不得套用 Claude Code 日志（产品限制，有审计证据）
+    sources_matrix_dump_test.go:184: claude-desktop.LIVE [UNSUP]: 同左，独立审计无实时来源（产品限制）
+    sources_matrix_dump_test.go:184: claude-desktop.BILL [UNAVL]: 账户账单回退待手动导入入口
+    sources_matrix_dump_test.go:184: claude-desktop.QUOTA [UNAVL]: 未核验
+    sources_matrix_dump_test.go:184: claude-desktop.ATTR [UNSUP]: 无来源，不套用 Claude Code 归因（产品限制）
+    sources_matrix_dump_test.go:184: claude-desktop.NOTIF [UNSUP]: 无事件来源（产品限制）
+    sources_matrix_dump_test.go:184: grok-build.HIST [UNSUP]: 2026-09-12 键名级审计（CLI 0.2.118）：chat_history/events.jsonl/summary.json 均无 usage/token/cost 字段；memtrace 仅心跳。无计量来源（产品限制，有审计证据）
+    sources_matrix_dump_test.go:184: grok-build.LIVE [UNSUP]: events.jsonl 无结构化用量事件（产品限制）
+    sources_matrix_dump_test.go:184: grok-build.BILL [UNAVL]: Provider/账单回退无本机数据
+    sources_matrix_dump_test.go:184: grok-build.QUOTA [UNAVL]: 无额度来源
+    sources_matrix_dump_test.go:184: grok-build.ATTR [UNSUP]: 无结构化 session 归因字段（产品限制）
+    sources_matrix_dump_test.go:184: grok-build.NOTIF [UNSUP]: 无结束/等待事件（产品限制）
+    sources_matrix_dump_test.go:184: openclaw.HIST [UNSUP]: 本机未安装；source 待安装版本核验（环境缺口）
+    sources_matrix_dump_test.go:184: openclaw.LIVE [UNSUP]: 同上，事件来源须核验
+    sources_matrix_dump_test.go:184: openclaw.BILL [UNAVL]: Provider/账单回退无本机数据
+    sources_matrix_dump_test.go:184: openclaw.QUOTA [UNAVL]: 未核验
+    sources_matrix_dump_test.go:184: openclaw.ATTR [UNSUP]: 未采集
+    sources_matrix_dump_test.go:184: openclaw.NOTIF [UNSUP]: 无事件来源
+    sources_matrix_dump_test.go:184: hermes.LIVE [UNSUP]: 历史不冒充实时；独立事件来源未核验
+    sources_matrix_dump_test.go:184: hermes.BILL [UNAVL]: 本地 cost 字段可核验；Provider 账单独立无本机接口
+    sources_matrix_dump_test.go:184: hermes.QUOTA [UNAVL]: 显式 unknown
+    sources_matrix_dump_test.go:184: hermes.ATTR [PART]: session 级归属可用；parent_session_id（压缩续接）不当作子代理
+    sources_matrix_dump_test.go:184: hermes.NOTIF [UNSUP]: 无实时事件来源，不声称即时提醒
+    sources_matrix_dump_test.go:184: cursor.HIST [UNAVL]: 个人端 dashboard/账单导入，无实时逐请求来源；手动导入入口待实现（环境+产品边界）
+    sources_matrix_dump_test.go:184: cursor.LIVE [UNAVL]: 个人端不承诺实时逐请求
+    sources_matrix_dump_test.go:184: cursor.BILL [UNAVL]: 账单导入回退待 T5 手动入口实现
+    sources_matrix_dump_test.go:184: cursor.QUOTA [UNAVL]: 订阅/credits source 未核验
+    sources_matrix_dump_test.go:184: cursor.ATTR [UNAVL]: 无逐请求归属数据
+    sources_matrix_dump_test.go:184: cursor.NOTIF [UNAVL]: 不把 IDE 活跃当完成事件
+    sources_matrix_dump_test.go:184: atomcode.HIST [UNAVL]: 键名级审计（2026-09-12）：entries.jsonl 顶层键仅 [text]，无 usage/token/session/cost 字段；无计量来源属产品限制，待新版本重审
+    sources_matrix_dump_test.go:184: atomcode.LIVE [UNAVL]: 同左，无结构化事件字段（产品限制）
+    sources_matrix_dump_test.go:184: atomcode.BILL [UNAVL]: 账单/导入回退无本机数据
+    sources_matrix_dump_test.go:184: atomcode.QUOTA [UNAVL]: 未核验
+    sources_matrix_dump_test.go:184: atomcode.ATTR [UNAVL]: 无结构化归因字段（产品限制）
+    sources_matrix_dump_test.go:184: atomcode.NOTIF [UNAVL]: 无结束/等待事件（产品限制）
+    sources_matrix_dump_test.go:184: AUDIT[claude-code]: JSONL adapter 以脱敏 fixture 验证；OTel 归因需 ADR-0030 决策 5 的显式开启
+    sources_matrix_dump_test.go:184: AUDIT[codex]: 累计快照 1000→1000→1600 求差语义已测试；序列重置另测
+    sources_matrix_dump_test.go:184: AUDIT[opencode]: 本机已安装 opencode 1.18.3；opencode-store/1 parser 已实现（~/.local/share/opencode/opencode.db 只读投影，fixture 冻结 schema）；SSE 实时事件未实现
+    sources_matrix_dump_test.go:184: AUDIT[pi]: 官方 session-format.md 核验（v3 头/assistant usage）；解析器以脱敏 fixture 验证
+    sources_matrix_dump_test.go:184: AUDIT[kimi-code]: sessions/server API 需按安装版本冻结 wire schema；待脱敏 fixture 后实现 parser
+    sources_matrix_dump_test.go:184: AUDIT[zcode]: 2026-09-12 实测 ~/.zcode/cli/rollout/model-io-*.jsonl：type=model_io 行含 requestId/sessionId/startedAt/model{modelId,providerId}/usage{input,cacheRead,cacheWrite,output,total}；parser zcode-rollout/1 已落地（计量原子 zcode:<requestId>，不读 body/text）；rollout 为 model-io 事件流，无实时事件/账单/额度来源
+    sources_matrix_dump_test.go:184: AUDIT[deepseek-harness]: 本机未安装 Harness（~/.deepseek 缺失）；待安装版本 session/usage fixture
+    sources_matrix_dump_test.go:184: AUDIT[claude-desktop]: 2026-09-12 独立 source 审计：local-agent-mode-sessions/<uuid>/<uuid>/ 仅含 remote_cowork_plugins/manifest.json，无结构化用量文件；不得套用 Claude Code 日志（§9.0）。显式 unsupported
+    sources_matrix_dump_test.go:184: AUDIT[grok-build]: 2026-09-12 source 审计（~/.grok，CLI 0.2.118）：sessions/<proj>/<uuid>/{chat_history,events}.jsonl 与 summary.json 均无 usage/token/cost 字段（键名级核验）；memtrace 仅 start/sample 心跳。无本机计量来源，显式 unsupported
+    sources_matrix_dump_test.go:184: AUDIT[openclaw]: 配置注入已支持；source 待核验
+    sources_matrix_dump_test.go:184: AUDIT[hermes]: 官方 session-storage 文档核验（schema_version 23）；只读白名单投影，不读正文/FTS；WAL 由只读连接处理
+    sources_matrix_dump_test.go:184: AUDIT[cursor]: 个人端不承诺实时计量；账单导入回退待手动入口实现；组织 API 仅在权限具备时接入并核验
+    sources_matrix_dump_test.go:184: AUDIT[atomcode]: 键名级审计（2026-09-12，本机 v0.x）：history-v2/<hash>/entries.jsonl 首行顶层键仅 [text]，无 usage/token/session/cost 结构化字段；无计量来源属产品限制，待新版本引入结构化字段后重审并冻结脱敏 fixture
+--- PASS: TestDumpCapabilityMatrixForEvidence (0.00s)
+=== RUN   TestCapabilityMatrixCoversRegistryAndUserList
+--- PASS: TestCapabilityMatrixCoversRegistryAndUserList (0.00s)
+=== RUN   TestCapabilityMatrixFieldsCompleteAndValid
+--- PASS: TestCapabilityMatrixFieldsCompleteAndValid (0.00s)
+=== RUN   TestIngestToolEventIdempotent
+--- PASS: TestIngestToolEventIdempotent (0.01s)
+=== RUN   TestIngestToolEventEndedNotInInbox
+--- PASS: TestIngestToolEventEndedNotInInbox (0.01s)
+=== RUN   TestSessionStateNoRegression
+--- PASS: TestSessionStateNoRegression (0.01s)
+=== RUN   TestAcknowledgeAttention
+--- PASS: TestAcknowledgeAttention (0.01s)
+=== RUN   TestAttentionOrderPriority
+--- PASS: TestAttentionOrderPriority (0.02s)
+PASS
+ok  	github.com/ldh/natives/model-host/internal/usage	1.854s

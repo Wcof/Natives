@@ -5,6 +5,138 @@
   "addWidget": {
     "message": "添加卡片"
   },
+  "aiPerfChartBar": {
+    "message": "排行"
+  },
+  "aiPerfChartHeatmap": {
+    "message": "活跃热力图"
+  },
+  "aiPerfChartLine": {
+    "message": "趋势线"
+  },
+  "aiPerfChartNumber": {
+    "message": "数字卡片"
+  },
+  "aiPerfChartTable": {
+    "message": "明细对比表"
+  },
+  "aiPerfChartTimeline": {
+    "message": "调用时间线"
+  },
+  "aiPerfColName": {
+    "message": "项目"
+  },
+  "aiPerfColRequests": {
+    "message": "请求"
+  },
+  "aiPerfColTokens": {
+    "message": "Token"
+  },
+  "aiPerfDimModel": {
+    "message": "按模型 (Model)"
+  },
+  "aiPerfDimProvider": {
+    "message": "按供应商 (Provider)"
+  },
+  "aiPerfDimSource": {
+    "message": "按工具来源 (Source)"
+  },
+  "aiPerfEmpty": {
+    "message": "当前统计范围暂无 AI 用量记录"
+  },
+  "aiPerfLoadFailed": {
+    "message": "用量数据加载失败"
+  },
+  "aiPerfLoading": {
+    "message": "加载用量数据…"
+  },
+  "aiPerfMetricCost": {
+    "message": "AI 成本"
+  },
+  "aiPerfMetricRequest": {
+    "message": "请求数"
+  },
+  "aiPerfMetricSession": {
+    "message": "使用活跃度"
+  },
+  "aiPerfMetricToken": {
+    "message": "Token 用量"
+  },
+  "aiPerfNoHeatmap": {
+    "message": "时间段内暂无活跃数据"
+  },
+  "aiPerfNoRank": {
+    "message": "时间段内暂无排行数据"
+  },
+  "aiPerfNoTable": {
+    "message": "暂无对比数据"
+  },
+  "aiPerfNoTimeline": {
+    "message": "暂无近期 AI 调用事件"
+  },
+  "aiPerfNoTrend": {
+    "message": "时间段内暂无趋势数据"
+  },
+  "aiPerfRange24h": {
+    "message": "近 24 小时"
+  },
+  "aiPerfRange30d": {
+    "message": "近 30 天"
+  },
+  "aiPerfRange7d": {
+    "message": "近 7 天"
+  },
+  "aiPerfRangeAll": {
+    "message": "全部"
+  },
+  "aiPerfSettingChart": {
+    "message": "可视化形态"
+  },
+  "aiPerfSettingDimension": {
+    "message": "分析维度"
+  },
+  "aiPerfSettingHint": {
+    "message": "数据来自 Model Host 用量统计，可在设置 › 数据与用量 中导入历史记录"
+  },
+  "aiPerfSettingMetric": {
+    "message": "核心指标"
+  },
+  "aiPerfSettingRange": {
+    "message": "统计范围"
+  },
+  "aiPerfSettingSubMetric": {
+    "message": "子指标 / 口径"
+  },
+  "aiPerfSubCostTotal": {
+    "message": "预估费用"
+  },
+  "aiPerfSubReqRate": {
+    "message": "成功率"
+  },
+  "aiPerfSubReqTotal": {
+    "message": "总请求数"
+  },
+  "aiPerfSubSessionActivity": {
+    "message": "调用频次"
+  },
+  "aiPerfSubTokenInput": {
+    "message": "输入 Token"
+  },
+  "aiPerfSubTokenOutput": {
+    "message": "输出 Token"
+  },
+  "aiPerfSubTokenTotal": {
+    "message": "全部 Token"
+  },
+  "aiPerfTimelineUnsupported": {
+    "message": "Timeline 视图将在后续版本提供"
+  },
+  "aiPerfTokens": {
+    "message": "Token"
+  },
+  "aiPerfUnpriced": {
+    "message": "未计价"
+  },
   "appName": {
     "message": "Natives 文件管理"
   },
@@ -2141,6 +2273,48 @@
   "clickToAuthorize": {
     "message": "点击授权权限"
   },
+  "plugin_widget_aiPerformance": {
+    "message": "AI 效能（旧版）"
+  },
+  "desc_aiPerformance": {
+    "message": "展示 AI 调用量、Token 与成本趋势与统计"
+  },
+  "plugin_widget_aiCost": {
+    "message": "AI 成本"
+  },
+  "plugin_widget_aiTokens": {
+    "message": "Token 用量"
+  },
+  "plugin_widget_aiSessions": {
+    "message": "会话活跃"
+  },
+  "plugin_widget_aiRequests": {
+    "message": "调用统计"
+  },
+  "plugin_widget_aiLimits": {
+    "message": "额度与预算"
+  },
+  "plugin_widget_aiAttention": {
+    "message": "任务提醒"
+  },
+  "plugin_widget_aiSavings": {
+    "message": "降本建议"
+  },
+  "aiPerfMetricSessions": {
+    "message": "会话活跃"
+  },
+  "aiPerfSubSessionCount": {
+    "message": "活跃会话数"
+  },
+  "aiPerfSubSessionDays": {
+    "message": "活跃天数"
+  },
+  "aiPerfInsightDismiss": {
+    "message": "忽略（7 天）"
+  },
+  "catAiPerformance": {
+    "message": "AI 效能"
+  },
   "catTimeAndClocks": {
     "message": "时间与时钟"
   },
@@ -2352,25 +2526,25 @@
     "message": "应用中心"
   },
   "appsCenterSub": {
-    "message": "管理可选 Natives 应用"
+    "message": "使用 Natives 内置功能"
   },
   "appsList": {
-    "message": "应用列表"
+    "message": "扩展包列表"
   },
   "appSurfaceNotFound": {
-    "message": "应用不存在或已卸载"
+    "message": "扩展包未安装或已移除"
   },
   "appSurfaceOpenFailed": {
-    "message": "应用无法打开"
+    "message": "扩展包无法打开"
   },
   "appSurfaceNeedsUpdate": {
     "message": "需要更新 Natives 后才能打开"
   },
   "appSurfaceNeedsUpdateBody": {
-    "message": "当前 Natives 不包含此应用的界面模块，请更新 Natives 后重试。"
+    "message": "当前 Natives 协议不兼容此扩展包，请更新 Natives 后重试。"
   },
   "appSurfaceDisabled": {
-    "message": "应用已停用"
+    "message": "扩展包已停用"
   },
   "appSurfaceDisabledBody": {
     "message": "请在应用中心重新启用后打开。"
@@ -2436,13 +2610,13 @@
     "message": "返回"
   },
   "appsEmpty": {
-    "message": "暂无可安装应用"
+    "message": "暂无可安装扩展包"
   },
   "appsHostOffline": {
     "message": "Native Host 未连接，请确认 Natives 已启动"
   },
   "appsCatalogUnavailable": {
-    "message": "应用目录暂不可用，仅显示已安装应用"
+    "message": "扩展包目录暂不可用，仅显示已安装扩展包"
   },
   "appsNotInstalled": {
     "message": "未安装"
@@ -2471,6 +2645,54 @@
   "appsOpen": {
     "message": "打开"
   },
+  "appsStop": {
+    "message": "停止"
+  },
+  "appsStoppedToast": {
+    "message": "扩展包已停止"
+  },
+  "appsStopRequested": {
+    "message": "已请求停止；如仍在其他浏览器会话中使用，请在该会话停止后重试"
+  },
+  "appsRepair": {
+    "message": "修复"
+  },
+  "appsRepairRequired": {
+    "message": "需要修复"
+  },
+  "appsPublisher": {
+    "message": "发布者"
+  },
+  "appsOfficialPublisher": {
+    "message": "Natives 官方"
+  },
+  "appsSource": {
+    "message": "来源"
+  },
+  "appsOfficialSignedSource": {
+    "message": "已签名的官方目录"
+  },
+  "appsPermissions": {
+    "message": "权限"
+  },
+  "appsDownloadSize": {
+    "message": "下载大小"
+  },
+  "appsCodeUsage": {
+    "message": "运行时载荷"
+  },
+  "appsCompatibility": {
+    "message": "兼容性"
+  },
+  "appsCompatible": {
+    "message": "兼容"
+  },
+  "appsUserDataUsage": {
+    "message": "个人数据占用"
+  },
+  "appsUsageNotReported": {
+    "message": "当前运行时未报告"
+  },
   "appsResolving": {
     "message": "解析目录…"
   },
@@ -2487,16 +2709,16 @@
     "message": "写入应用库…"
   },
   "appsInstalledToast": {
-    "message": "应用已安装"
+    "message": "扩展包已就绪"
   },
   "appsUninstalledToast": {
-    "message": "应用已卸载（个人数据保留）"
+    "message": "扩展包已移除（个人数据保留）"
   },
   "appsUninstallTitle": {
-    "message": "卸载应用？"
+    "message": "移除扩展包？"
   },
   "appsUninstallBody": {
-    "message": "将删除程序和注册信息，默认保留个人数据。保留的数据可稍后单独清除。"
+    "message": "将移除扩展包程序与相关注册，默认保留个人数据。保留的数据可稍后单独清除。"
   },
   "appsUpdateHint": {
     "message": "V1 更新：先卸载当前版本，再安装新版本（个人数据保留）"
@@ -2551,6 +2773,33 @@
   },
   "appsDataDeleted": {
     "message": "应用及其个人数据已删除"
+  },
+  "appsLoading": {
+    "message": "正在加载内置模块…"
+  },
+  "appsReady": {
+    "message": "就绪"
+  },
+  "appsProductConfigRequired": {
+    "message": "需先完成 Natives 配置"
+  },
+  "appsClearing": {
+    "message": "正在清除数据…"
+  },
+  "appsClearDataScope": {
+    "message": "将删除该模块的数据目录、导入原件、缓存与日志；程序文件、注册与显示/启用偏好保留。"
+  },
+  "appsDeleteCredentials": {
+    "message": "同时删除登录凭据（Keychain）"
+  },
+  "appsProductConfigure": {
+    "message": "完成 Natives 配置"
+  },
+  "appsProductConfigured": {
+    "message": "Natives 配置完成，全部内置模块就绪"
+  },
+  "appsProductSourceMissing": {
+    "message": "未找到已验证的产品安装源，请按安装说明完成 Natives 安装"
   },
   "appsPurgeChoice": {
     "message": "同时删除全部个人数据、配置和凭据"
@@ -2635,5 +2884,221 @@
   },
   "dragToReorder": {
     "message": "按住拖拽排序"
+  },
+  "aiPerfCapHistorical": {
+    "message": "历史用量"
+  },
+  "aiPerfCapLive": {
+    "message": "实时事件"
+  },
+  "aiPerfCapBilling": {
+    "message": "账单"
+  },
+  "aiPerfCapQuota": {
+    "message": "额度"
+  },
+  "aiPerfCapAttribution": {
+    "message": "归因"
+  },
+  "aiPerfCapNotification": {
+    "message": "提醒"
+  },
+  "aiPerfSourceEnabled": {
+    "message": "已启用"
+  },
+  "aiPerfNoSources": {
+    "message": "能力矩阵为空"
+  },
+  "aiPerfBillingEmpty": {
+    "message": "暂无账务条目；Provider 账单需导入或手动确认"
+  },
+  "aiPerfServiceSpend": {
+    "message": "服务消耗"
+  },
+  "aiPerfCashOut": {
+    "message": "现金流出"
+  },
+  "aiPerfCreditDelta": {
+    "message": "余额变化"
+  },
+  "aiPerfBillingNote": {
+    "message": "三口径独立统计；充值计入现金流与余额，不计入服务消耗"
+  },
+  "aiPerfAttentionEmpty": {
+    "message": "当前没有待处理事项"
+  },
+  "aiPerfAck": {
+    "message": "标记已查看"
+  },
+  "aiPerfViewPending": {
+    "message": "该视图的数据基础已就绪，卡片将在预算引擎启用后展示"
+  },
+  "aiPerfLimitsEmpty": {
+    "message": "暂无预算规则；支持按日/月设置 API 估算预算与阈值提醒"
+  },
+  "aiPerfBudgetUsed": {
+    "message": "已消耗"
+  },
+  "aiPerfLedgerEmpty": {
+    "message": "暂无用量事件记录"
+  },
+  "aiPerfSavingsEmpty": {
+    "message": "确定性规则监测正常，暂无显著长上下文膨胀、高费集中或缓存下降异常"
+  },
+  "aiPerfSettingView": {
+    "message": "视图模式"
+  },
+  "aiPerfViewUsage": {
+    "message": "用量与去向 (默认)"
+  },
+  "aiPerfViewTools": {
+    "message": "工具与账户目录"
+  },
+  "aiPerfViewBilling": {
+    "message": "账单与对账"
+  },
+  "aiPerfViewAttention": {
+    "message": "待我处理"
+  },
+  "aiPerfViewLimits": {
+    "message": "额度与预算"
+  },
+  "aiPerfViewLedger": {
+    "message": "统一用量账本"
+  },
+  "aiPerfViewSavings": {
+    "message": "降本建议"
+  },
+  "desc_aiCost": {
+    "message": "AI 模型用量估算金额与计费口径"
+  },
+  "desc_aiTokens": {
+    "message": "AI Token 输入/输出/总量统计"
+  },
+  "desc_aiSessions": {
+    "message": "有真实活动的去重会话数与活跃天数"
+  },
+  "desc_aiRequests": {
+    "message": "AI 请求数、成功率与结果分布"
+  },
+  "desc_aiLimits": {
+    "message": "账户额度窗口与预算阈值"
+  },
+  "desc_aiAttention": {
+    "message": "等待许可/输入、错误与轮次结束提醒"
+  },
+  "desc_aiSavings": {
+    "message": "有证据的降本建议与后续验证"
+  },
+  "modelUsageBilling": {
+    "message": "账单与支出"
+  },
+  "modelBillingEmpty": {
+    "message": "暂无账务条目"
+  },
+  "modelBillingServiceSpend": {
+    "message": "已确认服务消耗"
+  },
+  "modelBillingCashOutflow": {
+    "message": "现金流出"
+  },
+  "modelBillingCreditDelta": {
+    "message": "Credits/余额变化"
+  },
+  "modelImportBilling": {
+    "message": "导入账单 CSV"
+  },
+  "modelAddBillingEntry": {
+    "message": "手动确认支出"
+  },
+  "modelBillingKindSubscription": {
+    "message": "订阅"
+  },
+  "modelBillingKindServiceUsage": {
+    "message": "API 扣款"
+  },
+  "modelBillingKindTopup": {
+    "message": "充值"
+  },
+  "modelBillingKindCreditDelta": {
+    "message": "Credits 变化"
+  },
+  "modelBillingKindRefund": {
+    "message": "退款"
+  },
+  "modelBillingKindDiscount": {
+    "message": "折扣"
+  },
+  "modelBillingKindTax": {
+    "message": "税费"
+  },
+  "modelBillingKindPrepayExpiry": {
+    "message": "预付余额到期"
+  },
+  "modelBillingProvider": {
+    "message": "提供方"
+  },
+  "modelBillingAccount": {
+    "message": "账户"
+  },
+  "modelBillingKind": {
+    "message": "类型"
+  },
+  "modelBillingAmount": {
+    "message": "金额"
+  },
+  "modelBillingCurrency": {
+    "message": "币种"
+  },
+  "modelBillingDate": {
+    "message": "日期"
+  },
+  "modelBillingPeriodEnd": {
+    "message": "到期日（订阅/预付）"
+  },
+  "modelBillingNote": {
+    "message": "备注"
+  },
+  "modelBillingEvidence": {
+    "message": "证据"
+  },
+  "modelBillingImportTitle": {
+    "message": "导入账单 CSV（cursor-billing-csv/1）"
+  },
+  "modelBillingSchemaHint": {
+    "message": "表头：date,kind,amount,currency[,period_start,period_end,note]"
+  },
+  "modelBillingDuplicates": {
+    "message": "已存在重复"
+  },
+  "modelBillingPeriod": {
+    "message": "账期"
+  },
+  "modelBillingImportSuccess": {
+    "message": "账单已导入（重复条目已按内容指纹跳过）"
+  },
+  "modelBillingInvalidAmount": {
+    "message": "金额不能为零"
+  },
+  "modelBillingEntrySaved": {
+    "message": "账务条目已确认入账"
+  },
+  "modelImportInvalid": {
+    "message": "文件校验未通过，未写入账本"
+  },
+  "modelUploadPreview": {
+    "message": "上传并预览"
+  },
+  "suitePrepareFailed": {
+    "message": "随附应用准备未全部完成，可在应用中心重试或修复"
+  },
+  "aiPerfRangeCustom": {
+    "message": "自定义"
+  },
+  "aiPerfRangeStart": {
+    "message": "开始时间"
+  },
+  "aiPerfRangeEnd": {
+    "message": "结束时间"
   }
 }

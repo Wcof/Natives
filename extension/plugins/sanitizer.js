@@ -1,6 +1,10 @@
 
 
 export const WIDGET_KEYS = [
+  'widget/aiPerformance',
+  // R1（方案 §4.1）：七个独立 AI 效能组件（旧 aiPerformance 保留为兼容 key）。
+  'widget/aiCost', 'widget/aiTokens', 'widget/aiSessions',
+  'widget/aiRequests', 'widget/aiLimits', 'widget/aiAttention', 'widget/aiSavings',
   'widget/binaryTime', 'widget/bookmarks', 'widget/countdown',
   'widget/css', 'widget/currencyRates', 'widget/customText', 'widget/github',
   'widget/greeting', 'widget/html', 'widget/ipInfo',

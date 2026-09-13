@@ -1,0 +1,14 @@
+=== RUN   TestIngestToolEventIdempotent
+--- PASS: TestIngestToolEventIdempotent (0.01s)
+=== RUN   TestIngestToolEventEndedNotInInbox
+--- PASS: TestIngestToolEventEndedNotInInbox (0.01s)
+=== RUN   TestSessionStateNoRegression
+--- PASS: TestSessionStateNoRegression (0.01s)
+=== RUN   TestAcknowledgeAttention
+--- PASS: TestAcknowledgeAttention (0.01s)
+=== RUN   TestSendNotificationStates
+--- PASS: TestSendNotificationStates (3.00s)
+=== RUN   TestAttentionOrderPriority
+--- PASS: TestAttentionOrderPriority (0.04s)
+PASS
+ok  	github.com/ldh/natives/model-host/internal/usage	3.579s

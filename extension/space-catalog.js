@@ -4,6 +4,22 @@ import { WIDGET_KEYS, pluginName, widgetPlugins } from './space-plugins.js';
 
 export const WIDGET_CATEGORIES = [
   {
+    id: 'ai',
+    nameKey: 'catAiPerformance',
+    fallback: 'AI 效能',
+    keys: [
+      // R1（方案 §4.1）：七个独立 AI 效能组件；旧 widget/aiPerformance
+      // 保留兼容读取但从新增目录隐藏（方案 §8.2）。
+      'widget/aiCost',
+      'widget/aiTokens',
+      'widget/aiSessions',
+      'widget/aiRequests',
+      'widget/aiLimits',
+      'widget/aiAttention',
+      'widget/aiSavings',
+    ],
+  },
+  {
     id: 'time',
     nameKey: 'catTimeAndClocks',
     fallback: '时间与时钟',

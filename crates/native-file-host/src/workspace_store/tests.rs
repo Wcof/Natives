@@ -404,3 +404,26 @@ fn migration_purges_retired_widgets_and_cleans_personal_templates() {
 
     let _ = std::fs::remove_file(path);
 }
+
+#[test]
+fn ai_performance_widget_can_be_upserted() {
+    let (store, path) = temp_store("ai_perf");
+    let created = store.create("Space", None).expect("create");
+    let widget = WidgetRecord {
+        id: String::new(),
+        workspace_id: created.workspace.id.clone(),
+        key: "widget/aiPerformance".into(),
+        order: 0,
+        enabled: true,
+        config_json: serde_json::json!({ "metric": "token", "chart": "timeline" }),
+        display_json: serde_json::json!({ "position": "middleCentre" }),
+    };
+    let after_upsert = store
+        .widget_upsert(&created.workspace.id, &widget, Some(created.revision))
+        .expect("upsert aiPerformance");
+    assert!(after_upsert
+        .widgets
+        .iter()
+        .any(|entry| entry.key == "widget/aiPerformance"));
+    let _ = std::fs::remove_file(path);
+}

@@ -63,6 +63,22 @@ func (e *Engine) getUsageAnalysis(raw json.RawMessage) (*usage.AnalyticsResult, 
 	return e.usageStore.GetAnalytics(filter)
 }
 
+func (e *Engine) getUsageSessions(raw json.RawMessage) (*usage.SessionsResult, error) {
+	if e.usageStore == nil {
+		return nil, invalid("使用记录存储未就绪")
+	}
+	var filter usage.Filter
+	if len(raw) > 0 && string(raw) != "null" {
+		if err := json.Unmarshal(raw, &filter); err != nil {
+			return nil, invalid("会话统计参数无效")
+		}
+	}
+	if err := validateUsageFilter(filter); err != nil {
+		return nil, err
+	}
+	return e.usageStore.GetSessions(filter)
+}
+
 func (e *Engine) getUsageEvents(raw json.RawMessage) (*usage.EventsResult, error) {
 	if e.usageStore == nil {
 		return nil, invalid("使用记录存储未就绪")
@@ -76,7 +92,22 @@ func (e *Engine) getUsageEvents(raw json.RawMessage) (*usage.EventsResult, error
 	if err := validateUsageFilter(filter); err != nil {
 		return nil, err
 	}
-	return e.usageStore.GetEvents(filter)
+	result, err := e.usageStore.GetEvents(filter)
+	if err != nil {
+		return nil, err
+	}
+	// costStatus 读时判定：价格命中（含 0 价）为 priced，目录缺价为 unpriced，
+	// 不让"未计价"与"合法零价"在 UI 中混淆（T0 契约修复）。
+	if e.usageCalculator != nil {
+		for i := range result.Events {
+			if e.usageCalculator.FindPrice(result.Events[i].Provider, result.Events[i].Model) != nil {
+				result.Events[i].CostStatus = "priced"
+			} else {
+				result.Events[i].CostStatus = "unpriced"
+			}
+		}
+	}
+	return result, nil
 }
 
 func validateUsageFilter(filter usage.Filter) error {
@@ -88,6 +119,11 @@ func validateUsageFilter(filter usage.Filter) error {
 		}
 	default:
 		return invalid("使用记录时间范围无效")
+	}
+	// 整改 E2 §4.2：IANA 时区必须在白名单内核验；不识别的时区返回参数
+	// 错误，不静默退回 UTC。
+	if _, err := usage.ResolveTimezone(filter.Timezone); err != nil {
+		return invalid("用户时区参数无效")
 	}
 	for _, values := range [][]string{filter.Models, filter.Providers, filter.Sources, filter.AccessKeyIDs} {
 		if len(values) > 100 {
@@ -176,19 +212,24 @@ func (e *Engine) beginUsageImport(raw json.RawMessage) (map[string]any, error) {
 		return nil, invalid("导入服务未就绪")
 	}
 	var input struct {
-		FileName string `json:"fileName"`
-		FileSize int64  `json:"fileSize"`
+		FileName   string `json:"fileName"`
+		FileSize   int64  `json:"fileSize"`
+		ImportKind string `json:"importKind,omitempty"` // usage_events（默认）| billing_csv
+		Provider   string `json:"provider,omitempty"`
+		Account    string `json:"account,omitempty"`
 	}
 	if err := json.Unmarshal(raw, &input); err != nil || input.FileName == "" || input.FileSize <= 0 {
 		return nil, invalid("导入会话参数无效")
 	}
-	session, err := e.usageImporter.BeginSession(input.FileName, input.FileSize)
+	session, err := e.usageImporter.BeginSessionWithKind(
+		input.ImportKind, input.FileName, input.FileSize, input.Provider, input.Account)
 	if err != nil {
-		return nil, err
+		return nil, invalid(err.Error())
 	}
 	return map[string]any{
-		"sessionId": session.ID,
-		"chunkSize": usage.ImportChunkSize,
+		"sessionId":  session.ID,
+		"chunkSize":  usage.ImportChunkSize,
+		"importKind": session.ImportKind(),
 	}, nil
 }
 
@@ -241,9 +282,38 @@ func (e *Engine) commitUsageImport(raw json.RawMessage) (map[string]any, error) 
 	if err != nil {
 		return nil, err
 	}
+	// §7.3：账单 commit 是续费提醒的评估入口之一——导入带到期日的
+	// 订阅/预付条目后立即评估 7/3/1/0 天窗口（幂等，不重复入箱）。
+	if e.usageStore != nil {
+		if _, evalErr := e.usageStore.EvaluateRenewals(usage.RenewalOpts{SuppressAlerts: false}); evalErr != nil {
+			return map[string]any{"importedCount": count}, evalErr
+		}
+	}
 	return map[string]any{
 		"importedCount": count,
 	}, nil
+}
+
+// upsertUsageBillingEntry 手动录入经用户确认的账务事实（§7.2）：订阅、
+// API 扣款、充值、credits 变化、退款、折扣、税费、预付余额到期。
+// evidence 强制 user_confirmed；充值不得携带服务消耗（kindImpact 校验）。
+func (e *Engine) upsertUsageBillingEntry(raw json.RawMessage) (map[string]any, error) {
+	if e.usageStore == nil {
+		return nil, invalid("使用记录存储未就绪")
+	}
+	var entry usage.BillingEntry
+	if err := json.Unmarshal(raw, &entry); err != nil {
+		return nil, invalid("账务条目参数无效")
+	}
+	if err := e.usageStore.InsertManualBillingEntry(&entry); err != nil {
+		return nil, invalid(err.Error())
+	}
+	// 手动条目可能带订阅/预付到期日：立即评估续费窗口。
+	renewals, err := e.usageStore.EvaluateRenewals(usage.RenewalOpts{SuppressAlerts: false})
+	if err != nil {
+		return map[string]any{"ok": true, "entryId": entry.ID}, err
+	}
+	return map[string]any{"ok": true, "entryId": entry.ID, "renewals": renewals}, nil
 }
 
 func (e *Engine) cancelUsageImport(raw json.RawMessage) (map[string]any, error) {

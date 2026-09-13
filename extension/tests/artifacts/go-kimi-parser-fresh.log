@@ -1,0 +1,4 @@
+=== RUN   TestParseKimiSessionJSONLV1
+--- PASS: TestParseKimiSessionJSONLV1 (0.00s)
+PASS
+ok  	github.com/ldh/natives/model-host/internal/usage	0.544s

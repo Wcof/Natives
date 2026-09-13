@@ -30,10 +30,10 @@ func TestUsagePluginAttributesKeyAndDoesNotPersistUpstreamBody(t *testing.T) {
 		t.Fatalf("events = %+v, %v", events, err)
 	}
 	event := events.Events[0]
-		if event.AccessKeyID != "key-1" || event.AccessKeyName != "测试密钥" || event.ErrorSummary != "Unauthorized" {
-			t.Fatalf("stored event = %+v", event)
-		}
+	if event.AccessKeyID != "key-1" || event.AccessKeyName != "测试密钥" || event.ErrorSummary != "Unauthorized" {
+		t.Fatalf("stored event = %+v", event)
 	}
+}
 
 func TestUsagePluginProcessesRecordEvenWithCancelledContext(t *testing.T) {
 	store, _ := tempStore(t)
@@ -97,4 +97,3 @@ type testRecordPlugin func(cliproxyusage.Record)
 func (f testRecordPlugin) HandleUsage(ctx context.Context, record cliproxyusage.Record) {
 	f(record)
 }
-

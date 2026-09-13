@@ -1,57 +1,47 @@
-// App Center owns its Native Port, catalog state and explicit install operations.
+// App Center owns its Native Port and projects the fixed built-in modules of
+// the complete Natives product (plan §3.4/§4): open, show/hide, preferences
+// and data management. Module download/install/update/uninstall are retired
+// (2026-09-12 convergence): the center never loads a catalog, never calls
+// suite_prepare or the chunked install chain, and a failed handshake stops
+// every dependent call instead of falling back to a legacy path.
 import { createNativeClient } from './native-client.js';
 import { saveAppNavigation, projectionFromApps } from './app-navigation-projection.js';
-import { loadVerifiedCatalog, downloadNapPackage, decompressNap, payloadToBase64 } from './catalog-client.js';
-import { resolveAppPackages, compareAppVersions, classifyAppError } from './app-catalog-policy.js';
+import { storageGet } from './files-preferences.js';
 import { appLifecycle } from './app-lifecycle.js';
+import { classifyAppError } from './app-errors.js';
 
-// v4 helper: SHA-256 hex of a byte slice via SubtleCrypto.
-async function sha256Hex(bytes) {
-  const digest = await globalThis.crypto.subtle.digest('SHA-256', bytes);
-  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
-}
-
-async function transferPackage(pkg, { signal, onProgress } = {}) {
-  // Core Apps protocol v4 (contract §4.0): the page streams the RAW gzip
-  // artifact only; decompression and every hash check happen in the Host.
-  return downloadNapPackage({ url: pkg.url, wireSize: pkg.wire_size, signal, onProgress });
-}
+// AC-11: standalone pages inherit the product appearance preference and
+// follow its changes instead of a hardcoded theme.
+Promise.resolve()
+  .then(() => storageGet('natives-theme', 'archive'))
+  .then((theme) => {
+    document.documentElement.dataset.theme = ['volt', 'archive'].includes(theme) ? theme : 'archive';
+  })
+  .catch(() => {});
+globalThis.chrome?.storage?.onChanged?.addListener((changes, area) => {
+  if (area === 'local' && changes['natives-theme']) {
+    const theme = changes['natives-theme'].newValue;
+    document.documentElement.dataset.theme = ['volt', 'archive'].includes(theme) ? theme : 'archive';
+  }
+});
 
 export function createAppCenter({
   t = (key, fallback) => globalThis.chrome?.i18n?.getMessage?.(key) || fallback || key,
-  client, catalogLoader = loadVerifiedCatalog, packageTransfer = transferPackage,
+  client,
   storage = globalThis.chrome?.storage,
   list: customList,
   toast: customToast,
 } = {}) {
   const list = customList || (typeof document !== 'undefined' ? document.getElementById('apps-list') : null);
   const toast = customToast || (typeof document !== 'undefined' ? document.getElementById('apps-toast') : null);
-  const state = { catalog: [], apps: [], retained: [], revision: 0, host: null,
-    loading: true, catalogError: null, error: null, embedded: false, busy: new Map(), failures: new Map(),
-    signedCatalog: null };
-  // v4 helper: return the SIGNED catalog document for install_begin. The
-  // page never self-certifies: refresh() captured the verified raw bytes +
-  // Ed25519 signature, and the Host re-verifies both against its fixed
-  // trust root (contract §4.0). Without a signed catalog there is no path.
-  function signedCatalogForInstall() {
-    const signed = state.signedCatalog;
-    if (!signed?.bytes || !signed?.signatureB64) {
-      throw Object.assign(new Error('no signed catalog available'), { code: 'APP_CATALOG_INVALID' });
-    }
-    return {
-      catalogBase64: payloadToBase64(signed.bytes),
-      signature: signed.signatureB64.trim(),
-    };
-  }
-  let toastTimer, idleTimer, progressFrame, disposed = false, suspended = false;
+  const state = { apps: [], modules: [], retained: [], pendingResets: [], product: null,
+    revision: 0, host: null, loading: true, error: null, busy: new Map(), failures: new Map() };
+  let toastTimer, idleTimer, disposed = false, suspended = false;
   const dialogs = new Set();
-  let catalogAbort = new AbortController();
   let lifecycle = appLifecycle();
   const native = client || createNativeClient({
     host: 'com.natives.file_manager', timeoutMs: 20_000,
-    writeMethods: new Set(['apps:install_begin', 'apps:install_chunk', 'apps:install_finish',
-      'apps:install_commit', 'apps:install_abort', 'apps:uninstall', 'apps:clear_data',
-      'apps:recover', 'apps:set_enabled', 'apps:set_sidebar']),
+    writeMethods: new Set(['apps:clear_data', 'apps:recover', 'apps:set_enabled', 'apps:set_sidebar']),
     onDisconnect: (error, intentional) => {
       state.host = null;
       if (!intentional && !disposed) { state.error = classifyAppError(error); render(); }
@@ -75,6 +65,12 @@ export function createAppCenter({
     if (className) el.className = className;
     if (text !== undefined) el.textContent = text;
     return el;
+  }
+  function localized(value) {
+    if (value == null) return '';
+    if (typeof value !== 'object') return String(value);
+    const lang = globalThis.chrome?.i18n?.getUILanguage?.() || 'zh_CN';
+    return value[lang.startsWith('en') ? 'en' : 'zh_CN'] || value.zh_CN || value.en || '';
   }
   function action(icon, label, run, { danger = false, primary = false, disabled = false } = {}) {
     const button = node('button', `action${danger ? ' danger' : ''}${primary ? ' primary' : ''}`);
@@ -103,7 +99,7 @@ export function createAppCenter({
     state.host = null;
     const origin = globalThis.chrome?.runtime?.getURL?.('') || globalThis.location?.origin;
     const host = await native.call('apps:handshake', { origin });
-    if (host.appsProtocolVersion !== 3) {
+    if (host.appsProtocolVersion !== 4) {
       throw Object.assign(new Error('app host update required'), { code: 'APP_HOST_UPDATE_REQUIRED' });
     }
     state.host = host;
@@ -115,7 +111,10 @@ export function createAppCenter({
       const snapshot = await native.call('apps:list');
       if (disposed || suspended) return;
       state.apps = snapshot.apps || [];
+      state.modules = snapshot.modules || [];
       state.retained = snapshot.retainedData || [];
+      state.pendingResets = snapshot.pendingDataResets || [];
+      state.product = snapshot.product || null;
       state.revision = snapshot.revision;
       state.error = state.host ? null : (state.error || 'appsHostOffline');
       await saveAppNavigation(projectionFromApps(state.apps, state.revision), storage);
@@ -123,54 +122,79 @@ export function createAppCenter({
     render();
     scheduleIdle();
   }
-  async function reloadCatalog() {
-    catalogAbort.abort();
-    catalogAbort = new AbortController();
-    const attempt = catalogAbort;
-    state.loading = true;
-    state.catalogError = null;
-    render();
-    try {
-      const catalog = await catalogLoader({ signal: catalogAbort.signal, allowEmbedded: true });
-      if (disposed || attempt !== catalogAbort) return;
-      state.catalog = catalog.apps;
-      state.embedded = Boolean(catalog.embedded);
-      // v4: remember the verified raw catalog bytes + signature so the
-      // install flow can hand the SIGNED document to the Host for
-      // independent Ed25519 verification (contract §4.0).
-      state.signedCatalog = { bytes: catalog.rawBytes, signatureB64: catalog.rawSignatureB64 };
-    } catch (error) {
-      if (!disposed && attempt === catalogAbort && error.code !== 'APP_CANCELLED') {
-        state.catalog = [];
-        state.catalogError = classifyAppError(error);
-      }
-    } finally { if (attempt === catalogAbort) { state.loading = false; render(); } }
-  }
   async function reconnect() {
-    try { await handshake(); } catch (error) { state.error = classifyAppError(error); }
+    // Plan §3.4: a failed handshake stops every dependent call. There is no
+    // catalog reload, no suite preparation and no legacy fallback chain.
+    try { await handshake(); }
+    catch (error) { state.error = classifyAppError(error); render(); return; }
     await refresh();
   }
+  async function stopOwner(appId) {
+    // Notify same-profile pages immediately, then use the documented runtime
+    // message so the actual app.html owner closes its direct Native Port.
+    lifecycle.notify('stop', appId);
+    try {
+      const result = await globalThis.chrome?.runtime?.sendMessage?.({ type: 'natives-app-stop', appId });
+      return result?.stopped === true;
+    } catch {
+      // No local owner is normal. Core's runtime lock remains the authority
+      // for another browser profile or an uncooperative process.
+      return false;
+    }
+  }
   function items() {
-    const entries = new Map(state.catalog.map((entry) => [entry.app_id, { ...entry }]));
+    const entries = new Map();
+    // Fixed modules come from the Host's product manifest projection: an
+    // empty install table still shows every built-in module of the product.
+    for (const module of state.modules) {
+      entries.set(module.appId, {
+        app_id: module.appId,
+        name: localized(module.name) || module.appId,
+        description: module.description || null,
+        icon: module.appId === 'fund' ? 'grid' : 'box',
+        entryRoute: module.entryRoute || '',
+        present: Boolean(module.present),
+        configured: Boolean(module.configured),
+        enabled: module.enabled !== false,
+        showInSidebar: module.showInSidebar !== false,
+        sidebarOrder: module.sidebarOrder || 0,
+        fixed: true,
+      });
+    }
     for (const app of state.apps) {
-      const entry = entries.get(app.app_id) || { app_id: app.app_id, name: app.name, version: app.version };
-      Object.assign(entry, { installed: true, installedVersion: app.version, enabled: app.enabled,
-        showInSidebar: app.show_in_sidebar, recoveryPending: app.recovery_pending,
-        needsMigration: app.needs_migration, sidebarOrder: app.sidebar_order });
+      const entry = entries.get(app.app_id) || {
+        app_id: app.app_id,
+        name: app.name || app.app_id,
+        description: null,
+        icon: 'box',
+        entryRoute: `app.html?app=${encodeURIComponent(app.app_id)}`,
+        fixed: false,
+      };
+      Object.assign(entry, {
+        installed: true,
+        installedVersion: app.version,
+        enabled: app.enabled,
+        showInSidebar: app.show_in_sidebar,
+        recoveryPending: app.recovery_pending,
+        needsMigration: app.needs_migration,
+        hostRegistered: app.host_registered,
+        sidebarOrder: app.sidebar_order,
+      });
       entries.set(app.app_id, entry);
     }
     for (const retained of state.retained) {
-      const entry = entries.get(retained.app_id) || { app_id: retained.app_id, name: retained.name };
+      const entry = entries.get(retained.app_id) || {
+        app_id: retained.app_id,
+        name: retained.name || retained.app_id,
+        description: null,
+        icon: 'box',
+        entryRoute: `app.html?app=${encodeURIComponent(retained.app_id)}`,
+        fixed: false,
+      };
       Object.assign(entry, { retained: true, cleanupPending: retained.cleanup_pending, purgeData: retained.purge_data });
       entries.set(retained.app_id, entry);
     }
     return [...entries.values()].sort((a, b) => String(a.name).localeCompare(String(b.name)));
-  }
-  function available(entry) {
-    try {
-      const extensionVersion = globalThis.chrome?.runtime?.getManifest?.()?.version;
-      return resolveAppPackages(entry, state.host, extensionVersion);
-    } catch { return { reason: 'appsVerificationFailed', packages: [] }; }
   }
   function statusRow(message, retry) {
     const row = node('div', 'apps-notice');
@@ -183,14 +207,40 @@ export function createAppCenter({
     if (disposed || suspended || !list) return;
     list.replaceChildren();
     if (state.error) list.append(statusRow(state.error, reconnect));
-    if (state.catalogError) list.append(statusRow(state.catalogError, reloadCatalog));
-    else if (state.embedded) list.append(statusRow('appsEmbeddedCatalog', reloadCatalog));
-    if (state.loading) list.append(statusRow('appsCatalogLoading'));
+    // Plan §3.3: the explicit "Finish Natives setup" action prepares every
+    // fixed module of the product for this OS user — never per-module
+    // installs, and only when a verified product source is available.
+    if (!state.error && state.product && state.product.configured === false) {
+      if (state.product.sourcePresent) {
+        const setup = node('div', 'apps-notice');
+        setup.setAttribute('role', 'status');
+        setup.append(node('span', '', t('appsProductConfigRequired')));
+        setup.append(action('bolt', t('appsProductConfigure'), () => configureProduct(), { primary: true }));
+        list.append(setup);
+      } else {
+        list.append(statusRow('appsProductSourceMissing'));
+      }
+    }
     const entries = items();
-    if (!entries.length && !state.loading && !state.catalogError && !state.error) {
+    if (state.loading && !entries.length) list.append(statusRow('appsLoading'));
+    if (!entries.length && !state.loading && !state.error) {
       list.append(node('div', 'apps-empty', t('appsEmpty')));
     }
     for (const entry of entries) list.append(card(entry));
+  }
+  async function configureProduct() {
+    if (state.busy.size) throw Object.assign(new Error('app busy'), { code: 'APP_BUSY' });
+    state.loading = true;
+    render();
+    try {
+      await native.call('apps:product_configure', {});
+      setToast(t('appsProductConfigured'));
+    } catch (error) {
+      if (!disposed) state.error = classifyAppError(error);
+    } finally {
+      state.loading = false;
+      if (!disposed) await refresh();
+    }
   }
   function toggle(label, checked, onChange) {
     const container = node('label', 'apps-toggle');
@@ -214,61 +264,66 @@ export function createAppCenter({
     thumb.innerHTML = `<svg class="icon" aria-hidden="true"><use href="#i-${icon}" /></svg>`;
     const body = node('div', 'body');
     body.append(node('div', 'name', entry.name || entry.app_id));
-    const description = typeof entry.description === 'object'
-      ? entry.description[globalThis.chrome?.i18n?.getUILanguage?.().startsWith('zh') ? 'zh_CN' : 'en']
-      : entry.description;
+    const description = localized(entry.description);
     if (description) body.append(node('div', 'desc', description));
-    const readiness = available(entry);
-    const downloadBytes = readiness.packages.reduce((sum, pkg) => sum + pkg.wire_size, 0);
     const meta = node('div', 'meta');
-    if (entry.version || entry.installedVersion) meta.append(node('span', '', `v${entry.installedVersion || entry.version}`));
-    if (downloadBytes) meta.append(node('span', '', `${downloadBytes.toLocaleString()} B`));
+    const version = entry.installedVersion || entry.version;
+    if (version) meta.append(node('span', '', `v${version}`));
+    // §4.1: no store fields. Data usage stays honestly "not reported"
+    // until a module owner provides real numbers (plan §3.4).
+    meta.append(node('span', '', `${t('appsUserDataUsage')}: ${t('appsUsageNotReported')}`));
     body.append(meta);
     const actions = node('div', 'actions');
     const busy = state.busy.get(entry.app_id);
     const disabled = state.busy.size > 0;
+    const resetPending = state.pendingResets.includes(entry.app_id);
     if (busy) {
       actions.append(node('span', 'status', t(busy.stage)));
-      const progress = node('progress', 'apps-progress');
-      progress.max = 1;
-      progress.setAttribute('aria-label', t(busy.stage));
-      if (Number.isFinite(busy.progress)) progress.value = busy.progress;
-      actions.append(progress);
-      if (busy.controller) actions.append(action('close', t('cancel'), () => busy.controller.abort(), { disabled: busy.committing }));
     } else {
-      let status = entry.installed ? (entry.enabled ? 'appsInstalled' : 'appsDisabled') : 'appsNotInstalled';
-      if (!entry.installed && readiness.reason) status = readiness.reason;
-      if (entry.cleanupPending) status = 'appsCleanupPending';
+      let status;
+      if (entry.cleanupPending || resetPending) status = 'appsCleanupPending';
       else if (entry.recoveryPending) status = 'appsRecoveryPending';
       else if (entry.needsMigration) status = 'appsNeedsMigration';
-      else if (entry.retained && !entry.installed) status = 'appsDataRetained';
+      else if (entry.installed && !entry.hostRegistered) status = 'appsRepairRequired';
+      else if (entry.installed) status = entry.enabled ? 'appsReady' : 'appsDisabled';
+      else if (entry.fixed) status = entry.present && entry.configured ? 'appsReady' : 'appsProductConfigRequired';
+      else if (entry.retained) status = 'appsDataRetained';
+      else status = 'appsProductConfigRequired';
       actions.append(node('span', 'status', t(status)));
       if (entry.recoveryPending) {
-        actions.append(action('refresh', t('retry'), async () => {
+        actions.append(action('refresh', t('appsRepair'), async () => {
+          await stopOwner(entry.app_id);
           lifecycle.notify('maintenance', entry.app_id);
           try { await native.call('apps:recover', { appId: entry.app_id }); }
           finally { lifecycle.notify('changed', entry.app_id); await refresh(); }
         }, { disabled }));
-      } else if (entry.installed && !entry.cleanupPending) {
-        actions.append(action('open', t('appsOpen'), () => openApp(entry), { disabled: disabled || !entry.enabled || Boolean(entry.needsMigration) || Boolean(entry.recoveryPending) }));
-        const canUpdate = (entry.needsMigration || compareAppVersions(entry.version, entry.installedVersion) === 1) && !readiness.reason;
-        if (canUpdate) {
-          actions.append(action('up', t('appsUpdate'), () => install(entry), { primary: true, disabled }));
-        }
+      }
+      const openable = (entry.installed || (entry.fixed && entry.present))
+        && entry.enabled && !entry.cleanupPending && !resetPending
+        && !entry.recoveryPending && !entry.needsMigration;
+      if (openable) {
+        actions.append(action('open', t('appsOpen'), () => openApp(entry), { primary: true, disabled }));
+      }
+      if (entry.installed && entry.enabled) {
+        actions.append(action('stop', t('appsStop'), async () => {
+          const stopped = await stopOwner(entry.app_id);
+          setToast(t(stopped ? 'appsStoppedToast' : 'appsStopRequested'));
+        }, { disabled }));
+      }
+      // Preferences only exist once the module is configured (an apps
+      // record exists); a not-yet-configured module has no rows to toggle.
+      if (entry.installed) {
         body.append(toggle(t('appsEnabled'), entry.enabled, async (enabled) => {
-          if (!enabled) lifecycle.notify('maintenance', entry.app_id);
+          if (!enabled) { await stopOwner(entry.app_id); lifecycle.notify('maintenance', entry.app_id); }
           try { await native.call('apps:set_enabled', { appId: entry.app_id, enabled }); }
           finally { lifecycle.notify('changed', entry.app_id); }
         }));
         body.append(toggle(t('appsShowInSidebar'), entry.showInSidebar, (show) =>
           native.call('apps:set_sidebar', { appId: entry.app_id, show })));
-        actions.append(action('trash', t('appsUninstall'), () => confirmUninstall(entry), { danger: true, disabled }));
-      } else if (!entry.cleanupPending && !readiness.reason) {
-        actions.append(action('download', t('appsInstall'), () => install(entry), { primary: true, disabled }));
-      }
-      if (entry.retained || entry.cleanupPending) {
-        actions.append(action(entry.cleanupPending ? 'refresh' : 'trash', t(entry.cleanupPending ? 'retry' : 'appsClearData'),
-          () => confirmUninstall(entry, !entry.installed), { danger: true, disabled }));
+        // §4.3: data management is the only destructive action, fully
+        // separate from the retired uninstall; it keeps code, registration
+        // and preferences and requires double confirmation.
+        actions.append(action('trash', t('appsClearData'), () => confirmClearData(entry), { danger: true, disabled }));
       }
     }
     const failure = state.failures.get(entry.app_id);
@@ -277,123 +332,46 @@ export function createAppCenter({
     return article;
   }
 
-  async function install(entry) {
+  async function clearData(entry, { credentials = false } = {}) {
     if (state.busy.size) throw Object.assign(new Error('app busy'), { code: 'APP_BUSY' });
-    const controller = new AbortController();
-    const busy = { stage: 'appsResolving', controller, committing: false };
-    state.busy.set(entry.app_id, busy);
+    state.busy.set(entry.app_id, { stage: 'appsClearing' });
     state.failures.delete(entry.app_id);
     render();
-    let installId, committed = false;
+    await stopOwner(entry.app_id);
+    lifecycle.notify('maintenance', entry.app_id);
     try {
-      await handshake();
-      const extensionVersion = globalThis.chrome?.runtime?.getManifest?.()?.version;
-      const { packages, reason } = resolveAppPackages(entry, state.host, extensionVersion);
-      if (reason) throw Object.assign(new Error(reason), { code: 'APP_PACKAGE_INVALID' });
-      const existingApp = state.apps.find((a) => a.app_id === entry.app_id);
-      const enabled = existingApp ? existingApp.enabled : true;
-      const show_in_sidebar = existingApp ? existingApp.show_in_sidebar : true;
-      const sidebar_order = existingApp ? (Number(existingApp.sidebar_order) || 0) : 0;
-      const request = {
-        app: { app_id: entry.app_id, kind: 'extension_app', name: entry.name, version: entry.version,
-          enabled, show_in_sidebar, sidebar_order, runtime_spec: entry.runtime_spec || {},
-          surface: entry.surface, manifest: entry.manifest || {} },
-        packages: packages.map(({ package_id, kind, version, platform, arch, wire_size, payload_size,
-          artifact_sha256, payload_sha256, required = true }) => ({
-          package_id, kind, version, platform, arch, wire_size, payload_size, artifact_sha256, payload_sha256, required,
-        })),
-        permissions: entry.permissions || [],
-        min_host_version: entry.minHostVersion || entry.minNativesVersion || null,
-      };
-      controller.signal.throwIfAborted();
-      // Protocol v4: the page sends the SIGNED catalog bytes; the Host
-      // verifies the Ed25519 signature and selects the package itself.
-      const signed = signedCatalogForInstall();
-      const tx = await native.call('apps:install_begin', {
-        catalogBase64: signed.catalogBase64,
-        signature: signed.signature,
+      const unique = globalThis.crypto?.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+      await native.call('apps:clear_data', {
+        appId: entry.app_id,
+        requestId: `${entry.app_id}:${unique}`,
+        confirmPurge: true,
+        deleteImports: true,
+        deleteCache: true,
+        deleteLogs: true,
+        deleteCredentials: credentials,
       });
-      installId = tx.install_id;
-      let transferred = 0;
-      const total = packages.reduce((sum, pkg) => sum + pkg.wire_size, 0);
-      for (const pkg of packages) {
-        busy.stage = 'appsDownloading'; render();
-        const artifact = await packageTransfer(pkg, { signal: controller.signal, onProgress: (bytes) => {
-          busy.progress = (transferred + bytes) / total;
-          if (globalThis.requestAnimationFrame) {
-            progressFrame ??= requestAnimationFrame(() => { progressFrame = undefined; render(); });
-          } else render();
-        } });
-        controller.signal.throwIfAborted();
-        transferred += pkg.wire_size;
-        // Chunked upload: 256 KiB frames, sequential, one in flight; the
-        // Host owns every hash check and decompression (contract §4.0).
-        busy.stage = 'appsUploading'; render();
-        const chunkSize = tx.chunk_size || 262144;
-        for (let offset = 0; offset < artifact.byteLength; offset += chunkSize) {
-          const slice = artifact.subarray(offset, Math.min(offset + chunkSize, artifact.byteLength));
-          await native.call('apps:install_chunk', {
-            installId, packageId: pkg.package_id, offset,
-            dataBase64: payloadToBase64(slice),
-            chunkSha256: await sha256Hex(slice),
-          });
-        }
-        busy.stage = 'appsVerifying'; render();
-        await native.call('apps:install_finish', {
-          installId, packageId: pkg.package_id, artifactBytes: pkg.wire_size,
-        });
-      }
-      controller.signal.throwIfAborted();
-      busy.stage = 'appsCommitting'; busy.committing = true; busy.progress = undefined; render();
-      lifecycle.notify('maintenance', entry.app_id);
-      await native.call('apps:install_commit', { installId });
-      committed = true;
-      setToast(t('appsInstalledToast'));
-    } catch (error) {
-      if (installId && !disposed && !suspended && !committed) {
-        try { await native.call('apps:install_abort', { installId, errorCode: 'APP_CANCELLED', errorMessage: 'install interrupted' }); }
-        catch { state.failures.set(entry.app_id, 'appsRecoveryPending'); }
-      }
-      if (!state.failures.has(entry.app_id)) state.failures.set(entry.app_id,
-        controller.signal.aborted ? 'appsCancelled' : classifyAppError(error));
-      throw controller.signal.aborted ? Object.assign(new Error('cancelled'), { code: 'APP_CANCELLED' }) : error;
-    } finally {
+      setToast(t('appsDataDeleted'));
+    } catch (error) { state.failures.set(entry.app_id, classifyAppError(error)); throw error; }
+    finally {
       lifecycle.notify('changed', entry.app_id);
       state.busy.delete(entry.app_id);
-      if (!disposed) await refresh();
-      render();
-    }
-  }
-
-  async function uninstall(appId, { purgeData = false, confirmPurge = false, dataOnly = false } = {}) {
-    if (state.busy.size) throw Object.assign(new Error('app busy'), { code: 'APP_BUSY' });
-    state.busy.set(appId, { stage: 'appsCommitting' });
-    state.failures.delete(appId);
-    render();
-    lifecycle.notify('maintenance', appId);
-    try {
-      await native.call(dataOnly ? 'apps:clear_data' : 'apps:uninstall',
-        dataOnly ? { appId, confirmPurge } : { appId, purgeData, confirmPurge });
-      setToast(t(purgeData ? 'appsDataDeleted' : 'appsUninstalledToast'));
-    } catch (error) { state.failures.set(appId, classifyAppError(error)); throw error; }
-    finally {
-      lifecycle.notify('changed', appId);
-      state.busy.delete(appId);
       await refresh();
     }
   }
-  async function confirmUninstall(entry, dataOnly = false) {
-    const choice = await dialog({ title: t(dataOnly ? 'appsClearData' : 'appsUninstallTitle'),
-      body: entry.name + '\n' + t(dataOnly ? 'appsPurgeWarning' : 'appsUninstallBody'),
-      confirmLabel: t(dataOnly ? 'appsClearData' : 'appsUninstall'), checkbox: !dataOnly,
-      checked: Boolean(entry.purgeData), danger: dataOnly });
+  async function confirmClearData(entry) {
+    // Confirmation page lists the actual scope (§4.3): data, imported
+    // originals, cache and logs are cleared; sign-in credentials are kept
+    // unless separately confirmed. Code and preferences are never touched.
+    const choice = await dialog({ title: t('appsClearData'),
+      body: `${entry.name}\n${t('appsClearDataScope')}`,
+      confirmLabel: t('appsClearData'), checkboxLabel: t('appsDeleteCredentials'),
+      checked: false, danger: true });
     if (!choice) return;
-    const purgeData = dataOnly || choice.purgeData;
-    if (purgeData && !await dialog({ title: t('appsPurgeConfirmTitle'), body: entry.name + '\n' + t('appsPurgeWarning'),
+    if (!await dialog({ title: t('appsPurgeConfirmTitle'), body: `${entry.name}\n${t('appsPurgeWarning')}`,
       confirmLabel: t('appsClearData'), danger: true })) return;
-    await uninstall(entry.app_id, { purgeData, confirmPurge: purgeData, dataOnly });
+    await clearData(entry, { credentials: Boolean(choice.purgeData) });
   }
-  function dialog({ title, body, confirmLabel, checkbox, checked, danger }) {
+  function dialog({ title, body, confirmLabel, checkboxLabel, checked, danger }) {
     return new Promise((resolve) => {
       const previous = document.activeElement;
       const backdrop = node('div', 'apps-dialog-backdrop');
@@ -404,10 +382,10 @@ export function createAppCenter({
       const ok = backdrop.querySelector('[data-role="ok"]');
       cancel.textContent = t('cancel'); ok.textContent = confirmLabel;
       let input;
-      if (checkbox) {
+      if (checkboxLabel) {
         const label = node('label', 'apps-purge-choice');
-        input = node('input'); input.type = 'checkbox'; input.checked = checked;
-        label.append(input, node('span', '', t('appsPurgeChoice')));
+        input = node('input'); input.type = 'checkbox'; input.checked = Boolean(checked);
+        label.append(input, node('span', '', checkboxLabel));
         const actions = backdrop.querySelector('.actions');
         actions.remove();
         backdrop.querySelector('.apps-dialog').append(label, actions);
@@ -434,26 +412,35 @@ export function createAppCenter({
     });
   }
   function openApp(entry) {
-    const route = `app.html?app=${encodeURIComponent(entry.app_id)}`;
-    if (globalThis.chrome?.tabs?.create) chrome.tabs.create({ url: route });
-    else globalThis.window?.open(route, '_blank');
+    // §4: focus the module's existing page in this profile before opening a
+    // new one; repeated opens never spawn duplicate surfaces.
+    const route = entry.entryRoute || `app.html?app=${encodeURIComponent(entry.app_id)}`;
+    const url = globalThis.chrome?.runtime?.getURL ? globalThis.chrome.runtime.getURL(route) : route;
+    const base = url.split('?')[0];
+    if (globalThis.chrome?.tabs?.query) {
+      chrome.tabs.query({ url: `${base}*` }, (tabs) => {
+        const existing = Array.isArray(tabs) ? tabs[0] : null;
+        if (existing?.id !== undefined) {
+          chrome.tabs.update(existing.id, { active: true });
+          chrome.windows?.update?.(existing.windowId, { focused: true }).catch?.(() => {});
+        } else if (chrome.tabs.create) chrome.tabs.create({ url });
+        else globalThis.window?.open(url, '_blank');
+      });
+    } else if (chrome.tabs.create) chrome.tabs.create({ url });
+    else globalThis.window?.open(url, '_blank');
   }
   function suspend() {
     suspended = true;
-    catalogAbort.abort();
-    for (const busy of state.busy.values()) busy.controller?.abort();
     for (const close of dialogs) close(null);
     native.disconnect?.();
     lifecycle.close();
     clearTimeout(toastTimer); clearTimeout(idleTimer);
-    if (progressFrame !== undefined) globalThis.cancelAnimationFrame?.(progressFrame);
-    progressFrame = undefined;
   }
   function resume(event) {
     if (!event.persisted || disposed || !suspended) return;
     suspended = false;
     lifecycle = appLifecycle();
-    void Promise.all([reloadCatalog(), reconnect()]);
+    void reconnect();
   }
   function dispose() {
     disposed = true;
@@ -468,8 +455,8 @@ export function createAppCenter({
   const back = document.getElementById('nav-back');
   if (back) back.onclick = () => { dispose(); globalThis.location.assign('space.html'); };
   document.querySelectorAll('[data-i18n]').forEach((el) => { el.textContent = t(el.dataset.i18n, el.textContent); });
-  const ready = Promise.all([reloadCatalog(), reconnect()]);
-  return { refresh, reloadCatalog, state, install, uninstall, dispose, ready };
+  const ready = reconnect();
+  return { refresh, state, dispose, ready };
 }
 
 if (typeof document !== 'undefined' && document.getElementById('apps-list')) createAppCenter();

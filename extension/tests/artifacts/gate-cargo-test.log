@@ -1,0 +1,218 @@
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.20s
+     Running unittests src/lib.rs (target/debug/deps/app_host_support-77af185e7968b0ef)
+
+running 19 tests
+test framing::tests::rejects_oversize_and_truncated_frames ... ok
+test framing::tests::round_trip_and_clean_eof ... ok
+test error::tests::error_codes_round_trip ... ok
+test http::tests::request_is_bounded_and_checks_host_and_origin ... ok
+test lock::tests::app_id_normalization_matches_prefixed_and_unprefixed ... ok
+test activation::tests::verify_executable_sha256_checks_exact_hash ... ok
+test origin::tests::accepts_only_one_valid_chrome_origin ... ok
+test protocol::tests::request_round_trip_and_unknown_shape ... ok
+test protocol::tests::response_omits_absent_sides ... ok
+test lock::tests::lock_file_inode_is_preserved_across_releases ... ok
+test session::tests::challenge_is_required ... ok
+test session::tests::issue_and_authorize_round_trip ... ok
+test session::tests::rotate_changes_generation_and_revokes_session ... ok
+test session::tests::wrong_token_generation_or_missing_session_rejected ... ok
+test lock::tests::acquire_runtime_rejects_when_install_lock_held ... ok
+test lock::tests::runtime_lock_is_exclusive ... ok
+test lock::tests::runtime_lease_holds_one_app_lock_and_one_slot ... ok
+test lock::tests::slots_are_bounded ... ok
+test activation::tests::verify_activation_checks_all_invariants ... ok
+
+test result: ok. 19 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running unittests src/lib.rs (target/debug/deps/file_manager_core-6eb8963124e8caaf)
+
+running 45 tests
+test file_manager::archive::tests::lists_safe_tar_headers_without_reading_member_bodies ... ok
+test file_manager::archive::tests::lists_safe_utf8_members_without_inflating ... ok
+test file_manager::archive::tests::decodes_legacy_gbk_member_names ... ok
+test file_manager::archive::tests::parses_7z_flat_listing_with_size_and_bounds ... ok
+test file_manager::archive::tests::identifies_untrusted_symlink_member_as_non_extractable ... ok
+test file_manager::archive::tests::parses_rar_entry_lines_and_skips_headers ... ok
+test file_manager::archive::tests::create_zip_honors_cancellation_before_scan ... ok
+test file_manager::archive::tests::unavailable_listing_carries_explicit_flag ... ok
+test file_manager::archive::tests::rejects_declared_zip_bomb_size ... ok
+test file_manager::archive::tests::rejects_archive_path_escape_and_absolute_member ... ok
+test file_manager::archive::tests::rejects_symlink_and_cross_directory_zip_inputs ... ok
+test file_manager::file_manager_tests::authorization_accepts_home_and_home_ancestors_read ... ok
+test file_manager::file_manager_tests::authorization_rejects_dangling_symlink ... ok
+test file_manager::file_manager_tests::authorization_rejects_missing_target_below_external_symlink ... ok
+test file_manager::file_manager_tests::atomic_byte_write_truncation_keeps_utf8_boundary ... ok
+test file_manager::file_manager_tests::cancelled_streaming_import_drops_temporary_file ... ok
+test file_manager::file_manager_tests::clipboard_image_rejects_non_image_before_touching_clipboard ... ok
+test file_manager::file_manager_tests::create_rename_copy_duplicate_roundtrip ... ok
+test file_manager::file_manager_tests::deduplicate_path_adds_counter ... ok
+test file_manager::file_manager_tests::detect_file_kind_extensionless_and_images ... ok
+test file_manager::file_manager_tests::detect_project_badge_priority ... ok
+test file_manager::archive::tests::lists_standalone_gzip_member ... ok
+test file_manager::file_manager_tests::disk_usage_counts_nested_files_without_following_symlinks ... ok
+test file_manager::file_manager_tests::list_dir_detailed_includes_project_and_sorts_dirs_first ... ok
+test file_manager::file_manager_tests::list_dir_options_accepts_frontend_camel_case_json ... ok
+test file_manager::file_manager_tests::image_preview_accepts_safe_formats_and_rejects_unknown ... ok
+test file_manager::file_manager_tests::list_dir_page_returns_bounded_window_and_has_more ... ok
+test file_manager::file_manager_tests::atomic_write_rejects_stale_mtime_and_preserves_content ... ok
+test file_manager::file_manager_tests::macos_privacy_protected_home_directories_are_deferred ... ok
+test file_manager::file_manager_tests::list_dir_page_with_options_applies_hidden_and_size_sorting ... ok
+test file_manager::file_manager_tests::natural_cmp_numeric_order ... ok
+test file_manager::archive::tests::extracts_safe_zip_without_overwriting_existing_files ... ok
+test file_manager::file_manager_tests::pdf_preview_accepts_bounded_pdf_and_rejects_invalid_header ... ok
+test file_manager::file_manager_tests::read_file_rejects_binary_preview_transport ... ok
+test file_manager::file_manager_tests::media_preview_accepts_safe_audio_and_rejects_unknown ... ok
+test file_manager::file_manager_tests::read_file_returns_mtime_and_kind ... ok
+test file_manager::file_manager_tests::stat_path_missing_and_found ... ok
+test file_manager::file_manager_tests::streaming_import_rejects_bad_offsets_and_incomplete_data ... ok
+test file_manager::file_manager_tests::valid_name_rejects_path_sep_and_dots ... ok
+test file_manager::archive::tests::extracts_tar_family_without_overwriting_existing_files ... ok
+test file_manager::file_manager_tests::streaming_import_commits_chunks_without_overwrite ... ok
+test file_manager::file_manager_tests::authorization_accepts_external_volumes_read_and_volume_contents_write ... ok
+test file_manager::archive::tests::creates_zip_from_same_directory_inputs_and_rejects_overwrite ... ok
+test file_manager::file_manager_tests::list_dir_sorts_by_size_and_mtime ... ok
+test file_manager::file_manager_tests::batch_copy_move_trash_and_roots ... ok
+
+test result: ok. 45 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s
+
+     Running unittests src/main.rs (target/debug/deps/native_file_host-e8c81d96fc63c599)
+
+running 117 tests
+test app_dispatch::tests::resource_ranges_reject_negative_fractional_and_string_values ... ok
+test app_activation::tests::health_probe_rejects_nonzero_and_missing ... ok
+test app_activation::tests::runtime_host_name_is_stable_sha256 ... ok
+test app_host_manifest::tests::manifest_host_name_cannot_escape_registration_directory ... ok
+test app_host_manifest::tests::origin_gate_accepts_real_chrome_ids ... ok
+test app_host_manifest::tests::origin_gate_rejects_garbage ... ok
+test app_install::tests::identifiers_reject_traversal_and_prefixes ... ok
+test app_install::tests::app_directory_symlinks_cannot_escape_during_install_or_uninstall ... ok
+test app_install::tests::install_paths_are_core_decided ... ok
+test app_install::tests::payload_validation_accepts_json_and_images_rejects_binaries_and_scripts ... ok
+test app_install::tests::install_move_is_atomic_rename ... ok
+test app_install::tests::write_and_hash_payload ... ok
+test app_activation::tests::activation_projection_lifecycle ... ok
+test app_install::tests::uninstall_dirs_preserve_personal_data ... ok
+test app_dispatch::tests::handshake_cannot_grant_an_origin_not_supplied_by_chrome ... ok
+test app_secrets::tests::secret_cleanup_is_idempotent_without_reading_plaintext ... ok
+test app_secrets::tests::secret_cleanup_rejects_locked_and_pending_deletions ... ok
+test app_signing::tests::malformed_signatures_are_rejected ... ok
+test app_runtime::tests::app_panic_is_contained_and_audited ... ok
+test app_runtime::tests::successful_invoke_returns_result_without_child_process ... ok
+test app_runtime::tests::uninstalled_unknown_and_disabled_apps_are_rejected ... ok
+test app_activation::tests::run_bounded_drains_oversized_output_without_deadlock ... ok
+test app_store::tests::a5_bad_payload_rolls_back_to_failed_without_app_row ... ok
+test app_runtime::tests::core_dispatch_reaches_real_fund_app_library ... ok
+test app_runtime::tests::method_payload_permission_and_session_gates ... ok
+test app_store::tests::a5_commit_registers_resource_package_and_allows_read ... ok
+test app_signing::tests::valid_catalog_signature_verifies ... ok
+test app_signing::tests::tampered_catalog_is_rejected ... ok
+test app_store::tests::begin_rejects_unknown_kind_and_bad_app_id ... ok
+test app_store::tests::abort_records_explicit_error_state ... ok
+test app_store::tests::a5_commit_without_origin_refuses_registration ... ok
+test app_store::tests::commit_and_abort_require_a_known_transaction ... ok
+test app_store::tests::a5_uninstall_removes_packages_keeps_data ... ok
+test app_store::tests::migrations_are_idempotent ... ok
+test app_store::tests::metadata_only_and_incompatible_package_sets_are_rejected ... ok
+test app_store::tests::install_cannot_commit_missing_packages_or_an_aborted_transaction ... ok
+test app_store::tests::double_install_is_a_conflict ... ok
+test app_store::tests::install_owner_blocks_other_connections_and_abort_removes_staging ... ok
+test app_store::tests::failed_cleanup_is_visible_and_retryable_without_following_symlinks ... ok
+test app_store::tests::demo_install_query_enable_sidebar_uninstall_cycle ... ok
+test app_store::tests::suite_seed_invalid_app_id_fails ... ok
+test app_store::tests::suite_seed_corrupted_artifact_hash_fails ... ok
+test app_store::tests::updates::inspect_allows_rollback_default_denies_invalid_or_incompatible ... ok
+test app_store::tests::suite_seed_corrupted_payload_hash_fails ... ok
+test app_store::tests::update_can_begin_without_removing_the_installed_app ... ok
+test app_activation::tests::run_bounded_kills_over_budget_child ... ok
+test app_store::tests::uninstall_preserves_data_by_default_and_later_purge_wipes_only_owned_data ... ok
+test app_store::tests::v2::legacy_manifest_cleanup_requires_recorded_owner_and_owned_path ... ok
+test app_store::tests::updates::committed_cleanup_failure_can_retry_without_rolling_back_new_version ... ok
+test app_store::tests::v2::migration_marks_runtime_apps_once_without_touching_install_state ... ok
+test app_store::tests::updates::update_failure_preserves_previous_and_success_preserves_preferences ... ok
+test app_store::tests::v4_catalog_v3_artifact_hash_failure_aborts_without_an_app_row ... ok
+test app_store::tests::v4_catalog_v3_chunks_are_ordered_idempotent_and_abortable ... ok
+test app_store::tests::v4_catalog_v3_rejects_bad_signature_platform_and_oversize ... ok
+test app_store::tests::v4_catalog_v3_connection_close_aborts_without_touching_user_data ... ok
+test app_store::tests::v4_signed_catalog_chunked_install_reaches_staged ... ok
+test app_store::tests::v4_rejects_platform_mismatch_and_payload_hash_mismatch ... ok
+test protocol::tests::reads_native_message_frame ... ok
+test protocol::tests::reads_package_frame_at_incoming_limit ... ok
+test protocol::tests::app_chunk_request_accepts_frame_budget_without_relaxing_file_limits ... ok
+test protocol::tests::rejects_oversized_native_message_frame ... ok
+test tests::accepts_file_write_conflict_and_listing_options ... ok
+test tests::batch_copy_preserves_destination_directory_semantics ... ok
+test tests::batch_honors_cancellation_token_and_schema ... ok
+test tests::content_search_reports_unavailable_pdf_extractor ... ok
+test tests::content_search_returns_first_matching_line ... ok
+test tests::content_search_skips_binary_and_oversized_files ... ok
+test tests::create_folder_dispatch_uses_core_folder_type ... ok
+test tests::duplicate_batch_reports_progress_shape_and_result ... ok
+test tests::editor_dispatch_rejects_missing_path_before_spawning ... ok
+test tests::fuzzy_name_score_accepts_ordered_fragments_only ... ok
+test tests::image_preview_dispatch_returns_safe_data_url_parts ... ok
+test tests::locate_rejects_unsafe_queries ... ok
+test tests::media_preview_dispatch_returns_audio_data_url_parts ... ok
+test tests::normalizes_notify_events_and_filters_editor_noise ... ok
+test tests::pdf_preview_dispatch_returns_bounded_data_url_parts ... ok
+test tests::preview_honors_cancellation_token ... ok
+test tests::reaps_finished_background_jobs ... ok
+test tests::rejects_invalid_batch_shape_and_sort_values ... ok
+test tests::rejects_invalid_create_zip_paths ... ok
+test tests::rejects_invalid_request_envelope ... ok
+test tests::rejects_path_traversal_folder_names ... ok
+test tests::rejects_unknown_envelope_fields ... ok
+test tests::rejects_unknown_method_parameters_and_bad_limits ... ok
+test tests::rejects_unknown_methods ... ok
+test tests::rejects_unknown_request_method_before_dispatch ... ok
+test tests::sanitizes_internal_errors ... ok
+test tests::search_honors_cancellation_token ... ok
+test tests::search_respects_show_hidden_flag ... ok
+test tests::shutdown_cancels_and_joins_background_jobs ... ok
+test tests::version_rejects_parameters ... ok
+test tests::version_reports_stable_protocol_and_host_version ... ok
+test tests::watches_only_the_current_directory ... ok
+test tests::workspace_widget_add_uses_envelope_workspace_ownership ... ok
+test tests::write_file_dispatch_rejects_symlink_escape ... ok
+test tests::write_file_dispatch_reports_mtime_conflict_without_overwrite ... ok
+test workspace_store::tests::ai_performance_widget_can_be_upserted ... ok
+test workspace_store::tests::create_session_snapshot_and_soft_delete ... ok
+test workspace_store::tests::deleting_or_closing_the_last_workspace_is_rejected ... ok
+test workspace_store::tests::duplicate_copies_widgets_in_one_transaction ... ok
+test workspace_store::tests::legacy_workspace_schema_is_upgraded_and_keeps_one_open_workspace ... ok
+test workspace_store::tests::migration_purges_retired_widgets_and_cleans_personal_templates ... ok
+test workspace_store::tests::migrations_are_idempotent ... ok
+test workspace_store::tests::reset_workspace_to_built_in_templates ... ok
+test workspace_store::tests::revision_conflicts_are_rejected ... ok
+test workspace_store::tests::settings_roundtrip ... ok
+test workspace_store::tests::tabliss_import_is_validated_and_atomic ... ok
+test workspace_store::tests::tabliss_preview_and_export_roundtrip ... ok
+test workspace_store::tests::template_save_list_delete_lifecycle ... ok
+test workspace_store::tests::widget_upsert_reorder_and_background_save ... ok
+test app_store::tests::v2::resource_reads_are_chunked_and_keep_version_and_format ... ok
+test app_store::tests::suite_seed_unified_install_pipeline_succeeds ... ok
+test protocol::tests::refuses_oversized_host_response ... ok
+test app_store::tests::updates::rollback_inspect_validation_and_state_switch ... ok
+test app_store::tests::suite_seed_reconciliation_lifecycle ... ok
+test app_store::tests::updates::rollback_rejects_no_previous_version_or_active_runtime ... ok
+test app_store::tests::updates::set_enabled_rejects_running_app_and_advances_generation ... ok
+
+test result: ok. 117 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 2.32s
+
+     Running unittests sample_host.rs (target/debug/deps/sample_host-8c36984de423dfbc)
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests app_host_support
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests file_manager_core
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+

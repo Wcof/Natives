@@ -1,0 +1,246 @@
+{
+  "generatedAt": "2026-09-12T00:51:00.284Z",
+  "note": "测试数据基准截图（fixture），不进生产数据",
+  "entries": [
+    {
+      "card": "aiCost",
+      "chart": "number",
+      "background": "space-dark",
+      "file": "aiCost-number-space-dark.png",
+      "bytes": 3351,
+      "note": "测试数据 fixture，非生产数据"
+    },
+    {
+      "card": "aiCost",
+      "chart": "line",
+      "background": "space-dark",
+      "file": "aiCost-line-space-dark.png",
+      "bytes": 2775,
+      "note": "测试数据 fixture，非生产数据"
+    },
+    {
+      "card": "aiCost",
+      "chart": "bar",
+      "background": "space-dark",
+      "file": "aiCost-bar-space-dark.png",
+      "bytes": 3420,
+      "note": "测试数据 fixture，非生产数据"
+    },
+    {
+      "card": "aiCost",
+      "chart": "heatmap",
+      "background": "space-dark",
+      "file": "aiCost-heatmap-space-dark.png",
+      "bytes": 5880,
+      "note": "测试数据 fixture，非生产数据"
+    },
+    {
+      "card": "aiCost",
+      "chart": "table",
+      "background": "space-dark",
+      "file": "aiCost-table-space-dark.png",
+      "bytes": 6969,
+      "note": "测试数据 fixture，非生产数据"
+    },
+    {
+      "card": "aiTokens",
+      "chart": "number",
+      "background": "space-dark",
+      "file": "aiTokens-number-space-dark.png",
+      "bytes": 3819,
+      "note": "测试数据 fixture，非生产数据"
+    },
+    {
+      "card": "aiTokens",
+      "chart": "line",
+      "background": "space-dark",
+      "file": "aiTokens-line-space-dark.png",
+      "bytes": 4919,
+      "note": "测试数据 fixture，非生产数据"
+    },
+    {
+      "card": "aiTokens",
+      "chart": "bar",
+      "background": "space-dark",
+      "file": "aiTokens-bar-space-dark.png",
+      "bytes": 2928,
+      "note": "测试数据 fixture，非生产数据"
+    },
+    {
+      "card": "aiTokens",
+      "chart": "heatmap",
+      "background": "space-dark",
+      "file": "aiTokens-heatmap-space-dark.png",
+      "bytes": 5880,
+      "note": "测试数据 fixture，非生产数据"
+    },
+    {
+      "card": "aiTokens",
+      "chart": "table",
+      "background": "space-dark",
+      "file": "aiTokens-table-space-dark.png",
+      "bytes": 4338,
+      "note": "测试数据 fixture，非生产数据"
+    },
+    {
+      "card": "aiSessions",
+      "chart": "number",
+      "background": "space-dark",
+      "file": "aiSessions-number-space-dark.png",
+      "bytes": 3105,
+      "note": "测试数据 fixture，非生产数据"
+    },
+    {
+      "card": "aiSessions",
+      "chart": "heatmap",
+      "background": "space-dark",
+      "file": "aiSessions-heatmap-space-dark.png",
+      "bytes": 5880,
+      "note": "测试数据 fixture，非生产数据"
+    },
+    {
+      "card": "aiSessions",
+      "chart": "line",
+      "background": "space-dark",
+      "file": "aiSessions-line-space-dark.png",
+      "bytes": 793,
+      "note": "测试数据 fixture，非生产数据"
+    },
+    {
+      "card": "aiSessions",
+      "chart": "table",
+      "background": "space-dark",
+      "file": "aiSessions-table-space-dark.png",
+      "bytes": 5256,
+      "note": "测试数据 fixture，非生产数据"
+    },
+    {
+      "card": "aiSessions",
+      "chart": "timeline",
+      "background": "space-dark",
+      "file": "aiSessions-timeline-space-dark.png",
+      "bytes": 3586,
+      "note": "测试数据 fixture，非生产数据"
+    },
+    {
+      "card": "aiCost",
+      "chart": "number",
+      "background": "space-light",
+      "file": "aiCost-number-space-light.png",
+      "bytes": 3470,
+      "note": "测试数据 fixture，非生产数据"
+    },
+    {
+      "card": "aiCost",
+      "chart": "line",
+      "background": "space-light",
+      "file": "aiCost-line-space-light.png",
+      "bytes": 2769,
+      "note": "测试数据 fixture，非生产数据"
+    },
+    {
+      "card": "aiCost",
+      "chart": "bar",
+      "background": "space-light",
+      "file": "aiCost-bar-space-light.png",
+      "bytes": 3564,
+      "note": "测试数据 fixture，非生产数据"
+    },
+    {
+      "card": "aiCost",
+      "chart": "heatmap",
+      "background": "space-light",
+      "file": "aiCost-heatmap-space-light.png",
+      "bytes": 10756,
+      "note": "测试数据 fixture，非生产数据"
+    },
+    {
+      "card": "aiCost",
+      "chart": "table",
+      "background": "space-light",
+      "file": "aiCost-table-space-light.png",
+      "bytes": 7183,
+      "note": "测试数据 fixture，非生产数据"
+    },
+    {
+      "card": "aiTokens",
+      "chart": "number",
+      "background": "space-light",
+      "file": "aiTokens-number-space-light.png",
+      "bytes": 3932,
+      "note": "测试数据 fixture，非生产数据"
+    },
+    {
+      "card": "aiTokens",
+      "chart": "line",
+      "background": "space-light",
+      "file": "aiTokens-line-space-light.png",
+      "bytes": 4917,
+      "note": "测试数据 fixture，非生产数据"
+    },
+    {
+      "card": "aiTokens",
+      "chart": "bar",
+      "background": "space-light",
+      "file": "aiTokens-bar-space-light.png",
+      "bytes": 2960,
+      "note": "测试数据 fixture，非生产数据"
+    },
+    {
+      "card": "aiTokens",
+      "chart": "heatmap",
+      "background": "space-light",
+      "file": "aiTokens-heatmap-space-light.png",
+      "bytes": 10756,
+      "note": "测试数据 fixture，非生产数据"
+    },
+    {
+      "card": "aiTokens",
+      "chart": "table",
+      "background": "space-light",
+      "file": "aiTokens-table-space-light.png",
+      "bytes": 4349,
+      "note": "测试数据 fixture，非生产数据"
+    },
+    {
+      "card": "aiSessions",
+      "chart": "number",
+      "background": "space-light",
+      "file": "aiSessions-number-space-light.png",
+      "bytes": 3232,
+      "note": "测试数据 fixture，非生产数据"
+    },
+    {
+      "card": "aiSessions",
+      "chart": "heatmap",
+      "background": "space-light",
+      "file": "aiSessions-heatmap-space-light.png",
+      "bytes": 10756,
+      "note": "测试数据 fixture，非生产数据"
+    },
+    {
+      "card": "aiSessions",
+      "chart": "line",
+      "background": "space-light",
+      "file": "aiSessions-line-space-light.png",
+      "bytes": 780,
+      "note": "测试数据 fixture，非生产数据"
+    },
+    {
+      "card": "aiSessions",
+      "chart": "table",
+      "background": "space-light",
+      "file": "aiSessions-table-space-light.png",
+      "bytes": 5420,
+      "note": "测试数据 fixture，非生产数据"
+    },
+    {
+      "card": "aiSessions",
+      "chart": "timeline",
+      "background": "space-light",
+      "file": "aiSessions-timeline-space-light.png",
+      "bytes": 3668,
+      "note": "测试数据 fixture，非生产数据"
+    }
+  ]
+}

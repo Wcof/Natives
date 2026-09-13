@@ -1,0 +1,30 @@
+{
+  "generatedAt": "2026-09-12T03:57:22.235Z",
+  "note": "zoom emulated via CSS zoom in headless Chrome",
+  "results": [
+    {
+      "combo": "1440x900@100%",
+      "pageScrollW": 1440,
+      "pageClientW": 1440,
+      "numbers": 3
+    },
+    {
+      "combo": "960x600@100%",
+      "pageScrollW": 960,
+      "pageClientW": 960,
+      "numbers": 3
+    },
+    {
+      "combo": "960x600@125%",
+      "pageScrollW": 768,
+      "pageClientW": 768,
+      "numbers": 3
+    },
+    {
+      "combo": "960x600@200%",
+      "pageScrollW": 480,
+      "pageClientW": 480,
+      "numbers": 3
+    }
+  ]
+}

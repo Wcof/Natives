@@ -27,7 +27,7 @@
 |---|---|---|
 | Home | 多 Workspace（创建/打开/切换/关闭/重开/置顶/排序/重命名/复制/模板/删除，Close 只关会话、Delete 才删资源）、Grid/Canvas 双布局、增删移缩复制配隐重置、Widget Catalog（搜索/分类/添加/选择/配置）、Data View 四模式（List/Table/Board/Calendar） | Widget Runtime/市场、Plugin 平台、无限画布 |
 | Files | CRUD、Trash、Watch、Search、Recent/Favorite、预览入口 | 为 Home 重写文件系统 authority |
-| Apps | App / RuntimeSpec / RuntimeInstance / Surface / PackageSpec（ADR-0027 托管应用模型）、应用中心（安装/更新/启停/停用/修复/卸载/清数据，状态诚实有来源）、安装事务与崩溃恢复、通用 app.html owner 页面、签名 Catalog v3 + 托管 `.nap` 分发（ADR-0027） | 把 App 当 Widget；在线下载执行代码；第二 App Registry；Catalog 指定安装路径；CI 尺寸豁免；把安装中/已停止/运行于别处伪装成成功；新应用或新版本依赖重新发布 Core/扩展 |
+| Apps | App / RuntimeSpec / RuntimeInstance / Surface / PackageSpec（ADR-0027 托管应用模型；2026-09-12 收敛为整包内置模块）、应用中心（内置模块打开/显示隐藏/设置/数据管理，状态诚实有来源）、产品级安装/更新核验与崩溃恢复、通用 app.html owner 页面、签名组合清单核验固定模块文件 | 把 App 当 Widget；在线下载执行代码；模块独立下载/安装/更新/卸载与应用商店语义；第二 App Registry；清单指定安装路径；CI 尺寸豁免；把安装中/已停止/运行于别处伪装成成功 |
 | AI Resources | Provider / Connection / Credential、多 Key、OAuth、模型目录与健康 | 把 protocol 当 Provider、明文 Secret |
 | Local Proxy | Messages / Chat Completions / Responses、tools/stream/reasoning、Key Pool、usage | 企业 Gateway、多租户计费、第二 Event Platform |
 | AI Tool Integration | Detect/Inspect/Backup/Plan/Apply/Verify/Rollback | 直接覆盖用户配置、无回滚写入 |

@@ -1,0 +1,55 @@
+{
+  "generatedAt": "2026-09-12T01:07:17.040Z",
+  "note": "真实工具采集数据默认深/浅截图（§5.5）；数据经产品 CollectSources 链路导出，仅测试用途不进生产数据",
+  "sourceFixture": "tests/artifacts/real-usage-fixture.json",
+  "entries": [
+    {
+      "card": "aiCost",
+      "chart": "number",
+      "background": "space-dark",
+      "file": "aiCost-space-dark.png",
+      "bytes": 3351,
+      "note": "真实采集数据截图（测试用途），不进生产数据"
+    },
+    {
+      "card": "aiTokens",
+      "chart": "number",
+      "background": "space-dark",
+      "file": "aiTokens-space-dark.png",
+      "bytes": 4108,
+      "note": "真实采集数据截图（测试用途），不进生产数据"
+    },
+    {
+      "card": "aiSessions",
+      "chart": "number",
+      "background": "space-dark",
+      "file": "aiSessions-space-dark.png",
+      "bytes": 3359,
+      "note": "真实采集数据截图（测试用途），不进生产数据"
+    },
+    {
+      "card": "aiCost",
+      "chart": "number",
+      "background": "space-light",
+      "file": "aiCost-space-light.png",
+      "bytes": 3470,
+      "note": "真实采集数据截图（测试用途），不进生产数据"
+    },
+    {
+      "card": "aiTokens",
+      "chart": "number",
+      "background": "space-light",
+      "file": "aiTokens-space-light.png",
+      "bytes": 4208,
+      "note": "真实采集数据截图（测试用途），不进生产数据"
+    },
+    {
+      "card": "aiSessions",
+      "chart": "number",
+      "background": "space-light",
+      "file": "aiSessions-space-light.png",
+      "bytes": 3479,
+      "note": "真实采集数据截图（测试用途），不进生产数据"
+    }
+  ]
+}

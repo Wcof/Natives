@@ -8,11 +8,9 @@ use std::sync::{Arc, Mutex};
 /// limit is 1 MiB per message; we stay strictly under it).
 pub(crate) const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
 
-/// Hard cap for an Extension → Host request frame. Chrome allows 64 MiB;
-/// the largest legitimate V1 frame is a 20 MiB package payload in
-/// base64 (≈26.7 MiB) inside `apps:install_package`. 32 MiB gives margin
-/// while culling hostile/malformed frames far below Chrome's ceiling.
-pub(crate) const MAX_INCOMING_FRAME_BYTES: usize = 32 * 1024 * 1024;
+/// Hard cap for an Extension → Host request frame. File import still needs
+/// more than 512 KiB; managed-app chunks themselves remain below 512 KiB.
+pub(crate) const MAX_INCOMING_FRAME_BYTES: usize = 1024 * 1024;
 const MAX_ID_BYTES: usize = 128;
 const MAX_METHOD_BYTES: usize = 64;
 const MAX_IMPORT_CHUNK_BASE64_BYTES: usize = 700_000;
@@ -157,16 +155,18 @@ pub(crate) fn validate_request(request: &Request) -> Result<(), String> {
             | "settings_set"
             | "apps:handshake"
             | "apps:list"
+            | "apps:suite_prepare"
             | "apps:get"
             | "apps:health"
-            | "apps:read_resource"
             | "apps:install_begin"
-            | "apps:install_package"
+            | "apps:install_chunk"
+            | "apps:install_finish"
             | "apps:install_commit"
             | "apps:install_abort"
             | "apps:uninstall"
             | "apps:clear_data"
             | "apps:recover"
+            | "apps:rollback"
             | "apps:set_enabled"
             | "apps:set_sidebar"
     ) {
@@ -242,16 +242,22 @@ pub(crate) fn validate_request(request: &Request) -> Result<(), String> {
         "workspace_reset" => &["workspaceId", "template", "expectedRevision"],
         "settings_get" => &["keys"],
         "settings_set" => &["entries"],
-        "apps:list" | "apps:health" => &[],
+        "apps:list" | "apps:health" | "apps:suite_prepare" => &[],
         "apps:handshake" => &["origin"],
-        "apps:get" | "apps:recover" => &["appId"],
-        "apps:read_resource" => &["appId", "packageId", "offset", "length"],
+        "apps:get" | "apps:recover" | "apps:rollback" => &["appId"],
         "apps:uninstall" => &["appId", "purgeData", "confirmPurge"],
         "apps:clear_data" => &["appId", "confirmPurge"],
         "apps:set_enabled" => &["appId", "enabled"],
         "apps:set_sidebar" => &["appId", "show", "order"],
-        "apps:install_begin" => &["request"],
-        "apps:install_package" => &["installId", "packageId", "data"],
+        "apps:install_begin" => &["appId", "catalogBase64", "signature"],
+        "apps:install_chunk" => &[
+            "installId",
+            "packageId",
+            "offset",
+            "dataBase64",
+            "chunkSha256",
+        ],
+        "apps:install_finish" => &["installId", "packageId", "artifactBytes"],
         "apps:install_commit" => &["installId"],
         "apps:install_abort" => &["installId", "errorCode", "errorMessage"],
         _ => &[],
@@ -291,13 +297,22 @@ pub(crate) fn validate_request(request: &Request) -> Result<(), String> {
         "sortDir",
         "uploadId",
         "conflict",
+        "appId",
+        "catalogBase64",
+        "signature",
+        "installId",
+        "packageId",
+        "dataBase64",
+        "chunkSha256",
     ] {
         if let Some(value) = params.get(key) {
             let Some(text) = value.as_str() else {
                 return Err("parameter must be a string".into());
             };
-            let maximum = if request.method == "apps:install_package" && key == "data" {
-                crate::app_store::types::PACKAGE_DATA_MAX_BASE64_BYTES
+            let maximum = if request.method == "apps:install_chunk" && key == "dataBase64" {
+                crate::app_store::types::INSTALL_CHUNK_DATA_MAX_BASE64_BYTES
+            } else if request.method == "apps:install_begin" && key == "catalogBase64" {
+                crate::app_store::types::CATALOG_MAX_BYTES * 4 / 3 + 4
             } else {
                 4 * 1024 * 1024
             };
@@ -312,7 +327,7 @@ pub(crate) fn validate_request(request: &Request) -> Result<(), String> {
             }
         }
     }
-    for key in ["offset", "limit", "size"] {
+    for key in ["offset", "limit", "size", "artifactBytes"] {
         if let Some(value) = params.get(key) {
             let Some(number) = value.as_u64() else {
                 return Err("parameter must be a number".into());
@@ -321,8 +336,8 @@ pub(crate) fn validate_request(request: &Request) -> Result<(), String> {
                 return Err("invalid limit".into());
             }
             if key == "offset" {
-                let max_offset = if request.method == "apps:read_resource" {
-                    crate::app_store::types::PACKAGE_MAX_PAYLOAD_BYTES
+                let max_offset = if request.method == "apps:install_chunk" {
+                    crate::app_store::types::MANAGED_WIRE_MAX_BYTES
                 } else {
                     100_000
                 };
@@ -339,11 +354,7 @@ pub(crate) fn validate_request(request: &Request) -> Result<(), String> {
         let Some(number) = value.as_u64() else {
             return Err("parameter must be a number".into());
         };
-        let max_len = if request.method == "apps:read_resource" {
-            512 * 1024
-        } else {
-            crate::app_store::types::PACKAGE_MAX_PAYLOAD_BYTES
-        };
+        let max_len = 100_000;
         if number == 0 || number > max_len {
             return Err("invalid length".into());
         }
@@ -412,18 +423,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn app_package_request_accepts_full_payload_budget_without_relaxing_file_limits() {
+    fn app_chunk_request_accepts_frame_budget_without_relaxing_file_limits() {
         let mut request: Request = serde_json::from_value(serde_json::json!({
-            "id": "package", "method": "apps:install_package",
-            "params": { "installId": "tx", "packageId": "host", "data": "AAAA" }
+            "id": "package", "method": "apps:install_chunk",
+            "params": { "installId": "tx", "packageId": "host", "offset": 0,
+                "dataBase64": "AAAA", "chunkSha256": "ab" }
         }))
         .unwrap();
         assert!(
             validate_request(&request).is_ok(),
             "package method must reach dispatch"
         );
-        let maximum = crate::app_store::types::PACKAGE_DATA_MAX_BASE64_BYTES;
-        request.params["data"] = Value::String("A".repeat(maximum));
+        let maximum = crate::app_store::types::INSTALL_CHUNK_DATA_MAX_BASE64_BYTES;
+        request.params["dataBase64"] = Value::String("A".repeat(maximum));
         assert!(validate_request(&request).is_ok());
         request.params["data"] = Value::String("A".repeat(maximum + 1));
         assert!(validate_request(&request).is_err());

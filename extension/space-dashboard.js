@@ -35,8 +35,36 @@ export function createSpaceDashboard({
   const slotContainers = {};
   const widgetRegistry = new Map();
   const confirmedConfigs = new Map();
+  // §5.2：空间默认文字色由空间背景解析派生（浅背景用深字，深背景用浅字），
+  // 未显式设置 colour 的卡片不再硬编码白色。
+  let resolvedDefaultText = '';
 
   let staticStyleContent = '';
+  // §5.2：按解析后的空间背景亮度派生默认文字色。
+  // 读渲染层实际生效的背景色（plugin render 已写入），亮度中点为界；
+  // brightness 滤镜调暗背景时同样折算。取不到颜色时保守用浅色（深背景是历史默认）。
+  function deriveReadableText(bgLayerEl, bright = 1) {
+    try {
+      // §5.5 动态切换：background-layer 有 0.3s 过渡，计算样式读到的是
+      // 过渡起始的旧背景（旧色快照）。内联样式是插件刚写入的目标值，
+      // 即时生效；图片背景内联为 transparent 时回退计算样式。
+      const raw = bgLayerEl.style.backgroundColor || getComputedStyle(bgLayerEl).backgroundColor;
+      const m = /rgba?\(([^)]+)\)/.exec(raw);
+      if (!m) return '#f4f6f0';
+      const parts = m[1].split(',').map((x) => parseFloat(x));
+      const alpha = parts.length > 3 ? parts[3] : 1;
+      if (alpha < 0.5) return '#f4f6f0';
+      // brightness 滤镜等比压暗各通道。
+      const srgb = (v) => {
+        const s = Math.min(1, Math.max(0, (v * bright) / 255));
+        return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+      };
+      const l = 0.2126 * srgb(parts[0]) + 0.7152 * srgb(parts[1]) + 0.0722 * srgb(parts[2]);
+      return l > 0.36 ? '#1c2018' : '#f4f6f0';
+    } catch {
+      return '#f4f6f0';
+    }
+  }
   function getCompiledStyleSheet() {
     if (staticStyleContent) return staticStyleContent;
     const backgroundStyles = Object.values(backgroundPlugins || {})
@@ -126,6 +154,9 @@ export function createSpaceDashboard({
         } else if (typeof bgPlugin.dispose === 'function') {
           currentBgDisposer = () => bgPlugin.dispose();
         }
+        // §5.2：从解析后的空间背景派生默认文字色（亮度中点为界）。
+        // 未显式设置 colour 的卡片在此默认下保持 ≥4.5:1 可读对比。
+        resolvedDefaultText = deriveReadableText(bgLayerEl, bright);
       }
     }
 
@@ -148,6 +179,22 @@ export function createSpaceDashboard({
         mountWidget(widget, pos, shadow, root, snapshot, activeWorkspaceId, updateSnapshot);
       } else {
         patchWidget(existing, widget, pos, shadow, root, snapshot, activeWorkspaceId, updateSnapshot);
+      }
+    }
+
+    for (const widget of incomingWidgets) {
+      const pos = widget.displayJson?.position || 'middleCentre';
+      const entry = widgetRegistry.get(widget.id);
+      if (!entry) continue;
+      if (pos === 'free') {
+        if (entry.wrapperEl && slotContainers.container && entry.wrapperEl.parentElement === slotContainers.container) {
+          slotContainers.container.append(entry.wrapperEl);
+        }
+      } else {
+        const targetSlot = slotContainers[pos] || slotContainers.middleCentre;
+        if (targetSlot && entry.element && entry.element.parentElement === targetSlot) {
+          targetSlot.append(entry.element);
+        }
       }
     }
   }
@@ -214,6 +261,14 @@ export function createSpaceDashboard({
         lang: selectedLanguage,
         shadowRoot,
         onDataChange: createDataChangeHandler(widget, container, shadowRoot, activeWorkspaceId, snapshot, updateSnapshot),
+        // R7（§5.1 第 5 条）：点击金额/图形进入带原筛选的用量详情。
+        openDrilldown: (filter) => {
+          const mod = import('./model-settings.js');
+          if (mod && typeof mod.then === 'function') {
+            mod.then((m) => m.openModelSettings({ t, language: selectedLanguage, returnFocus: container, initialPage: 'usage', initialUsageFilter: filter }))
+              .catch(() => {});
+          }
+        },
       });
       if (typeof maybeDisposer === 'function') {
         disposer = maybeDisposer;
@@ -278,7 +333,29 @@ export function createSpaceDashboard({
   }
 
   function applyWidgetDisplayStyles(container, disp, keyClass, isEditing = false) {
-    container.style.color = disp.useAccentColor ? 'var(--accent, #cdf24b)' : (disp.colour || '#ffffff');
+    // §5.2 解析链：已授权的卡片显式外观覆盖 → 空间派生默认（由背景亮度决定）。
+    // 未显式设置 colour 的卡片不再硬编码白色。
+    const explicitColour = typeof disp.colour === 'string' && disp.colour.length > 0 ? disp.colour : '';
+    const textColor = disp.useAccentColor ? 'var(--accent, #cdf24b)' : (explicitColour || resolvedDefaultText || '#ffffff');
+    container.style.color = textColor;
+    // R2（方案 §5.2）：空间解析后的局部语义角色别名。仅是解析结果，
+    // 没有独立主题配置；数据卡 renderer 只消费这些别名，不回读全局变量。
+    container.style.setProperty('--space-widget-text', textColor);
+    container.style.setProperty('--space-widget-text-secondary', `color-mix(in srgb, ${textColor} 70%, transparent)`);
+    container.style.setProperty('--space-widget-accent', textColor);
+    container.style.setProperty('--space-widget-metric-size', disp.fontSize ? `${disp.fontSize}px` : '');
+    // §5.5 字体设置：主指标字重必须响应用户 fontWeight——未设置时移除，
+    // 让 renderer 用自己的默认 700；设置了则传导（不能让回退值吞掉用户设置）。
+    if (disp.fontWeight) {
+      container.style.setProperty('--space-widget-weight', String(disp.fontWeight));
+    } else if (typeof container.style.removeProperty === 'function') {
+      container.style.removeProperty('--space-widget-weight');
+    } else {
+      container.style.setProperty('--space-widget-weight', '');
+    }
+    // §5.2 警告/危险角色：由卡片已解析的文字色派生，替代 AI 层固定 #ff4d4f/#faad14，
+    // 保证错误/警告文字与该卡实际背景保持可读对比。
+    container.style.setProperty('--space-widget-danger', textColor);
     container.style.fontFamily = disp.fontFamily || '';
     container.style.fontSize = disp.fontSize ? `${disp.fontSize}px` : '';
     container.style.fontWeight = disp.fontWeight ? String(disp.fontWeight) : '';

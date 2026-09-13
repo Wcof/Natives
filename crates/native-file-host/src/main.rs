@@ -16,12 +16,15 @@ mod app_fixture;
 mod app_host;
 mod app_host_manifest;
 mod app_install;
+mod app_product;
 mod app_secrets;
 mod app_signing;
 mod app_store;
 mod batch;
 mod dispatch;
+mod extension_provision;
 mod import;
+mod launcher_setup;
 mod preview;
 mod protocol;
 mod search;
@@ -52,6 +55,18 @@ fn workspace_dispatch(store: &WorkspaceStore, request: &Request) -> Result<Value
 }
 
 fn main() -> io::Result<()> {
+    // Launcher 引导流：检测/准备受管 Extension 目录、打开 Chrome 扩展页 +
+    // Finder、有界轮询握手标记后退出（不常驻，方案 §Launcher）。
+    let cli_args: Vec<String> = std::env::args().skip(1).collect();
+    if cli_args.first().map(String::as_str) == Some("--launcher-setup") {
+        std::process::exit(launcher_setup::run_cli(&cli_args));
+    }
+    if cli_args.first().map(String::as_str) == Some("--launcher-default") {
+        // 双击 Natives 的默认入口：注册核心 Host → 已就绪则直接打开
+        // Chrome 中的 Natives，否则输出 setup_required（外层 Launcher
+        // 据此转入 --launcher-setup 引导）。
+        std::process::exit(launcher_setup::run_launcher_default());
+    }
     #[cfg(debug_assertions)]
     if std::env::args().nth(1).as_deref() == Some("--app-fixture") {
         return app_fixture::run();
@@ -77,6 +92,10 @@ fn main() -> io::Result<()> {
             if let Err(error) = store.recover_interrupted() {
                 eprintln!("app install recovery pending: {}", error.code());
             }
+            // AC-07: suite seed reconciliation no longer runs at startup —
+            // first-run preparation happens on a verified foreground
+            // connection via `apps:suite_prepare` (visible, cancellable by
+            // closing the page, errors surfaced to the center).
             Some(store)
         }
         Err(error) => {

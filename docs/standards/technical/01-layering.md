@@ -30,7 +30,9 @@ Service Worker 长连接。旧 Tauri Files 调用链是迁移源，不得继续�
 
 **Model Host 例外（ADR-0020 §6.1）**：扩展通过独立 Native Messaging interface 调用单用途 `model-host`，不得共享 Files 能力。默认由页面连接拥有生命周期；仅用户显式开启常驻后可跨页面关闭存活，必须单实例、可停止且无登录自启动。Gateway 仅绑定 `127.0.0.1` 并鉴权，禁止 Management API；持久 Secret 由 OS Keychain 持有。该例外不授权通用 Daemon 或新的产品 Surface。
 
-**Extension App 例外（ADR-0027，取代 ADR-0026/ADR-0025 对应决策，2026-09-09 生效）**：官方托管应用（managed_local）以独立原生可执行程序交付，业务代码与构建后 UI 嵌入程序内；Core App Store 负责安装、签名核验、登记与受限 Native Host 注册（runtimeHost 由 Core 计算）。通用 `app.html` 每应用一个 owner 页面：先短连 Core 核验安装，再以 `runtime.connectNative` 直连 App Host（Chrome 按连接启动应用进程，每个 Port 独立进程）；应用在 127.0.0.1 动态端口提供内嵌 UI 与业务接口，app.html 用受限 sandbox iframe（`allow-scripts allow-forms`）呈现。业务代码不进入扩展执行上下文；协议兼容时新增/升级应用不重新发布扩展/Core。Service Worker 仍无状态、无 Port、无轮询；Files/Model Host 边界不变。
+**托管扩展包运行例外（ADR-0027，取代 ADR-0026/ADR-0025 对应决策，2026-09-09 生效；2026-09-12 收敛为内置模块随完整产品交付）**：Natives 是唯一的用户产品。官方托管扩展包（managed_local）作为 Natives Apps 域的**内置模块**，代码随 Natives 完整安装包构建并进入安装包，不独立发布、不独立更新、无独立 Release；其运行载荷由受控本机实现承载，业务代码与构建后 UI 嵌入载荷内；Core App Store 在产品级安装/更新时负责核验、签名校验、登记与受限 Native Host 注册（runtimeHost 由 Core 计算），安装路径严格限制在 Natives 私有数据根（`~/.natives/apps/<appId>/`），禁止写入 `/Applications`、Dock 或 LaunchServices。通用 `app.html` 每扩展包一个 owner 页面：先短连 Core 核验，再以 `runtime.connectNative` 直连 App Host（Chrome 按连接启动应用进程，每个 Port 独立进程）；应用在 127.0.0.1 动态端口提供内嵌 UI 与业务接口，app.html 用受限 sandbox iframe（`allow-scripts allow-forms`）呈现。业务代码不进入扩展执行上下文；不存在"新增/升级扩展包不重发扩展/Core"的独立交付语义——新模块只能通过新的完整 Natives 版本交付。Service Worker 仍无状态、无 Port、无轮询；Files/Model Host 边界不变；保留 Host 默认 authority，禁止新建通用 Plugin Runtime 或将内部模块暴露为独立应用。
+
+**统一套件例外（ADR-0029；2026-09-12 收敛为整包统一交付）**：产品安装器只交付主程序薄入口、主 Host、受限浏览器注册及全部内置模块文件；不存在离线预装源（Suite Seed）与 Seed Reconciliation 链路，首用只做数据初始化/迁移，无模块代码下载。Core 在产品安装/更新时通过既有验签/事务实现核验完整组合内的固定模块文件与身份；不得新增安装 DB、root 业务服务、常驻 bootstrap 或把基金业务链接进 Core。macOS `/Library/Application Support/Natives/` 仅为受限系统代码目录；活动模块载荷与用户数据仍在私有用户根。详细职责与本地隔离规则见托管应用契约 §3.2/§4.2。不执行旧 Workbench.app 启动壳，不自动安装浏览器。唯一主产品薄 Natives Launcher（打开 Chrome、定位扩展目录、简短诊断后退出）是 ADR-0020 顶层结构的精确例外。
 
 #### R-T2 · 数据 authority 单一
 - **等级**：MUST

@@ -1,0 +1,8 @@
+=== RUN   TestRenewalWindowsFireOnceEach
+--- PASS: TestRenewalWindowsFireOnceEach (0.01s)
+=== RUN   TestRenewalDueTodayAndExpired
+--- PASS: TestRenewalDueTodayAndExpired (0.01s)
+=== RUN   TestRenewalSuppressAlertsAndBadDate
+--- PASS: TestRenewalSuppressAlertsAndBadDate (0.01s)
+PASS
+ok  	github.com/ldh/natives/model-host/internal/usage	0.552s

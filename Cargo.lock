@@ -35,6 +35,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]
@@ -556,6 +557,7 @@ dependencies = [
 name = "native-file-host"
 version = "0.1.0"
 dependencies = [
+ "app-host-support",
  "base64",
  "dirs",
  "ed25519-dalek",

@@ -1,0 +1,4 @@
+=== RUN   TestParseAtomcodeSessionJSONL
+--- PASS: TestParseAtomcodeSessionJSONL (0.00s)
+PASS
+ok  	github.com/ldh/natives/model-host/internal/usage	0.558s

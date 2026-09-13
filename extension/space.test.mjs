@@ -16,11 +16,11 @@ import { createSpaceDeleteModal } from './space-modal-delete.js';
 console.log('--- Space Plugin Registry & Modals Test ---');
 
 // 1. Check registry completeness and consistency
-assert.equal(WIDGET_KEYS.length, 24, 'Must have exactly 24 Chromium widgets');
+assert.equal(WIDGET_KEYS.length, 32, 'Must have exactly 32 Chromium widgets (25 legacy + 7 independent AI components)');
 assert.equal(BACKGROUND_KEYS.length, 9, 'Must have exactly 9 backgrounds');
 assert.equal(POSITIONS.length, 10, 'Must have 9-grid + free layout positions');
 
-assert.equal(Object.keys(widgetPlugins).length, 24, 'widgetPlugins must contain 24 entries');
+assert.equal(Object.keys(widgetPlugins).length, 32, 'widgetPlugins must contain 32 entries');
 assert.equal(Object.keys(backgroundPlugins).length, 9, 'backgroundPlugins must contain 9 entries');
 
 for (const key of WIDGET_KEYS) {
@@ -320,5 +320,64 @@ assert.equal(searchDialogEl.open, true, 'Clicking search trigger must open stand
 searchModal.close();
 assert.equal(searchDialogEl.open, false, 'Closing search dialog must close in-place');
 console.log('✓ Standalone global search modal passed');
+
+// Test 7: Space dashboard slot DOM reordering
+console.log('--- Space Dashboard Slot DOM Reordering Test ---');
+const reorderHost = new MockElement('div');
+reorderHost.attachShadow = () => {
+  reorderHost.shadowRoot = new MockElement('shadow-root');
+  return reorderHost.shadowRoot;
+};
+const reorderDashboard = createSpaceDashboard({
+  $: () => reorderHost,
+  t: (k, f) => f || k,
+  selectedLanguage: 'zh_CN',
+  backgroundPlugins: { 'background/colour': { render() {} } },
+  widgetPlugins: {
+    'widget/probe': {
+      styles: '',
+      render(element, data) {
+        element.className = `Widget Probe probe-${data.id}`;
+        element.dataset.probeId = String(data.id);
+        return () => {};
+      },
+    },
+  },
+  nativeCall: async () => ({}),
+  broadcastRevision: () => {},
+});
+
+const initialSnapshot = {
+  revision: 1,
+  backgroundJson: { key: 'background/colour', display: {} },
+  widgets: [
+    { id: 'w-alpha', key: 'widget/probe', enabled: true, configJson: { id: 'alpha' }, displayJson: { position: 'middleCentre' } },
+    { id: 'w-beta', key: 'widget/probe', enabled: true, configJson: { id: 'beta' }, displayJson: { position: 'middleCentre' } },
+    { id: 'w-gamma', key: 'widget/probe', enabled: true, configJson: { id: 'gamma' }, displayJson: { position: 'middleCentre' } },
+  ],
+};
+
+reorderDashboard.render(initialSnapshot, 'ws-1', () => {});
+const middleCentreSlot = reorderHost.shadowRoot.querySelector('.middleCentre');
+assert.ok(middleCentreSlot, 'middleCentre slot must exist');
+let slotChildrenIds = middleCentreSlot.children.map((c) => c.dataset.probeId);
+assert.deepEqual(slotChildrenIds, ['alpha', 'beta', 'gamma'], 'Initial slot order must match initial snapshot');
+
+// Reorder widgets: gamma, alpha, beta
+const reorderedSnapshot = {
+  revision: 2,
+  backgroundJson: { key: 'background/colour', display: {} },
+  widgets: [
+    { id: 'w-gamma', key: 'widget/probe', enabled: true, configJson: { id: 'gamma' }, displayJson: { position: 'middleCentre' } },
+    { id: 'w-alpha', key: 'widget/probe', enabled: true, configJson: { id: 'alpha' }, displayJson: { position: 'middleCentre' } },
+    { id: 'w-beta', key: 'widget/probe', enabled: true, configJson: { id: 'beta' }, displayJson: { position: 'middleCentre' } },
+  ],
+};
+
+reorderDashboard.render(reorderedSnapshot, 'ws-1', () => {});
+slotChildrenIds = middleCentreSlot.children.map((c) => c.dataset.probeId);
+assert.deepEqual(slotChildrenIds, ['gamma', 'alpha', 'beta'], 'Slot DOM children must strictly reflect the updated snapshot widget order');
+reorderDashboard.destroy();
+console.log('✓ Space dashboard slot DOM reordering passed');
 
 console.log('All space tests passed!\n');

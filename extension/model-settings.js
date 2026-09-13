@@ -3,6 +3,7 @@ import { createModelSettingsView, renderNewProvider } from './model-settings-vie
 import { handleAdvancedAction, handleAdvancedSubmit } from './model-advanced-controller.js';
 import { localizedModelError } from './model-settings-errors.js';
 import { handleUsageAction, handleUsageSubmit } from './model-usage-controller.js';
+import { userTimezone } from './ai-performance/metrics.js';
 import { handleAgentAction, loadAgentClients } from './model-agent-controller.js';
 import { openAccountModelsDialog } from './model-account-models-dialog.js';
 
@@ -12,6 +13,8 @@ export async function openModelSettings(options) {
   if (!instance) instance = new ModelSettings(options);
   instance.setLocale(options);
   if (options?.initialPage) instance.setInitialPage(options.initialPage);
+  // R7 钻取：携带来源卡片的筛选打开用量详情（同 range/来源/模型口径）。
+  if (options?.initialUsageFilter) instance.setInitialUsageFilter(options.initialUsageFilter);
   await instance.open();
 }
 
@@ -67,6 +70,12 @@ class ModelSettings {
   }
   setLocale({ t, language, returnFocus }) { this.t = t; this.language = language; this.returnFocus = returnFocus; }
   setInitialPage(page) { this.initialPage = page; }
+  setInitialUsageFilter(filter) {
+    // R7 钻取：只接受用量页已支持的字段；page 重置为第一页。
+    if (!filter || typeof filter !== 'object') return;
+    const allowed = ['range', 'startTime', 'endTime', 'model', 'provider', 'source', 'accessKeyId', 'result'];
+    this.usageFilter = { range: '4h', page: 1, limit: 20, ...Object.fromEntries(allowed.filter((k) => filter[k] != null && filter[k] !== '').map((k) => [k, filter[k]])) };
+  }
   async open() {
     this.view.open();
     if (this.initialPage) {
@@ -148,6 +157,8 @@ class ModelSettings {
         sources: this.usageFilter.source ? [this.usageFilter.source] : [],
         accessKeyIds: this.usageFilter.accessKeyId ? [this.usageFilter.accessKeyId] : [],
         result: this.usageFilter.result || undefined,
+        // 整改 E2 §4.2：数据与用量页与 Space 卡片使用同一用户时区口径。
+        timezone: userTimezone(),
       };
       if (tab === 'overview') {
         this.overviewData = await this.api.getUsageOverview(query);
@@ -161,6 +172,8 @@ class ModelSettings {
         });
       } else if (tab === 'pricing') {
         this.pricingData = await this.api.getUsagePricing();
+      } else if (tab === 'billing') {
+        this.billingData = await this.api.getUsageBilling({ includeEntries: true });
       }
     } catch (err) {
       this.showError(err);
@@ -190,6 +203,7 @@ class ModelSettings {
           analyticsData: this.analyticsData,
           eventsData: this.eventsData,
           pricingData: this.pricingData,
+          billingData: this.billingData,
           currentFilter: this.usageFilter,
           filterOptions: this.usageFilterOptions,
           ...agentState,

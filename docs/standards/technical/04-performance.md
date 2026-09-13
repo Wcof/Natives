@@ -95,7 +95,7 @@
   - 文件页面按需直连 Host；`pagehide` 必须断开，隐藏且无进行中操作 60 秒后必须断开。
   - 最后端口关闭后 Host 必须在 2 秒内退出；未打开文件页面时 Host 的 CPU、RSS、GPU 占用均为 0。
   - Release Host 空闲 RSS ≤ 12 MB、60 秒平均 CPU ≤ 0.5%，不得创建 GPU 进程或上下文。
-  - 扩展估算包 Hard Gate ≤ 300 KiB（307,200 bytes，ADR-0024 修订）；`native-file-host` 目标 ≤ 3 MiB，过渡硬 Gate ≤ 4 MiB（ADR-0025 D19，与 `scripts/perf/check-native-host.mjs` 对齐）；安装包目标 ≤ 10 MB，超出必须给出文件级归因。
+  - 扩展估算包 Hard Gate ≤ 360 KiB（368,640 bytes；2026-09-13 用户决定自 300 KiB 上调 20%，ADR-0024 修订）；`native-file-host` 目标 ≤ 3 MiB，过渡硬 Gate ≤ 4 MiB（ADR-0025 D19，与 `scripts/perf/check-native-host.mjs` 对齐）；安装包目标 ≤ 10 MB，超出必须给出文件级归因。
   - 安装、启动和更新不得引入 Electron/Tauri 壳、daemon、托盘常驻进程或后台更新轮询。
 - **为什么**：Natives 复用用户已有 Chrome，增量成本必须限制在当前文件 Surface，而不是复制浏览器或常驻运行时。
 

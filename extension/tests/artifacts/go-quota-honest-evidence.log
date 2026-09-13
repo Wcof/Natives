@@ -1,0 +1,8 @@
+=== RUN   TestQueryUnsupportedProviderHonestError
+--- PASS: TestQueryUnsupportedProviderHonestError (0.00s)
+=== RUN   TestQueryHTTPErrorKeepsWindowsEmpty
+--- PASS: TestQueryHTTPErrorKeepsWindowsEmpty (0.00s)
+=== RUN   TestQueryNetworkErrorKeepsWindowsEmpty
+--- PASS: TestQueryNetworkErrorKeepsWindowsEmpty (0.00s)
+PASS
+ok  	github.com/ldh/natives/model-host/internal/quota	1.062s

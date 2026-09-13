@@ -20,7 +20,7 @@ export function signCatalog(path, keyPath) {
 }
 
 if (process.argv[1] && import.meta.url === new URL('file://' + process.argv[1]).href) {
-  const path = resolve(process.argv[2] || 'dist/app-release/catalog-v2.json');
+  const path = resolve(process.argv[2] || 'dist/app-release/catalog-v3.json');
   signCatalog(path, process.argv[3]);
   console.log(`signed ${path}`);
 }

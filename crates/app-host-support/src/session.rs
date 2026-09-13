@@ -87,7 +87,6 @@ impl Session {
 pub struct SessionManager {
     generation: String,
     session: Option<Session>,
-    origin_epoch: Instant,
 }
 
 impl SessionManager {
@@ -96,7 +95,6 @@ impl SessionManager {
         Some(Self {
             generation,
             session: None,
-            origin_epoch: Instant::now(),
         })
     }
 
@@ -191,7 +189,8 @@ impl SessionManager {
     }
 }
 
-fn random_id() -> Option<String> {
+/// 128-bit base64url identifier，供 instanceId/challenge 等非 Secret wire 字段使用。
+pub fn random_id() -> Option<String> {
     let mut bytes = [0u8; INSTANCE_ID_BYTES];
     if !random_bytes(&mut bytes) {
         return None;

@@ -2,11 +2,78 @@
 
 use super::mutation::{bump_revision, lock_error, now_millis, AppStore};
 use super::{query, types::*};
-use crate::{app_host, app_install, app_signing};
+use crate::{app_install, app_signing};
 use base64::Engine;
 use rusqlite::{params, OptionalExtension};
 use sha2::{Digest, Sha256};
 use std::io::Read;
+
+fn install_request_from_catalog_v3(bytes: &[u8], app_id: &str) -> Result<InstallRequest, AppError> {
+    let catalog: serde_json::Value = serde_json::from_slice(bytes)
+        .map_err(|_| AppError::InvalidState("catalog is not valid JSON".into()))?;
+    if catalog
+        .get("catalogVersion")
+        .and_then(serde_json::Value::as_u64)
+        != Some(3)
+    {
+        return Err(AppError::InvalidState("unsupported catalog version".into()));
+    }
+    let entries = catalog
+        .get("apps")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| AppError::InvalidState("catalog apps are missing".into()))?;
+    let matches: Vec<_> = entries
+        .iter()
+        .filter(|entry| entry.get("app_id").and_then(serde_json::Value::as_str) == Some(app_id))
+        .collect();
+    if matches.len() != 1 {
+        return Err(AppError::InvalidState(
+            "catalog appId must resolve exactly once".into(),
+        ));
+    }
+    let entry = matches[0];
+    if entry.get("published").and_then(serde_json::Value::as_bool) != Some(true) {
+        return Err(AppError::InvalidState(
+            "catalog app is not published".into(),
+        ));
+    }
+    let version = entry
+        .get("version")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
+    let app = serde_json::json!({
+        "app_id": app_id,
+        "kind": entry.get("kind").cloned().unwrap_or(serde_json::Value::Null),
+        "name": entry.get("name").cloned().unwrap_or(serde_json::Value::Null),
+        "version": version,
+        "enabled": true,
+        "show_in_sidebar": true,
+        "sidebar_order": entry.get("sidebar_order").cloned().unwrap_or(serde_json::json!(0)),
+        "runtime_spec": entry.get("runtime_spec").cloned().unwrap_or_else(|| serde_json::json!({})),
+        "surface": entry.get("surface").cloned().unwrap_or_else(|| serde_json::json!({})),
+        "manifest": entry.get("manifest").cloned().unwrap_or_else(|| serde_json::json!({})),
+    });
+    let packages = entry
+        .get("packages")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| AppError::InvalidState("catalog packages are missing".into()))?
+        .iter()
+        .map(|package| {
+            let mut package = package.clone();
+            if let Some(object) = package.as_object_mut() {
+                object.remove("url");
+            }
+            package
+        })
+        .collect::<Vec<_>>();
+    serde_json::from_value(serde_json::json!({
+        "app": app,
+        "packages": packages,
+        "permissions": entry.get("permissions").cloned().unwrap_or_else(|| serde_json::json!([])),
+        "min_host_version": entry.get("minHostVersion").cloned().unwrap_or(serde_json::Value::Null),
+    }))
+    .map_err(|_| AppError::InvalidState("invalid Catalog v3 app entry".into()))
+}
 
 impl AppStore {
     /// Core Apps protocol v4 `apps:install_begin` (contract §4.0): the page
@@ -18,6 +85,41 @@ impl AppStore {
         &self,
         catalog_base64: &str,
         signature_base64: &str,
+    ) -> Result<InstallBeginResult, AppError> {
+        self.install_begin_catalog_inner(catalog_base64, signature_base64, None, false)
+    }
+
+    /// Production Catalog v3 entry selection. The page names only an appId;
+    /// all install metadata still comes from the signed document.
+    pub fn install_begin_catalog_for(
+        &self,
+        catalog_base64: &str,
+        signature_base64: &str,
+        app_id: &str,
+    ) -> Result<InstallBeginResult, AppError> {
+        crate::app_install::validate_identifier(app_id, "app id")?;
+        self.install_begin_catalog_inner(catalog_base64, signature_base64, Some(app_id), false)
+    }
+
+    /// Seed repair entry (ADR-0029 §5.4): same-version reinstall is allowed
+    /// ONLY for repairing a broken on-disk install from the signed catalog;
+    /// it must still be the SAME version (downgrades stay rejected).
+    pub fn install_begin_catalog_repair_for(
+        &self,
+        catalog_base64: &str,
+        signature_base64: &str,
+        app_id: &str,
+    ) -> Result<InstallBeginResult, AppError> {
+        crate::app_install::validate_identifier(app_id, "app id")?;
+        self.install_begin_catalog_inner(catalog_base64, signature_base64, Some(app_id), true)
+    }
+
+    fn install_begin_catalog_inner(
+        &self,
+        catalog_base64: &str,
+        signature_base64: &str,
+        selected_app_id: Option<&str>,
+        allow_same_version_repair: bool,
     ) -> Result<InstallBeginResult, AppError> {
         if catalog_base64.len() > CATALOG_MAX_BYTES * 4 / 3 + 4 {
             return Err(AppError::InvalidState(
@@ -33,8 +135,15 @@ impl AppStore {
             ));
         }
         app_signing::verify_catalog_signature(&catalog, signature_base64)?;
-        let request: InstallRequest = serde_json::from_slice(&catalog)
-            .map_err(|_| AppError::InvalidState("catalog is not a valid install request".into()))?;
+        let request: InstallRequest = if let Some(app_id) = selected_app_id {
+            install_request_from_catalog_v3(&catalog, app_id)?
+        } else {
+            // Compatibility for the focused v4 unit fixtures. Production
+            // dispatch always supplies appId and therefore requires v3.
+            serde_json::from_slice(&catalog).map_err(|_| {
+                AppError::InvalidState("catalog is not a valid install request".into())
+            })?
+        };
         request.validate()?;
         // Core selects the package for THIS platform; the catalog never
         // decides disk paths or what runs.
@@ -76,7 +185,11 @@ impl AppStore {
             if let Some(from) = &from {
                 let current = semver::Version::parse(from).map_err(|_| AppError::InvalidState("installed version is invalid".into()))?;
                 let next = semver::Version::parse(&request.app.version).map_err(|_| AppError::InvalidState("new version is invalid".into()))?;
-                if next <= current { return Err(AppError::Conflict("update must increase the installed version".into())); }
+                if next < current || (next == current && !allow_same_version_repair) {
+                    return Err(AppError::Conflict(
+                        "update must increase the installed version".into(),
+                    ));
+                }
             }
             let request_json = serde_json::to_string(&request).map_err(|_| AppError::InvalidState("invalid install request".into()))?;
             tx.execute("INSERT INTO app_install_transactions
@@ -374,7 +487,11 @@ impl AppStore {
             if let Some(from) = &from {
                 let current = semver::Version::parse(from).map_err(|_| AppError::InvalidState("installed version is invalid".into()))?;
                 let next = semver::Version::parse(&request.app.version).map_err(|_| AppError::InvalidState("new version is invalid".into()))?;
-                if next <= current { return Err(AppError::Conflict("update must increase the installed version".into())); }
+                if next <= current {
+                    return Err(AppError::Conflict(
+                        "update must increase the installed version".into(),
+                    ));
+                }
             }
             let request_json = serde_json::to_string(request).map_err(|_| AppError::InvalidState("invalid install request".into()))?;
             tx.execute("INSERT INTO app_install_transactions
@@ -393,7 +510,10 @@ impl AppStore {
         Ok(record)
     }
 
-    fn owned_transaction(&self, install_id: &str) -> Result<InstallTransaction, AppError> {
+    pub(super) fn owned_transaction(
+        &self,
+        install_id: &str,
+    ) -> Result<InstallTransaction, AppError> {
         let record = self.transaction(install_id)?;
         if record.state == install_state::INSTALLED {
             return Err(AppError::Conflict("install already committed".into()));
@@ -545,12 +665,13 @@ impl AppStore {
                 if pkg.kind == KIND_MANAGED_LOCAL {
                     // Contract §4.0.1 step 4: verify code identity BEFORE the
                     // probe. Dev fixtures carry the explicit fixture flag.
-                    let fixture = request
-                        .app
-                        .manifest
-                        .get("fixture")
-                        .and_then(serde_json::Value::as_bool)
-                        .unwrap_or(false);
+                    let fixture = cfg!(debug_assertions)
+                        && request
+                            .app
+                            .manifest
+                            .get("fixture")
+                            .and_then(serde_json::Value::as_bool)
+                            .unwrap_or(false);
                     let _backend = app_signing::verify_platform_signature(&target, fixture)?;
                     crate::app_activation::make_executable(&target)?;
                     crate::app_activation::health_probe(&target)?;
@@ -560,7 +681,40 @@ impl AppStore {
                         Ok(())
                     })?;
                     let origin = trusted.clone();
-                    crate::app_activation::register_runtime_host(&record.app_id, &target, &origin)?;
+                    let host_name = crate::app_activation::register_runtime_host(
+                        &record.app_id,
+                        &target,
+                        &origin,
+                        &self.manifest_dir()?,
+                    )?;
+                    let prev_app = self
+                        .with_conn(|conn| query::app(conn, &record.app_id, Some(self.app_root())))
+                        .ok();
+                    let is_enabled = prev_app
+                        .as_ref()
+                        .map(|a| a.enabled)
+                        .unwrap_or(request.app.enabled);
+                    let next_generation = crate::app_activation::next_activation_generation(
+                        self.app_root(),
+                        &record.app_id,
+                    );
+                    let projection = serde_json::json!({
+                        "receiptVersion": 1,
+                        "appId": record.app_id,
+                        "runtimeHost": host_name,
+                        "activeVersion": request.app.version,
+                        "generation": next_generation,
+                        "activationState": if is_enabled { "ready" } else { "disabled" },
+                        "enabled": is_enabled,
+                        "appProtocolVersion": 1,
+                        "payloadSha256": pkg.payload_sha256,
+                        "allowedOrigins": [origin],
+                    });
+                    crate::app_activation::write_activation_projection(
+                        self.app_root(),
+                        &record.app_id,
+                        &projection,
+                    )?;
                     self.with_conn(|conn| {
                         conn.execute("UPDATE app_install_transactions SET rollback_json = 'activated' WHERE install_id = ?1",
                             [install_id])?;
@@ -579,14 +733,103 @@ impl AppStore {
                 if let Err(e) = cleanup {
                     return Err(e);
                 }
+                // AC-04: an explicit successful install/upgrade restores the
+                // default preinstall choice (user-initiated reinstall path).
+                let _ = self.set_user_intent(&record.app_id, "default");
                 self.app(&record.app_id)
             }
             Err(error) => {
-                // Activation failure after registration: do not leave a
-                // "success but registration unusable" half-install (A3 §143);
-                // the previous version stays usable via rollback_install.
-                if error.code() != "APP_NOT_FOUND" {
-                    let _ = crate::app_activation::unregister_runtime_host(&record.app_id);
+                // Activation failure after registration:
+                // Check if there was an installed previous version. If so, restore
+                // its registration and activation projection so it remains usable.
+                let prev_app = self
+                    .with_conn(|conn| query::app(conn, &record.app_id, Some(self.app_root())))
+                    .ok();
+                if let Some(prev) = prev_app {
+                    if let Ok(dir) = self.manifest_dir() {
+                        let prev_target = crate::app_activation::find_runtime_binary(
+                            self.app_root(),
+                            &record.app_id,
+                            &prev.version,
+                        );
+                        if let Some(prev_target) = prev_target {
+                            let origin = trusted.clone();
+                            let host_name = crate::app_activation::register_runtime_host(
+                                &record.app_id,
+                                &prev_target,
+                                &origin,
+                                &dir,
+                            )
+                            .unwrap_or_else(|_| {
+                                crate::app_activation::runtime_host_name(&record.app_id)
+                            });
+                            let prev_payload_sha256 = {
+                                use sha2::{Digest, Sha256};
+                                std::fs::File::open(&prev_target)
+                                    .ok()
+                                    .and_then(|mut f| {
+                                        let mut hasher = Sha256::new();
+                                        std::io::copy(&mut f, &mut hasher)
+                                            .ok()
+                                            .map(|_| format!("{:x}", hasher.finalize()))
+                                    })
+                                    .unwrap_or_default()
+                            };
+                            let next_generation = crate::app_activation::next_activation_generation(
+                                self.app_root(),
+                                &record.app_id,
+                            );
+                            let projection = serde_json::json!({
+                                "receiptVersion": 1,
+                                "appId": record.app_id,
+                                "runtimeHost": host_name,
+                                "activeVersion": prev.version,
+                                "generation": next_generation,
+                                "activationState": if prev.enabled { "ready" } else { "disabled" },
+                                "enabled": prev.enabled,
+                                "appProtocolVersion": 1,
+                                "payloadSha256": prev_payload_sha256,
+                                "allowedOrigins": [origin],
+                            });
+                            if let Err(restore_err) =
+                                crate::app_activation::write_activation_projection(
+                                    self.app_root(),
+                                    &record.app_id,
+                                    &projection,
+                                )
+                            {
+                                // AC-14: a failed restore leaves a mixed
+                                // state; report repair_required, never a
+                                // clean rollback.
+                                return Err(AppError::InvalidState(format!(
+                                    "APP_REPAIR_REQUIRED: rollback restore failed to rewrite the previous activation projection: {}",
+                                    restore_err
+                                )));
+                            }
+                        }
+                    }
+                } else {
+                    if error.code() != "APP_NOT_FOUND" {
+                        if let Ok(dir) = self.manifest_dir() {
+                            if let Err(unreg_err) =
+                                crate::app_activation::unregister_runtime_host(&record.app_id, &dir)
+                            {
+                                return Err(AppError::InvalidState(format!(
+                                    "APP_REPAIR_REQUIRED: failed install could not unregister the runtime host: {}",
+                                    unreg_err
+                                )));
+                            }
+                        }
+                        if let Err(proj_err) = crate::app_activation::remove_activation_projection(
+                            self.app_root(),
+                            &record.app_id,
+                        ) {
+                            return Err(AppError::InvalidState(format!(
+                                "APP_REPAIR_REQUIRED: failed install could not remove the activation projection: {}",
+                                proj_err
+                            )));
+                        }
+                    }
                 }
                 self.abort_owned(&record, error.code(), "package install failed")?;
                 Err(error)
@@ -602,16 +845,29 @@ impl AppStore {
         self.with_conn(|conn| {
             let tx = conn.unchecked_transaction()?;
             let now = now_millis();
+            // host_registered reflects an ACTUAL runtimeHost registration,
+            // which only happens for managed_local executable packages
+            // (activation steps in install_commit_with_origin). A
+            // managed_local app with only data packages stays unregistered.
+            let host_registered = if request
+                .packages
+                .iter()
+                .any(|package| package.kind == KIND_MANAGED_LOCAL)
+            {
+                1
+            } else {
+                0
+            };
             tx.execute("INSERT INTO apps
                 (app_id, kind, name, version, enabled, show_in_sidebar, sidebar_order, runtime_spec_json, surface_json, manifest_json,
                  installed_at, updated_at, revision, host_registered, needs_migration)
-                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11, 0, 0, 0)
+                VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?11, 0, ?12, 0)
                 ON CONFLICT(app_id) DO UPDATE SET kind = excluded.kind, name = excluded.name, version = excluded.version,
                 runtime_spec_json = excluded.runtime_spec_json, surface_json = excluded.surface_json, manifest_json = excluded.manifest_json,
-                updated_at = excluded.updated_at, revision = apps.revision + 1, host_registered = 0, needs_migration = 0",
+                updated_at = excluded.updated_at, revision = apps.revision + 1, host_registered = ?12, needs_migration = 0",
                 params![request.app.app_id, request.app.kind, request.app.name, request.app.version, request.app.enabled,
                     request.app.show_in_sidebar, request.app.sidebar_order, request.app.runtime_spec.to_string(),
-                    request.app.surface.to_string(), request.app.manifest.to_string(), now])?;
+                    request.app.surface.to_string(), request.app.manifest.to_string(), now, host_registered])?;
             tx.execute("DELETE FROM app_packages WHERE app_id = ?1", [&record.app_id])?;
             for package in &request.packages {
                 let path = app_install::install_path_for(self.app_root(), &record.app_id, &package.kind, &package.version, &package.package_id)?;
@@ -629,7 +885,7 @@ impl AppStore {
             tx.execute("UPDATE app_install_transactions SET state = 'installed', rollback_json = 'installed', completed_at = ?2, error_code = NULL, error_message = NULL WHERE install_id = ?1",
                 params![record.install_id, now])?;
             bump_revision(&tx)?;
-            let app = query::app(&tx, &record.app_id)?;
+            let app = query::app(&tx, &record.app_id, Some(self.app_root()))?;
             tx.commit()?;
             Ok(app)
         })
@@ -643,180 +899,6 @@ impl AppStore {
             )?;
             Ok(())
         })
-    }
-
-    pub fn install_abort(
-        &self,
-        install_id: &str,
-        code: &str,
-        message: &str,
-    ) -> Result<InstallTransaction, AppError> {
-        let _operation = self.operation.lock().map_err(lock_error)?;
-        let record = self.transaction(install_id)?;
-        if record.state == install_state::FAILED {
-            return Ok(record);
-        }
-        let record = self.owned_transaction(install_id)?;
-        self.abort_owned(&record, code, message)?;
-        self.transaction(install_id)
-    }
-
-    fn abort_owned(
-        &self,
-        record: &InstallTransaction,
-        code: &str,
-        message: &str,
-    ) -> Result<(), AppError> {
-        // Release the install lock FIRST: a rollback failure must not leak
-        // the lock in self.installs (flock self-conflict on the next begin).
-        // The removed File drops immediately (temporary value).
-        self.installs
-            .lock()
-            .map_err(lock_error)?
-            .remove(&record.install_id);
-        self.rollback_install(record, code, message)
-    }
-
-    pub(super) fn rollback_install(
-        &self,
-        record: &InstallTransaction,
-        code: &str,
-        message: &str,
-    ) -> Result<(), AppError> {
-        let journal = self.with_conn(|conn| {
-            Ok(conn.query_row(
-                "SELECT rollback_json FROM app_install_transactions WHERE install_id = ?1",
-                [&record.install_id],
-                |row| row.get::<_, String>(0),
-            )?)
-        })?;
-        let phase = self.transaction(&record.install_id)?.state;
-        if !journal.is_empty() {
-            let _ = phase;
-            app_host::remove_version(self.app_root(), &record.app_id, &record.to_version)?;
-        }
-        let staging =
-            app_install::staging_dir(self.app_root(), &record.app_id, &record.install_id)?;
-        app_install::remove_staging_dir(&staging)?;
-        self.with_conn(|conn| {
-            let tx = conn.unchecked_transaction()?;
-            tx.execute("DELETE FROM app_package_stages WHERE install_id = ?1", [&record.install_id])?;
-            tx.execute("UPDATE app_install_transactions SET state = 'failed', rollback_json = '', completed_at = ?2, error_code = ?3, error_message = ?4 WHERE install_id = ?1",
-                params![record.install_id, now_millis(), code.chars().take(64).collect::<String>(), message.chars().take(256).collect::<String>()])?;
-            tx.commit()?;
-            Ok(())
-        })
-    }
-
-    fn finish_committed(&self, record: &InstallTransaction) -> Result<(), AppError> {
-        let staging =
-            app_install::staging_dir(self.app_root(), &record.app_id, &record.install_id)?;
-        app_install::remove_staging_dir(&staging)?;
-        // Contract §5 step 7: keep the new version plus ONE previous version;
-        // anything older is cleaned. The update itself does not run the app.
-        if !record.from_version.is_empty() && record.from_version != record.to_version {
-            app_host::retain_versions(
-                self.app_root(),
-                &record.app_id,
-                &[record.to_version.as_str(), record.from_version.as_str()],
-            )?;
-        } else {
-            app_host::retain_versions(
-                self.app_root(),
-                &record.app_id,
-                &[record.to_version.as_str()],
-            )?;
-        }
-        self.with_conn(|conn| {
-            let tx = conn.unchecked_transaction()?;
-            tx.execute(
-                "DELETE FROM app_package_stages WHERE install_id = ?1",
-                [&record.install_id],
-            )?;
-            tx.execute(
-                "UPDATE app_install_transactions SET rollback_json = '' WHERE install_id = ?1",
-                [&record.install_id],
-            )?;
-            tx.commit()?;
-            Ok(())
-        })
-    }
-
-    pub(super) fn recover_app(&self, app_id: &str) -> Result<(), AppError> {
-        let ids = self.with_conn(|conn| {
-            let mut stmt = conn.prepare("SELECT install_id FROM app_install_transactions WHERE app_id = ?1 AND (state NOT IN ('installed', 'failed') OR rollback_json != '') ORDER BY started_at")?;
-            let rows = stmt.query_map([app_id], |row| row.get::<_, String>(0))?;
-            Ok(rows.collect::<Result<Vec<_>, _>>()?)
-        })?;
-        for id in ids {
-            let record = self.transaction(&id)?;
-            if record.state == install_state::INSTALLED {
-                self.finish_committed(&record)?;
-            } else {
-                self.rollback_install(&record, "APP_INTERRUPTED", "interrupted install recovered")?;
-            }
-        }
-        Ok(())
-    }
-
-    /// Roll back this connection's own leftover transactions for `app_id`
-    /// (ones still registered in `self.installs`, i.e. holding the install
-    /// lock). Called BEFORE acquiring the app lock in the begin methods so
-    /// a same-connection retry after a failed install cannot self-conflict
-    /// on the flock file. Transactions owned by another connection (not in
-    /// `self.installs`) are left untouched — `recover_app` after the lock
-    /// acquisition owns that decision.
-    fn recover_owned_stale(&self, app_id: &str) -> Result<(), AppError> {
-        let ids = self.with_conn(|conn| {
-            let mut stmt = conn.prepare("SELECT install_id FROM app_install_transactions WHERE app_id = ?1 AND (state NOT IN ('installed', 'failed') OR rollback_json != '') ORDER BY started_at")?;
-            let rows = stmt.query_map([app_id], |row| row.get::<_, String>(0))?;
-            Ok(rows.collect::<Result<Vec<_>, _>>()?)
-        })?;
-        let mut owned = self.installs.lock().map_err(lock_error)?;
-        for id in ids {
-            // Only roll back what THIS connection still owns (lock held in
-            // the map). Removing the entry drops the install lock.
-            if owned.remove(&id).is_some() {
-                let record = self.transaction(&id)?;
-                if record.state == install_state::INSTALLED {
-                    drop(owned);
-                    self.finish_committed(&record)?;
-                    owned = self.installs.lock().map_err(lock_error)?;
-                } else {
-                    drop(owned);
-                    self.rollback_install(
-                        &record,
-                        "APP_INTERRUPTED",
-                        "interrupted install recovered",
-                    )?;
-                    owned = self.installs.lock().map_err(lock_error)?;
-                }
-            }
-        }
-        Ok(())
-    }
-
-    pub fn recover_interrupted(&self) -> Result<(), AppError> {
-        let _operation = self.operation.lock().map_err(lock_error)?;
-        let ids = self.with_conn(|conn| {
-            let mut stmt = conn.prepare("SELECT DISTINCT app_id FROM app_install_transactions WHERE state NOT IN ('installed','failed') OR rollback_json != ''")?;
-            let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
-            Ok(rows.collect::<Result<Vec<_>, _>>()?)
-        })?;
-        for id in ids {
-            match app_install::acquire_app_lock(self.app_root(), &id, false) {
-                Ok(_lock) => self.recover_app(&id)?,
-                Err(AppError::Conflict(_)) => continue,
-                Err(error) => return Err(error),
-            }
-        }
-        Ok(())
-    }
-
-    pub fn recover_install(&self, app_id: &str) -> Result<(), AppError> {
-        let _operation = self.operation.lock().map_err(lock_error)?;
-        let _install = app_install::acquire_app_lock(self.app_root(), app_id, false)?;
-        self.recover_app(app_id)
     }
 }
 

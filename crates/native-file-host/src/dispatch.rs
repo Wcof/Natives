@@ -6,10 +6,36 @@ use serde_json::{json, Value};
 
 pub(crate) fn handle(request: &Request) -> Result<Value, String> {
     match request.method.as_str() {
-        "version" => Ok(json!({
-            "protocolVersion": 1,
-            "hostVersion": env!("CARGO_PKG_VERSION"),
-        })),
+        "version" => {
+            // Launcher 引导流：握手时落盘标记（extensionVersion 等），
+            // 供 `--launcher-setup` 有界轮询验证"用户已完成加载"。
+            // best-effort：标记写失败不影响握手响应。
+            if let Some(ext_version) = request
+                .params
+                .get("extensionVersion")
+                .and_then(Value::as_str)
+            {
+                let marker = crate::launcher_setup::handshake_marker_path(
+                    &crate::launcher_setup::natives_root_pub(),
+                );
+                if let Some(parent) = marker.parent() {
+                    let _ = std::fs::create_dir_all(parent);
+                }
+                let _ = std::fs::write(
+                    &marker,
+                    serde_json::json!({
+                        "extensionVersion": ext_version,
+                        "hostVersion": env!("CARGO_PKG_VERSION"),
+                        "protocolVersion": 1,
+                    })
+                    .to_string(),
+                );
+            }
+            Ok(json!({
+                "protocolVersion": 1,
+                "hostVersion": env!("CARGO_PKG_VERSION"),
+            }))
+        }
         "roots" => file_manager::default_roots()
             .map(Value::Array)
             .map_err(|e| e.to_string()),

@@ -29,7 +29,16 @@ func (s *Store) migrate() error {
 		cache_read_price_micro INTEGER NOT NULL DEFAULT 0, cache_write_price_micro INTEGER NOT NULL DEFAULT 0,
 		source TEXT NOT NULL, updated_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')));
 	CREATE UNIQUE INDEX IF NOT EXISTS idx_model_prices_unique ON model_prices(provider_id, model_id);`)
-	return err
+	if err != nil {
+		return err
+	}
+	// T3：三层账本语义扩展（sources/cursors/sessions/budgets/alerts/subjects/
+	// charge_components/billing_entries/cost_attributions + billing_atom 去重）。
+	if err := s.migrateV2(); err != nil {
+		return err
+	}
+	// v3：三元来源实例身份、结构化来源运行状态、事件级归因关联。
+	return s.migrateV3()
 }
 
 func (s *Store) Prune() error {

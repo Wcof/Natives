@@ -3,33 +3,53 @@
 //! 每 appId 一个 OS 排他 runtime 锁（跨 Chrome profile 兜底）；
 //! 每 OS 用户命名空间四个全局运行槽，持锁代表占用。
 //! 崩溃由 OS 释放；不自动终止 busy 应用。
+//! 锁文件使用稳定 inode，不在释放时删除；release/Drop 不重复释放。
 
 use std::fs::{File, OpenOptions};
 use std::io;
+#[cfg(unix)]
 use std::os::unix::io::AsRawFd;
 use std::path::{Path, PathBuf};
 
-/// 一个已持有的排他文件锁；Drop 时释放并尽力移除锁文件。
+/// 一个已持有的排他文件锁；Drop/release 时释放锁，保留稳定 inode 文件。
 pub struct FileLock {
     path: PathBuf,
-    file: File,
+    file: Option<File>,
 }
 
 impl FileLock {
-    /// 尝试获取排他锁；不可得返回 None（调用方映射为 APP_RUNNING_ELSEWHERE / APP_RUNTIME_LIMIT）。
+    /// 尝试获取排他锁；不可得返回 None（调用方映射为 APP_RUNNING_ELSEWHERE / APP_RUNTIME_LIMIT / APP_BUSY）。
     pub fn try_acquire(path: PathBuf) -> io::Result<Option<Self>> {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent)?;
         }
         let file = OpenOptions::new()
-            .create(true)
+            .read(true)
             .write(true)
+            .create(true)
             .truncate(false)
             .open(&path)?;
-        if flock_exclusive(file.as_raw_fd()) {
-            Ok(Some(Self { path, file }))
-        } else {
-            Ok(None)
+        #[cfg(unix)]
+        {
+            if flock_exclusive(file.as_raw_fd()) {
+                Ok(Some(Self {
+                    path,
+                    file: Some(file),
+                }))
+            } else {
+                Ok(None)
+            }
+        }
+        #[cfg(not(unix))]
+        {
+            match file.try_lock() {
+                Ok(()) => Ok(Some(Self {
+                    path,
+                    file: Some(file),
+                })),
+                Err(std::fs::TryLockError::WouldBlock) => Ok(None),
+                Err(std::fs::TryLockError::Error(e)) => Err(e),
+            }
         }
     }
 
@@ -42,8 +62,13 @@ impl FileLock {
     }
 
     fn unlock(&mut self) {
-        let _ = flock_unlock(self.file.as_raw_fd());
-        let _ = std::fs::remove_file(&self.path);
+        if let Some(file) = self.file.take() {
+            #[cfg(unix)]
+            {
+                let _ = flock_unlock(file.as_raw_fd());
+            }
+            drop(file);
+        }
     }
 }
 
@@ -53,11 +78,21 @@ impl Drop for FileLock {
     }
 }
 
+/// 统一剥除 `com.natives.app.` 前缀，与 Core `acquire_app_lock` 保持严格一致。
+pub fn normalize_app_id(app_id: &str) -> &str {
+    app_id.strip_prefix("com.natives.app.").unwrap_or(app_id)
+}
+
 /// appId 运行锁路径：apps/.locks/<appId>.runtime.lock
 pub fn runtime_lock_path(apps_root: &Path, app_id: &str) -> PathBuf {
-    apps_root
-        .join(".locks")
-        .join(format!("{app_id}.runtime.lock"))
+    let id = normalize_app_id(app_id);
+    apps_root.join(".locks").join(format!("{id}.runtime.lock"))
+}
+
+/// appId 安装/管理锁路径：apps/.locks/<appId>.install.lock
+pub fn install_lock_path(apps_root: &Path, app_id: &str) -> PathBuf {
+    let id = normalize_app_id(app_id);
+    apps_root.join(".locks").join(format!("{id}.install.lock"))
 }
 
 /// 第 slot 个全局运行槽路径：apps/.locks/runtime-slot-<n>.lock
@@ -75,6 +110,48 @@ pub fn acquire_slot(apps_root: &Path, max_slots: usize) -> io::Result<Option<(us
         }
     }
     Ok(None)
+}
+
+/// 一次真实运行持有的 app 锁与一个全局槽。仅在 `app:start` 成功时创建。
+pub struct RuntimeLease {
+    pub slot: usize,
+    _runtime: FileLock,
+    _slot: FileLock,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeUnavailable {
+    AlreadyRunning,
+    Busy,
+    Limit,
+}
+
+/// 获取应用运行时租约。
+/// 严格遵守 install → runtime 锁获取顺序：
+/// 1. 尝试获取 install 锁（若 Core 正进行安装/恢复/回滚，则返回 Busy 映射 APP_BUSY）；
+/// 2. 在 install 锁保护下获取 runtime 锁（若已有实例运行，返回 AlreadyRunning）；
+/// 3. 获取全局运行槽（若已满，返回 Limit）；
+/// 4. 释放 install 锁，保留 runtime 锁与全局运行槽。
+pub fn acquire_runtime(
+    apps_root: &Path,
+    app_id: &str,
+) -> io::Result<Result<RuntimeLease, RuntimeUnavailable>> {
+    let Some(install) = FileLock::try_acquire(install_lock_path(apps_root, app_id))? else {
+        return Ok(Err(RuntimeUnavailable::Busy));
+    };
+    let Some(runtime) = FileLock::try_acquire(runtime_lock_path(apps_root, app_id))? else {
+        return Ok(Err(RuntimeUnavailable::AlreadyRunning));
+    };
+    let Some((slot, slot_lock)) = acquire_slot(apps_root, crate::protocol::MAX_RUNTIME_SLOTS)?
+    else {
+        return Ok(Err(RuntimeUnavailable::Limit));
+    };
+    drop(install);
+    Ok(Ok(RuntimeLease {
+        slot,
+        _runtime: runtime,
+        _slot: slot_lock,
+    }))
 }
 
 #[cfg(unix)]
@@ -128,6 +205,27 @@ mod tests {
     }
 
     #[test]
+    fn lock_file_inode_is_preserved_across_releases() {
+        let root = std::env::temp_dir().join(format!("natives-inode-test-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&root);
+        let path = runtime_lock_path(&root, "stable-inode");
+        let first = FileLock::try_acquire(path.clone()).unwrap().unwrap();
+        assert!(path.exists());
+        first.release();
+        // File must NOT be unlinked on release so its inode remains stable
+        assert!(
+            path.exists(),
+            "lock file must remain on disk to preserve inode stability"
+        );
+        let second = FileLock::try_acquire(path).unwrap();
+        assert!(
+            second.is_some(),
+            "stable inode lock is immediately re-acquirable"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
     fn slots_are_bounded() {
         let root = std::env::temp_dir().join(format!("natives-slot-test-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&root);
@@ -146,5 +244,46 @@ mod tests {
         let again = acquire_slot(&root, 4).unwrap();
         assert!(again.is_some());
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn runtime_lease_holds_one_app_lock_and_one_slot() {
+        let root =
+            std::env::temp_dir().join(format!("natives-runtime-lease-test-{}", std::process::id()));
+        let lease = acquire_runtime(&root, "sample").unwrap().unwrap();
+        assert_eq!(lease.slot, 0);
+        assert!(matches!(
+            acquire_runtime(&root, "sample").unwrap(),
+            Err(RuntimeUnavailable::AlreadyRunning)
+        ));
+        drop(lease);
+        assert!(acquire_runtime(&root, "sample").unwrap().is_ok());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn acquire_runtime_rejects_when_install_lock_held() {
+        let root = std::env::temp_dir().join(format!("natives-busy-test-{}", std::process::id()));
+        let install_lock = FileLock::try_acquire(install_lock_path(&root, "busy-app"))
+            .unwrap()
+            .unwrap();
+        let result = acquire_runtime(&root, "busy-app").unwrap();
+        assert!(matches!(result, Err(RuntimeUnavailable::Busy)));
+        drop(install_lock);
+        let second = acquire_runtime(&root, "busy-app").unwrap();
+        assert!(second.is_ok());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn app_id_normalization_matches_prefixed_and_unprefixed() {
+        let root = std::env::temp_dir().join(format!("natives-norm-test-{}", std::process::id()));
+        let p1 = runtime_lock_path(&root, "com.natives.app.fund");
+        let p2 = runtime_lock_path(&root, "fund");
+        assert_eq!(p1, p2);
+        let i1 = install_lock_path(&root, "com.natives.app.fund");
+        let i2 = install_lock_path(&root, "fund");
+        assert_eq!(i1, i2);
+        let _ = std::fs::remove_dir_all(root);
     }
 }

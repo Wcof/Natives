@@ -148,16 +148,39 @@ func (c *Calculator) GetPricingCatalog() (*PricingResult, error) {
 	}
 
 	var totalCostMicro, pricedCount, unpricedCount int64
+	type modelCount struct {
+		provider, model string
+		cnt             int64
+	}
+	var modelCounts []modelCount
 	c.store.mu.RLock()
-	row := c.store.db.QueryRow(`
-		SELECT
-			COALESCE(SUM(cost_micro), 0),
-			COALESCE(SUM(CASE WHEN cost_micro > 0 THEN 1 ELSE 0 END), 0),
-			COALESCE(SUM(CASE WHEN cost_micro = 0 THEN 1 ELSE 0 END), 0)
-		FROM usage_events
-	`)
-	_ = row.Scan(&totalCostMicro, &pricedCount, &unpricedCount)
+	// 汇总口径（R5，方案 §9.1）：已计价记录数按价格目录判定（含合法零价），
+	// 不用 cost_micro>0 区分——合法零价不是未计价；未计价 = 价格目录缺该模型
+	// 的记录数。目录判定在锁外做（FindPrice 内部会再取 store.mu，
+	// 非重入锁在持锁期间调用会死锁——项目 Rust/Go 锁纪律同样适用于此）。
+	row := c.store.db.QueryRow(`SELECT COALESCE(SUM(cost_micro), 0) FROM usage_events`)
+	_ = row.Scan(&totalCostMicro)
+	modelRows, err := c.store.db.Query(`
+		SELECT provider, model, COUNT(*) FROM usage_events
+		GROUP BY provider, model`)
+	if err == nil {
+		for modelRows.Next() {
+			var mc modelCount
+			if err := modelRows.Scan(&mc.provider, &mc.model, &mc.cnt); err == nil {
+				modelCounts = append(modelCounts, mc)
+			}
+		}
+		modelRows.Close()
+	}
 	c.store.mu.RUnlock()
+
+	for _, mc := range modelCounts {
+		if c.FindPrice(mc.provider, mc.model) != nil {
+			pricedCount += mc.cnt
+		} else {
+			unpricedCount += mc.cnt
+		}
+	}
 
 	return &PricingResult{
 		Prices:                allPrices,

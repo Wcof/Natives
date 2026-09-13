@@ -60,6 +60,42 @@ export class UsageImporterWizard {
     }
   }
 
+  // billing_csv 导入（整改 E5，方案 §7.1）：复用同一分块协议，begin 固定
+  // provider/account；preview 返回合法记录、重复、币种三口径与逐行错误。
+  async processBillingFile(file, { provider, account }, onProgress) {
+    this.file = file;
+    try {
+      const beginRes = await this.api.beginUsageImport({
+        fileName: file.name,
+        fileSize: file.size,
+        importKind: 'billing_csv',
+        provider,
+        account,
+      });
+      this.sessionId = beginRes.sessionId;
+
+      const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+      for (let i = 0; i < totalChunks; i++) {
+        const start = i * CHUNK_SIZE;
+        const end = Math.min(start + CHUNK_SIZE, file.size);
+        const arrayBuffer = await file.slice(start, end).arrayBuffer();
+        await this.api.chunkUsageImport({
+          sessionId: this.sessionId,
+          chunkIndex: i,
+          chunkDataBase64: arrayBufferToBase64(arrayBuffer),
+        });
+        if (onProgress) onProgress({ currentChunk: i + 1, totalChunks, percent: Math.round(((i + 1) / totalChunks) * 100) });
+      }
+
+      return await this.api.previewUsageImport({ sessionId: this.sessionId });
+    } catch (err) {
+      if (this.sessionId) {
+        this.api.cancelUsageImport({ sessionId: this.sessionId }).catch(() => {});
+      }
+      throw err;
+    }
+  }
+
   async commit() {
     if (!this.sessionId) throw new Error('No active import session');
     const result = await this.api.commitUsageImport({ sessionId: this.sessionId });

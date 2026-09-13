@@ -92,8 +92,10 @@ export function createNativeClient({ host, connectNative = (name) => globalThis.
         if (transportError) reject(transportError);
         else if (message?.ok) resolve(message.result);
         else {
-          const error = new Error(message?.error || '操作失败');
-          error.code = message?.errorCode || 'internal_error';
+          const body = message?.error;
+          const error = new Error(typeof body === 'object' ? body.message : body || '操作失败');
+          error.code = (typeof body === 'object' ? body.code : message?.errorCode) || 'internal_error';
+          error.retryable = Boolean(typeof body === 'object' && body.retryable);
           reject(error);
         }
       };

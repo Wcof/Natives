@@ -7,6 +7,15 @@ import { widgetPlugins } from './plugins/widgets/index.js';
 export { WIDGET_KEYS, BACKGROUND_KEYS, POSITIONS, sanitizeHtml, escapeHtml, backgroundPlugins, widgetPlugins };
 
 const DEFAULT_ZH_NAMES = {
+  'widget/aiPerformance': 'AI 效能（旧版）',
+  // R1：七个独立 AI 效能组件的展示名。
+  'widget/aiCost': 'AI 成本',
+  'widget/aiTokens': 'Token 用量',
+  'widget/aiSessions': '会话活跃',
+  'widget/aiRequests': '调用统计',
+  'widget/aiLimits': '额度与预算',
+  'widget/aiAttention': '任务提醒',
+  'widget/aiSavings': '降本建议',
   'widget/binaryTime': '二进制时钟',
   'widget/bookmarks': '书签',
   'widget/countdown': '倒计时',

@@ -5,6 +5,15 @@ use std::path::PathBuf;
 use super::types::{StoreResult, WidgetRecord, WorkspaceError};
 
 pub const WIDGET_KEYS: &[&str] = &[
+    "widget/aiPerformance",
+    // R1（方案 §4.1）：七个独立 AI 效能组件；旧 aiPerformance 保留为兼容 key。
+    "widget/aiCost",
+    "widget/aiTokens",
+    "widget/aiSessions",
+    "widget/aiRequests",
+    "widget/aiLimits",
+    "widget/aiAttention",
+    "widget/aiSavings",
     "widget/binaryTime",
     "widget/bookmarks",
     "widget/countdown",

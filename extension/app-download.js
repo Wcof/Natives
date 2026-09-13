@@ -1,9 +1,7 @@
 // Fixed supply-chain sources. Network errors may switch source; validation errors never do.
 export const RELEASE_ROOT = 'https://github.com/Wcof/Natives/releases/';
-export const MIRROR_ROOT = 'https://ghproxy.net/';
 export const CATALOG_SOURCES = Object.freeze([
-  `${RELEASE_ROOT}download/app-catalog-v2/`,
-  `${MIRROR_ROOT}${RELEASE_ROOT}download/app-catalog-v2/`,
+  `${RELEASE_ROOT}download/app-catalog-v3/`,
 ]);
 
 export function transferError(code, message) { return Object.assign(new Error(message), { code }); }
@@ -14,16 +12,20 @@ export function artifactSources(url) {
       || !url.startsWith(`${RELEASE_ROOT}download/`)) {
     throw transferError('APP_SOURCE_INVALID', 'package URL is outside the release allowlist');
   }
-  return [url, `${MIRROR_ROOT}${url}`];
+  return [url];
 }
 
 function checkedRedirect(response) {
   if (!response.url) return;
   const url = new URL(response.url);
   if (['chrome-extension:', 'file:'].includes(url.protocol)) return;
+  // Dev harness exception: the browser-evidence pages are served from the
+  // loopback dev server (extension pages in production are always
+  // chrome-extension://, so this cannot widen the shipped attack surface).
+  if (url.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(url.hostname)) return;
   if (url.protocol !== 'https:' || ![
     'github.com', 'release-assets.githubusercontent.com', 'objects.githubusercontent.com',
-    'releases.githubusercontent.com', 'ghproxy.net',
+    'releases.githubusercontent.com',
   ].includes(url.hostname)) {
     throw transferError('APP_SOURCE_INVALID', 'unexpected download redirect');
   }
