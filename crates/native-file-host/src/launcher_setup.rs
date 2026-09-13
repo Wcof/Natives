@@ -26,12 +26,6 @@ pub fn handshake_marker_path(natives_root: &Path) -> PathBuf {
     natives_root.join("extensions/chrome/handshake.json")
 }
 
-/// Finder 定位目标：优先 Downloads 快捷方式（失败时调用方回退真实目录）。
-fn alias_display(extension_dir: &Path) -> PathBuf {
-    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-    ensure_downloads_alias(extension_dir, &home).unwrap_or_else(|_| extension_dir.to_path_buf())
-}
-
 #[derive(PartialEq, Eq, Debug, Clone, Copy)]
 enum Entry {
     Product,
@@ -123,30 +117,6 @@ pub fn read_fresh_handshake(
     Some(value)
 }
 
-/// 用户可见快捷方式（用户反馈 2026-09-13：/Library 在 Finder 中不可见，
-/// 找不到扩展目录）：在 ~/Downloads 放一个指向固定系统源扩展目录的
-/// 符号链接。只导航不改加载位置——真实目录仍是受保护系统源，无第二
-/// 更新链。已存在同名真实文件/目录时不覆盖用户数据；链接指向一致时幂等。
-pub fn ensure_downloads_alias(extension_dir: &Path, home: &Path) -> Result<PathBuf, String> {
-    let downloads = home.join("Downloads");
-    fs::create_dir_all(&downloads).map_err(|e| format!("create Downloads: {e}"))?;
-    let alias = downloads.join("Natives-Extension");
-    let points_here = std::fs::read_link(&alias)
-        .map(|target| target == extension_dir)
-        .unwrap_or(false);
-    if !points_here {
-        if std::fs::symlink_metadata(&alias).is_ok() {
-            return Err(format!(
-                "downloads alias blocked by existing non-link entry: {}",
-                alias.display()
-            ));
-        }
-        std::os::unix::fs::symlink(extension_dir, &alias)
-            .map_err(|e| format!("create downloads alias: {e}"))?;
-    }
-    Ok(alias)
-}
-
 /// 打开引导所需的外部页面/目录。拆出以便测试注入。
 /// §1.3：先打开随包离线指南（file:），再开扩展管理页并在 Finder 定位；
 /// §1.1：复制固定目录路径；Chrome 缺失时用原生对话框如实提示。
@@ -166,24 +136,11 @@ fn reveal(extension_dir: &Path, onboarding_html: Option<&Path>) -> Result<(), St
     let _ = std::process::Command::new("/usr/bin/open")
         .args(["-a", "Google Chrome", "chrome://extensions"])
         .status();
-    // §1.4：剪贴板只在用户点击"复制目录路径"时改变，不自动覆盖。
-    // Finder 定位（用户可见入口）：优先 Downloads 快捷方式所在处，
-    // 让用户看到可选目录；失败再回退定位真实目录。
-    let home = dirs::home_dir().ok_or("home dir unavailable")?;
-    match ensure_downloads_alias(extension_dir, &home) {
-        Ok(alias) => {
-            std::process::Command::new("/usr/bin/open")
-                .args(["-R", &alias.to_string_lossy()])
-                .status()
-                .map_err(|e| format!("open Finder: {e}"))?;
-        }
-        Err(_) => {
-            std::process::Command::new("/usr/bin/open")
-                .arg(extension_dir)
-                .status()
-                .map_err(|e| format!("open Finder: {e}"))?;
-        }
-    }
+    // Finder 定位固定系统扩展目录（直接高亮选中，供用户拖入 Chrome 扩展页）：
+    std::process::Command::new("/usr/bin/open")
+        .args(["-R", &extension_dir.to_string_lossy()])
+        .status()
+        .map_err(|e| format!("open Finder: {e}"))?;
     Ok(())
 }
 
@@ -203,10 +160,6 @@ fn run(
             extension_dir.display()
         ));
     }
-    // 用户可见快捷方式独立于打开动作创建（--no-open 也要准备）：
-    // 用户反馈 2026-09-13——Downloads 里的 Natives-Extension 必须始终存在。
-    let home = dirs::home_dir().ok_or("home dir unavailable")?;
-    let _ = ensure_downloads_alias(&extension_dir, &home);
     let extension_version = read_managed_manifest_version(&extension_dir);
     let not_before = SystemTime::now();
     if !no_open {
@@ -261,13 +214,8 @@ pub fn run_cli(args: &[String]) -> i32 {
     let no_open = args.iter().any(|a| a == "--no-open");
     if args.iter().any(|a| a == "--reveal-extension-dir") {
         let dir = system_chrome_extension_dir();
-        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
-        if let Err(err) = ensure_downloads_alias(&dir, &home) {
-            println!("{}", serde_json::json!({ "step": "error", "error": err }));
-            return 1;
-        }
         let mut child = match std::process::Command::new("/usr/bin/open")
-            .args(["-R", &alias_display(&dir).to_string_lossy()])
+            .args(["-R", &dir.to_string_lossy()])
             .spawn()
         {
             Ok(child) => child,
@@ -331,12 +279,6 @@ pub fn run_launcher_default(args: &[String]) -> i32 {
     // 有界时限替代纯文件存在判定。
     // D03：不再用 30 天旧标记判成功。就绪 = 存在握手标记且其记录的
     // extensionVersion 与系统扩展 manifest 版本一致（升级后需重载）。
-    let ext_dir = system_chrome_extension_dir();
-    if ext_dir.join("manifest.json").exists() {
-        if let Some(home) = dirs::home_dir() {
-            let _ = ensure_downloads_alias(&ext_dir, &home);
-        }
-    }
     // D03 + 用户反馈：入口三态——系统扩展缺失走完整引导；产品已配置
     // （配置经扩展前台完成 = 扩展已装）直接进产品；扩展已装未配置进
     // 配置入口。实时连接由产品页自身握手核验，不依赖旧标记。
@@ -468,30 +410,6 @@ mod tests {
         fs::write(&marker, r#"{"hostVersion":"0.1.0"}"#).unwrap();
         assert!(read_fresh_handshake(&root, SystemTime::now() - Duration::from_secs(60)).is_none());
         let _ = fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn downloads_alias_points_at_fixed_extension_dir_and_is_idempotent() {
-        let root = std::env::temp_dir().join(format!(
-            "natives-alias-{}-{:?}",
-            std::process::id(),
-            std::thread::current().id()
-        ));
-        fs::create_dir_all(&root).unwrap();
-        let real = root.join("ChromeExtension");
-        fs::create_dir_all(&real).unwrap();
-        let temp_home = root.join("home");
-        let alias = ensure_downloads_alias(&real, &temp_home).unwrap();
-        assert_eq!(std::fs::read_link(&alias).unwrap(), real);
-        // 幂等：重复调用不重建、不报错。
-        let alias2 = ensure_downloads_alias(&real, &temp_home).unwrap();
-        assert_eq!(alias2, alias);
-        // 同名真实条目不覆盖用户数据（D11：测试只碰临时根）。
-        std::fs::remove_file(&alias).unwrap();
-        fs::write(&alias, b"user file").unwrap();
-        assert!(ensure_downloads_alias(&real, &temp_home).is_err());
-        let _ = fs::remove_dir_all(&root);
-        let _ = fs::remove_file(&alias);
     }
 
     #[test]

@@ -59,24 +59,12 @@ static void openInChrome(NSString *target) {
 
 static void revealFolder(void) {
     NSString *extDir = [NSString stringWithFormat:@"%s/ChromeExtension", SOURCE_ROOT];
-    NSString *downloads = [NSHomeDirectory() stringByAppendingPathComponent:@"Downloads"];
-    NSString *alias = [downloads stringByAppendingPathComponent:@"Natives-Extension"];
-    NSFileManager *fm = [NSFileManager defaultManager];
+    NSURL *targetURL = [NSURL fileURLWithPath:extDir];
 
-    // 确保 Downloads/Natives-Extension 符号链接存在并指向系统扩展目录
-    BOOL isDir = NO;
-    if (![fm fileExistsAtPath:alias isDirectory:&isDir] || [[fm destinationOfSymbolicLinkAtPath:alias error:nil] length] > 0) {
-        [fm removeItemAtPath:alias error:nil];
-        [fm createSymbolicLinkAtPath:alias withDestinationPath:extDir error:nil];
-    }
-
-    NSString *targetPath = [fm fileExistsAtPath:alias] ? alias : extDir;
-    NSURL *targetURL = [NSURL fileURLWithPath:targetPath];
-
-    // 原生调用 Finder 定位并高亮该文件/文件夹
+    // 直接在访达中高亮选中 ChromeExtension 真实扩展文件夹，供用户一秒拖入 Chrome
     [[NSWorkspace sharedWorkspace] activateFileViewerSelectingURLs:@[targetURL]];
 
-    // 唤起 Finder 到前台，方便用户直接拖拽
+    // 唤起访达至前台
     NSTask *task = [[NSTask alloc] init];
     task.launchPath = @"/usr/bin/osascript";
     task.arguments = @[@"-e", @"tell application \"Finder\" to activate"];
