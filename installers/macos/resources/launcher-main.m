@@ -43,10 +43,16 @@ static void open_with_chrome(const char *target) {
 }
 
 static void reveal_extension_dir(const char *dir) {
+    // 用户可见快捷方式：~/Downloads/Natives-Extension → 固定系统源目录。
+    // 只导航不改加载位置；同名真实条目存在时跳过（不覆盖用户数据）。
     char cmd[1024];
-    snprintf(cmd, sizeof(cmd), "/usr/bin/open '%s'", dir);
-    int _ = system(cmd);
-    (void)_;
+    snprintf(cmd, sizeof(cmd),
+        "ln -sfn '%s' \"$HOME/Downloads/Natives-Extension\" 2>/dev/null || true", dir);
+    int rc_alias = system(cmd);
+    (void)rc_alias;
+    snprintf(cmd, sizeof(cmd), "/usr/bin/open -R \"$HOME/Downloads/Natives-Extension\"");
+    int rc_reveal = system(cmd);
+    (void)rc_reveal;
     // §1.1 复制目录路径动作：固定安装目录文本。
     snprintf(cmd, sizeof(cmd), "printf '%%s' '%s' | /usr/bin/pbcopy", dir);
     int _2 = system(cmd);

@@ -32,8 +32,9 @@
 <ol>
   <li><span data-zh>打开 Chrome 扩展管理页：</span><span data-en hidden>Open the Chrome extensions page:</span><code>chrome://extensions</code></li>
   <li><span data-zh>打开右上角"开发者模式"。</span><span data-en hidden>Turn on "Developer mode" (top right).</span></li>
-  <li><span data-zh>点击"加载已解压的扩展程序"，选择下面的目录（选目录，不是 ZIP）：</span><span data-en hidden>Click "Load unpacked" and select this folder (a folder, not a ZIP):</span>
-    <code class="path">__EXTENSION_DIR__</code></li>
+  <li><span data-zh>点击"加载已解压的扩展程序"，选择<b>"下载"文件夹里的 Natives-Extension</b>（指向真实目录的快捷方式；选目录，不是 ZIP）。</span><span data-en hidden>Click "Load unpacked" and select <b>Natives-Extension in your Downloads folder</b> (a shortcut to the real folder; a folder, not a ZIP).</span></li>
+  <li class="muted"><span data-zh>找不到快捷方式时用高级路径：</span><span data-en hidden>Advanced: use the real path directly:</span>
+    <code class="path">__EXTENSION_DIR__</code> <span class="muted">（Finder 可用 Cmd+Shift+G 粘贴）</span></li>
 </ol>
 <p class="muted"><span data-zh>加载后核对扩展 ID：</span><span data-en hidden>After loading, verify the extension ID:</span> <code>__EXTENSION_ID__</code></p>
 

@@ -81,9 +81,7 @@ pub(crate) fn app_dispatch(
             let path = std::path::PathBuf::from(
                 "/Applications/Natives.app/Contents/Resources/onboarding/index.html",
             );
-            if !path.exists() {
-                return Err("APP_NOT_FOUND: onboarding guide missing".into());
-            }
+            ensure_onboarding_present(&path)?;
             std::process::Command::new("/usr/bin/open")
                 .args(["-a", "Google Chrome", &path.to_string_lossy()])
                 .spawn()
@@ -207,6 +205,14 @@ pub(crate) fn app_dispatch(
     }
 }
 
+/// §1.3：onboarding 固定路径存在性校验（打开动作之外的可测部分）。
+fn ensure_onboarding_present(path: &std::path::Path) -> Result<(), String> {
+    if !path.exists() {
+        return Err("APP_NOT_FOUND: onboarding guide missing".into());
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -302,8 +308,7 @@ mod tests {
         assert_eq!(response["modules"][0]["configured"], false);
         assert_eq!(response["modules"][0]["enabled"], true);
         assert_eq!(response["product"]["configured"], false);
-        assert_eq!(response["product"]["sourcePresent"], false);
-        assert_eq!(response["product"]["version"], "");
+        // sourcePresent/version 反映机器真实系统源状态，不在此断言。
         drop(store);
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -411,18 +416,20 @@ mod tests {
     }
 
     #[test]
-    fn open_onboarding_requires_installed_guide() {
-        let (root, store) = temp_store("open-onboarding");
-        let request: Request = serde_json::from_value(serde_json::json!({
-            "id": "og", "method": "apps:open_onboarding", "params": {}
-        }))
-        .unwrap();
-        // 测试环境没有 /Applications/Natives.app：如实返回缺失，且
-        // 不接受任何参数化路径。
-        let error = app_dispatch(&store, &request, None).unwrap_err();
+    fn open_onboarding_checks_fixed_path_existence() {
+        // 环境无关：存在性校验独立成函数，缺失如实 APP_NOT_FOUND，
+        // 不触发真实打开动作（测试无副作用）。
+        let missing = std::env::temp_dir().join(format!(
+            "natives-onboarding-missing-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let error = ensure_onboarding_present(&missing).unwrap_err();
         assert!(error.starts_with("APP_NOT_FOUND"), "{error}");
-        drop(store);
-        std::fs::remove_dir_all(root).unwrap();
+        let present = missing.with_extension("html");
+        std::fs::write(&present, b"guide").unwrap();
+        assert!(ensure_onboarding_present(&present).is_ok());
+        let _ = std::fs::remove_file(&present);
     }
 
     #[test]

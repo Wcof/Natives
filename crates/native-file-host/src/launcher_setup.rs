@@ -61,6 +61,29 @@ pub fn read_fresh_handshake(
     Some(value)
 }
 
+/// 用户可见快捷方式（用户反馈 2026-09-13：/Library 在 Finder 中不可见，
+/// 找不到扩展目录）：在 ~/Downloads 放一个指向固定系统源扩展目录的
+/// 符号链接。只导航不改加载位置——真实目录仍是受保护系统源，无第二
+/// 更新链。已存在同名真实文件/目录时不覆盖用户数据；链接指向一致时幂等。
+pub fn ensure_downloads_alias(extension_dir: &Path) -> Result<PathBuf, String> {
+    let home = dirs::home_dir().ok_or("home dir unavailable")?;
+    let alias = home.join("Downloads").join("Natives-Extension");
+    let points_here = std::fs::read_link(&alias)
+        .map(|target| target == extension_dir)
+        .unwrap_or(false);
+    if !points_here {
+        if std::fs::symlink_metadata(&alias).is_ok() {
+            return Err(format!(
+                "downloads alias blocked by existing non-link entry: {}",
+                alias.display()
+            ));
+        }
+        std::os::unix::fs::symlink(extension_dir, &alias)
+            .map_err(|e| format!("create downloads alias: {e}"))?;
+    }
+    Ok(alias)
+}
+
 /// 打开引导所需的外部页面/目录。拆出以便测试注入。
 /// §1.3：先打开随包离线指南（file:），再开扩展管理页并在 Finder 定位；
 /// §1.1：复制固定目录路径；Chrome 缺失时用原生对话框如实提示。
@@ -92,11 +115,22 @@ fn reveal(extension_dir: &Path, onboarding_html: Option<&Path>) -> Result<(), St
         }
     }
     drop(pbcopy);
-    // Finder 定位固定目录（用户在 Chrome 中选择的就是这个文件夹）。
-    std::process::Command::new("/usr/bin/open")
-        .arg(extension_dir)
-        .status()
-        .map_err(|e| format!("open Finder: {e}"))?;
+    // Finder 定位（用户可见入口）：优先 Downloads 快捷方式所在处，
+    // 让用户看到可选目录；失败再回退定位真实目录。
+    match ensure_downloads_alias(extension_dir) {
+        Ok(alias) => {
+            std::process::Command::new("/usr/bin/open")
+                .args(["-R", &alias.to_string_lossy()])
+                .status()
+                .map_err(|e| format!("open Finder: {e}"))?;
+        }
+        Err(_) => {
+            std::process::Command::new("/usr/bin/open")
+                .arg(extension_dir)
+                .status()
+                .map_err(|e| format!("open Finder: {e}"))?;
+        }
+    }
     Ok(())
 }
 
@@ -292,6 +326,29 @@ mod tests {
         fs::write(&marker, r#"{"hostVersion":"0.1.0"}"#).unwrap();
         assert!(read_fresh_handshake(&root, SystemTime::now() - Duration::from_secs(60)).is_none());
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn downloads_alias_points_at_fixed_extension_dir_and_is_idempotent() {
+        let root = std::env::temp_dir().join(format!(
+            "natives-alias-{}-{:?}",
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let real = root.join("ChromeExtension");
+        fs::create_dir_all(&real).unwrap();
+        let alias = ensure_downloads_alias(&real).unwrap();
+        assert_eq!(std::fs::read_link(&alias).unwrap(), real);
+        // 幂等：重复调用不重建、不报错。
+        let alias2 = ensure_downloads_alias(&real).unwrap();
+        assert_eq!(alias2, alias);
+        // 同名真实条目不覆盖用户数据。
+        std::fs::remove_file(&alias).unwrap();
+        fs::write(&alias, b"user file").unwrap();
+        assert!(ensure_downloads_alias(&real).is_err());
+        let _ = fs::remove_dir_all(&root);
+        let _ = fs::remove_file(&alias);
     }
 
     #[test]
