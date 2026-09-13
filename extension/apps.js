@@ -41,7 +41,7 @@ export function createAppCenter({
   let lifecycle = appLifecycle();
   const native = client || createNativeClient({
     host: 'com.natives.file_manager', timeoutMs: 20_000,
-    writeMethods: new Set(['apps:clear_data', 'apps:recover', 'apps:set_enabled', 'apps:set_sidebar']),
+    writeMethods: new Set(['apps:clear_data', 'apps:recover', 'apps:set_enabled', 'apps:set_sidebar', 'apps:open_onboarding']),
     onDisconnect: (error, intentional) => {
       state.host = null;
       if (!intentional && !disposed) { state.error = classifyAppError(error); render(); }
@@ -227,6 +227,12 @@ export function createAppCenter({
       list.append(node('div', 'apps-empty', t('appsEmpty')));
     }
     for (const entry of entries) list.append(card(entry));
+    // §1.3：用户可随时重新查看同版本安装说明（固定安装路径，Host 打开）。
+    const guide = node('div', 'apps-notice');
+    guide.append(action('open', t('appsViewGuide'), async () => {
+      await native.call('apps:open_onboarding', {});
+    }));
+    list.append(guide);
   }
   async function configureProduct() {
     if (state.busy.size) throw Object.assign(new Error('app busy'), { code: 'APP_BUSY' });

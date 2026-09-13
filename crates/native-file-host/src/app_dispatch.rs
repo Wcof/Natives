@@ -75,6 +75,24 @@ pub(crate) fn app_dispatch(
                 "retainedData": retained,
             }))
         }
+        "apps:open_onboarding" => {
+            // §1.3：用户从产品内重新查看同版本安装说明；只允许固定安装
+            // 路径，无参数、无网络、不写任何状态。
+            let path = std::path::PathBuf::from(
+                "/Applications/Natives.app/Contents/Resources/onboarding/index.html",
+            );
+            if !path.exists() {
+                return Err("APP_NOT_FOUND: onboarding guide missing".into());
+            }
+            std::process::Command::new("/usr/bin/open")
+                .args(["-a", "Google Chrome", &path.to_string_lossy()])
+                .spawn()
+                .map_err(|error| format!("APP_INTERNAL: {error}"))
+                .and_then(|mut child| {
+                    let _ = child.wait();
+                    Ok(serde_json::json!({ "ok": true }))
+                })
+        }
         "apps:product_status" => {
             let status = store.product_status().map_err(|error| error.to_string())?;
             serde_json::to_value(status).map_err(|error| error.to_string())
@@ -388,6 +406,21 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.starts_with("APP_CONFIRMATION_REQUIRED"), "{error}");
+        drop(store);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn open_onboarding_requires_installed_guide() {
+        let (root, store) = temp_store("open-onboarding");
+        let request: Request = serde_json::from_value(serde_json::json!({
+            "id": "og", "method": "apps:open_onboarding", "params": {}
+        }))
+        .unwrap();
+        // 测试环境没有 /Applications/Natives.app：如实返回缺失，且
+        // 不接受任何参数化路径。
+        let error = app_dispatch(&store, &request, None).unwrap_err();
+        assert!(error.starts_with("APP_NOT_FOUND"), "{error}");
         drop(store);
         std::fs::remove_dir_all(root).unwrap();
     }

@@ -120,9 +120,10 @@ function makeDom() {
   assert.equal(dom.list.querySelectorAll('.app-card').length, 1, 'empty install table still shows fund');
   assert.ok(dom.list.textContent.includes('基金'));
   assert.ok(dom.list.textContent.includes('个人基金记账、持仓与收益'));
-  assert.ok(!dom.list.textContent.includes(t('appsInstall')));
-  assert.ok(!dom.list.textContent.includes(t('appsUninstall')));
-  assert.ok(!dom.list.textContent.includes(t('appsUpdate')));
+  const labels = [...dom.list.querySelectorAll('.action span')].map((n) => n.textContent);
+  assert.ok(!labels.includes(t('appsInstall')), 'no install action');
+  assert.ok(!labels.includes(t('appsUninstall')), 'no uninstall action');
+  assert.ok(!labels.includes(t('appsUpdate')), 'no update action');
   assert.equal(client.calls.filter((c) => c.method === 'apps:suite_prepare').length, 0);
   assert.ok(!client.calls.some((c) => c.method.startsWith('apps:install_')));
   // The explicit product setup bar is shown; configuration never happens

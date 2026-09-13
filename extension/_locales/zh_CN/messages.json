@@ -3100,5 +3100,8 @@
   },
   "aiPerfRangeEnd": {
     "message": "结束时间"
+  },
+  "appsViewGuide": {
+    "message": "查看安装说明"
   }
 }

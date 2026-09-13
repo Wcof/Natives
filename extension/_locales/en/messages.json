@@ -3100,5 +3100,8 @@
   },
   "aiPerfRangeEnd": {
     "message": "End time"
+  },
+  "appsViewGuide": {
+    "message": "View setup guide"
   }
 }

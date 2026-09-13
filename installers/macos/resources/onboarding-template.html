@@ -51,6 +51,14 @@
 <div class="card"><span data-zh>本页来自本次安装包，不请求网络。Natives 不会静默修改 Chrome 配置；"产品配置"只在你在扩展前台明确点击后执行；基金数据保存在你的用户数据目录。</span><span data-en hidden>This page ships inside the installer and makes no network requests. Natives never silently modifies your Chrome profile; product configuration runs only after you explicitly click it; Fund data stays in your user data directory.</span></div>
 
 <script>
+  const params = new URLSearchParams(location.search);
+  const session = params.get('session');
+  if (session && /^[0-9a-f]{1,32}$/.test(session)) {
+    const line = document.createElement('p');
+    line.className = 'muted';
+    line.append(document.createTextNode('\u672c\u6b21\u5f15\u5bfc\u4f1a\u8bdd\uff1a' + session));
+    document.querySelector('.ver').after(line);
+  }
   const zh = document.querySelectorAll('[data-zh]'), en = document.querySelectorAll('[data-en]');
   const btn = document.getElementById('lang-toggle');
   btn.onclick = () => {

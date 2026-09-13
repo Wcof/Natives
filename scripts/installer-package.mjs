@@ -99,12 +99,15 @@ export async function buildInstaller({ mode = 'local', version, output, fundNap 
   const host = buildHostBinary(mode);
   const modelHost = buildModelHost();
 
-  // 可见主入口包装（§1.1）：编译 C 包装（Finder 双击不弹 Terminal），
+  // 可见主入口包装（§1.1）：编译 ObjC 包装（AppKit 原生状态窗：重新检测/
+  // 打开扩展管理页/显示扩展文件夹/复制目录路径；Finder 双击不弹 Terminal），
   // SOURCE_ROOT 固化系统源路径，双击经它调用 native-file-host 引导模式。
   const sourceName = mode === 'production' ? 'Natives' : 'Natives-Local';
   const appExec = join(STAGING, 'Natives');
-  execFileSync('cc', ['-O2', `-DSOURCE_ROOT="\"/Library/Application Support/${sourceName}\""`,
-    '-o', appExec, join(ROOT, 'installers/macos/resources/launcher-main.c')], { stdio: 'inherit' });
+  execFileSync('cc', ['-O2', '-framework', 'AppKit',
+    '-DSOURCE_ROOT="' + `/Library/Application Support/${sourceName}` + '"',
+    '-DEXTENSION_ID="' + extensionId + '"',
+    '-o', appExec, join(ROOT, 'installers/macos/resources/launcher-main.m')], { stdio: 'inherit' });
   const appIcon = join(ROOT, 'installers/macos/resources/natives.icns');
 
   // 随包离线引导页（§1.3）：单一内容源模板 → index.html；conclusion
@@ -138,6 +141,11 @@ export async function buildInstaller({ mode = 'local', version, output, fundNap 
   }
   if (finalHtml.includes('__VERSION__') || finalHtml.includes('__EXTENSION_DIR__')) {
     throw new Error('onboarding placeholders not fully substituted');
+  }
+  // §1.3 包扫描口径：无远端脚本/eval/localhost/Native Port/开发机路径。
+  const forbidden = [/https?:\/\//, /\beval\s*\(/, /localhost/i, /chrome\.runtime/, /\/Users\//, /<a\s+href/i];
+  for (const pattern of forbidden) {
+    if (pattern.test(finalHtml)) throw new Error(`onboarding contains forbidden content: ${pattern}`);
   }
 
   // 固定模块：fund .nap 是 gzip 单载荷，解压即 Mach-O 可执行程序；
@@ -173,6 +181,11 @@ export async function buildInstaller({ mode = 'local', version, output, fundNap 
       artifactPath: `modules/fund/${appJson.version}/app`,
       payloadSha256,
     }],
+  };
+  manifest.launcher = {
+    bundleId: 'com.natives.app',
+    executableSha256: digest(readFileSync(appExec)),
+    onboardingSha256: digest(readFileSync(join(onboardingDir, 'index.html'))),
   };
   const manifestBytes = Buffer.from(JSON.stringify(manifest, null, 2) + '\n');
   const manifestPath = join(STAGING, 'product-manifest.json');

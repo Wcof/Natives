@@ -104,6 +104,7 @@ fn run(
     natives_root: &Path,
     poll: Duration,
     onboarding_html: Option<&Path>,
+    no_open: bool,
 ) -> Result<SetupStatus, String> {
     let started = Instant::now();
     // §3.3：扩展目录就是 pkg 安装的固定系统源目录。无 ZIP 准备链、
@@ -117,7 +118,9 @@ fn run(
     }
     let extension_version = read_managed_manifest_version(&extension_dir);
     let not_before = SystemTime::now();
-    let _ = reveal(&extension_dir, onboarding_html);
+    if !no_open {
+        let _ = reveal(&extension_dir, onboarding_html);
+    }
 
     // 有界轮询握手标记（Extension 加载后首次连接即写）；超时如实报告，不常驻。
     while started.elapsed() < poll {
@@ -160,8 +163,16 @@ pub fn run_cli(args: &[String]) -> i32 {
         .position(|a| a == "--onboarding-html")
         .and_then(|i| args.get(i + 1))
         .map(PathBuf::from);
+    // --no-open：打开动作由 Natives.app 原生窗口负责（§1.3 状态职责表），
+    // Host 只做有界握手轮询（原生窗的"重新检测"使用）。
+    let no_open = args.iter().any(|a| a == "--no-open");
     let root = natives_root();
-    match run(&root, Duration::from_secs(timeout), onboarding.as_deref()) {
+    match run(
+        &root,
+        Duration::from_secs(timeout),
+        onboarding.as_deref(),
+        no_open,
+    ) {
         Ok(status) => {
             println!("{}", serde_json::to_string(&status).unwrap_or_default());
             if status.handshakeVerified {

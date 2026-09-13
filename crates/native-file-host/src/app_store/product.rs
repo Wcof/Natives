@@ -183,6 +183,53 @@ impl AppStore {
             }
         }
 
+        // §1.3/§3.2：清单签名绑定 Launcher 可执行与 onboarding 摘要；
+        // 字段存在时逐项核验（缺失视为旧候选，保持兼容）。
+        if let Some(launcher) = manifest.get("launcher") {
+            let verify_fixed = |rel: &str, expected: &str, label: &str| -> Result<(), AppError> {
+                let path = std::path::PathBuf::from(rel);
+                let bytes = std::fs::read(&path).map_err(|_| {
+                    AppError::InvalidState(format!(
+                        "APP_PACKAGE_INVALID: {label} missing at {}",
+                        path.display()
+                    ))
+                })?;
+                let actual = hex_sha256(&bytes);
+                if actual != expected {
+                    return Err(AppError::PackageInvalid(format!(
+                        "{label} hash mismatch against the signed product manifest"
+                    )));
+                }
+                Ok(())
+            };
+            if let (Some(bundle_id), Some(sha)) = (
+                launcher.get("bundleId").and_then(serde_json::Value::as_str),
+                launcher
+                    .get("executableSha256")
+                    .and_then(serde_json::Value::as_str),
+            ) {
+                if bundle_id != "com.natives.app" {
+                    return Err(AppError::InvalidState(
+                        "APP_PACKAGE_INVALID: unexpected launcher bundle id".into(),
+                    ));
+                }
+                verify_fixed(
+                    "/Applications/Natives.app/Contents/MacOS/Natives",
+                    sha,
+                    "launcher executable",
+                )?;
+            }
+            if let Some(sha) = launcher
+                .get("onboardingSha256")
+                .and_then(serde_json::Value::as_str)
+            {
+                verify_fixed(
+                    "/Applications/Natives.app/Contents/Resources/onboarding/index.html",
+                    sha,
+                    "onboarding page",
+                )?;
+            }
+        }
         let entries = manifest
             .get("modules")
             .and_then(serde_json::Value::as_array)

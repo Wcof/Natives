@@ -50,9 +50,12 @@ sudo installer -pkg dist/installer/Natives-0.1.0-macOS-arm64-local.pkg -target /
 ## 3. 双击 Natives，按引导加载扩展（§1.1 主入口流程）
 
 1. 安装完成后打开 Finder"应用程序"：应看到 **Natives**（名称、图标、版本正常）。
-2. **双击 Natives**：自动打开 Chrome，显示随包离线引导页
-   （`onboarding/index.html`），同时打开扩展管理页并在 Finder 定位
-   扩展目录（目录路径已自动复制到剪贴板）。Chrome 未安装时给出原生提示。
+2. **双击 Natives**：自动打开 Chrome 显示随包离线引导页，同时打开扩展
+   管理页并在 Finder 定位扩展目录，弹出**原生状态窗口**（§1.1 按钮：
+   重新检测 / 打开扩展管理页 / 显示扩展文件夹 / 复制目录路径 / 取消）；
+   目录路径已自动复制到剪贴板。加载完成后点"重新检测"即直接进入产品；
+   超过 10 分钟窗口如实显示超时，可继续重试；Chrome 未安装时给出原生
+   提示与官方获取入口。
 3. 按引导页三步操作：`chrome://extensions` → 开启"开发者模式" →
    "加载已解压的扩展程序"选择被定位的目录（选目录，不是 ZIP）。
 4. 核对扩展 ID 必须是 `gehmgcnlpdepnpmcbbdaijabcjdnbfmh`
@@ -61,6 +64,8 @@ sudo installer -pkg dist/installer/Natives-0.1.0-macOS-arm64-local.pkg -target /
 
 手动路径（等价）：`chrome://extensions` → 开发者模式 → 加载已解压 →
 选择 `/Library/Application Support/Natives-Local/ChromeExtension`。
+
+产品内可随时点应用中心底部"查看安装说明"重新查看同版本指南（§1.3）。
 
 ## 4. 完成产品配置并测试（§3.3 / §6.3 本机简化清单）
 
