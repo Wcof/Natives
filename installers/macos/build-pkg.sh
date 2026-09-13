@@ -145,29 +145,26 @@ component=$tmp/Natives-component.pkg
 set -- --root "$payload" --identifier "com.natives.$source_name" --version "$version" --install-location /
 [ -z "$pkg_sign" ] || set -- "$@" --sign "$pkg_sign"
 pkgbuild "$@" "$component"
-# Distribution XML：conclusion 静态摘要与随包 onboarding/index.html 由
-# 同一内容源生成（§1.3），文本经 xml 转义。
-# D06：conclusion 用文件资源 + mime-type（Apple Distribution 定义），
-# 本地化文件经 --resources 打入；架构在分发层强制（T24 口径）。
+
+# Distribution XML：由 productbuild --synthesize 自动生成符合 Apple 规范的
+# 骨架（包含正确的 choices-outline 与 hostArchitectures），确保 Installer.app
+# 评估顺利通过，不触发架构错误或取消安装；注入同源 conclusion 资源与标题（§1.3/D06）。
 resources="$tmp/resources"
 mkdir -p "$resources"
 cp "$conclusion_dir/conclusion-zh.txt" "$resources/conclusion-zh.txt"
 cp "$conclusion_dir/conclusion-en.txt" "$resources/conclusion-en.txt"
-arch_tag=$([ "$mode" = production ] && echo 'x86_64' || echo 'arm64')
-cat > "$tmp/distribution.xml" <<EOF
-<?xml version="1.0" encoding="utf-8"?>
-<installer-gui-script minSpecVersion="1">
-    <title>Natives</title>
-    <options customize="never" require-scripts="false"/>
-    <domains enable_anywhere="true" enable_currentUserHome="false" enable_localSystem="true"/>
-    <os hostArchitectures="$arch_tag"/>
-    <choices-outline><line choice="natives"/></choices-outline>
-    <choice id="natives" visible="false"><pkg-ref id="com.natives.$source_name"/></choice>
-    <pkg-ref id="com.natives.$source_name" version="$version" onConclusion="none">Natives-component.pkg</pkg-ref>
-    <conclusion lang="zh_CN" file="conclusion-zh.txt" mime-type="text/plain"/>
-    <conclusion lang="en" file="conclusion-en.txt" mime-type="text/plain"/>
-</installer-gui-script>
-EOF
+productbuild --synthesize --package "$component" "$tmp/distribution.xml"
+python3 -c "
+p = '$tmp/distribution.xml'
+s = open(p).read()
+insert = '''    <title>Natives</title>
+    <conclusion lang=\"zh_CN\" file=\"conclusion-zh.txt\" mime-type=\"text/plain\"/>
+    <conclusion lang=\"en\" file=\"conclusion-en.txt\" mime-type=\"text/plain\"/>
+'''
+s = s.replace('</installer-gui-script>', insert + '</installer-gui-script>')
+open(p, 'w').write(s)
+"
+
 set -- --distribution "$tmp/distribution.xml" --resources "$resources" --package-path "$tmp"
 [ -z "$product_sign" ] || set -- "$@" --sign "$product_sign"
 mkdir -p "$(dirname "$output")"
