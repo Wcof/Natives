@@ -45,10 +45,17 @@ static BOOL chromeInstalled(void) {
         || access([NSHomeDirectory() stringByAppendingPathComponent:@"Applications/Google Chrome.app"].fileSystemRepresentation, F_OK) == 0;
 }
 
+// Chrome 目标必须显式指定 Chrome（D05 修复：chrome:// scheme 未注册到
+// LaunchServices，NSWorkspace openURL 会报"未设定应用程序"；file: 也不能
+// 依赖默认浏览器）。/usr/bin/open -a 按名称定位，系统/用户级安装均适用。
 static void openInChrome(NSString *target) {
-    [[NSWorkspace sharedWorkspace] openURL:[NSURL fileURLWithPath:target]
-                                   options:NSWorkspaceLaunchWithoutActivation
-                     configuration:@{} error:NULL];
+    NSTask *task = [[NSTask alloc] init];
+    task.launchPath = @"/usr/bin/open";
+    task.arguments = @[@"-a", @"Google Chrome", target];
+    NSError *error = nil;
+    if (![task launchAndReturnError:&error]) {
+        NSLog(@"open in Chrome failed: %@", error);
+    }
 }
 
 // 异步运行 Host 检测（D04）：NSTask，主线程只轮询状态，保持响应。
@@ -97,7 +104,7 @@ int main(int argc, char **argv) {
 
     // §1.3 状态职责：打开动作归原生 Launcher；Host 只做有界检测（--no-open）。
     openInChrome(ONBOARDING_PATH);  // file: 离线指南（§1.3）
-    [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"chrome://extensions"]];
+    openInChrome(@"chrome://extensions");
 
     NSTimeInterval totalWaited = 0;
     while (YES) {
@@ -141,9 +148,8 @@ int main(int argc, char **argv) {
         }
         BOOL verified = activeTask && activeTask.terminationStatus == 0 && !chromeMissing;
         if (verified) {
-            [[NSWorkspace sharedWorkspace] openURL:
-                [NSURL URLWithString:[NSString stringWithFormat:
-                    @"chrome-extension://%s/space.html", EXTENSION_ID]]];
+            openInChrome([NSString stringWithFormat:
+                @"chrome-extension://%s/space.html", EXTENSION_ID]);
             return 0; // 成功交接：Launcher 退出，应用图标保留。
         }
         // 结果窗：超时或未连接，用户选择下一步；取消结束本次引导。
@@ -164,7 +170,7 @@ int main(int argc, char **argv) {
             continue; // 重新检测：开启新一轮有界等待。
         }
         if (response == first + 1) {
-            [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"chrome://extensions"]];
+            openInChrome(@"chrome://extensions");
         } else if (response == first + 2) {
             [[NSWorkspace sharedWorkspace] openURL:[NSURL fileURLWithPath:extensionDir]
                                            options:NSWorkspaceLaunchWithoutActivation
