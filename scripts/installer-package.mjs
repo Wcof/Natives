@@ -81,7 +81,7 @@ function signProductManifest(manifestBytes, keyPath) {
   return signature;
 }
 
-export async function buildInstaller({ mode = 'local', version, output, fundNap } = {}) {
+export async function buildInstaller({ mode = 'local', version, output, fundNap, fundNapVersionOverride, manifestKey, pkgSign, productSign } = {}) {
   if (mode !== 'local' && mode !== 'production') usage();
   if (!version) {
     version = JSON.parse(readFileSync(join(ROOT, 'extension/manifest.json'), 'utf8')).version;
@@ -151,6 +151,11 @@ export async function buildInstaller({ mode = 'local', version, output, fundNap 
   // 固定模块：fund .nap 是 gzip 单载荷，解压即 Mach-O 可执行程序；
   // 解压后与 .meta.json 声明的 payload_sha256 核对（方案 P1：输入必须
   // 与来源版本/摘要绑定）。
+  // D13：版本同源绑定——--version 与扩展 manifest 不一致即失败；
+  // Fund 的 meta.version 与 app.json.version 不一致即失败。
+  if (fundNapVersionOverride && fundNapVersionOverride !== version) {
+    throw new Error(`--version ${fundNapVersionOverride} != extension manifest version ${version}`);
+  }
   const napPath = fundNap || findFundNap();
   const meta = JSON.parse(readFileSync(`${napPath}.meta.json`, 'utf8'));
   const appDir = join(STAGING, 'modules/fund', meta.version);
@@ -166,6 +171,9 @@ export async function buildInstaller({ mode = 'local', version, output, fundNap 
   // 产品组合清单：与 host 端 app_store/product.rs 的读取格式一致，
   // Ed25519 分离签名（local 用开发信任根私钥，生产由 --manifest-key 提供）。
   const appJson = JSON.parse(readFileSync(resolve(ROOT, '../Natives-App-Fund/app.json'), 'utf8'));
+  if (appJson.version !== meta.version) {
+    throw new Error(`fund version drift: app.json ${appJson.version} != nap meta ${meta.version}`);
+  }
   const arch = rustTargetArch();
   const manifest = {
     schemaVersion: 1,
@@ -190,8 +198,12 @@ export async function buildInstaller({ mode = 'local', version, output, fundNap 
   const manifestBytes = Buffer.from(JSON.stringify(manifest, null, 2) + '\n');
   const manifestPath = join(STAGING, 'product-manifest.json');
   writeFileSync(manifestPath, manifestBytes);
-  const keyPath = resolve(ROOT, 'scripts/apps/keys/catalog-trust-dev.private.pem');
-  if (!existsSync(keyPath)) throw new Error('missing development product signing key');
+  const keyPath = manifestKey
+    || (mode === 'production'
+      ? null
+      : resolve(ROOT, 'scripts/apps/keys/catalog-trust-dev.private.pem'));
+  if (!keyPath) throw new Error('production requires --manifest-key (production product signing key)');
+  if (!existsSync(keyPath)) throw new Error(`missing product signing key: ${keyPath}`);
   const signature = signProductManifest(manifestBytes, keyPath);
   writeFileSync(`${manifestPath}.sig`, signature + '\n');
 
@@ -201,6 +213,8 @@ export async function buildInstaller({ mode = 'local', version, output, fundNap 
   const engine = join(ROOT, 'installers/macos/build-pkg.sh');
   const args = ['installers/macos/build-pkg.sh',
     '--mode', mode, '--host', host, '--model-host', modelHost,
+    ...(pkgSign ? ['--pkg-sign', pkgSign] : []),
+    ...(productSign ? ['--product-sign', productSign] : []),
     '--extension-id', extensionId, '--extension-dir', join(ROOT, 'dist/extension'),
     '--modules-dir', join(STAGING, 'modules'),
     '--product-manifest', manifestPath,
@@ -222,16 +236,15 @@ export async function buildInstaller({ mode = 'local', version, output, fundNap 
   mkdirSync(dmgStaging, { recursive: true });
   copyFileSync(output, join(dmgStaging, basename(output)));
   copyFileSync(join(dirname(output), 'SHA256SUMS'), join(dmgStaging, 'SHA256SUMS'));
+  // §1.4：说明只写用户三步；技术细节放开发文档。
   writeFileSync(join(dmgStaging, '安装说明.txt'), [
-    `Natives ${version}（macOS ${arch}，${mode === 'production' ? 'production' : 'local'} 候选）`,
+    `Natives ${version}（macOS ${arch}）`,
     '',
-    '安装：双击其中的 .pkg → 继续 → 输入管理员密码。',
-    '装完后的三步操作与验收清单见仓库 docs/development/local-install-guide.md：',
-    '  1. chrome://extensions 开发者模式加载 /Library/Application Support/Natives-Local/ChromeExtension',
-    '  2. 扩展 ID 必须是 ' + extensionId,
-    '  3. 打开 Natives → 设置 → 应用中心 → 完成 Natives 配置',
+    '1. 双击其中的 .pkg → 继续 → 输入管理员密码完成安装。',
+    '2. 打开"应用程序"，双击 Natives，按引导在 Chrome 加载扩展。',
+    '3. 加载后点击原生窗口的"重新检测"即可进入 Natives。',
     '',
-    '卸载：sudo "/Library/Application Support/Natives-Local/uninstall.sh"（用户数据保留）',
+    '卸载：在"应用程序"旁卸载工具或随包卸载脚本执行；个人数据保留。',
     '',
   ].join('\n') + '\n');
   const dmgPath = output.replace(/\.pkg$/, '.dmg');
@@ -265,6 +278,9 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
     else if (args[i] === '--version') options.version = args[++i];
     else if (args[i] === '--output') options.output = args[++i];
     else if (args[i] === '--fund-nap') options.fundNap = args[++i];
+    else if (args[i] === '--manifest-key') options.manifestKey = args[++i];
+    else if (args[i] === '--pkg-sign') options.pkgSign = args[++i];
+    else if (args[i] === '--product-sign') options.productSign = args[++i];
   }
   buildInstaller(options).then((result) => {
     console.log(JSON.stringify({ pkg: result.pkg, dmg: result.dmg, sha256: result.sha256, dmgSha256: result.dmgSha256, size: result.size, extensionId: result.extensionId }));

@@ -48,8 +48,8 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 case "$mode" in
-  local) source_name=Natives-Local;;
-  production) source_name=Natives;;
+  local) source_name=Natives-Local; app_name="Natives Local.app";;
+  production) source_name=Natives; app_name="Natives.app";;
   *) echo 'error: --mode must be explicitly local or production' >&2; exit 1;;
 esac
 [ -n "$host" ] && [ -x "$host" ] || { echo 'error: --host must be an executable prebuilt Host' >&2; exit 1; }
@@ -82,7 +82,7 @@ mkdir -p "$source_root" "$payload/Library/Google/Chrome/NativeMessagingHosts" \
 install -m 755 "$host" "$source_root/native-file-host"
 # 可见主入口 /Applications/Natives.app（用户决定 2026-09-13，ADR-0029 修订）：
 # 正常 bundle、Info.plist、图标与引导资源；不设 Hidden/LSUIElement。
-app_root="$payload/Applications/Natives.app"
+app_root="$payload/Applications/$app_name"
 mkdir -p "$app_root/Contents/MacOS" "$app_root/Contents/Resources/onboarding"
 install -m 755 "$app_exec" "$app_root/Contents/MacOS/Natives"
 install -m 644 "$app_icon" "$app_root/Contents/Resources/natives.icns"
@@ -111,7 +111,8 @@ cp -R "$extension_dir/" "$source_root/ChromeExtension/"
 cp -R "$modules_dir/" "$source_root/modules/"
 install -m 644 "$product_manifest" "$source_root/product-manifest.json"
 install -m 644 "$product_manifest.sig" "$source_root/product-manifest.sig"
-install -m 755 "$base/uninstall.sh" "$source_root/uninstall.sh"
+sed -e "s|__APP_PATH__|\"/Applications/$app_name\"|" -e "s|__SOURCE_ROOT__|\"/Library/Application Support/$source_name\"|" -e "s|__NM_CORE__|com.natives.file_manager|" -e "s|__NM_MODEL__|com.natives.model_host|" "$base/resources/uninstall-template.sh" > "$source_root/uninstall.sh"
+chmod 755 "$source_root/uninstall.sh"
 printf '%s\n' "$extension_id" > "$source_root/extension-id"
 
 # Minimal browser Native Messaging registration only: the manifests point at
@@ -130,7 +131,7 @@ done
 # 精确白名单（方案 §5 P0）：/Applications 下唯一允许的条目是主产品
 # Natives.app；任何其他 .app/可执行入口/模块应用仍然禁止。
 if [ -d "$payload/Applications" ]; then
-  extra=$(find "$payload/Applications" -mindepth 1 -maxdepth 1 ! -name 'Natives.app')
+  extra=$(find "$payload/Applications" -mindepth 1 -maxdepth 1 ! -name "$app_name")
   [ -z "$extra" ] || { echo "error: unexpected /Applications entries:" >&2; echo "$extra" >&2; exit 1; }
   nested=$(find "$app_root" -name '*.app' -mindepth 1)
   [ -z "$nested" ] || { echo "error: nested .app inside main bundle" >&2; exit 1; }
@@ -141,23 +142,28 @@ set -- --root "$payload" --identifier "com.natives.$source_name" --version "$ver
 pkgbuild "$@" "$component"
 # Distribution XML：conclusion 静态摘要与随包 onboarding/index.html 由
 # 同一内容源生成（§1.3），文本经 xml 转义。
-escape_xml() { sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' "$1"; }
-conclusion_zh=$(escape_xml "$conclusion_dir/conclusion-zh.txt")
-conclusion_en=$(escape_xml "$conclusion_dir/conclusion-en.txt")
+# D06：conclusion 用文件资源 + mime-type（Apple Distribution 定义），
+# 本地化文件经 --resources 打入；架构在分发层强制（T24 口径）。
+resources="$tmp/resources"
+mkdir -p "$resources"
+cp "$conclusion_dir/conclusion-zh.txt" "$resources/conclusion-zh.txt"
+cp "$conclusion_dir/conclusion-en.txt" "$resources/conclusion-en.txt"
+arch_tag=$([ "$mode" = production ] && echo 'x86_64' || echo 'arm64')
 cat > "$tmp/distribution.xml" <<EOF
 <?xml version="1.0" encoding="utf-8"?>
 <installer-gui-script minSpecVersion="1">
     <title>Natives</title>
     <options customize="never" require-scripts="false"/>
     <domains enable_anywhere="true" enable_currentUserHome="false" enable_localSystem="true"/>
+    <os hostArchitectures="$arch_tag"/>
     <choices-outline><line choice="natives"/></choices-outline>
     <choice id="natives" visible="false"><pkg-ref id="com.natives.$source_name"/></choice>
     <pkg-ref id="com.natives.$source_name" version="$version" onConclusion="none">Natives-component.pkg</pkg-ref>
-    <conclusion lang="zh_CN">$conclusion_zh</conclusion>
-    <conclusion lang="en">$conclusion_en</conclusion>
+    <conclusion lang="zh_CN" file="conclusion-zh.txt" mime-type="text/plain"/>
+    <conclusion lang="en" file="conclusion-en.txt" mime-type="text/plain"/>
 </installer-gui-script>
 EOF
-set -- --distribution "$tmp/distribution.xml" --package-path "$tmp"
+set -- --distribution "$tmp/distribution.xml" --resources "$resources" --package-path "$tmp"
 [ -z "$product_sign" ] || set -- "$@" --sign "$product_sign"
 mkdir -p "$(dirname "$output")"
 productbuild "$@" "$output"

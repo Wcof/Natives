@@ -1,31 +1,29 @@
 #!/bin/sh
+# D11：当前路线的候选核验（不再断言旧"禁止 /Applications"）。
 set -eu
-dir=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
-sh -n "$dir/build-pkg.sh" "$dir/uninstall.sh"
-grep -Fq 'pkgbuild' "$dir/build-pkg.sh"
-grep -Fq 'productbuild' "$dir/build-pkg.sh"
-grep -Fq '__EXTENSION_ID__' "$dir/resources/native-host-manifest.json.in"
-grep -Fq 'https://clients2.google.com/service/update2/crx' "$dir/resources/external-extension.json.in"
-# ADR-0029 §2: the installer never creates .app bundles or /Applications
-# entries; the Workbench templates must not exist.
-grep -Fq 'must not contain /Applications entries' "$dir/build-pkg.sh"
-if grep -Fq 'Workbench' "$dir/build-pkg.sh"; then
-  echo 'error: build-pkg.sh still references Workbench' >&2
-  exit 1
-fi
-if [ -e "$dir/resources/natives-launch.sh.in" ] || [ -e "$dir/resources/Info.plist.in" ] || [ -e "$dir/resources/uninstall-wrapper.command.in" ]; then
-  echo 'error: legacy Workbench templates must be removed' >&2
-  exit 1
-fi
-# uninstall.sh still cleans legacy Workbench leftovers by known path.
-tmp=$(mktemp -d "${TMPDIR:-/tmp}/natives-installer-check.XXXXXX")
+[ "$#" -eq 1 ] || { echo "usage: $0 <candidate.pkg>" >&2; exit 2; }
+pkg=$1
+tmp=$(mktemp -d "${TMPDIR:-/tmp}/natives-verify.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT INT TERM
-mkdir -p "$tmp/Library/Application Support/Natives" "$tmp/Library/Google/Chrome/NativeMessagingHosts" "$tmp/Applications/Natives Workbench.app/Contents/MacOS"
-touch "$tmp/Library/Application Support/Natives/native-file-host" "$tmp/Library/Application Support/Natives/extension-id"
-touch "$tmp/Library/Application Support/Natives/uninstall.sh"
-touch "$tmp/Library/Google/Chrome/NativeMessagingHosts/com.natives.file_manager.json"
-touch "$tmp/Applications/Natives Workbench.app/Contents/Info.plist" "$tmp/Applications/Natives Workbench.app/Contents/MacOS/natives-launch"
-sh "$dir/uninstall.sh" --root "$tmp" >/dev/null
-[ ! -e "$tmp/Library/Application Support/Natives/native-file-host" ]
-[ ! -e "$tmp/Applications/Natives Workbench.app/Contents/Info.plist" ]
-echo 'macOS installer static and temporary-layout checks passed.'
+pkgutil --expand-full "$pkg" "$tmp/expanded" >/dev/null
+payload="$tmp/expanded/Natives-component.pkg/Payload"
+fail() { echo "VERIFY FAIL: $1" >&2; exit 1; }
+app=$(find "$payload/Applications" -mindepth 1 -maxdepth 1 -name '*.app' | head -1)
+[ -n "$app" ] || fail "no main .app"
+[ -f "$app/Contents/Info.plist" ] || fail "Info.plist missing"
+[ -x "$app/Contents/MacOS/Natives" ] || fail "main executable missing"
+[ -f "$app/Contents/Resources/natives.icns" ] || fail "app icon missing"
+[ -f "$app/Contents/Resources/onboarding/index.html" ] || fail "onboarding html missing"
+if grep -rq "__VERSION__\|__EXTENSION_DIR__" "$app/Contents/Resources/onboarding/"; then fail "onboarding placeholders"; fi
+for browser in "Library/Google/Chrome/NativeMessagingHosts" "Library/Application Support/Chromium/NativeMessagingHosts"; do
+  [ -f "$payload/$browser/com.natives.file_manager.json" ] || fail "core NM manifest missing ($browser)"
+done
+[ -d "$payload/Library/Application Support/Natives-Local" ] || [ -d "$payload/Library/Application Support/Natives" ] || fail "system source missing"
+src=$(find "$payload/Library/Application Support" -maxdepth 1 -type d -name 'Natives*Local' -o -maxdepth 1 -type d -name 'Natives' | head -1)
+[ -f "$src/native-file-host" ] || fail "core host missing"
+[ -f "$src/model-host" ] || fail "model host missing"
+[ -f "$src/ChromeExtension/manifest.json" ] || fail "extension dir missing"
+[ -f "$src/modules/fund/0.1.0/app" ] || fail "fund payload missing"
+[ -f "$src/product-manifest.json" ] && [ -f "$src/product-manifest.sig" ] || fail "product manifest missing"
+[ ! -d "$payload/Library/Application Support/Google/Chrome/External Extensions" ] || fail "External Extensions must not ship"
+echo "VERIFY OK: $pkg"

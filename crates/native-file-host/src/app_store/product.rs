@@ -9,6 +9,7 @@
 //! signature and per-file SHA-256 before anything on the user side changes.
 
 use super::mutation::{bump_revision, lock_error, now_millis, AppStore};
+use super::query;
 use super::types::AppError;
 use crate::{app_activation, app_install};
 use rusqlite::{params, OptionalExtension};
@@ -30,6 +31,13 @@ pub struct ProductStatus {
     pub source_present: bool,
     /// Product version declared by the available source (empty when absent).
     pub source_version: String,
+}
+
+fn version_tuple(version: &str) -> Vec<u64> {
+    version
+        .split('.')
+        .map(|part| part.parse::<u64>().unwrap_or(0))
+        .collect()
 }
 
 fn hex_sha256(bytes: &[u8]) -> String {
@@ -134,10 +142,29 @@ impl AppStore {
             .and_then(|(manifest, _)| manifest.get("version").and_then(serde_json::Value::as_str))
             .unwrap_or_default()
             .to_string();
+        // D09：就绪需要当前证据（载荷目录 + activation 投影仍在），
+        // 相同清单快路径也不能掩盖文件/注册丢失。
+        let evidence_ok = generation > 0
+            && self
+                .with_conn(|conn| {
+                    Ok(query::apps(conn, Some(self.app_root()))?.iter().all(|app| {
+                        app.host_registered
+                            && self.app_root().join(&app.app_id).join("runtime").is_dir()
+                            && crate::app_activation::read_activation_projection(
+                                self.app_root(),
+                                &app.app_id,
+                            )
+                            .ok()
+                            .flatten()
+                            .is_some()
+                    }))
+                })
+                .unwrap_or(false);
+        let configured = generation > 0 && evidence_ok && !version.is_empty();
         Ok(ProductStatus {
             version,
             generation,
-            configured: generation > 0,
+            configured,
             source_present: source.is_ok(),
             source_version,
         })
@@ -167,6 +194,13 @@ impl AppStore {
             })?
             .to_string();
         let (configured_version, configured_generation) = self.product_meta()?;
+        if configured_generation > 0
+            && version_tuple(&configured_version) > version_tuple(&product_version)
+        {
+            return Err(AppError::InvalidState(format!(
+                "APP_INCOMPATIBLE: refusing downgrade from {configured_version} to {product_version}"
+            )));
+        }
         if configured_generation > 0 && configured_version == product_version {
             let applied_manifest = self.with_conn(|conn| {
                 conn.query_row(
@@ -230,6 +264,8 @@ impl AppStore {
                 )?;
             }
         }
+        // D08：跨进程操作锁必须先于任何 staging 写入。
+        let _operation = self.operation.lock().map_err(lock_error)?;
         let entries = manifest
             .get("modules")
             .and_then(serde_json::Value::as_array)
@@ -306,7 +342,6 @@ impl AppStore {
             });
         }
 
-        let _operation = self.operation.lock().map_err(lock_error)?;
         let manifest_dir = self.manifest_dir()?;
         for module in &staged {
             let runtime_version = self
@@ -382,14 +417,20 @@ impl AppStore {
             })?;
             let activation_generation =
                 app_activation::next_activation_generation(self.app_root(), &module.app_id);
+            // D08：activation enabled 与 DB 偏好一致；历史停用选择保留。
+            let enabled = self.with_conn(|conn| {
+                Ok(query::app(conn, &module.app_id, Some(self.app_root()))
+                    .map(|app| app.enabled)
+                    .unwrap_or(true))
+            })?;
             let projection = serde_json::json!({
                 "receiptVersion": 1,
                 "appId": module.app_id,
                 "runtimeHost": host,
                 "activeVersion": module.version,
                 "generation": activation_generation,
-                "activationState": "ready",
-                "enabled": true,
+                "activationState": if enabled { "ready" } else { "disabled" },
+                "enabled": enabled,
                 "appProtocolVersion": 1,
                 "payloadSha256": module.payload_sha256,
                 "allowedOrigins": [origin],

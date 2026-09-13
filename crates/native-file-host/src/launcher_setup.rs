@@ -25,6 +25,45 @@ pub fn handshake_marker_path(natives_root: &Path) -> PathBuf {
     natives_root.join("extensions/chrome/handshake.json")
 }
 
+/// Finder 定位目标：优先 Downloads 快捷方式（失败时调用方回退真实目录）。
+fn alias_display(extension_dir: &Path) -> PathBuf {
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    ensure_downloads_alias(extension_dir, &home).unwrap_or_else(|_| extension_dir.to_path_buf())
+}
+
+/// D03：握手标记的 extensionVersion 必须与当前系统扩展一致；旧版本
+/// 标记意味着扩展需要重载，不能作为就绪证据。
+fn read_handshake_matching_version(natives_root: &Path, extension_dir: &Path) -> bool {
+    let marker = handshake_marker_path(natives_root);
+    let Ok(value) = fs::read_to_string(&marker)
+        .map(|s| serde_json::from_str::<serde_json::Value>(&s).unwrap_or(serde_json::Value::Null))
+    else {
+        return false;
+    };
+    let recorded = value.get("extensionVersion").and_then(|v| v.as_str());
+    let Some(recorded) = recorded else {
+        return false;
+    };
+    let manifest = extension_dir.join("manifest.json");
+    let Some(text) = fs::read_to_string(&manifest).ok() else {
+        return false;
+    };
+    let current = serde_json::from_str::<serde_json::Value>(&text)
+        .ok()
+        .and_then(|v| v.get("version").and_then(|v| v.as_str()).map(String::from));
+    current.as_deref() == Some(recorded)
+}
+
+/// Chrome 发现（D05）：系统级与用户级应用目录都检查。
+fn chrome_installed() -> bool {
+    if Path::new("/Applications/Google Chrome.app").exists() {
+        return true;
+    }
+    dirs::home_dir()
+        .map(|home| home.join("Applications/Google Chrome.app").exists())
+        .unwrap_or(false)
+}
+
 fn natives_root() -> PathBuf {
     dirs::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
@@ -65,9 +104,10 @@ pub fn read_fresh_handshake(
 /// 找不到扩展目录）：在 ~/Downloads 放一个指向固定系统源扩展目录的
 /// 符号链接。只导航不改加载位置——真实目录仍是受保护系统源，无第二
 /// 更新链。已存在同名真实文件/目录时不覆盖用户数据；链接指向一致时幂等。
-pub fn ensure_downloads_alias(extension_dir: &Path) -> Result<PathBuf, String> {
-    let home = dirs::home_dir().ok_or("home dir unavailable")?;
-    let alias = home.join("Downloads").join("Natives-Extension");
+pub fn ensure_downloads_alias(extension_dir: &Path, home: &Path) -> Result<PathBuf, String> {
+    let downloads = home.join("Downloads");
+    fs::create_dir_all(&downloads).map_err(|e| format!("create Downloads: {e}"))?;
+    let alias = downloads.join("Natives-Extension");
     let points_here = std::fs::read_link(&alias)
         .map(|target| target == extension_dir)
         .unwrap_or(false);
@@ -88,7 +128,7 @@ pub fn ensure_downloads_alias(extension_dir: &Path) -> Result<PathBuf, String> {
 /// §1.3：先打开随包离线指南（file:），再开扩展管理页并在 Finder 定位；
 /// §1.1：复制固定目录路径；Chrome 缺失时用原生对话框如实提示。
 fn reveal(extension_dir: &Path, onboarding_html: Option<&Path>) -> Result<(), String> {
-    if !Path::new("/Applications/Google Chrome.app").exists() {
+    if !chrome_installed() {
         let _ = std::process::Command::new("/usr/bin/osascript")
             .args(["-e", "display dialog \"Natives 需要 Google Chrome。请从 google.com/chrome 安装后重新双击 Natives。\\n\\nNatives requires Google Chrome.\" buttons {\"好 / OK\"} default button 1 with title \"Natives\""])
             .status();
@@ -103,21 +143,11 @@ fn reveal(extension_dir: &Path, onboarding_html: Option<&Path>) -> Result<(), St
     let _ = std::process::Command::new("/usr/bin/open")
         .args(["-a", "Google Chrome", "chrome://extensions"])
         .status();
-    // 复制固定目录路径（§1.1 复制目录路径动作）。
-    let mut pbcopy = std::process::Command::new("/usr/bin/pbcopy")
-        .stdin(std::process::Stdio::piped())
-        .spawn()
-        .ok();
-    if let Some(mut child) = pbcopy.as_mut() {
-        use std::io::Write;
-        if let Some(stdin) = child.stdin.as_mut() {
-            let _ = stdin.write_all(extension_dir.to_string_lossy().as_bytes());
-        }
-    }
-    drop(pbcopy);
+    // §1.4：剪贴板只在用户点击"复制目录路径"时改变，不自动覆盖。
     // Finder 定位（用户可见入口）：优先 Downloads 快捷方式所在处，
     // 让用户看到可选目录；失败再回退定位真实目录。
-    match ensure_downloads_alias(extension_dir) {
+    let home = dirs::home_dir().ok_or("home dir unavailable")?;
+    match ensure_downloads_alias(extension_dir, &home) {
         Ok(alias) => {
             std::process::Command::new("/usr/bin/open")
                 .args(["-R", &alias.to_string_lossy()])
@@ -199,7 +229,36 @@ pub fn run_cli(args: &[String]) -> i32 {
         .map(PathBuf::from);
     // --no-open：打开动作由 Natives.app 原生窗口负责（§1.3 状态职责表），
     // Host 只做有界握手轮询（原生窗的"重新检测"使用）。
+    // --reveal-extension-dir：别名/定位逻辑单一来源在 Host（§1.4 不在两处
+    // 实现链接逻辑），原生窗的"显示扩展文件夹"经此复用。
     let no_open = args.iter().any(|a| a == "--no-open");
+    if args.iter().any(|a| a == "--reveal-extension-dir") {
+        let dir = system_chrome_extension_dir();
+        let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+        if let Err(err) = ensure_downloads_alias(&dir, &home) {
+            println!("{}", serde_json::json!({ "step": "error", "error": err }));
+            return 1;
+        }
+        let mut child = match std::process::Command::new("/usr/bin/open")
+            .args(["-R", &alias_display(&dir).to_string_lossy()])
+            .spawn()
+        {
+            Ok(child) => child,
+            Err(e) => {
+                println!(
+                    "{}",
+                    serde_json::json!({ "step": "error", "error": format!("open Finder: {e}") })
+                );
+                return 1;
+            }
+        };
+        let _ = child.wait();
+        println!(
+            "{}",
+            serde_json::json!({ "step": "revealed", "dir": dir.to_string_lossy() })
+        );
+        return 0;
+    }
     let root = natives_root();
     match run(
         &root,
@@ -243,12 +302,10 @@ pub fn run_launcher_default(args: &[String]) -> i32 {
     // 就绪判定（§1.1"已就绪直接进入"）：近期真实握手标记 + 系统扩展目录
     // 完整。挑战级会话关联（本次 challenge 绑定）是 P3 后续项，当前以
     // 有界时限替代纯文件存在判定。
-    let ready = read_fresh_handshake(
-        &root,
-        SystemTime::now() - Duration::from_secs(30 * 24 * 3600),
-    )
-    .is_some()
-        && system_chrome_extension_dir().join("manifest.json").exists();
+    // D03：不再用 30 天旧标记判成功。就绪 = 存在握手标记且其记录的
+    // extensionVersion 与系统扩展 manifest 版本一致（升级后需重载）。
+    let ready = system_chrome_extension_dir().join("manifest.json").exists()
+        && read_handshake_matching_version(&root, &system_chrome_extension_dir());
     if ready {
         let url = format!("chrome-extension://{STABLE_EXTENSION_ID}/space.html");
         let _ = std::process::Command::new("/usr/bin/open")
@@ -338,15 +395,16 @@ mod tests {
         fs::create_dir_all(&root).unwrap();
         let real = root.join("ChromeExtension");
         fs::create_dir_all(&real).unwrap();
-        let alias = ensure_downloads_alias(&real).unwrap();
+        let temp_home = root.join("home");
+        let alias = ensure_downloads_alias(&real, &temp_home).unwrap();
         assert_eq!(std::fs::read_link(&alias).unwrap(), real);
         // 幂等：重复调用不重建、不报错。
-        let alias2 = ensure_downloads_alias(&real).unwrap();
+        let alias2 = ensure_downloads_alias(&real, &temp_home).unwrap();
         assert_eq!(alias2, alias);
-        // 同名真实条目不覆盖用户数据。
+        // 同名真实条目不覆盖用户数据（D11：测试只碰临时根）。
         std::fs::remove_file(&alias).unwrap();
         fs::write(&alias, b"user file").unwrap();
-        assert!(ensure_downloads_alias(&real).is_err());
+        assert!(ensure_downloads_alias(&real, &temp_home).is_err());
         let _ = fs::remove_dir_all(&root);
         let _ = fs::remove_file(&alias);
     }

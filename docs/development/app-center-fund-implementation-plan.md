@@ -1,14 +1,14 @@
 # Natives 单一应用、内置模块与完整交付实施方案
 
-> 修订：2026-09-13，补入用户明确要求的“安装后应用可见、双击自动打开 Chrome 并引导扩展”。
+> 修订：2026-09-13，依据 HEAD `9f4b21e4`、当前 macOS 安装文件及实际 PKG 展开结果，更新安装审计与实施顺序。
 > **唯一产品路线：Natives 是一个完整应用，基金等功能是内置模块，全部随 Natives 一起安装、更新和修复。没有模块独立下载、安装、更新、卸载或 Release。**
 > 本版替换本文件此前“独立应用包”“统一套件加二次下载”“条件备选”路线，不并行保留。
 > **主入口必须可见：同一 PKG 安装 `/Applications/Natives.app`，显示正常图标和名称；首次双击自动打开 Chrome 并引导加载随包扩展，已就绪则直接进入 Natives。** 这取代前版“禁止主程序 .app、只靠安装说明找目录”的决定，内置模块仍不独立安装。
-> **检查结论：当前应用中心尚不符合预期。规范已部分收敛，生产页面、Host 接口、数据清理和安装包仍保留旧实现，完整产品实操尚未验收。**
-> 本轮交付是方案、主入口 ADR/规范澄清和文档索引，未实施产品代码、系统安装或公开发布。
+> **检查结论：路线合理，安装尚未达到普通用户顺利完成并正常使用的标准。可见主程序、离线指南和完整组件已经进入候选；首次握手接续、本地/正式隔离、更新恢复和正式签名仍有明确缺口。**
+> 本轮交付是安装审计和更新方案；只读检查现有安装与产物，未重新安装、启动引导、修改 Chrome 配置或公开发布。
 > P0 清理 ADR/Standards 正文中与已采纳决定冲突的旧条款，不重新讨论产品路线。模块数据、Secret、安全隔离和回收约束继续保留。
 
-**执行顺序：§0–§3 冻结产品与边界 → §4 确定交互 → §5 实施 P0–P6 → §6 打包发布与实操 → §7/§8 完整验收。§10 可直接交给本地 Agent。**
+**本次重点：§1.4 用户操作与前台接续 → §2 实际审计 → §5 安装工作包 → §6/§8.4 实操验收；§10 可直接交给本地 Agent。其余章节保留完整产品与基金要求，不重新扩张本次安装范围。**
 
 ## 0. 本次决定，不再混合两种模式
 
@@ -96,25 +96,25 @@ Chrome 最终选择包含 manifest.json 的**解压目录**，不能直接选择
 
 本轮不实现企业策略注入、Chrome profile 篡改、无障碍自动点击、静默 CRX 安装或商店后备链。若将来改走商店/企业受管分发，另行明确分发决定；当前验收按上述本地加载路径完整完成。`chrome://extensions` 不能假设从普通网页链接打开，Launcher 应通过系统浏览器打开能力尝试，并在失败时提供地址复制及 Chrome 菜单操作。[Chrome 本地加载步骤](https://developer.chrome.com/docs/extensions/get-started/tutorial/hello-world)
 
-### 1.3 随包离线 HTML 安装引导页：必须新增
+### 1.3 随包离线 HTML 安装引导页：保留并完善
 
-需要新增，而且它解决的是“扩展尚未存在时用户没有任何可见说明”的断点。它不是应用中心，也不替代 Natives.app 的原生引导窗口，而是一个随完整产品发布、无需扩展即可打开的静态说明模块。
+当前已经有随包 HTML，应完善现有模板。它提供扩展尚未安装时也能阅读的说明；原生窗口保留系统操作与真实状态。无需新建引导框架或在线帮助服务。
 
 **交付位置和打开方式：**
 
-- 源文件放在现有安装输入中的 `onboarding/index.html`（中英文由同一模板生成），最终进入 `Natives.app/Contents/Resources/onboarding/`；同一文件的摘要纳入产品组合清单和签名。
+- 源文件复用 `installers/macos/resources/onboarding-template.html`（中英文来自同一份内容），最终进入 `Natives.app/Contents/Resources/onboarding/`；同一文件的摘要纳入产品组合清单和签名。
 - PKG 安装完成页（Distribution `conclusion`）显示离线引导的短摘要：告诉用户去“应用程序”打开 Natives、首次会打开 Chrome、需要完成三步扩展加载。不能在结尾页复制第二套完整步骤。
 - 用户双击 `/Applications/Natives.app` 时，Launcher 先打开 Chrome 中的 `file:` 离线指南，并同时显示原生状态窗口。指南不依赖扩展、Native Bridge、本地 HTTP 服务、业务数据或网络；Chrome 尚未安装时改由原生窗口显示同一内容的降级摘要。
 - 已连接扩展后不再重复打开指南；用户从 Natives 的“帮助/重新查看安装说明”进入时仍可重新查看同一版本指南。更新产品时指南和主程序同版本切换，不从网上加载远程 HTML。
 
 **页面内容必须包含：**
 
-1. 当前 Natives 版本和“安装完成/尚未连接扩展”的明确状态说明；静态页面只能显示“请按步骤完成”，不能猜测已安装。
+1. 当前 Natives 版本与“首次使用，请完成以下步骤”的说明。静态页面不显示“未连接/已连接/安装完成”等实时状态；用户从帮助重开指南时，内容仍成立。
 2. 三步图文说明：打开 `chrome://extensions`、打开开发者模式、点击“加载已解压的扩展程序”并选择随包目录。明确选择目录而不是 ZIP，并显示实际目录的复制文本。
 3. “之后怎么打开”：以后从“应用程序”双击 Natives；扩展已经加载时会直接进入；基金在应用中心中直接打开，不显示安装基金。
 4. “常见问题”：没有 Chrome、页面打不开、扩展被停用、重复加载、目录权限错误、Chrome profile 不一致、重新安装/升级后如何重载，以及如何返回 Natives。
-5. “安全与隐私”短说明：文件来自本次安装包，Natives 不会静默修改 Chrome profile；产品配置只在用户明确完成后执行；基金数据保存在用户数据目录。
-6. 中英文、离线可用、无外部字体/CDN、键盘可访问、浅色/深色跟随系统，窗口较窄时步骤仍可读。页面只使用本地 CSS 和无状态脚本；不嵌入业务 UI，不请求任何网络地址。
+5. 高级帮助折叠展示真实扩展目录、版本与诊断信息；日常步骤不要求核对长扩展 ID、引导会话编号、Host 路径或仓库文件。数据说明只保留用户需要知道的本地保存与卸载保留规则。
+6. 中英文、离线可用、无外部字体/CDN、键盘可访问、浅色/深色跟随系统，窗口较窄时步骤仍可读。页面只使用本地 CSS 和语言切换等展示脚本；不嵌入业务 UI，不自动请求网络资源。用户主动打开的固定 Chrome 官方下载/帮助链接可以保留。
 
 **状态职责必须分开：**
 
@@ -125,51 +125,99 @@ Chrome 最终选择包含 manifest.json 的**解压目录**，不能直接选择
 | 扩展首次配置页 | 真实 Native 握手、产品清单校验、当前用户配置和就绪状态 | 在握手前读取基金数据、从网络下载模块、把旧 handshake 文件当成功 |
 | PKG conclusion | 安装结束的静态下一步摘要 | 运行脚本、检测 Chrome、动态显示已连接 |
 
-这里的外部 seam 只有一个：`Launcher → local onboarding URL + session id`。HTML 不接收可执行命令；实时状态通过原生窗口和扩展前台各自报告。session id 仅用于同一次引导页面的文案关联，不是连接凭据、路径授权或安装证明。这样页面可以独立测试，安装状态仍只有真实握手模块拥有。
+Launcher 按 bundle 资源位置打开静态 HTML，不给说明页生成无用途的 session id，也不在说明页展示随机编号。真正的本次启动 challenge 只用于 Launcher 与经过 Native origin 核验的扩展前台确认连接，见 §1.4；说明页不参与鉴权。
 
 **实施和验收要求：**
 
 - 在构建阶段从一份内容源生成 `index.html`、PKG conclusion 摘要和两套 locale；CI 检查三者的版本、步骤标题和目录文本一致，禁止手工维护两份说明。
-- 包扫描必须确认 HTML、CSS、图标都在 `Natives.app` 内，所有链接为本地或固定 `chrome://extensions` 文本，不出现远端脚本、`eval`、Native Port、localhost、业务参数或开发机绝对路径。
+- 包扫描必须确认 HTML、CSS、图标都在 `Natives.app` 内，仅允许本地资源、固定 `chrome://extensions` 文本与用户主动打开的固定官方帮助链接，不出现远端脚本、`eval`、Native Port、localhost、业务参数或开发机绝对路径。
 - 在没有扩展、没有网络、首次安装、用户关闭引导、Chrome 不存在、错误 profile、扩展已加载、重复双击、产品升级后重载九种路径验证。页面打开成功不等于扩展安装成功；必须以真实握手结果判定后续状态。
-- HTML 只能由受信本地文件路径打开；禁止把用户输入的路径拼进 URL 或允许页面跳转任意 `file:`/HTTP 地址。复制目录只复制固定安装目录的文本，由原生窗口完成更稳妥。
+- HTML 只能由受信本地文件路径打开；禁止把用户输入的路径拼进 URL 或允许页面跳转任意 `file:`/HTTP 地址。复制目录只复制固定安装目录的文本；保留可选中文本作为失败回退。只在用户点击“复制目录路径”时改剪贴板，不因打开应用自动覆盖用户剪贴板。
+
+
+### 1.4 让用户少操作，但每一步确实接通
+
+本轮保留现有 DMG → PKG 分发方式：下载入口只推荐一个对应芯片的安装文件，DMG 里只突出“安装 Natives.pkg”，不要摆放第二个可拖拽安装的 Natives.app。高级下载可提供同一个 PKG；用户不用在 ZIP、扩展包、基金包和源码之间选择。
+
+| 阶段 | 用户操作 | 系统完成 / 明确结束条件 |
+|---|---|---|
+| 系统安装 | 打开安装文件，按系统提示授权 | 一次安装主入口、主 Hosts、扩展及全部内置模块；结束页告诉用户“到应用程序打开 Natives” |
+| 首次双击 | 双击 Natives | 尽快显示原生“正在连接”状态；首次打开离线指南并定位目录。避免多窗口反复抢焦点，不自动改剪贴板 |
+| 加载扩展 | 在 Chrome 开启开发者模式，点击加载已解压目录并选择固定目录 | 这是浏览器必需的人工步骤；指南按实际菜单说明，找不到目录可用选择器中的 Cmd+Shift+G 粘贴固定路径 |
+| 前台接续 | 加载后自动进入配置；自动打开未发生时点击扩展图标 | 扩展单次安装事件只打开/聚焦现有扩展前台配置入口；Native Port 归前台持有，不归 Service Worker |
+| 完成配置 | 只点击一次“完成 Natives 配置” | 当前用户完成全部固定模块校验、私有载荷/注册/activation；成功后直接进入空间，基金可以打开 |
+| 日常使用 | 双击 Natives 或点击扩展图标 | 本次连接核验后聚焦产品；已完成配置不再显示教学，失败回到可恢复提示 |
+
+**前台接续的具体改法：**
+
+- 复用现有设置/产品配置界面作为首次配置入口；需要路由时只给现有扩展页面增加受控 setup 模式。不复制一个新的工作台，也不把完成配置藏在“设置 → 应用中心”三级路径。
+- `background.js` 的 `onInstalled` 当前只有日志。首次安装时打开上述前台入口；扩展更新时由实际版本/配置状态决定是否提示，普通 worker 唤醒不反复开页。原有扩展 action 也路由到同一入口，完成后仍可去正常产品页。
+- Launcher 先建立一次有期限的请求，再打开目标前台入口；页面经 Chrome 提供的 caller origin 校验后，通过既有 Host 通道读取/应答这次请求。应答至少绑定 mode、本次 challenge、扩展 ID/实际版本、产品清单摘要、协议与当前用户配置结果。
+- 复用现有受限握手状态文件，将其变成原子写入的本次结果；过期、旧版、不同 mode、重复消费和不匹配 challenge 均不能让本次启动成功。不要把任意网页 query、页面自报 origin 或 30 天旧记录当认证。
+- 首次安装事件没有 Launcher URL 参数时，前台可通过已核验的 Host 读取本用户尚有效的待完成请求；没有待完成请求也可以执行正常首次配置。HTML 不读取此请求。待完成请求/结果仅限当前模式的用户私有根、限制权限/大小/有效期，并随取消或成功失效；请求本身不授予文件、进程或业务权限。
+- Native Messaging origin 只能标识扩展，不能证明 Chrome profile 名称。成功表示发起此次前台接续的实际页面可用；没有证据时只说“尚未连接”，提供“在已加载扩展的 Chrome 用户中点击 Natives 扩展图标”，不读取/修改 Chrome 私有 profile 配置来猜测。
+- 普通文件页自动发出的 version 握手只表示该连接的信息，不能自动完成全产品配置或让另一等待会话成功。配置成功和真实连接成功均满足才交接。
+- 已打开页面的聚焦由扩展在当前 profile 内按固定路由处理；Launcher 重复启动使用原生应用重开事件激活已有窗口，不增加第二个监督服务。
+
+**等待、错误和取消：**
+
+- 原生主线程不执行 `waitpid` 或 60 秒同步 Host 等待。使用系统异步任务/退出回调，在同一小窗口更新状态；等待期间所有按钮仍可操作。
+- 自动等待累计最多 10 分钟；超时停止检测并保留“重试/关闭”。用户重试才开启新一轮，不能只改一句超时文案后继续循环。
+- 取消/关闭/成功交接均终止并回收本次等待进程，不关闭 Chrome。目标：启动后 1 秒内有可见反馈，取消后 2 秒内结束本次 Launcher 等待；以指定测试机实测记录为准。
+- Chrome 通过系统应用发现能力定位；支持正常的系统级或当前用户安装。缺 Chrome 时，“获取 Chrome”用系统默认浏览器打开官方页面，不能调用不存在的 Chrome 打开下载链接。
+- 打开指南、扩展管理页、Finder、复制路径的错误各自返回并显示可执行下一步；`open` 命令成功只证明请求已提交，不证明目标扩展已加载。
+- 扩展文件夹默认展示固定真实目录。已有 Downloads 快捷方式只能作为辅助；如保留，local/production 使用不同名称，真实文件/目录或非本产品链接存在时保持原样并回退真实目录。禁止 `ln -sfn` 替换用户条目，也不在两处分别实现链接逻辑。
 
 ## 2. 已核验的问题与整改重点
 
-### 2.1 当前缺口
+### 2.1 当前事实与缺口
 
-以下保留上一轮 2026-09-13 审计快照：`deploy`，HEAD `762f6d84e442247c7ea2c5c1fd66bff2ce98a4a7`，含未提交修改。部分规范正文随后已同步；此次补充聚焦可见主入口，不将旧缺口断言为尚未变化。**没有实际安装候选或真实页面视觉验收**；本次只读检查也未在当前机器的 `/Applications/Natives.app` 和正式系统源目录发现安装，不能据此判定用户其他安装位置/候选的状态。实施时复核最新工作区与具体安装包。
+审计基线：2026-09-13，HEAD `9f4b21e4`，开始检查时工作区干净。检查了源码、`dist/installer/Natives-0.1.0-macOS-arm64-local.pkg`（实算 SHA-256：`714f068994480e8b8d77138e5718689206b2b3e34f633c14e937938b6180fc5a`）的真实展开树，以及当前机器已有的 `/Applications/Natives.app` 和 `/Library/Application Support/Natives-Local/`。**本轮没有重装、启动引导或做真实 Chrome 操作；下列代码路径推断与产物检查不能代替实装验收。**
 
-| 编号 / 优先级 | 已确认事实与位置 | 用户影响与整改 |
+已具备、应保留的部分：
+
+- 单一系统安装引擎已经接通；PKG 内有 Natives.app、图标、离线 HTML、固定解压扩展、Files/Model Host 与真实 Fund 载荷。
+- 主 Host 注册已指向系统源中的真实文件，普通本地加载使用固定扩展 key/ID；旧 External Extensions 文件未进入当前候选。
+- 应用中心已删除 Catalog 加载与自动 suite_prepare；Host 明确拒绝旧分块安装、卸载及 rollback 路由。当前中心测试通过，不能继续按上一轮旧代码结论要求全部重写。
+- 当前已安装入口与自己的清单摘要一致；它与 dist 中另一个同为 0.1.0 的候选字节不同。测试必须绑定准确包 hash，不能仅看版本号。
+
+以下 D 编号更新为本次安装审计，不沿用旧快照判断：
+
+| 编号 / 级别 | 已核验位置与事实 | 用户影响 / 必做整改 |
 |---|---|---|
-| D01 / P0 | `extension/apps.js` 的 `ready/reconnect` 加载 Catalog，并调用 `apps:suite_prepare`；握手失败后仍继续 prepare/list | 打开管理页仍触发旧预装流程。初始加载只握手、读取固定模块；握手失败立即停止依赖调用 |
-| D02 / P0 | `apps.js:items` 合并 Catalog、已安装表和保留数据；`app_store/query.rs:apps` 仅查询 apps 表 | 空安装表没有可靠的内置模块入口。列表由签名产品清单决定，叠加用户偏好；Fund 不靠远端条目出现 |
-| D03 / P0 | `apps.js:card/install/uninstall` 仍有安装、更新、修复包、停止、卸载及分块下载；`app_dispatch.rs` 的 install、suite_prepare、uninstall、rollback 仍可执行 | 只删按钮无法完成整改。前后端同时退出模块分发，旧协议在任何写操作前明确拒绝 |
-| D04 / P0 | `app_dispatch.rs` 将 `apps:clear_data` 与 uninstall 合并，调用 `cleanup.rs:uninstall_with_data`；该函数写 removed 意图，删注册、activation、模块根目录和 apps 记录 | 当前“清数据”会移除模块代码与入口。必须单独实现受限数据重置，保留代码、注册和用户偏好；不得用日常数据复现 |
-| D05 / P0 | 原审计发现 build-pkg 与 JS 打包器有两套布局，基金未接入实际复制 | 统一一个安装引擎；必须交付唯一可见 Natives.app 及完整系统源。主 `.app` 不再作为违规范项，模块 `.app` 和 seeds 仍禁止 |
-| D06 / P0 | JS 打包器把 native-file-host 放 `Contents/MacOS`，`launcher_setup.rs:register_core_hosts` 却将两种主 Host 都指向 `../share/natives/Runtime` | 安装后注册可指向不存在的文件。清单生成实际路径，必须检查解包后的真实文件树 |
-| D07 / P1 | `extension_provision.rs` 使用文本 current/版本目录，同版准备先删除旧目录；摘要取 SHA256SUMS 首行 | Chrome 实际加载目录、完整性与恢复不可靠。整包提供固定真实扩展目录；摘要精确绑定文件，候选验证后切换 |
-| D08 / P1 | `launcher_setup.rs` 用旧握手文件判断 ready，忽略部分打开 Chrome 错误；build-pkg 仍生成 External Extensions 条目 | 假就绪和残留商店安装路径。保留本地加载三步操作，前台握手验证当前 profile/实际版本，失败可见 |
-| D09 / P1 | `apps.js/app.js` 重复注册主题监听；仅识别部分主题别名；`openApp` 总是 tabs.create | 外观切换可能不同步，多次点击打开重复页。复用当前主题协调器，按准确模块路由聚焦已有页 |
-| D10 / P0 | 原审计中的独立 nap/分块安装条款已在后续部分同步；此次又明确了可见主程序要求 | 依据最新 ADR/Standards 检查剩余冲突；主产品 .app 必须允许，模块分发仍关闭，不反复切换产品路线 |
-| D11 / P1 | 当前 Apps 检查仍验证 catalog/install/conflict/uninstall；包扫描包含 self-test，发布测试仍验证旧 Catalog | 绿色测试不能证明新产品验收。把断言改成固定模块、拒绝旧入口、数据重置保代码和完整候选扫描 |
-| D12 / P0 交付 | GitHub 当前可见发布只有 `app-catalog-v2` 与 `apps-demo-v2.0.0`（2026-09-08），没有完整 Natives 产品发布证据 | 用户仍拿不到已验收整包。整包回下载后实装、真实基金、重启、N→N+1 更新全部通过才完成 |
-| D13 / P0 | 当前 `scripts/installer-package.mjs` 与 `installers/macos/build-pkg.sh` 都没有 `Natives.app` 或 `onboarding/index.html` 输入，且明确禁止 `/Applications` | 安装后不可见，也没有扩展未安装时可打开的离线指南。P1 必须把可见主入口、引导资源、PKG conclusion 接入同一安装引擎 |
+| D01 / P0 | `build-pkg.sh` 两种 mode 都写 `/Applications/Natives.app`、`com.natives.app` 与同名主 Host 注册；组装器使用同一扩展 key；`launcher_setup.rs` 写 `~/.natives`，Model usage/Keychain 也没有本地隔离 | 本地候选可遮蔽正式程序、注册和用户数据。打包、扩展、全部 Hosts、模块路径及凭据必须端到端隔离，见 P1 |
+| D02 / P0 | `background.js:onInstalled` 只写日志；写握手标记的 version 参数目前来自 `files-host-connection.js`；Launcher 等标记后才打开 space | 用户只完成“加载扩展”不保证触发握手。新增一次性前台接续与扩展图标回退，见 §1.4；不让两端互等 |
+| D03 / P0 | `run_launcher_default` 接受 30 天内含 extensionVersion 的标记；不比对当前实际版本/产品配置，忽略浏览器退出状态 | 扩展停用、切用户或升级后可能假成功。换成本次请求关联和真实配置结果；旧记录仅作提示线索 |
+| D04 / P0 | `launcher-main.m:run_host` 在主线程同步 waitpid；每次 setup 等 60 秒才展示 NSAlert；超过十分钟只是改文案，循环仍可继续 | 首次无及时状态、按钮不可用、难取消。异步等待、单个可取消窗口和真正的总截止时间 |
+| D05 / P1 | Launcher 仅检查 `/Applications/Google Chrome.app`；缺 Chrome 时“获取页面”仍执行 `open -a Google Chrome` | Chrome 在用户应用目录时误判缺失；真缺失时下载按钮失败。用系统应用发现与默认浏览器打开固定官方下载链接 |
+| D06 / P0 | 实际 PKG Distribution 中有两个内联 `<conclusion lang=…>`，没有 file/mime-type 与 conclusion 资源 | 不能保证安装结束说明显示；按 Apple 资源格式生成并在 Installer GUI 验证，见 P1 |
+| D07 / P0 发布 | JS 忽略声明的 pkg/product 签名参数，始终用开发清单私钥；Host release 分支无条件拒绝此开发信任根；构建没有完整 bundle 签名/公证流程 | production 路径尚不可交付；不得通过去掉拒绝检查放行。接通正式身份、代码签名、产品清单签名、PKG/DMG 公证验证 |
+| D08 / P0 | `app_store/product.rs` 在锁前使用共享 staging，逐模块提交、写注册后再写 activation；没有在此链完整复用持久产品恢复与运行锁；activation 写死 enabled=true | 并发/中断/更新可能留下不同步配置，历史停用选择不一致。复用现有锁/journal/恢复，完成全量后才发布就绪 |
+| D09 / P0 | `product_status` 只用 generation>0 判 configured；相同清单提前返回，未重查活动文件；配置按钮位于 apps.js；静态 FIXED_MODULES 仍含 Fund 定义 | 升级或载荷损坏仍可能报已配置，用户进了产品才发现不能用。签名清单为来源，比较当前组合与实际可用性，配置前台完成/修复后再开放业务 |
+| D10 / P1 | HTML 写死“扩展尚未连接”，显示随机 session 与 ID，升级说明称通常不用重载；ObjC 自动覆盖剪贴板并用 `ln -sfn`，与 Rust 链接实现不同 | 状态误导、教学复杂、可能触碰同名用户条目。按 §1.3/§1.4 简化；扩展实际版本需验证，更新需重载时明确告知 |
+| D11 / P0 验收 | `installers/macos/verify.sh` 仍要求禁止 /Applications，并调用已不支持的 uninstall --root；本次执行 exit=1；alias 单测调用真实 HOME/Downloads | 旧测试无法验证当前路线，且可能污染用户目录。改成当前候选扫描与完全临时目录测试；不能先跑危险单测再声称隔离 |
+| D12 / P0 | build-pkg 没有完整 OS/架构/目标卷/降级/维护窗口检查；uninstall.sh 不删主 .app，却无条件删共享主 Host 注册 | 错包或更新后可能不可用，卸载留下失效图标或影响另一模式。补系统预检、更新恢复、按 mode/归属卸载并保留用户数据 |
+| D13 / P1 | 组装器从 rustc host 推架构，Fund 目录用 meta.version、清单路径用相邻 app.json.version；--version 不同步扩展版本；DMG 文案硬写 Local 路径和仓库说明 | 输入漂移产生“打包成功但用不了”。锁定来源/工具链与真实架构，统一版本规则、最终字节摘要和同源用户说明 |
 
-主要代码入口：[中心](../../extension/apps.js)、[Host 分发](../../crates/native-file-host/src/app_dispatch.rs)、[查询](../../crates/native-file-host/src/app_store/query.rs)、[清理](../../crates/native-file-host/src/app_store/cleanup.rs)、[系统打包器](../../installers/macos/build-pkg.sh)、[JS 组装器](../../scripts/installer-package.mjs)、[入口配置](../../crates/native-file-host/src/launcher_setup.rs)、[扩展准备](../../crates/native-file-host/src/extension_provision.rs)。发布记录见 [现有 Releases](https://github.com/Wcof/Natives/releases)。
+上述判断来自当前具体代码路径；例如 D02 是静态追踪确认“缺少自动接续”，不声称本轮已经在干净 Chrome 中复现卡死。D06 对照 [Apple Distribution conclusion 定义](https://developer.apple.com/library/archive/documentation/DeveloperTools/Reference/DistributionDefinitionRef/Chapters/Distribution_XML_Ref.html)：使用文件资源、声明内容类型，conclusion 不是容纳内联正文的多语言节点。
 
-### 2.2 上一轮审计验证与可保留部分
+主要落点：[系统安装器](../../installers/macos/build-pkg.sh)、[组装器](../../scripts/installer-package.mjs)、[原生入口](../../installers/macos/resources/launcher-main.m)、[引导模板](../../installers/macos/resources/onboarding-template.html)、[握手入口](../../crates/native-file-host/src/launcher_setup.rs)、[产品配置](../../crates/native-file-host/src/app_store/product.rs)、[扩展安装事件](../../extension/background.js)、[应用中心](../../extension/apps.js)。
 
-| 检查 | 结果 | 能证明的范围 |
+### 2.2 本次验证及限制
+
+| 检查 | 结果 | 结论边界 |
 |---|---|---|
-| `rtk node extension/apps.test.mjs` | 通过 | 现有页面行为；其中仍包含旧安装/卸载断言，不能当整改验收 |
-| `rtk node extension/app-boot.test.mjs` | 通过 | 通用 owner、受限 sandbox、EOF 清理的模拟验证，可保留基础 |
-| `rtk npm run apps:check` | 通过 | 现有契约/投影/签名/包扫描自测/发布单测；未扫描一个新完整发行候选 |
-| 复用 DOM mock 的一次性只读调用探针 | 正常及不兼容握手均出现 `catalogLoads=1`，随后 `apps:handshake → apps:suite_prepare → apps:list` | 证明打开中心仍走旧链；没有对真实系统发起安装或清理 |
-| GitHub Release 列表 | 仅旧 Demo/Catalog 两项 | 未找到符合当前目标的完整产品发布；本地 dist 不是公开可用证据 |
-| 真实 pkg 安装、Chrome 视觉、基金实操、Rust 全量 | 本轮未执行 | 不作通过声明；实施阶段按 §8 完成 |
+| 展开实际 local PKG | 成功；有主 .app、HTML、主 Hosts、扩展、Fund；主注册路径存在 | 证明组件随包，未证明 GUI 首次使用成功 |
+| 现有安装与其自身清单比较 | Launcher/HTML 摘要匹配；检查到的四个可执行程序均为 arm64 | 安装与当前 dist 同名版本但不同构建；不是损坏证据，也不能用已装旧候选验证新包 |
+| `pkgutil --check-signature` 检查 local PKG | exit=1，no signature | 如实为本地未签 PKG，不是 production Release |
+| `codesign --verify --strict --verbose=2 /Applications/Natives.app` | exit=1，资源签名结构检查失败 | 本地 bundle 也应完成一致的 ad-hoc/development 签名；未测试 Gatekeeper 交互，不推断系统已拒绝双击 |
+| `cc -fsyntax-only -x objective-c installers/macos/resources/launcher-main.m` | 通过 | 仅语法，不证明主线程响应、取消或真实窗口 |
+| `rtk node extension/apps.test.mjs` | 通过 | 当前固定模块、握手停止与数据管理的模拟行为 |
+| `rtk proxy sh installers/macos/verify.sh` | exit=1，无输出 | 追踪脚本发现旧 /Applications 禁止断言；须修断言与临时布局测试 |
+| 真实新装/Chrome 加载/重启/N→N+1/公开下载 | 本轮未执行 | 仍需 §6/§8 的实际候选验收 |
+| Rust 全量测试 | 本轮未执行 | 已发现 Downloads alias 测试使用真实 HOME；先隔离，再执行相关测试 |
 
-保留已有 app.html → 短 Core 核验 → 模块 Native Port/受限 iframe 的结构，以及共享支持库、路径/身份验证、锁、journal 和数据域。当前并非需要重写所有代码；主要工作是删掉旧产品链，并把这些能力接到完整产品安装和固定模块读取上。不能把前端握手失败后继续调用等同于已证实绕过 Host 鉴权，Host 仍须独立核验 caller。
+本轮不重跑旧快照中的远端 Release 列表，也不把它写成当前发布现状。正式 Release 是否可用必须由实施 Agent 核验准确 tag、资产和公开回下载结果。
 
 ## 3. 架构：保留必要分工，取消模块分发系统
 
@@ -336,6 +384,21 @@ AGENTS、ADR 修订头和部分产品规范已经采纳本次决定。先检查�
 
 ### P1：一个构建入口、一个安装布局
 
+**先修 D01/D06/D07/D12/D13，复用已有引擎，不重建打包系统。以下为本次安装补齐项：**
+
+1. 在任何编译或覆盖 staging 前校验参数，明确 local/production；未知参数报错。接通真实签名参数和生产清单密钥/信任根输入；production 缺必需身份立即停止，不能花时间构建后才失败，也不能默认回退 local。
+2. 从同一份已有构建元数据派生模式身份，生成到各组件；不要各写一套常量。生产为 `/Applications/Natives.app`、正式 bundle ID、正式扩展 ID/Native 名称、`~/.natives` 和正式 Keychain。local 为 `/Applications/Natives Local.app`、独立 bundle/扩展/主及模块 Host 名称、`~/.natives-local` 和独立 Keychain；系统源仍为 `Natives-Local`。Files、Model、Fund、引导标记、usage/auth、浏览器存储与卸载都必须贯穿；精确名称遵循现有契约，缺项补入同一来源。local/production 是构建隔离，不是用户选两种产品。
+3. `ONBOARDING_PATH` 和 Host 的 bundle 验证路径按模式生成；原生入口通过 bundle 资源 API 获取指南，不能写死另一个模式的位置。只保留 `.m` 的真实生产入口，确认 `.c` 及 `--launcher` 旧副本无调用后删除。
+4. `conclusion` 使用单个文件引用与 `mime-type`，用 `productbuild --resources` 打入平台本地化资源。HTML、结尾摘要、DMG 安装说明的步骤标题/产品名称/版本/目录来自同一内容源；分别打开系统 Installer 的中英文结束页验证，XML 可解析或 productbuild 成功不算 UI 通过。
+5. 受控载荷全部完成模式对应代码签名，完成 bundle 资源后签整个 `.app`；再计算固定文件的最终长度/hash、签产品组合清单；最后组装并签 PKG，按平台要求公证/staple/核验，DMG 也完成其适用校验。最终发布文件摘要在其最后一次字节修改后计算。清单不把自己的签名/自身 hash 递归纳入。
+6. 正式 Host 编入正式验签公钥，验证匹配密钥签署的产品清单，拒绝开发公钥；不能删除当前 release 拒绝逻辑后继续信任仓库开发私钥。本地完整 bundle 使用一致的 ad-hoc/development 签名，失败如实报告。
+7. 产品清单绑定主 Hosts、扩展逐文件、Launcher/资源、全部固定模块、来源 commit/锁文件与协议/版本。Fund 的 meta、app.json、实际可执行程序版本/架构/摘要必须一致；缺 hash、目录与清单版本不一、错误平台均在打包前失败。内部 `.nap` 可以作为现有编译中间产物，不成为用户下载对象。
+8. 产品版本、扩展版本、Host 构建版本允许按既有规则映射，但映射必须写入组合清单并经双方兼容检查；不能让 `--version` 只改安装器名称。用户看到一个产品版本，诊断显示准确 build/manifest hash，区分相同 0.1.0 的不同本地候选。
+9. 核验所有实际 Mach-O 架构和最低系统版本，不能从 rustc host 推断所有载荷。Installer 在写文件前检查 OS、芯片、目标系统卷、可用磁盘、包完整性与升级条件；只提供已验证布局，避免安装到别的卷后硬编码路径失效。支持范围来自实测，不能只凭 Info.plist 的 11.0 宣告支持。
+10. 包检查验证 root-owned 文件、不可被普通用户修改的代码目录、真实注册目标与唯一 `.app` 白名单；本地和正式可同时存在并各自正确连接。升级/卸载归属同样按 mode 核验，不能互删。
+11. DMG 保留用户已选分发壳；说明只写“安装 PKG → 应用程序打开 Natives → 按引导加载扩展”。不出现仓库路径、核对长 ID、Local 硬编码或 sudo 卸载命令；高级技术说明放开发文档。
+
+
 - installers/macos/build-pkg.sh 是唯一系统安装引擎；installer-package.mjs 只组装输入/调用，移除重复 pkgbuild 和第二布局。
 - 主程序、扩展、基金及支持库使用锁定的源码与依赖，生成同一组合清单；不能把开发机 ../ 路径当用户或 CI 环境要求。
 - 去掉 `--seeds-dir` 生产输入，改为完整组件输入；将唯一 Natives.app 的组装并入同一安装引擎，移除 JS 的第二次 pkgbuild。去掉本路线不使用的 Chrome Web Store External Extensions 条目，保留 Native Messaging 注册。
@@ -348,9 +411,20 @@ AGENTS、ADR 修订头和部分产品规范已经采纳本次决定。先检查�
 - 产品清单/包验证替代独立模块 Catalog/nap 发布校验，不为基金再维护另一套发布工作流。
 - 删除产品入口对本地源码、target/debug、dev server 和试验目录的依赖。
 
-交付：完整组合候选；修复 D02/D03，不另写一个安装系统。
+交付：可准确追溯的完整候选；local 不影响正式安装；结尾页有效；正式构建身份确实接通；缺任何必需输入即失败。
 
 ### P2：内置模块读取与旧数据迁移
+
+**本次重点 D08/D09：修复现有 `app_store/product.rs`，不要另造事务平台。**
+
+- `product_status` 区分尚未配置、正在配置、就绪、需要完成更新、需修复和不兼容；读取签名源失败返回真实原因。就绪要求当前已验证组合摘要与本用户已应用组合一致，全部固定模块的注册/activation/文件证据一致；generation>0、目录存在或有旧 apps 行均不足。相同清单快路径仍要识别文件/注册丢失，不能让同版重装失去修复能力。
+- 在既有跨进程操作锁下读取并验证同一份清单字节；其摘要也从同一缓冲区计算，避免二次读取切换。验证完整固定模块集合、唯一 appId、版本/路径/链接边界、长度/hash、协议与签名；生产新候选缺必需字段不能静默当旧格式兼容。
+- 复用现有 staging、journal 与恢复原语，为本次产品事务隔离 staging；先取得相关运行锁/维护条件再切换，不能锁外删另一个调用的 staging。产品版本降级在用户数据变更前拒绝。
+- journal 记录产品清单摘要、目标 generation、各模块旧/新载荷及注册/activation 的恢复步骤。所有模块应用成功才提交产品就绪；任何一步失败允许恢复同一事务，所有入口在 pending 时拒绝依赖业务。不要仅依赖同一进程的 Mutex 或“再点一次”。
+- activation 与 DB 偏好一致，不能写死 enabled=true；每个固定模块投影绑定同一产品 generation。保留历史 disabled/removed 选择、侧栏与 Keychain，不主动唤醒被关闭的功能。
+- 在每个副作用切点注入中断，以及双前台并发配置，验证不会得到部分就绪。这个故障测试复用既有临时根和进程测试能力，不建立第二个测试框架。
+- 应用中心保留“前往完成 Natives 配置”提示即可，把现有 `configureProduct` 的执行归入产品首次配置入口；用户正常从 Launcher 进入应在到达空间/应用中心前完成。不会因读列表就自动配置。
+
 
 - 在 `launcher_setup/app_store` 的既有职责内落实 §3.3 当前用户完整配置：只读取已验证系统源，为本用户配置全量固定模块，绑定同一产品 generation，幂等恢复后才就绪。扩展通过既有产品配置页触发，不从应用中心触发。
 - apps.js/native-app-client/App Store 查询和导航投影按 §3.4 改造；无远端发现依赖。空 apps 表也返回产品声明的基金；未知可用性不伪装可用或未安装。
@@ -368,20 +442,18 @@ AGENTS、ADR 修订头和部分产品规范已经采纳本次决定。先检查�
 
 ### P3：扩展准备和主入口
 
-- 将 §1.1 的可见主程序与引导窗口接到现有 `launcher_setup.rs` 逻辑，使用平台原生应用/窗口能力；不引入 Electron/Tauri/WebView、另一更新器或业务 UI。可直接调用现有受限配置逻辑，不能把任意命令接口暴露给引导页。
-- 同一 PKG 放置并正常登记 Natives.app；从 Finder 双击验证主入口，无 Terminal、无后台隐藏标记。安装完成说明明确“在应用程序中打开 Natives”，用户不必先记住系统目录。
-- 随包放置固定真实扩展目录 `/Library/Application Support/Natives/ChromeExtension/`。首次双击自动打开 Chrome、显示薄引导；需要安装时自动尝试打开扩展管理页并在 Finder 定位该目录，提供复制路径和失败恢复。
-- 构建输入 ZIP 由同一产品清单精确绑定文件名/长度/hash/版本/固定公钥 ID；不能任取 SHA256SUMS 首行。将现有有界校验用于包组装，最终还要核验解包后的扩展逐文件内容。
-- 解压到候选 staging，拒绝路径穿越、越界链接、重复冲突条目、超限和错 manifest。相同版本同 hash 幂等；整包验证与维护条件满足前不能删除正在加载的目录。
-- 按 §1.2 明确自动化边界；普通 Chrome 本地加载仍有用户确认步骤，不能模拟点击、写入 profile 或换测试浏览器。打开 Chrome/管理页/目录失败分别显示，不能只记录日志或忽略退出状态。
-- 加载后由扩展 action/单次安装事件打开现有产品页，该前台页面做真实 Native 握手；SW 不等待连接、不保活。
-- 首次配置复用产品设置界面，不增加第二工作台；“完成 Natives 配置”以当前 OS 用户执行 §3.3，不在 root postinstall 里改业务库。
-- 将 Launcher 的本次 challenge/有效期与真实前台握手关联，复用现有状态通道；旧 handshake 文件和目录存在均不是成功证明。未知为“尚未连接”，明确处理缺 Chrome、profile/版本不匹配、扩展被停用或移除。
-- 重复双击激活原引导，交接成功聚焦产品页；可见引导期间有界检测，成功、关闭或取消时回收 Launcher 及本次等待，不影响 Chrome 和已打开业务。
-- Launcher 首次双击先打开随包 `onboarding/index.html`，再执行 Chrome/目录动作；通过固定 session id 只关联本次文案，不把状态写进 HTML。扩展未装时指南仍能完整显示，扩展装好后由前台握手切换为产品页，不能靠 HTML 自己判定成功。
-- Native 主程序路径与打包目录完全一致，读取系统源失败不回退当前工作目录。
+按 §1.1–§1.4 完整接通 D02–D05/D10，复用 `launcher-main.m`、`launcher_setup.rs`、现有扩展设置页与 `background.js`。
 
-交付：安装后能找到 Natives，双击自动打开 Chrome 并引导首次使用；已就绪时直接进入。旧扩展路径给出一次换载说明并验证 ID/版本；不维护双目录更新链。此后只需双击主应用或扩展图标，无源码、终端或第二下载。
+- 原生入口负责系统打开/定位/窗口；Host 负责有界状态和已核验结果；只保留一份路径/链接规则。删除 ObjC shell 拼接和 Rust 重复打开流程，使用系统 API 或固定程序的参数数组，检查退出结果并回收子进程。
+- 同一 PKG 放置并正常登记模式对应主 .app；指南使用现有 HTML 模板。固定扩展目录由安装包直接提供，不在首用重新解压、复制第二扩展副本或下载文件。
+- 将 `onInstalled`、扩展 action、Launcher 打开行为接到同一前台配置入口；Native 握手、产品配置与本次完成反馈在那里发生。SW 只处理一次事件，不持有 Native Port、不轮询/保活。
+- 原生窗口尽快出现，始终可取消；后台等待、真实总超时、重复双击聚焦、错误恢复按 §1.4 实现。Chrome 未安装时从默认浏览器获取；多 profile 不猜测、不修改浏览器私有数据。
+- 移除 HTML 的固定连接状态、随机 session 和常规步骤中的扩展 ID；升级帮助明确实际扩展版本不足时需要重载。帮助链接不提供任意本地文件/命令入口。
+- 扩展安装成功提示不等于 Natives 已可用。全产品配置与真实连接完成后再聚焦空间、关闭原生引导；产品内帮助入口仍可重新查看静态说明。
+- 旧扩展 current/ZIP 代码先查全部 caller；只保留确实需要的受控迁移和 fixture。新产品调用路径不再进入该链，旧加载目录的用户得到一次明确换载说明，不能静默切回旧目录。
+- 用户看见的错误包含下一步：重新检测、正确 profile 内点击图标、重载扩展、完成配置、整包修复。业务数据异常进入数据管理，不建议通过删除用户目录解决安装问题。
+
+交付：真实 PKG 安装后，用户从 Finder 双击到空间及基金可用，全程无源码、Terminal、第二次模块下载或手工 Native 注册；失败可退回并继续。
 
 ### P4：应用中心与真实基金
 
@@ -398,6 +470,15 @@ AGENTS、ADR 修订头和部分产品规范已经采纳本次决定。先检查�
 交付：内置基金直接打开，真实业务可用，普通中心没有安装/下载语义。
 
 ### P5：整包更新、修复与恢复
+
+**本次补齐 D08/D09/D12 的系统侧与用户侧衔接：**
+
+- 安装器不能只覆盖 payload 后就认为整体升级成功。写入前拒绝不兼容降级，检查运行中的 Natives 页面/模块和固定扩展目录的使用条件，提示保存关闭，不能静默结束 Chrome。复用产品级维护/恢复记录，对 `.app` 与系统源两个根的切换保留可验证恢复点；其他用户仍在使用时推迟。
+- 更新后前台比较“实际运行扩展版本、系统组合、本用户配置组合”；需要重载时明确引导重载，需要更新用户配置时进入同一个配置页。不因旧 generation 存在而跳过。修复仍使用同一完整安装包与用户配置流程，保留数据。
+- 同版完整修复需要重新校验并恢复丢失文件/注册；旧版重装不能覆盖新版本造成隐式降级。升级中断恢复一致可用版本或明确待修复，不能伪称多目录写入天然原子。
+- 产品卸载有明确可见入口，使用同一套已安装卸载逻辑和系统授权能力，不要求普通用户执行 sudo。移除本 mode 的主 .app、系统代码及自己拥有的主注册；按精确收据和目标核验清理本用户模块注册/活动代码。默认保留业务数据与 Keychain，不枚举删除其他用户内容，不删除另一模式注册；其他用户残留由该用户的受控维护处理。Chrome 扩展由用户在 Chrome 内移除，明确提示，不篡改 profile。
+- 删除主应用到废纸篓不能冒充完整卸载。检测到入口缺失/系统源仍在时引导完整重装修复或正式卸载；卸载完成不留一个指向不存在 Host 的主应用图标。
+
 
 - 只有产品级“检查更新/更新 Natives”；来源为可信完整产品 Release，按已有设置和前台动作触发，无后台轮询。
 - 检查新组合版本、平台、全部文件/身份与扩展兼容性。缺任何必需组件不切换。
@@ -416,6 +497,15 @@ AGENTS、ADR 修订头和部分产品规范已经采纳本次决定。先检查�
 交付：同一组合版本的一致性与用户数据有真实故障切点证据。
 
 ### P6：清理旧生产链与完整验收
+
+**优先修 D11：先让检查对应真实安装路线，再增加实操证据。**
+
+- `verify.sh` 改为精确允许模式对应唯一主入口、要求 HTML/图标/所有 Hosts/Fund、验证 Distribution 资源、真实注册、签名和模式隔离；删除已经失效的“禁止 /Applications”与商店前提。不能只 grep 源码中的目标语句。
+- 卸载测试从临时安装树执行并显式注入测试根，测试模式不能访问真实 `/Library` 或 `/Applications`；没有可信测试根时拒绝。修复当前 `--root` 测试与实现不一致的问题，保留精确归属反例。
+- 修复 `downloads_alias_points_at_fixed_extension_dir_and_is_idempotent`：纯文件操作接收测试目录，在临时根运行；生产由调用者传真实用户目录。测试不改 HOME 等系统环境、不写真实 Downloads，不能清理用户同名路径。
+- 沿用现有 Node/Rust 测试，新增会失败的关键断言：只加载扩展也能接续配置；旧标记不能成功；缺 Chrome 下载按钮可用；等待中取消有效；配置故障不就绪；local 与 production 不串。原生异步/取消和 Installer 显示必须另外实测。
+- CI 证据绑定被测包的 SHA-256 和源码指纹；已安装包/当前 dist 字节不同则明确重装被测候选，不能只按 0.1.0 匹配。
+
 
 - 退出 app-catalog-v2/v3、apps-fund-*、Demo 的当前生产发现和发布链；历史 Release/用户资料不删除。
 - apps 下载/包安装器的只用于历史迁移部分明确标注，其余死代码在本轮集成移除；不保留运行时切换到旧路线的配置。
@@ -436,7 +526,7 @@ AGENTS、ADR 修订头和部分产品规范已经采纳本次决定。先检查�
 | P5 更新/修复 | 同一安装引擎、现有 journal/恢复/产品配置 | N→N+1、用户 generation、旧版兼容、故障恢复和数据保留 |
 | P6 集成与发布 | 既有 Apps 测试、`.github/workflows/app-release.yml`、现有发布脚本 | T01–T24、完整资产、公开回下载与实装证据 |
 
-先完成五个能判断方向是否正确的检查：**中心加载 Catalog/prepareSuite 次数均为 0；空安装表仍显示内置基金；旧分发方法写入前拒绝；清数据保留代码/注册/偏好；实际整包包含真实基金且注册路径有效。** 然后继续完整 A/B、业务、主题、更新与发布验收。这是依赖顺序，不是只交付五项的 MVP。
+本次按安装风险顺序交付：**P1 模式隔离/准确候选 → P3 前台接续与可取消引导 + P2 全量用户配置 → P5 升级/修复/卸载 → P6 实装与发布验收**。各包先跑最小相关检查；完成后再执行完整门禁。既有中心“Catalog/prepareSuite=0、固定基金可见、旧分发拒绝、清数据保留代码”的反例继续保留，不重复重写已正确部分。这是完整交付的依赖顺序，不是只交付前三步的 MVP。
 
 ## 6. 完整打包、发布与实操
 
@@ -582,10 +672,10 @@ account映射到本地唯一账户，缺失账户先在预览中确认创建；f
 |---|---|---|
 | T01 单一产品路线 | 检查规范、生产入口、构建/Release；直接调用旧分发方法 | 无模块商店/独立安装/更新/卸载；一个安装引擎；旧方法在网络、文件、DB、注册变更前明确拒绝 |
 | T02 包完整性 | 缺 Natives.app/图标/可执行入口/离线引导/基金/Model/扩展、错误架构或缺签名 | 完整候选构建失败；只有后台文件或只有安装说明不算成功，不能首用再下载补齐 |
-| T03 注册路径 | 展开实际 pkg、核对应用登记与 Native manifest、完成用户配置 | 仅允许固定主产品 .app；主 Host 指向真实系统文件，模块指向私有载荷；hash/架构/身份正确，root 不写用户 DB/activation |
+| T03 注册路径与模式隔离 | 展开 local/production pkg、核对应用登记与 Native manifest；两种模式并存 | 各自唯一主 .app、扩展 ID、Host 名称、数据根和 Keychain；无互相覆盖；注册指向本模式真实载荷；root 不写用户 DB/activation |
 | T04 基金零下载首用 | 空安装表、固定 fund 清单、断网；完成产品配置后打开基金并保存重开 | 配置前已有基金卡片并引导产品配置；配置后打开只初始化数据，无 Catalog/nap/代码复制或下载；本地账本正常 |
 | T05 主应用与首次引导 | 从系统应用列表/Finder 找到 Natives，双击→Chrome 打开离线 HTML + 原生状态窗→目录定位/加载→交接；再次双击 | 名称/图标/版本可见；无 Terminal；PKG 结束页、HTML 和实际目录一致；真实 ID/版本/握手正确；已有配置直接进入，不重复窗口 |
-| T06 主入口错误 | 缺 Chrome、HTML 文件损坏/缺失、错误 profile、停用/移除扩展、旧握手、注册错、用户关闭/超时 | HTML 或原生降级说明仍可见；错误可恢复，不假报连接；关闭后 Launcher/检测结束，应用图标保留，双击可继续 |
+| T06 主入口错误 | 缺 Chrome/用户级 Chrome、HTML 缺失、错误 profile、停用/移除扩展、旧握手、注册错；等待中关闭/超时 | 下载按钮能用默认浏览器；旧标记不成功；等待中按钮可用；真正停止十分钟检测；取消后 2 秒内回收等待，主图标保留 |
 | T07 扩展幂等 | 同版重复安装、错 ZIP/ID/hash/清单、旧用户扩展路径迁移 | 固定真实目录完整可用；验证前不删旧目录，不任取首行摘要；旧用户按明确换载步骤完成，无双目录更新链 |
 | T08 解压安全 | 路径/链接越界、重复条目、超限/坏文件、半解压失败 | 有界拒绝与清理，不执行坏候选、不伤旧版本 |
 | T09 固定模块身份 | 伪造模块 ID、程序路径、Host 名、generation | 仅当前签名组合中固定模块可启动，页面不能扩展能力 |
@@ -600,7 +690,7 @@ account映射到本地唯一账户，缺失账户先在预览中确认创建；f
 | T18 整包升级 | 同一用户/profile N→N+1，基金有真实 UI/行为变化 | 全组件属于同一组合；实际扩展重载版本正确，数据/偏好保留 |
 | T19 更新故障 | 系统文件/扩展、用户载荷、注册、productGeneration 各切点失败或进程退出 | 恢复一致版本或明确待恢复；未完成全量用户配置不宣告就绪，不让新 Host 混旧模块继续业务 |
 | T20 数据迁移/回退 | 新写入、兼容/不兼容旧版本、inspect 错误/备份失败 | 不兼容/未知拒绝退代码；不恢复旧备份覆盖新写入 |
-| T21 修复与重装 | 破坏隔离安装文件或主应用入口、修复、同版/旧版重装 | 恢复图标/入口及完整产品，无重复 Natives 副本；数据/偏好不变，失败真实，拒绝隐式降级 |
+| T21 修复、重装与产品卸载 | 破坏隔离安装文件/注册、同版修复、旧版重装；local/production 分别卸载 | 同版修复不被旧 generation 跳过；恢复图标/入口且数据不变；拒绝降级；卸载只移除本模式代码/注册/主图标，保留数据与凭据，不影响另一模式 |
 | T22 清数据/重启 | 二次确认，保留/删除凭据两种选择；清理失败、同 requestId 重试、清后写新数据再重放；重启 | 仅清确认范围；代码 hash/注册/activation/偏好不变，模块可直接打开；重放不删新数据；其他模块/备份/Keychain 不误删 |
 | T23 发布实操 | 公开 Release 无凭据回下载，完整运行 §6.3 | 精确 URL/hash 匹配；无源码/dev Host/本地缓存代替 |
 | T24 平台/资源 | 所声明平台实机，同机同构建类型前后比较和30分钟循环 | 签名/安装/更新/关闭可验证；Core 预算按 2026-09-13 用户决定上调 20% 至 360 KiB（ADR-0024 修订）后不再放宽、资源不持续增长 |
@@ -624,6 +714,30 @@ P0 完成剩余规范与测试映射；保留已生效的门槛：
 - 在本文、PR 和已有 CI artifact 中记录证据，不再创建平行方案或多份“最终完成报告”。
 
 证据最少包含：源代码/工作区指纹、构建模式、平台/浏览器版本、完整产品及组件最终 hash、命令退出码、关键 UI/数据/资源证据、发布 URL 与公开回下载摘要。
+
+
+### 8.4 安装专项实操清单（细化现有 T 用例）
+
+这些场景使用同一候选，不增加第二条安装引擎。A-Local 可先在受控本地包执行；正式签名与公开回下载项在 production 候选执行，分别记录 pass/fail/pending。
+
+| 对应项 | 必须实际操作 | 留下的证据 |
+|---|---|---|
+| T02/T03/T05 | 干净测试 OS 用户，打开 DMG/PKG；完成安装；Finder 找到并双击主程序 | 包 hash、Installer 中英文结束页、应用名称/图标/位置；没有 Terminal 或源码 |
+| T05/T06 | Chrome 已装但无 Natives 扩展；只按指南加载目录，随后完成一次配置 | 加载自动打开配置前台；成功后空间/文件/应用中心可用；若自动接续失败，扩展图标可恢复 |
+| T04/T17 | 首次配置后断网打开随包 Fund，保存再重开 | 真实数据持久，无模块下载；不要用打开空白页面作为通过 |
+| T06 | Chrome 不在系统 Applications、完全没装 Chrome 两种情况 | 正常发现用户级 Chrome；完全缺失时默认浏览器能打开官方下载页，回来重试有效 |
+| T06/T16 | 植入过期/错误 challenge 的测试记录；停用/移除扩展；切至另一个 profile | 不误报就绪；能在目标 profile 继续；不修改 Chrome 私有配置 |
+| T05/T06/T13 | 等待刚开始/进行中取消；超时；连续双击 5 次；应用关闭后再开 | 首次可见反馈耗时、取消耗时、进程退出；不堆积五个向导或产品 tab |
+| T07/T18 | N→N+1 整包更新，扩展尚未重载，再按提示重载和完成用户配置 | 实际扩展版本/清单/用户 generation 一致；无“通常不必重载”掩盖版本差异 |
+| T11/T19/T20 | 配置和更新各副作用切点退出；两个前台同时配置；旧版包覆盖尝试 | 可恢复且没有部分就绪；新数据、停用/隐藏选择不丢；旧版被拒绝 |
+| T03/T15/T21 | local 与 production 并存，各自打开、修复、卸载；使用专用测试凭据/数据 | 文件/注册/扩展/Keychain 不串用；卸载本模式不影响另一模式，默认数据保留 |
+| T06/T12 | Downloads 同名文件/目录/非本产品链接；剪贴板放测试文本；深浅主题/中英文/键盘操作 | 原条目和剪贴板不被自动覆盖；目录路径有可用回退；指南可读且无假状态 |
+| T21/T22 | 同版修复丢失的入口/注册/载荷；重启 macOS 后再次双击 | 图标仍在；本次真实握手成功；原配置与数据可用 |
+| T23/T24 | 已签名/公证正式包经普通下载落地，保持正常系统安全检查并全程使用普通 Chrome | 正式平台验证输出、公开 URL/实际 hash 与无源码实装记录；未测平台保持 pending |
+
+安装部分完成标准：以上适用场景全部通过；普通用户不接触 Node/npm、命令行、仓库文档或 Native 注册。遇到不能自动完成的 Chrome 操作，有清楚的步骤与可恢复入口。
+
+建议最后请 3 位未参与开发的使用者，仅凭分发包与随包说明完成首次安装和打开基金，记录卡在哪一步、是否需要额外解释、完成耗时。安装与使用不要求他们提供账户/真实资金数据；这是发现说明缺口的可用性验收，不做虚构成功率或强制遥测。
 
 ## 9. 工程执行纪律
 
@@ -663,7 +777,7 @@ perf:check 已包含的项目保留一次完整结果，不机械叠跑。另做
 
 本机 Fund Rust 从 Natives 根使用 --manifest-path ../Natives-App-Fund/Cargo.toml，先 metadata 核验 target_directory 沿用主 checkout；独立 CI 锁定源码输入，不依赖开发机相邻路径。
 
-本轮修改仅限 Markdown；已执行的只读审计检查及其限制见 §2.2。文档修改后检查链接、章节、验收覆盖和 diff，不重复运行已通过且代码未变的产品检查。
+本轮修改仅限 Markdown；已执行的只读审计、语法与模拟检查及其限制见 §2.2。文档修改后检查链接、章节、验收覆盖和 diff，不重复运行已通过且代码未变的产品检查。
 
 ## 10. 给本地执行 Agent 的唯一指令
 
@@ -675,15 +789,20 @@ perf:check 已包含的项目保留一次完整结果，不机械叠跑。另做
 取消模块独立下载、安装、更新、卸载、Catalog 和 Fund nap 发布；
 不要同时做“内置模块”和“安装后继续下载子应用”，也不要保留备选分支。
 
-先 P0：本决定已部分写入 AGENTS/ADR/产品规范，清理 Standards/ADR 正文、契约和测试中仍冲突的旧 MUST，不另起产品路线。
+先阅读 §2 的 9f4b21e4 安装审计，针对当前 HEAD 复核 D01–D13；已存在主 .app、HTML 和固定模块路线，不重写正确部分。
+本轮优先 P1 隔离/正确打包，P3 前台接续与可取消引导，P2 配置一致性，P5 更新修复卸载，P6 实装证据。
+P0 只清理 Standards/ADR 正文、契约和测试中仍冲突的旧 MUST，不另起产品路线。
 保留数据、Secret、路径/身份、运行锁、sandbox 和 EOF 回收规则。
 主产品必须安装 /Applications/Natives.app，有正常名称、图标与系统应用登记。
+local 必须使用 /Applications/Natives Local.app 与独立扩展 ID/Native 名称/用户根/Keychain，绝不覆盖正式模式。
 本次主入口例外已经记录 ADR-0029；禁止的是模块的独立 .app/系统入口，不能隐藏 Natives 主程序。
 不恢复工作台、业务桌面 UI 或常驻通用 Runtime。
 
-在 Natives.app 内新增随包离线 HTML 引导：
+保留并完善 Natives.app 内已有的随包离线 HTML 引导：
 Contents/Resources/onboarding/index.html（含本地 CSS、图标、中英文文案）。
-同一内容源生成 PKG Distribution conclusion 的静态摘要，不能维护两套步骤。
+同一内容源生成 PKG Distribution conclusion 的静态摘要，使用 file/mime-type 与实际资源，不能塞两个内联 conclusion。
+HTML 不显示连接状态、随机 session 或强制用户核对长扩展 ID；缺 Chrome 的下载按钮用默认浏览器。
+原生等待改异步且能取消，真实十分钟截止；不能在 AppKit 主线程阻塞 60 秒。
 首次双击先在 Chrome 打开本地指南，同时显示原生状态窗；指南不依赖扩展、
 Native Bridge、localhost、网络或业务数据，不能自行声称安装成功。
 原生状态窗负责打开 Chrome、打开/定位 chrome://extensions 和扩展目录、
@@ -699,7 +818,10 @@ PKG 结尾页、HTML、安装包版本/目录文本必须在构建检查中一�
 统一使用受限系统安装源，安装包包含全部固定模块和真实解压扩展目录。
 用户从“应用程序”双击 Natives，自动打开 Chrome；首次显示薄引导并定位扩展目录。
 普通 Chrome 本地加载仍须用户开启开发者模式并选择目录，不能假报静默安装。
-加载后经本次真实前台握手与产品配置进入 Natives；已就绪则直接进入。
+onInstalled 单次打开现有配置前台，扩展 action 也可继续；SW 无 Native Port。
+加载后经本次 challenge 关联的真实前台握手与全量产品配置进入 Natives；已就绪则直接进入。
+禁用 30 天旧标记成功判定；generation>0 不能替代当前组合/载荷/注册/activation 核验。
+产品配置使用既有跨进程锁、journal/恢复与运行锁，修复同版提前返回、锁外共享 staging、写死 enabled=true。
 重复双击聚焦现有窗口；关闭引导或成功交接回收 Launcher，安装图标一直保留。
 配置从可信本地完整安装内容校验并准备本用户的全部固定模块，
 活动载荷和数据仍在 ~/.natives/apps/<appId>/；root 不写用户库或 activation。
@@ -718,7 +840,10 @@ apps:clear_data 必须拆离 uninstall_with_data，只清确认的数据范围�
 清理失败可恢复，同 requestId 完成后重放不得删掉后来新建的数据。
 重复打开基金聚焦同一 profile 的已有模块页；只更新偏好不重启模块。
 
-修复当前安装路径错位、扩展真实加载目录、摘要/身份校验和假握手问题。
+接通 production 参数、真实生产信任根、完整 bundle/Hosts 签名与 PKG/DMG 适用公证；正式身份缺失就报 pending，禁止信任开发私钥放行。
+完整包预检架构/系统/安装卷/降级/维护条件；锁定源版本与实际产物摘要。
+verify.sh 改成真实候选检查，所有 alias/卸载测试在临时根运行，不能使用真实 HOME/Downloads。
+修复扩展真实加载目录、摘要/身份校验和假握手问题。
 旧用户迁移保留 fund 数据/Keychain/侧栏/停用移除意图，拒绝隐式降级。
 产品更新有维护窗口、版本兼容、恢复 journal 和实际浏览器重载验证，
 不能让新 Host 配旧组件继续业务，也不能用旧备份覆盖新写入。
@@ -741,4 +866,5 @@ B-Local 通过才称本机可用；完成 §8 T01–T24 和适用工程门禁。
 - [Chrome 加载与重载扩展](https://developer.chrome.com/docs/extensions/get-started/tutorial/hello-world)、[固定扩展 ID](https://developer.chrome.com/docs/extensions/reference/manifest/key)：组件随产品提供，浏览器加载身份和实际版本仍须核验。
 - [Chromium 的 --load-extension 变更公告](https://groups.google.com/a/chromium.org/g/chromium-extensions/c/1-g8EFx2BBY)：普通 Chrome 与测试发行版不能混作同一种用户安装证据。
 - [Apple Developer ID/公证能力](https://developer.apple.com/support/compare-memberships/)：整包模块化不取消正式平台分发条件。
+- [Apple Distribution conclusion 定义](https://developer.apple.com/library/archive/documentation/DeveloperTools/Reference/DistributionDefinitionRef/Chapters/Distribution_XML_Ref.html)：结尾说明引用随包资源并声明内容类型；需检查实际 Installer 显示，不能仅以 XML 和包构建成功通过。
 - [Apple Application Bundle 结构](https://developer.apple.com/library/archive/documentation/CoreFoundation/Conceptual/CFBundles/BundleTypes/BundleTypes.html)：主程序使用正式 bundle、Info.plist、可执行入口及图标资源；可见/双击行为仍须实际安装验证。
