@@ -8,7 +8,7 @@
 //   已签名产品组合清单 product-manifest.json/.sig（Ed25519，dev/生产密钥）
 // pkgbuild/productbuild 只发生在 build-pkg.sh；这里不再有第二布局，
 // 不组装 Natives.app，不写 /Applications，不产生 seeds。
-import { existsSync, mkdirSync, rmSync, writeFileSync, readFileSync, readdirSync, createReadStream, createWriteStream, chmodSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, writeFileSync, copyFileSync, readFileSync, readdirSync, createReadStream, createWriteStream, chmodSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { join, resolve, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -158,7 +158,35 @@ export async function buildInstaller({ mode = 'local', version, output, fundNap 
     `${payloadSha256}  modules/fund/${meta.version}/app`,
   ].join('\n') + '\n';
   writeFileSync(join(dirname(output), 'SHA256SUMS'), sums);
-  return { pkg: output, sha256: digest(pkgBytes), size: pkgBytes.length, extensionId, manifest };
+
+  // 分发外壳（用户决定 2026-09-13）：DMG 内含同一个已核验 .pkg 安装器、
+  // SHA256SUMS 与首次安装说明；安装内容与引擎不变（写 /Library 仍由
+  // pkg 完成）。DMG 是 UDZO 只读压缩镜像。
+  const dmgStaging = join(STAGING, 'dmg');
+  mkdirSync(dmgStaging, { recursive: true });
+  copyFileSync(output, join(dmgStaging, basename(output)));
+  copyFileSync(join(dirname(output), 'SHA256SUMS'), join(dmgStaging, 'SHA256SUMS'));
+  writeFileSync(join(dmgStaging, '安装说明.txt'), [
+    `Natives ${version}（macOS ${arch}，${mode === 'production' ? 'production' : 'local'} 候选）`,
+    '',
+    '安装：双击其中的 .pkg → 继续 → 输入管理员密码。',
+    '装完后的三步操作与验收清单见仓库 docs/development/local-install-guide.md：',
+    '  1. chrome://extensions 开发者模式加载 /Library/Application Support/Natives-Local/ChromeExtension',
+    '  2. 扩展 ID 必须是 ' + extensionId,
+    '  3. 打开 Natives → 设置 → 应用中心 → 完成 Natives 配置',
+    '',
+    '卸载：sudo "/Library/Application Support/Natives-Local/uninstall.sh"（用户数据保留）',
+    '',
+  ].join('\n') + '\n');
+  const dmgPath = output.replace(/\.pkg$/, '.dmg');
+  execFileSync('hdiutil', ['create', '-volname', `Natives ${version}`, '-srcfolder', dmgStaging,
+    '-ov', '-format', 'UDZO', dmgPath], { stdio: 'inherit' });
+  const dmgBytes = readFileSync(dmgPath);
+  writeFileSync(join(dirname(output), 'SHA256SUMS'), [
+    sums.trimEnd(),
+    `${digest(dmgBytes)}  ${basename(dmgPath)}`,
+  ].join('\n') + '\n');
+  return { pkg: output, dmg: dmgPath, sha256: digest(pkgBytes), dmgSha256: digest(dmgBytes), size: pkgBytes.length, extensionId, manifest };
 }
 
 function findFundNap() {
@@ -183,7 +211,7 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
     else if (args[i] === '--fund-nap') options.fundNap = args[++i];
   }
   buildInstaller(options).then((result) => {
-    console.log(JSON.stringify({ pkg: result.pkg, sha256: result.sha256, size: result.size, extensionId: result.extensionId }));
+    console.log(JSON.stringify({ pkg: result.pkg, dmg: result.dmg, sha256: result.sha256, dmgSha256: result.dmgSha256, size: result.size, extensionId: result.extensionId }));
   }).catch((error) => {
     console.error(error.message || error);
     process.exit(1);

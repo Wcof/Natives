@@ -364,7 +364,9 @@ AGENTS、ADR 修订头和部分产品规范已经采纳本次决定。先检查�
 每个已验证架构一个完整安装包，加同版本说明和签名/摘要资料：
 
 ~~~text
-Natives-版本-macOS-arm64.pkg
+Natives-版本-macOS-arm64.dmg     分发外壳（用户决定 2026-09-13）：内含同版
+Natives-版本-macOS-arm64.pkg     安装器、SHA256SUMS 与安装说明；安装引擎
+                                 产物 .pkg 随附，供命令行静默安装
 Natives-版本-macOS-x64.pkg       仅在该平台验收通过后宣告支持
 产品组合清单 / 签名 / SHA256SUMS
 首次使用说明 / 实操证据

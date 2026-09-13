@@ -31,7 +31,10 @@ native-file-host（本地信任根语义）、Go 构建的 model-host、解压�
 sudo installer -pkg dist/installer/Natives-0.1.0-macOS-arm64-local.pkg -target /
 ```
 
-或双击 .pkg。安装内容（root-owned，只写系统源 + 浏览器最小注册）：
+或双击分发外壳 **`Natives-0.1.0-macOS-arm64-local.dmg`** → 双击其中的
+`.pkg` → 继续 → 输入管理员密码（DMG 只是把同一个安装器包成一层的分发
+外壳；写 /Library 仍由 pkg 完成）。安装内容（root-owned，只写系统源 +
+浏览器最小注册）：
 
 ```
 /Library/Application Support/Natives-Local/
