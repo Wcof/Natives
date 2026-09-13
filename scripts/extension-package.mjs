@@ -33,8 +33,11 @@ export const STABLE_EXTENSION_ID = extensionIdForKey(EXTENSION_ID_KEY);
 export const LOCAL_EXTENSION_ID = extensionIdForKey(EXTENSION_ID_KEY_LOCAL);
 
 // local 模式的 Native Messaging Host 名称（与 build-pkg.sh 的注册文件名一致）。
+// esbuild minify 之后字符串字面量通常输出为双引号，因此同时兼容替换单/双引号及无引号标识符。
 const HOST_NAME_SUBSTITUTIONS_LOCAL = [
+  ['"com.natives.file_manager"', '"com.natives.local.file_manager"'],
   ["'com.natives.file_manager'", "'com.natives.local.file_manager'"],
+  ['"com.natives.model_host"', '"com.natives.local.model_host"'],
   ["'com.natives.model_host'", "'com.natives.local.model_host'"],
 ];
 

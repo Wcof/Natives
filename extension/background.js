@@ -1,30 +1,29 @@
 import { setupScreenshotListeners } from './screenshot-coordinator.js';
 
-const FILES_URL = chrome.runtime.getURL('files.html');
+const SPACE_URL = chrome.runtime.getURL('space.html');
 
 setupScreenshotListeners();
 
-
-// §1.4 前台接续（D02）：首次安装打开应用中心的产品配置入口（含
-// "完成 Natives 配置"）；更新不打扰（版本/配置状态由前台页面判定）。
-// SW 只处理这一次事件，不持有 Native Port、不轮询。
+// 首次拖拽装载扩展后（或者用户安装后首次启动），默认打开空间（首页）：
+// 用户安装后期望看到的第一画面是自己的个人主页/空间（space.html），
+// 而不是管理性质的 apps.html 应用中心。
 chrome.runtime.onInstalled.addListener((details) => {
   console.log('[Natives] Service Worker initialized successfully.');
   if (details.reason === 'install') {
-    chrome.tabs.create({ url: chrome.runtime.getURL('apps.html') });
+    chrome.tabs.create({ url: SPACE_URL });
   }
 });
 
 chrome.action.onClicked.addListener(async () => {
   try {
-    const tabs = await chrome.tabs.query({ url: FILES_URL });
+    const tabs = await chrome.tabs.query({ url: SPACE_URL });
     if (tabs[0]?.id) {
       await chrome.tabs.update(tabs[0].id, { active: true });
       return;
     }
-    await chrome.tabs.create({ url: FILES_URL });
+    await chrome.tabs.create({ url: SPACE_URL });
   } catch (err) {
-    console.error('[Natives] Failed to open files page:', err);
+    console.error('[Natives] Failed to open space page:', err);
   }
 });
 
