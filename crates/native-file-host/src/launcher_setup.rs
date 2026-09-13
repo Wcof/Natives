@@ -12,6 +12,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
+use crate::app_store::AppStore;
 use crate::extension_provision::read_managed_manifest_version;
 
 /// 随包固定解压扩展目录（契约 §3.2）：pkg 安装到受限系统源；
@@ -29,6 +30,28 @@ pub fn handshake_marker_path(natives_root: &Path) -> PathBuf {
 fn alias_display(extension_dir: &Path) -> PathBuf {
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
     ensure_downloads_alias(extension_dir, &home).unwrap_or_else(|_| extension_dir.to_path_buf())
+}
+
+#[derive(PartialEq, Eq, Debug, Clone, Copy)]
+enum Entry {
+    Product,
+    Config,
+    Setup,
+}
+
+/// 入口三态（§1.4 日常使用）：系统扩展缺失 → 完整引导；产品已配置 →
+/// 直接进产品；扩展已装未配置 → 进配置入口。旧标记仅作提示线索。
+fn decide_entry(system_extension_ok: bool, product_configured: bool, natives_root: &Path) -> Entry {
+    if !system_extension_ok {
+        return Entry::Setup;
+    }
+    if product_configured {
+        return Entry::Product;
+    }
+    if read_handshake_matching_version(natives_root, &system_chrome_extension_dir()) {
+        return Entry::Config;
+    }
+    Entry::Setup
 }
 
 /// D03：握手标记的 extensionVersion 必须与当前系统扩展一致；旧版本
@@ -314,24 +337,45 @@ pub fn run_launcher_default(args: &[String]) -> i32 {
             let _ = ensure_downloads_alias(&ext_dir, &home);
         }
     }
-    let ready = system_chrome_extension_dir().join("manifest.json").exists()
-        && read_handshake_matching_version(&root, &system_chrome_extension_dir());
-    if ready {
-        let url = format!("chrome-extension://{STABLE_EXTENSION_ID}/space.html");
-        let _ = std::process::Command::new("/usr/bin/open")
-            .args(["-a", "Google Chrome", &url])
-            .status();
-        println!(
-            "{}",
-            serde_json::json!({ "step": "opened_natives", "url": url })
-        );
-        0
-    } else {
-        println!(
-            "{}",
-            serde_json::json!({ "step": "setup_required", "reason": "extension not loaded yet" })
-        );
-        2
+    // D03 + 用户反馈：入口三态——系统扩展缺失走完整引导；产品已配置
+    // （配置经扩展前台完成 = 扩展已装）直接进产品；扩展已装未配置进
+    // 配置入口。实时连接由产品页自身握手核验，不依赖旧标记。
+    let system_extension_ok = system_chrome_extension_dir().join("manifest.json").exists();
+    let configured = AppStore::open(&crate::workspace_store::default_db_path())
+        .and_then(|store| store.product_status())
+        .map(|status| status.configured)
+        .unwrap_or(false);
+    match decide_entry(system_extension_ok, configured, &root) {
+        Entry::Product => {
+            let url = format!("chrome-extension://{STABLE_EXTENSION_ID}/space.html");
+            let _ = std::process::Command::new("/usr/bin/open")
+                .args(["-a", "Google Chrome", &url])
+                .status();
+            println!(
+                "{}",
+                serde_json::json!({ "step": "opened_natives", "url": url })
+            );
+            0
+        }
+        Entry::Config => {
+            // §1.4 加载后自动进入配置入口；实时连接由页面握手核验。
+            let url = format!("chrome-extension://{STABLE_EXTENSION_ID}/apps.html");
+            let _ = std::process::Command::new("/usr/bin/open")
+                .args(["-a", "Google Chrome", &url])
+                .status();
+            println!(
+                "{}",
+                serde_json::json!({ "step": "opened_config", "url": url })
+            );
+            0
+        }
+        Entry::Setup => {
+            println!(
+                "{}",
+                serde_json::json!({ "step": "setup_required", "reason": "extension not loaded yet" })
+            );
+            2
+        }
     }
 }
 
