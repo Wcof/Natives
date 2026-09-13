@@ -103,10 +103,12 @@ export async function buildInstaller({ mode = 'local', version, output, fundNap,
   // 打开扩展管理页/显示扩展文件夹/复制目录路径；Finder 双击不弹 Terminal），
   // SOURCE_ROOT 固化系统源路径，双击经它调用 native-file-host 引导模式。
   const sourceName = mode === 'production' ? 'Natives' : 'Natives-Local';
+  const setupScheme = mode === 'production' ? 'natives-setup' : 'natives-setup-local';
   const appExec = join(STAGING, 'Natives');
   execFileSync('cc', ['-O2', '-framework', 'AppKit',
     '-DSOURCE_ROOT="' + `/Library/Application Support/${sourceName}` + '"',
     '-DEXTENSION_ID="' + extensionId + '"',
+    '-DSETUP_SCHEME="' + setupScheme + '"',
     '-o', appExec, join(ROOT, 'installers/macos/resources/launcher-main.m')], { stdio: 'inherit' });
   const appIcon = join(ROOT, 'installers/macos/resources/natives.icns');
 
@@ -117,6 +119,7 @@ export async function buildInstaller({ mode = 'local', version, output, fundNap,
     .replaceAll('__VERSION__', version)
     .replaceAll('__EXTENSION_ID__', extensionId)
     .replaceAll('__EXTENSION_DIR__', extensionDir)
+    .replaceAll('__SETUP_SCHEME__', setupScheme)
     .replaceAll('__SOURCE_ROOT__', `/Library/Application Support/${sourceName}`);
   const template = readFileSync(join(ROOT, 'installers/macos/resources/onboarding-template.html'), 'utf8');
   const onboardingDir = join(STAGING, 'onboarding');

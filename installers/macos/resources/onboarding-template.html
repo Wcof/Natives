@@ -20,6 +20,9 @@
   .muted { color:var(--muted); font-size:13px; }
   .lang { position:fixed; top:12px; right:12px; }
   .lang button { border:1px solid var(--line); background:var(--card); color:var(--fg); border-radius:6px; padding:4px 10px; cursor:pointer; }
+  .btn { display:inline-block; border:1px solid var(--accent); color:var(--accent); border-radius:8px; padding:4px 12px; text-decoration:none; cursor:pointer; }
+  .btn.primary { background:var(--accent); color:#fff; }
+  .actions { display:flex; flex-wrap:wrap; gap:10px; margin:12px 0; }
   [hidden] { display:none !important; }
 </style>
 </head>
@@ -34,10 +37,21 @@
   <li class="muted"><span data-zh>（可选）打开扩展管理页：</span><span data-en hidden>(Optional) Open the extensions page:</span><code>chrome://extensions</code></li>
   <li><span data-zh>打开右上角"开发者模式"。</span><span data-en hidden>Turn on "Developer mode" (top right).</span></li>
   <li><span data-zh>点击"加载已解压的扩展程序"，选择<b>"下载"文件夹里的 Natives-Extension</b>（指向真实目录的快捷方式；选目录，不是 ZIP）。</span><span data-en hidden>Click "Load unpacked" and select <b>Natives-Extension in your Downloads folder</b> (a shortcut to the real folder; a folder, not a ZIP).</span></li>
-  <li class="muted"><span data-zh>找不到快捷方式时用高级路径：</span><span data-en hidden>Advanced: use the real path directly:</span>
+  <li class="muted"><span data-zh>找不到快捷方式时：点击</span><span data-en hidden>Can't find the shortcut: click</span>
+    <a class="btn" href="__SETUP_SCHEME__://folder"><span data-zh>显示扩展文件夹</span><span data-en hidden>Show extension folder</span></a>
+    <span data-zh>或用高级路径：</span><span data-en hidden>or use the real path:</span>
     <code class="path">__EXTENSION_DIR__</code> <span class="muted">（Finder 可用 Cmd+Shift+G 粘贴）</span></li>
 </ol>
 <p class="muted"><span data-zh>加载后核对扩展 ID：</span><span data-en hidden>After loading, verify the extension ID:</span> <code>__EXTENSION_ID__</code></p>
+
+<h2 data-zh>一键直达（点击后由已安装的 Natives 完成）</h2><h2 data-en hidden>One-click actions (handled by the installed Natives app)</h2>
+<div class="actions">
+  <a class="btn primary" href="__SETUP_SCHEME__://extensions"><span data-zh>打开扩展管理页</span><span data-en hidden>Open extensions page</span></a>
+  <a class="btn" href="__SETUP_SCHEME__://folder"><span data-zh>显示扩展文件夹</span><span data-en hidden>Show extension folder</span></a>
+  <a class="btn" href="__SETUP_SCHEME__://copy"><span data-zh>复制目录路径</span><span data-en hidden>Copy folder path</span></a>
+  <a class="btn" href="__SETUP_SCHEME__://detect"><span data-zh>重新检测</span><span data-en hidden>Re-detect</span></a>
+</div>
+<p class="muted"><span data-zh>若点击无反应：从"应用程序"双击一次 Natives 后再试（首次需先完成上面三步）。</span><span data-en hidden>If a click does nothing: double-click Natives in Applications once, then retry (complete the three steps on first use).</span></p>
 
 <h2 data-zh>之后怎么打开</h2><h2 data-en hidden>How to open Natives afterwards</h2>
 <div class="card"><span data-zh>以后从"应用程序"双击 <b>Natives</b>：扩展已就绪时直接进入产品。基金在应用中心点击打开，首次只做数据初始化——没有"安装基金"。</span><span data-en hidden>Double-click <b>Natives</b> in Applications; once the extension is ready you go straight into the product. Open Fund from the App Center — first use only initializes data, there is no "install fund".</span></div>

@@ -48,8 +48,8 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 case "$mode" in
-  local) source_name=Natives-Local; app_name="Natives Local.app";;
-  production) source_name=Natives; app_name="Natives.app";;
+  local) source_name=Natives-Local; app_name="Natives Local.app"; setup_scheme=natives-setup-local;;
+  production) source_name=Natives; app_name="Natives.app"; setup_scheme=natives-setup;;
   *) echo 'error: --mode must be explicitly local or production' >&2; exit 1;;
 esac
 [ -n "$host" ] && [ -x "$host" ] || { echo 'error: --host must be an executable prebuilt Host' >&2; exit 1; }
@@ -100,7 +100,12 @@ printf '%s\n' "<?xml version=\"1.0\" encoding=\"UTF-8\"?>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>LSMinimumSystemVersion</key><string>11.0</string>
   <key>NSHighResolutionCapable</key><true/>
+  <key>CFBundleURLTypes</key><array><dict>
+    <key>CFBundleURLName</key><string>com.natives.setup</string>
+    <key>CFBundleURLSchemes</key><array><string>__SETUP_SCHEME__</string></array>
+  </dict></array>
 </dict></plist>" > "$app_root/Contents/Info.plist"
+sed -i '' "s/__SETUP_SCHEME__/$setup_scheme/" "$app_root/Contents/Info.plist"
 [ -z "$launcher" ] || install -m 755 "$launcher" "$source_root/natives-launcher"
 if [ -n "$model_host" ] && [ -x "$model_host" ]; then
   install -m 755 "$model_host" "$source_root/model-host"
