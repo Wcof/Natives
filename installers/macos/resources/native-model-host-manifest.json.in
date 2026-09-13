@@ -1,0 +1,7 @@
+{
+  "name": "com.natives.model_host",
+  "description": "Natives model settings and local model proxy",
+  "path": "__SOURCE_ROOT__/model-host",
+  "type": "stdio",
+  "allowed_origins": ["chrome-extension://__EXTENSION_ID__/"]
+}

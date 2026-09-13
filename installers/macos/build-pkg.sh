@@ -1,97 +1,108 @@
 #!/bin/sh
 set -eu
-# Unified Natives suite installer (ADR-0029).
+# The single Natives system install engine (plan §5 P1, ADR-0029).
 #
 # Modes (explicit, never inferred from flags):
-#   local      — isolated local candidate; ad-hoc/development signing allowed per
-#                managed-app contract §4.2. Seeds/model-host optional (dev builds).
-#   production — complete suite candidate; REQUIRES Model Host binary, a seeds
-#                directory containing a signed suite manifest, and all three
-#                signing identities. Never builds from fixture seeds.
+#   local      — isolated local candidate into
+#                /Library/Application Support/Natives-Local/ (contract §3.2/§4.2);
+#                ad-hoc/development signing and a development-built Host are
+#                allowed here.
+#   production — complete suite candidate into
+#                /Library/Application Support/Natives/; REQUIRES the model Host,
+#                the unpacked extension directory, the fixed module files, a
+#                signed product composition manifest and all signing identities.
 #
-# The installer only writes the restricted system source, read-only seeds and
-# the minimal browser registration (ADR-0029 §2). It never creates .app
-# bundles, Dock/LaunchServices entries, or /Applications uninstall shortcuts.
-usage() { echo "usage: $0 --mode local|production --host PATH --extension-id ID [--model-host PATH] [--seeds-dir PATH] [--version V] [--output PATH] [--app-sign ID] [--pkg-sign ID] [--product-sign ID]" >&2; exit 2; }
-mode= host= extension_id= model_host= seeds_dir= version=1.0.0 output=./Natives-macos.pkg app_sign= pkg_sign= product_sign=
+# The installer only writes the restricted root-owned system source and the
+# minimal browser Native Messaging registration (contract §3.2). It never
+# creates .app bundles, /Applications entries, Dock/LaunchServices products,
+# External Extensions store entries, or user data/activation.
+usage() {
+  echo "usage: $0 --mode local|production --host PATH --extension-id ID --extension-dir PATH \
+--modules-dir PATH --product-manifest PATH [--model-host PATH] [--launcher PATH] \
+[--version V] [--output PATH] [--pkg-sign ID] [--product-sign ID]" >&2
+  exit 2
+}
+mode= host= extension_id= extension_dir= modules_dir= product_manifest= model_host= launcher=
+version=1.0.0 output= pkg_sign= product_sign=
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --mode) mode=${2:-}; shift 2;;
     --host) host=${2:-}; shift 2;;
     --model-host) model_host=${2:-}; shift 2;;
-    --seeds-dir) seeds_dir=${2:-}; shift 2;;
+    --launcher) launcher=${2:-}; shift 2;;
     --extension-id) extension_id=${2:-}; shift 2;;
+    --extension-dir) extension_dir=${2:-}; shift 2;;
+    --modules-dir) modules_dir=${2:-}; shift 2;;
+    --product-manifest) product_manifest=${2:-}; shift 2;;
     --version) version=${2:-}; shift 2;;
     --output) output=${2:-}; shift 2;;
-    --app-sign) app_sign=${2:-}; shift 2;;
     --pkg-sign) pkg_sign=${2:-}; shift 2;;
     --product-sign) product_sign=${2:-}; shift 2;;
     *) usage;;
   esac
 done
 case "$mode" in
-  local) ;;
-  production) ;;
+  local) source_name=Natives-Local;;
+  production) source_name=Natives;;
   *) echo 'error: --mode must be explicitly local or production' >&2; exit 1;;
 esac
 [ -n "$host" ] && [ -x "$host" ] || { echo 'error: --host must be an executable prebuilt Host' >&2; exit 1; }
+[ -n "$extension_dir" ] && [ -f "$extension_dir/manifest.json" ] || { echo 'error: --extension-dir must be the unpacked extension directory containing manifest.json' >&2; exit 1; }
+[ -n "$modules_dir" ] && [ -d "$modules_dir" ] || { echo 'error: --modules-dir must contain the fixed module files' >&2; exit 1; }
+[ -n "$product_manifest" ] && [ -f "$product_manifest" ] || { echo 'error: --product-manifest must be the signed product composition manifest' >&2; exit 1; }
+[ -f "$product_manifest.sig" ] || { echo 'error: product manifest detached signature (.sig) is required' >&2; exit 1; }
 echo "$extension_id" | grep -Eq '^[a-p]{32}$' || { echo 'error: --extension-id must be the explicit 32-character Chrome ID' >&2; exit 1; }
 echo "$version" | grep -Eq '^[0-9]+(\.[0-9]+){1,3}$' || { echo 'error: invalid --version' >&2; exit 1; }
 command -v pkgbuild >/dev/null 2>&1 || { echo 'error: macOS pkgbuild is required' >&2; exit 1; }
 command -v productbuild >/dev/null 2>&1 || { echo 'error: macOS productbuild is required' >&2; exit 1; }
-
-# Complete-suite constraints (ADR-0029 R-APP-19): a production candidate is only
-# complete with Model Host, signed seeds and full signing identities.
 if [ "$mode" = production ]; then
-  [ -n "$model_host" ] && [ -x "$model_host" ] || { echo 'error: production suite requires an executable --model-host' >&2; exit 1; }
-  [ -n "$seeds_dir" ] && [ -f "$seeds_dir/suite-manifest.json" ] || { echo 'error: production suite requires --seeds-dir containing a signed suite-manifest.json' >&2; exit 1; }
-  [ -n "$app_sign" ] || { echo 'error: production suite requires --app-sign' >&2; exit 1; }
-  [ -n "$pkg_sign" ] || { echo 'error: production suite requires --pkg-sign' >&2; exit 1; }
-  [ -n "$product_sign" ] || { echo 'error: production suite requires --product-sign' >&2; exit 1; }
+  [ -n "$model_host" ] && [ -x "$model_host" ] || { echo 'error: production requires an executable --model-host' >&2; exit 1; }
+  [ -n "$pkg_sign" ] || { echo 'error: production requires --pkg-sign' >&2; exit 1; }
+  [ -n "$product_sign" ] || { echo 'error: production requires --product-sign' >&2; exit 1; }
 fi
 
 base=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/natives-pkg.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT INT TERM
 payload=$tmp/payload
-mkdir -p "$payload/Library/Application Support/Natives/seeds" "$payload/Library/Google/Chrome/NativeMessagingHosts" \
-  "$payload/Library/Application Support/Google/Chrome/External Extensions" "$payload/Library/Application Support/Chromium/NativeMessagingHosts" \
-  "$payload/Library/Application Support/Chromium/External Extensions"
-install -m 755 "$host" "$payload/Library/Application Support/Natives/native-file-host"
+source_root="$payload/Library/Application Support/$source_name"
+mkdir -p "$source_root" "$payload/Library/Google/Chrome/NativeMessagingHosts" \
+  "$payload/Library/Application Support/Chromium/NativeMessagingHosts"
+
+install -m 755 "$host" "$source_root/native-file-host"
+[ -z "$launcher" ] || install -m 755 "$launcher" "$source_root/natives-launcher"
 if [ -n "$model_host" ] && [ -x "$model_host" ]; then
-  install -m 755 "$model_host" "$payload/Library/Application Support/Natives/model-host"
+  install -m 755 "$model_host" "$source_root/model-host"
 fi
-if [ -n "$seeds_dir" ] && [ -d "$seeds_dir" ]; then
-  cp -R "$seeds_dir/"* "$payload/Library/Application Support/Natives/seeds/"
-fi
-install -m 755 "$base/uninstall.sh" "$payload/Library/Application Support/Natives/uninstall.sh"
-printf '%s\n' "$extension_id" > "$payload/Library/Application Support/Natives/extension-id"
-for browser in "$payload/Library/Google/Chrome/NativeMessagingHosts" "$payload/Library/Application Support/Chromium/NativeMessagingHosts"; do
-  sed "s/__EXTENSION_ID__/$extension_id/g" "$base/resources/native-host-manifest.json.in" > "$browser/com.natives.file_manager.json"
+# Fixed built-in module files and the UNPACKED extension directory: the
+# complete product content (plan §3.1). No ZIP, no seeds, no second copy.
+cp -R "$extension_dir/" "$source_root/ChromeExtension/"
+cp -R "$modules_dir/" "$source_root/modules/"
+install -m 644 "$product_manifest" "$source_root/product-manifest.json"
+install -m 644 "$product_manifest.sig" "$source_root/product-manifest.sig"
+install -m 755 "$base/uninstall.sh" "$source_root/uninstall.sh"
+printf '%s\n' "$extension_id" > "$source_root/extension-id"
+
+# Minimal browser Native Messaging registration only: the manifests point at
+# the real installed system-source binaries and lock the fixed extension ID
+# (contract §3.2). No External Extensions store entries (plan §5 P1).
+for browser in "$payload/Library/Google/Chrome/NativeMessagingHosts" \
+               "$payload/Library/Application Support/Chromium/NativeMessagingHosts"; do
+  sed -e "s/__EXTENSION_ID__/$extension_id/g" -e "s|__SOURCE_ROOT__|/Library/Application Support/$source_name|g" \
+    "$base/resources/native-host-manifest.json.in" > "$browser/com.natives.file_manager.json"
   if [ -n "$model_host" ] && [ -x "$model_host" ]; then
-    cat > "$browser/com.natives.model_host.json" <<EOF
-{
-  "name": "com.natives.model_host",
-  "description": "Natives model settings and local model proxy",
-  "path": "/Library/Application Support/Natives/model-host",
-  "type": "stdio",
-  "allowed_origins": [
-    "chrome-extension://$extension_id/"
-  ]
-}
-EOF
+    sed -e "s/__EXTENSION_ID__/$extension_id/g" -e "s|__SOURCE_ROOT__|/Library/Application Support/$source_name|g" \
+      "$base/resources/native-model-host-manifest.json.in" > "$browser/com.natives.model_host.json"
   fi
 done
-for browser in "$payload/Library/Application Support/Google/Chrome/External Extensions" "$payload/Library/Application Support/Chromium/External Extensions"; do
-  cp "$base/resources/external-extension.json.in" "$browser/$extension_id.json"
-done
-# Hard prohibitions (ADR-0029 §2): no .app bundles, no /Applications entries at all.
+
+# Hard prohibitions (ADR-0029 §2 / plan §3.3): no .app, no /Applications.
 if [ -d "$payload/Applications" ]; then
   echo "error: installer payload must not contain /Applications entries" >&2
   exit 1
 fi
 component=$tmp/Natives-component.pkg
-set -- --root "$payload" --identifier com.natives.file-manager --version "$version" --install-location /
+set -- --root "$payload" --identifier "com.natives.$source_name" --version "$version" --install-location /
 [ -z "$pkg_sign" ] || set -- "$@" --sign "$pkg_sign"
 pkgbuild "$@" "$component"
 set -- --package "$component"
@@ -99,7 +110,7 @@ set -- --package "$component"
 mkdir -p "$(dirname "$output")"
 productbuild "$@" "$output"
 if [ -z "$pkg_sign" ] || [ -z "$product_sign" ]; then
-  echo "created unsigned development package ($mode mode): $output (supply --pkg-sign and --product-sign for release signing)"
+  echo "created unsigned development package ($mode mode, source /Library/Application Support/$source_name): $output"
 else
   echo "created signed package ($mode mode): $output"
 fi

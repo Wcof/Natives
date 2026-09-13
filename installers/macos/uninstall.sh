@@ -1,36 +1,24 @@
 #!/bin/sh
 set -eu
-root=/
-extension_id=
-while [ "$#" -gt 0 ]; do
-  case "$1" in
-    --root) root=${2:-}; shift 2;;
-    --extension-id) extension_id=${2:-}; shift 2;;
-    *) echo 'usage: uninstall.sh [--root <test-root>] [--extension-id <id>]' >&2; exit 2;;
-  esac
+# Natives uninstall (plan §6): removes THIS system source directory (the
+# script lives inside it) and the minimal browser Native Messaging
+# registration. User data in ~/.natives and ~/.natives-local is preserved —
+# clearing module data is a separate, explicitly confirmed action (§4.3).
+src="$(cd "$(dirname "$0")" && pwd)"
+case "$src" in
+  "/Library/Application Support/Natives"|"Natives-Local") ;;
+  "/Library/Application Support/Natives-Local") ;;
+  *) echo "refusing to uninstall from unexpected location: $src" >&2; exit 1;;
+esac
+extension_id=$(cat "$src/extension-id" 2>/dev/null || true)
+[ -z "$extension_id" ] || echo "$extension_id" | grep -Eq '^[a-p]{32}$' || { echo "invalid extension id" >&2; exit 1; }
+for browser in "/Library/Google/Chrome/NativeMessagingHosts" "/Library/Application Support/Chromium/NativeMessagingHosts"; do
+  rm -f "$browser/com.natives.file_manager.json" "$browser/com.natives.model_host.json"
 done
-[ -n "$extension_id" ] || extension_id=$(cat "$root/Library/Application Support/Natives/extension-id" 2>/dev/null || true)
-[ -z "$extension_id" ] || echo "$extension_id" | grep -Eq '^[a-p]{32}$' || { echo 'error: invalid --extension-id' >&2; exit 1; }
-remove() {
-  path=$1
-  [ -e "$root$path" ] || [ -L "$root$path" ] || return 0
-  rm -f "$root$path"
-}
-remove '/Library/Application Support/Natives/native-file-host'
-remove '/Library/Application Support/Natives/extension-id'
-remove '/Library/Google/Chrome/NativeMessagingHosts/com.natives.file_manager.json'
-if [ -n "$extension_id" ]; then
-  remove "/Library/Application Support/Google/Chrome/External Extensions/$extension_id.json"
-fi
-remove '/Library/Application Support/Chromium/NativeMessagingHosts/com.natives.file_manager.json'
-if [ -n "$extension_id" ]; then
-  remove "/Library/Application Support/Chromium/External Extensions/$extension_id.json"
-fi
-remove '/Applications/Natives Workbench.app/Contents/MacOS/natives-launch'
-remove '/Applications/Natives Workbench.app/Contents/Info.plist'
-remove '/Applications/Natives Workbench Uninstall.command'
-rmdir "$root/Applications/Natives Workbench.app/Contents/MacOS" 2>/dev/null || true
-rmdir "$root/Applications/Natives Workbench.app/Contents" 2>/dev/null || true
-rmdir "$root/Applications/Natives Workbench.app" 2>/dev/null || true
-rmdir "$root/Library/Application Support/Natives" 2>/dev/null || true
-echo 'Natives macOS files removed (user data untouched).'
+# Legacy 2026-09-era leftovers are cleaned only when present (plan §5 P6).
+rm -f "/Library/Application Support/Google/Chrome/External Extensions/$extension_id.json" 2>/dev/null || true
+rm -f "/Library/Application Support/Chromium/External Extensions/$extension_id.json" 2>/dev/null || true
+cd /
+rm -rf "$src"
+echo "Natives system source removed: $src"
+echo "user data (~/.natives, ~/.natives-local) is preserved."
