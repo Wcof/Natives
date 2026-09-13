@@ -9,7 +9,7 @@
 #### R-T1 · Native authority 与已接受的生产范围
 - **等级**：MUST
 - **分类**：分层、进程、安全
-- **规则**：当前 Files 主链遵循下方 ADR-0023，Model Host 遵循 ADR-0020 §6.1；扩展页面是唯一产品 Surface。下表及 Tauri 主链记录历史架构，仅在审计、迁移或删除相应历史实现时适用。
+- **规则**：当前 Files 主链遵循下方 ADR-0023，Model Host 遵循 ADR-0020 §6.1；扩展页面是唯一业务 Surface。ADR-0029 的唯一主产品 Launcher 可显示首次引导/简短诊断窗口，不承载业务。下表及 Tauri 主链记录历史架构，仅在审计、迁移或删除相应历史实现时适用。
 
 | 运行域 | 目标 authority | 允许 | 禁止 |
 |---|---|---|---|
@@ -33,6 +33,10 @@ Service Worker 长连接。旧 Tauri Files 调用链是迁移源，不得继续�
 **托管扩展包运行例外（ADR-0027，取代 ADR-0026/ADR-0025 对应决策，2026-09-09 生效；2026-09-12 收敛为内置模块随完整产品交付）**：Natives 是唯一的用户产品。官方托管扩展包（managed_local）作为 Natives Apps 域的**内置模块**，代码随 Natives 完整安装包构建并进入安装包，不独立发布、不独立更新、无独立 Release；其运行载荷由受控本机实现承载，业务代码与构建后 UI 嵌入载荷内；Core App Store 在产品级安装/更新时负责核验、签名校验、登记与受限 Native Host 注册（runtimeHost 由 Core 计算），安装路径严格限制在 Natives 私有数据根（`~/.natives/apps/<appId>/`），禁止写入 `/Applications`、Dock 或 LaunchServices。通用 `app.html` 每扩展包一个 owner 页面：先短连 Core 核验，再以 `runtime.connectNative` 直连 App Host（Chrome 按连接启动应用进程，每个 Port 独立进程）；应用在 127.0.0.1 动态端口提供内嵌 UI 与业务接口，app.html 用受限 sandbox iframe（`allow-scripts allow-forms`）呈现。业务代码不进入扩展执行上下文；不存在"新增/升级扩展包不重发扩展/Core"的独立交付语义——新模块只能通过新的完整 Natives 版本交付。Service Worker 仍无状态、无 Port、无轮询；Files/Model Host 边界不变；保留 Host 默认 authority，禁止新建通用 Plugin Runtime 或将内部模块暴露为独立应用。
 
 **统一套件例外（ADR-0029；2026-09-12 收敛为整包统一交付）**：产品安装器只交付主程序薄入口、主 Host、受限浏览器注册及全部内置模块文件；不存在离线预装源（Suite Seed）与 Seed Reconciliation 链路，首用只做数据初始化/迁移，无模块代码下载。Core 在产品安装/更新时通过既有验签/事务实现核验完整组合内的固定模块文件与身份；不得新增安装 DB、root 业务服务、常驻 bootstrap 或把基金业务链接进 Core。macOS `/Library/Application Support/Natives/` 仅为受限系统代码目录；活动模块载荷与用户数据仍在私有用户根。详细职责与本地隔离规则见托管应用契约 §3.2/§4.2。不执行旧 Workbench.app 启动壳，不自动安装浏览器。唯一主产品薄 Natives Launcher（打开 Chrome、定位扩展目录、简短诊断后退出）是 ADR-0020 顶层结构的精确例外。
+
+**可见主入口修订（ADR-0029，2026-09-13 用户明确决定）**：完整安装包必须提供 `/Applications/Natives.app`，正常显示名称、图标与系统应用登记。该薄 Launcher 只负责双击打开 Chrome、首次扩展安装/启用引导、固定目录定位与简短诊断，成功交接或用户关闭即退出；不使用 WebView/Tauri 重建业务界面。主 Host、固定扩展和内置模块源仍在受限系统源，活动模块与数据仍在私有用户根。上述对子模块 `.app`/系统入口的禁止不适用于这个唯一主产品入口；不强制固定 Dock，不增加常驻服务。
+
+**离线首次引导（ADR-0029，2026-09-13）**：允许 Launcher 在 Chrome 打开随包本地 HTML 指南，并在 PKG conclusion 显示同源静态摘要；指南不依赖扩展已安装，不使用 Native Bridge、业务数据、通用 URL Scheme 或本地 Web 服务。完整教学内容仅维护一套；真实连接与系统操作仍由原生入口/已验证扩展前台负责。这是安装文档，不是新的业务 Surface。
 
 #### R-T2 · 数据 authority 单一
 - **等级**：MUST

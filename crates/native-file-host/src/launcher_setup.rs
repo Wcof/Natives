@@ -2,22 +2,22 @@
 // 职责边界（用户方案）：只做 Extension 检测/准备/引导与握手验证，
 // 不承载空间/文件/AI/应用中心等业务 UI，不常驻——有界轮询后退出。
 //
-// 流程：
-//   1. 受管目录无 Extension → 从安装包布局准备（ZIP 校验→解压→current）
-//   2. 打开 Chrome 扩展管理页 + Finder 定位受管 current 目录
+// 流程（2026-09-13 可见主入口修订 / §1.1、§1.3、§3.3）：
+//   1. 打开随包离线 HTML 指南（file:，Chrome）+ 原生降级提示
+//   2. 打开 Chrome 扩展管理页 + 复制/Finder 定位固定系统源扩展目录
 //   3. 有界轮询握手标记（由 Extension↔Host 握手写入），成功即打印状态退出
+// 无 ZIP 准备链、无 current/版本目录；目录缺失 = 安装不完整（T02）。
 // 系统调用只用固定程序 + 固定参数（/usr/bin/open），不拼接外部文本。
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
-use crate::extension_provision::{
-    current_extension_dir, provision_extension, read_managed_manifest_version,
-};
+use crate::extension_provision::read_managed_manifest_version;
 
-/// 安装包布局中 Extension ZIP 的位置：`<exe>/../share/natives/ChromeExtension/`。
-pub fn bundled_chrome_extension_dir(exe_dir: &Path) -> PathBuf {
-    exe_dir.join("../share/natives/ChromeExtension")
+/// 随包固定解压扩展目录（契约 §3.2）：pkg 安装到受限系统源；
+/// 不再使用 bundle 相对布局（D06：清单生成实际路径）。
+pub fn system_chrome_extension_dir() -> PathBuf {
+    crate::app_product::default_system_source().join("ChromeExtension")
 }
 
 /// 握手标记文件路径：由 Native Messaging "version" 握手写入。
@@ -62,12 +62,37 @@ pub fn read_fresh_handshake(
 }
 
 /// 打开引导所需的外部页面/目录。拆出以便测试注入。
-fn reveal(extension_dir: &Path) -> Result<(), String> {
+/// §1.3：先打开随包离线指南（file:），再开扩展管理页并在 Finder 定位；
+/// §1.1：复制固定目录路径；Chrome 缺失时用原生对话框如实提示。
+fn reveal(extension_dir: &Path, onboarding_html: Option<&Path>) -> Result<(), String> {
+    if !Path::new("/Applications/Google Chrome.app").exists() {
+        let _ = std::process::Command::new("/usr/bin/osascript")
+            .args(["-e", "display dialog \"Natives 需要 Google Chrome。请从 google.com/chrome 安装后重新双击 Natives。\\n\\nNatives requires Google Chrome.\" buttons {\"好 / OK\"} default button 1 with title \"Natives\""])
+            .status();
+        return Err("chrome_missing: /Applications/Google Chrome.app not found".into());
+    }
+    if let Some(html) = onboarding_html {
+        let _ = std::process::Command::new("/usr/bin/open")
+            .args(["-a", "Google Chrome", &html.to_string_lossy()])
+            .status();
+    }
     // Chrome 扩展管理页：固定程序 + 固定 URL 字面量。
     let _ = std::process::Command::new("/usr/bin/open")
         .args(["-a", "Google Chrome", "chrome://extensions"])
         .status();
-    // Finder 定位受管目录（用户在 Chrome 中选择的就是这个文件夹）。
+    // 复制固定目录路径（§1.1 复制目录路径动作）。
+    let mut pbcopy = std::process::Command::new("/usr/bin/pbcopy")
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .ok();
+    if let Some(mut child) = pbcopy.as_mut() {
+        use std::io::Write;
+        if let Some(stdin) = child.stdin.as_mut() {
+            let _ = stdin.write_all(extension_dir.to_string_lossy().as_bytes());
+        }
+    }
+    drop(pbcopy);
+    // Finder 定位固定目录（用户在 Chrome 中选择的就是这个文件夹）。
     std::process::Command::new("/usr/bin/open")
         .arg(extension_dir)
         .status()
@@ -75,58 +100,24 @@ fn reveal(extension_dir: &Path) -> Result<(), String> {
     Ok(())
 }
 
-fn run(natives_root: &Path, exe_dir: &Path, poll: Duration) -> Result<SetupStatus, String> {
+fn run(
+    natives_root: &Path,
+    poll: Duration,
+    onboarding_html: Option<&Path>,
+) -> Result<SetupStatus, String> {
     let started = Instant::now();
-    let mut extension_dir = current_extension_dir(natives_root);
-    if extension_dir.is_none() {
-        // 首启：从安装包布局准备受管目录。
-        let bundle = bundled_chrome_extension_dir(exe_dir);
-        let sums = fs::read_dir(&bundle)
-            .ok()
-            .and_then(|entries| {
-                entries.flatten().find_map(|e| {
-                    let name = e.file_name().to_string_lossy().into_owned();
-                    name.starts_with("SHA256SUMS").then(|| e.path())
-                })
-            })
-            .ok_or_else(|| {
-                format!(
-                    "installer bundle missing SHA256SUMS in {}",
-                    bundle.display()
-                )
-            })?;
-        let zip = fs::read_dir(&bundle)
-            .ok()
-            .and_then(|entries| {
-                entries.flatten().find_map(|e| {
-                    let name = e.file_name().to_string_lossy().into_owned();
-                    (name.starts_with("natives-extension-") && name.ends_with(".zip"))
-                        .then(|| e.path())
-                })
-            })
-            .ok_or_else(|| {
-                format!(
-                    "installer bundle missing natives-extension-*.zip in {}",
-                    bundle.display()
-                )
-            })?;
-        let version = zip
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .and_then(|n| {
-                n.trim_start_matches("natives-extension-")
-                    .trim_end_matches(".zip")
-                    .to_string()
-                    .into()
-            });
-        let version = version.ok_or("cannot derive extension version from zip name")?;
-        let dir = provision_extension(natives_root, &zip, &sums, &version)?;
-        extension_dir = Some(dir);
+    // §3.3：扩展目录就是 pkg 安装的固定系统源目录。无 ZIP 准备链、
+    // 无 current/版本目录（D07）；目录缺失 = 安装不完整（T02）。
+    let extension_dir = system_chrome_extension_dir();
+    if !extension_dir.join("manifest.json").exists() {
+        return Err(format!(
+            "installer incomplete: system ChromeExtension missing at {}",
+            extension_dir.display()
+        ));
     }
-    let extension_dir = extension_dir.ok_or("extension dir unavailable")?;
     let extension_version = read_managed_manifest_version(&extension_dir);
     let not_before = SystemTime::now();
-    let _ = reveal(&extension_dir);
+    let _ = reveal(&extension_dir, onboarding_html);
 
     // 有界轮询握手标记（Extension 加载后首次连接即写）；超时如实报告，不常驻。
     while started.elapsed() < poll {
@@ -164,12 +155,13 @@ pub fn run_cli(args: &[String]) -> i32 {
         .and_then(|v| v.parse::<u64>().ok())
         .unwrap_or(300)
         .min(3600);
-    let exe_dir = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(Path::to_path_buf))
-        .unwrap_or_else(|| PathBuf::from("."));
+    let onboarding = args
+        .iter()
+        .position(|a| a == "--onboarding-html")
+        .and_then(|i| args.get(i + 1))
+        .map(PathBuf::from);
     let root = natives_root();
-    match run(&root, &exe_dir, Duration::from_secs(timeout)) {
+    match run(&root, Duration::from_secs(timeout), onboarding.as_deref()) {
         Ok(status) => {
             println!("{}", serde_json::to_string(&status).unwrap_or_default());
             if status.handshakeVerified {
@@ -193,19 +185,25 @@ pub const STABLE_EXTENSION_ID: &str = "gehmgcnlpdepnpmcbbdaijabcjdnbfmh";
 /// 二次启动默认模式：Extension 已就绪且握手已完成 → 直接打开 Chrome 中的
 /// Natives（chrome-extension://<stable-id>/space.html）；否则进入首次引导。
 /// 同时完成核心 Host NM manifest 注册（用户级，幂等）。
-pub fn run_launcher_default() -> i32 {
+pub fn run_launcher_default(args: &[String]) -> i32 {
     let root = natives_root();
-    let exe_dir = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(Path::to_path_buf))
-        .unwrap_or_else(|| PathBuf::from("."));
-    // 核心 Host 注册（com.natives.file_manager / com.natives.model_host）：
-    // manifest 指向安装包内二进制，allowed_origins 锁定稳定 Extension ID。
-    if let Err(err) = register_core_hosts(&root, &exe_dir) {
+    // default 模式不打开指南（未就绪时由外层包装转入 --launcher-setup，
+    // 指南在 setup 流程打开）；args 中的 --onboarding-html 由 setup 消费。
+    let _ = args;
+    // 核心 Host 注册（com.natives.file_manager / com.natives.model_host）。
+    if let Err(err) = register_core_hosts() {
         println!("{}", serde_json::json!({ "step": "error", "error": err }));
         return 1;
     }
-    let ready = current_extension_dir(&root).is_some() && handshake_marker_path(&root).exists();
+    // 就绪判定（§1.1"已就绪直接进入"）：近期真实握手标记 + 系统扩展目录
+    // 完整。挑战级会话关联（本次 challenge 绑定）是 P3 后续项，当前以
+    // 有界时限替代纯文件存在判定。
+    let ready = read_fresh_handshake(
+        &root,
+        SystemTime::now() - Duration::from_secs(30 * 24 * 3600),
+    )
+    .is_some()
+        && system_chrome_extension_dir().join("manifest.json").exists();
     if ready {
         let url = format!("chrome-extension://{STABLE_EXTENSION_ID}/space.html");
         let _ = std::process::Command::new("/usr/bin/open")
@@ -225,12 +223,20 @@ pub fn run_launcher_default() -> i32 {
     }
 }
 
-/// 写入核心 Host 的 Chrome NM manifest（用户级目录，幂等覆盖自身文件）。
-fn register_core_hosts(root: &Path, exe_dir: &Path) -> Result<(), String> {
+/// 写入核心 Host 的 Chrome NM manifest。pkg 安装场景下系统级注册已由
+/// 安装引擎写入并指向真实系统源——用户级重复注册会遮蔽系统注册
+/// （方案 §3.3），此时跳过；开发运行（无系统注册）指向系统源真实
+/// 二进制（D06：不再使用 bundle 相对猜测路径）。
+fn register_core_hosts() -> Result<(), String> {
     let dir =
         crate::app_host_manifest::chrome_manifest_dir().ok_or("cannot resolve Chrome NM dir")?;
+    if Path::new("/Library/Google/Chrome/NativeMessagingHosts/com.natives.file_manager.json")
+        .exists()
+    {
+        return Ok(());
+    }
     fs::create_dir_all(&dir).map_err(|e| format!("create NM dir: {e}"))?;
-    let core_dir = exe_dir.join("../share/natives/Runtime");
+    let core_dir = crate::app_product::default_system_source();
     let origin = format!("chrome-extension://{STABLE_EXTENSION_ID}/");
     for (host, binary) in [
         ("com.natives.file_manager", "native-file-host"),
@@ -248,7 +254,6 @@ fn register_core_hosts(root: &Path, exe_dir: &Path) -> Result<(), String> {
         )
         .map_err(|e| format!("write {host} manifest: {e}"))?;
     }
-    let _ = root; // 根目录仅用于握手标记判定，注册本身不落盘额外状态。
     Ok(())
 }
 
@@ -279,13 +284,14 @@ mod tests {
     }
 
     #[test]
-    fn bundled_layout_path_is_relative_to_exe() {
-        let p = bundled_chrome_extension_dir(Path::new("/Applications/Natives.app/Contents/MacOS"));
+    fn extension_dir_resolves_from_fixed_system_source() {
+        // §3.3：扩展目录 = pkg 安装的固定系统源目录（D06：不再 bundle 相对）。
+        let expected = crate::app_product::default_system_source()
+            .join("ChromeExtension")
+            .join("manifest.json");
         assert_eq!(
-            p,
-            PathBuf::from(
-                "/Applications/Natives.app/Contents/MacOS/../share/natives/ChromeExtension"
-            )
+            system_chrome_extension_dir().join("manifest.json"),
+            expected
         );
     }
 

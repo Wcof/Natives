@@ -65,7 +65,7 @@ fn main() -> io::Result<()> {
         // 双击 Natives 的默认入口：注册核心 Host → 已就绪则直接打开
         // Chrome 中的 Natives，否则输出 setup_required（外层 Launcher
         // 据此转入 --launcher-setup 引导）。
-        std::process::exit(launcher_setup::run_launcher_default());
+        std::process::exit(launcher_setup::run_launcher_default(&cli_args));
     }
     #[cfg(debug_assertions)]
     if std::env::args().nth(1).as_deref() == Some("--app-fixture") {

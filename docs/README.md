@@ -53,7 +53,7 @@ AiNative
 
 | 任务 | 先读 |
 |---|---|
-| Natives 单一应用与内置模块（2026-09-13 复核） | [唯一实施方案](development/app-center-fund-implementation-plan.md)（§2 当前缺口/检查证据、§3 固定模块与产品配置、§4 数据清理/交互、§5 P0–P6、§6 整包发布、§8 T01–T24、§10 Agent 指令）；当前代码尚不符合预期，仍有 Catalog/预装/分块安装，清数据复用卸载，整包与发布未验收。沿用已采纳内置模块决定，P0 清理 [ADR-0027](adr/0027-managed-apps-independent-delivery.md)、[ADR-0029](adr/0029-unified-suite-preinstalled-apps.md)、[现有契约](contracts/managed-app-contract.md) 的冲突正文；本轮只交付审计与方案 |
+| Natives 单一应用与内置模块（2026-09-13 离线引导补充） | [唯一实施方案](development/app-center-fund-implementation-plan.md)（§1.1 安装后可见/双击引导、§1.2 Chrome 自动化边界、§1.3 随包离线 HTML 指南、§2 审计证据、§3–§5 固定模块与 P0–P6、§6 整包发布、§8 T01–T24、§10 Agent 指令）；同一 PKG 必须提供 `/Applications/Natives.app` 和独立于扩展的 `Contents/Resources/onboarding/index.html`，安装结束页显示同源摘要，双击自动打开 Chrome 并引导加载随包扩展，基金仍整包内置。[ADR-0029](adr/0029-unified-suite-preinstalled-apps.md)、相关 Standards/AGENTS 与 [契约](contracts/managed-app-contract.md) 已记录主入口和离线引导约束；本轮仅修改目标文档，代码和整包实操未验收 |
 | 任何编码 | `standards/README.md` + 相关 1–3 篇 |
 | Apps Framework / 应用中心 / App 打包分发 | **ADR-0027**（取代 ADR-0026/ADR-0025 Apps 目标决策）+ `standards/technical/06-sub-apps.md` + [托管应用契约 v1](contracts/managed-app-contract.md) + `standards/technical/02` (R-S14) + `standards/technical/04` (R-P13) + `standards/technical/03` (R-D1) |
 | 全局产品/IA/Legacy | ADR-0020 + `standards/product/01-positioning.md` |

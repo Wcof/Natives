@@ -18,11 +18,13 @@ set -eu
 # External Extensions store entries, or user data/activation.
 usage() {
   echo "usage: $0 --mode local|production --host PATH --extension-id ID --extension-dir PATH \
---modules-dir PATH --product-manifest PATH [--model-host PATH] [--launcher PATH] \
+--modules-dir PATH --product-manifest PATH --app-exec PATH --app-icon PATH \
+--onboarding-dir PATH --conclusion-dir PATH [--model-host PATH] \
 [--version V] [--output PATH] [--pkg-sign ID] [--product-sign ID]" >&2
   exit 2
 }
-mode= host= extension_id= extension_dir= modules_dir= product_manifest= model_host= launcher=
+mode= host= extension_id= extension_dir= modules_dir= product_manifest=
+app_exec= app_icon= onboarding_dir= conclusion_dir= model_host= launcher=
 version=1.0.0 output= pkg_sign= product_sign=
 while [ "$#" -gt 0 ]; do
   case "$1" in
@@ -34,6 +36,10 @@ while [ "$#" -gt 0 ]; do
     --extension-dir) extension_dir=${2:-}; shift 2;;
     --modules-dir) modules_dir=${2:-}; shift 2;;
     --product-manifest) product_manifest=${2:-}; shift 2;;
+    --app-exec) app_exec=${2:-}; shift 2;;
+    --app-icon) app_icon=${2:-}; shift 2;;
+    --onboarding-dir) onboarding_dir=${2:-}; shift 2;;
+    --conclusion-dir) conclusion_dir=${2:-}; shift 2;;
     --version) version=${2:-}; shift 2;;
     --output) output=${2:-}; shift 2;;
     --pkg-sign) pkg_sign=${2:-}; shift 2;;
@@ -51,6 +57,10 @@ esac
 [ -n "$modules_dir" ] && [ -d "$modules_dir" ] || { echo 'error: --modules-dir must contain the fixed module files' >&2; exit 1; }
 [ -n "$product_manifest" ] && [ -f "$product_manifest" ] || { echo 'error: --product-manifest must be the signed product composition manifest' >&2; exit 1; }
 [ -f "$product_manifest.sig" ] || { echo 'error: product manifest detached signature (.sig) is required' >&2; exit 1; }
+[ -n "$app_exec" ] && [ -x "$app_exec" ] || { echo 'error: --app-exec must be the compiled main-entry wrapper' >&2; exit 1; }
+[ -f "$app_icon" ] || { echo 'error: --app-icon (.icns) is required for the visible main entry' >&2; exit 1; }
+[ -d "$onboarding_dir" ] && [ -f "$onboarding_dir/index.html" ] || { echo 'error: --onboarding-dir with index.html is required (offline guide)' >&2; exit 1; }
+[ -f "$conclusion_dir/conclusion-zh.txt" ] && [ -f "$conclusion_dir/conclusion-en.txt" ] || { echo 'error: --conclusion-dir with conclusion-{zh,en}.txt is required' >&2; exit 1; }
 echo "$extension_id" | grep -Eq '^[a-p]{32}$' || { echo 'error: --extension-id must be the explicit 32-character Chrome ID' >&2; exit 1; }
 echo "$version" | grep -Eq '^[0-9]+(\.[0-9]+){1,3}$' || { echo 'error: invalid --version' >&2; exit 1; }
 command -v pkgbuild >/dev/null 2>&1 || { echo 'error: macOS pkgbuild is required' >&2; exit 1; }
@@ -70,6 +80,27 @@ mkdir -p "$source_root" "$payload/Library/Google/Chrome/NativeMessagingHosts" \
   "$payload/Library/Application Support/Chromium/NativeMessagingHosts"
 
 install -m 755 "$host" "$source_root/native-file-host"
+# 可见主入口 /Applications/Natives.app（用户决定 2026-09-13，ADR-0029 修订）：
+# 正常 bundle、Info.plist、图标与引导资源；不设 Hidden/LSUIElement。
+app_root="$payload/Applications/Natives.app"
+mkdir -p "$app_root/Contents/MacOS" "$app_root/Contents/Resources/onboarding"
+install -m 755 "$app_exec" "$app_root/Contents/MacOS/Natives"
+install -m 644 "$app_icon" "$app_root/Contents/Resources/natives.icns"
+cp -R "$onboarding_dir/" "$app_root/Contents/Resources/onboarding/"
+printf '%s\n' "<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">
+<plist version=\"1.0\"><dict>
+  <key>CFBundleName</key><string>Natives</string>
+  <key>CFBundleDisplayName</key><string>Natives</string>
+  <key>CFBundleIdentifier</key><string>com.natives.app</string>
+  <key>CFBundleVersion</key><string>$version</string>
+  <key>CFBundleShortVersionString</key><string>$version</string>
+  <key>CFBundleExecutable</key><string>Natives</string>
+  <key>CFBundleIconFile</key><string>natives</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>LSMinimumSystemVersion</key><string>11.0</string>
+  <key>NSHighResolutionCapable</key><true/>
+</dict></plist>" > "$app_root/Contents/Info.plist"
 [ -z "$launcher" ] || install -m 755 "$launcher" "$source_root/natives-launcher"
 if [ -n "$model_host" ] && [ -x "$model_host" ]; then
   install -m 755 "$model_host" "$source_root/model-host"
@@ -96,16 +127,37 @@ for browser in "$payload/Library/Google/Chrome/NativeMessagingHosts" \
   fi
 done
 
-# Hard prohibitions (ADR-0029 §2 / plan §3.3): no .app, no /Applications.
+# 精确白名单（方案 §5 P0）：/Applications 下唯一允许的条目是主产品
+# Natives.app；任何其他 .app/可执行入口/模块应用仍然禁止。
 if [ -d "$payload/Applications" ]; then
-  echo "error: installer payload must not contain /Applications entries" >&2
-  exit 1
+  extra=$(find "$payload/Applications" -mindepth 1 -maxdepth 1 ! -name 'Natives.app')
+  [ -z "$extra" ] || { echo "error: unexpected /Applications entries:" >&2; echo "$extra" >&2; exit 1; }
+  nested=$(find "$app_root" -name '*.app' -mindepth 1)
+  [ -z "$nested" ] || { echo "error: nested .app inside main bundle" >&2; exit 1; }
 fi
 component=$tmp/Natives-component.pkg
 set -- --root "$payload" --identifier "com.natives.$source_name" --version "$version" --install-location /
 [ -z "$pkg_sign" ] || set -- "$@" --sign "$pkg_sign"
 pkgbuild "$@" "$component"
-set -- --package "$component"
+# Distribution XML：conclusion 静态摘要与随包 onboarding/index.html 由
+# 同一内容源生成（§1.3），文本经 xml 转义。
+escape_xml() { sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' "$1"; }
+conclusion_zh=$(escape_xml "$conclusion_dir/conclusion-zh.txt")
+conclusion_en=$(escape_xml "$conclusion_dir/conclusion-en.txt")
+cat > "$tmp/distribution.xml" <<EOF
+<?xml version="1.0" encoding="utf-8"?>
+<installer-gui-script minSpecVersion="1">
+    <title>Natives</title>
+    <options customize="never" require-scripts="false"/>
+    <domains enable_anywhere="true" enable_currentUserHome="false" enable_localSystem="true"/>
+    <choices-outline><line choice="natives"/></choices-outline>
+    <choice id="natives" visible="false"><pkg-ref id="com.natives.$source_name"/></choice>
+    <pkg-ref id="com.natives.$source_name" version="$version" onConclusion="none">Natives-component.pkg</pkg-ref>
+    <conclusion lang="zh_CN">$conclusion_zh</conclusion>
+    <conclusion lang="en">$conclusion_en</conclusion>
+</installer-gui-script>
+EOF
+set -- --distribution "$tmp/distribution.xml" --package-path "$tmp"
 [ -z "$product_sign" ] || set -- "$@" --sign "$product_sign"
 mkdir -p "$(dirname "$output")"
 productbuild "$@" "$output"

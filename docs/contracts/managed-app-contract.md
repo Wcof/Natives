@@ -125,7 +125,11 @@ catalogEvidenceSha256 指向标准 apps/.catalog-evidence/<sha256>.json 与同�
 
 一个完整产品包含 Core Files Host、现有 Model Host、薄打开入口、稳定的扩展身份与安装说明、签名产品组合清单、固定解压扩展目录及全部固定内置模块文件（2026-09-12 收敛：无预装清单、无逐应用包）。首个完整候选必须包含真实 fund；独立样例仅作为覆盖共享底层规则的低层测试 fixture，必须标为测试，不宣称基金可用。
 
-macOS 正式系统源为 `/Library/Application Support/Natives/`，本地候选为 `/Library/Application Support/Natives-Local/`。目录及父级由系统安装器保护，root-owned、普通用户不可写；只存薄打开入口、主 Host、固定扩展目录 `ChromeExtension/`（含 manifest.json 的完整解压目录，用户按安装说明在 Chrome 中加载该目录）与全部固定内置模块文件；不存离线种子，不存用户数据库、activation 或业务数据。活动应用载荷仍在每用户私有根，Native Messaging 注册仅在浏览器指定位置。不得创建 Workbench.app、独立 `.app`、Dock 入口、LaunchServices 或其他桌面产品。Windows/Linux 的套件位置及权限必须在对应平台实际验收后声明支持，不用 macOS 结果代替。
+macOS 正式系统源为 `/Library/Application Support/Natives/`，本地候选为 `/Library/Application Support/Natives-Local/`。目录及父级由系统安装器保护，root-owned、普通用户不可写；存主 Host、固定扩展目录 `ChromeExtension/`（含 manifest.json）与全部固定内置模块文件；不存离线种子、用户数据库、activation 或业务数据。活动模块载荷仍在每用户私有根，Native Messaging 注册仅在浏览器指定位置。
+
+**可见主产品入口（2026-09-13，ADR-0029）**：同一安装器必须安装 `/Applications/Natives.app`，具备 Info.plist、正常 GUI 可执行入口、图标和系统应用登记；用户从“应用程序”双击即可打开 Chrome。未连接扩展时显示薄引导窗口，定位上述随包目录、提供浏览器所需操作；已连接则通过本次真实前台握手交接。不得标为隐藏/纯后台应用，不强制固定 Dock，不另建业务桌面界面；关闭引导或成功交接即结束 Launcher。模块仍不得创建独立 `.app`/系统图标。开发候选使用 `/Applications/Natives Local.app`、独立 bundle ID/名称/图标标识，并继续使用 Natives-Local 系统源及私有根，不覆盖正式入口。Windows/Linux 按对应平台实操声明支持。
+
+**离线引导资源（2026-09-13）**：完整指南位于主产品 `Contents/Resources/onboarding/index.html`，CSS、经典脚本、图片和中英文内容全部本地随包，由 launcher.files 纳入同版本摘要/签名。PKG Distribution 的 conclusion 使用同一内容来源生成静态摘要，不依赖脚本或外网；首次双击则由 Launcher 明确在 Chrome 打开完整指南。HTML 只负责展示/语言切换/可降级复制，不使用扩展 API、Native Bridge、file 扫描、localhost HTTP、任意命令或新 URL Scheme；不能用查询参数、手工勾选或按钮点击证明安装/连接。实际状态由本次验证握手和产品配置确定。主/开发版本的路径、名称和扩展身份从各自完整产品元数据构建，不在浏览器猜测。详细交互与验收见唯一实施方案 §1.3。
 
 `bundle-manifest.json`（签名产品组合清单）≤256 KiB，旁置 Ed25519 detached signature；沿用既有信任根与签名工具，不创建第二套密钥协议（2026-09-12 收敛：清单只描述完整产品内固定文件与固定模块，无 Catalog 条目、无模块下载 URL）。最小字段为：
 
@@ -134,10 +138,11 @@ macOS 正式系统源为 `/Library/Application Support/Natives/`，本地候选�
 | bundleSchemaVersion / suiteVersion | 1 / 套件 SemVer；与各应用版本独立 |
 | distribution / platform / arch | production 或 local-development；精确匹配当前构建身份与机器 |
 | extensionId / minExtensionVersion | 真实、稳定、可核验的扩展身份与最低版本；不使用假商店 ID |
+| launcher | bundleId、version、files（relativePath/size/sha256）；只描述固定主产品 `.app` 内的入口和资源，纳入同一组合签名与平台验证 |
 | hosts | role（file/model）、version、relativePath、payloadSha256；主 Host 校验适用平台身份 |
 | modules | appId、version、entryRoute、多语言名称/说明、artifactPath、payloadSha256；与包内固定模块文件精确匹配，无独立安装记录或下载 URL |
 
-所有相对路径限制在该受信系统源目录内，拒绝绝对路径、..、符号链接/重解析点逃逸、重复 ID 和不受支持的字段；不允许命令或安装脚本。清单只描述不可变交付资产，不记录 enabled/running/用户数据，不是第二 App Registry。签名公钥可分发，私钥禁止随包；本地开发系统源的来源摘要还须满足 §4.2。
+hosts/modules/扩展的相对路径限制在受信系统源内；launcher.files 的相对路径只限制在本节固定主产品 `.app` 根内。根位置由生产/隔离开发构建策略固定，不能由页面或包参数任意改写。各自拒绝绝对路径、..、符号链接/重解析点逃逸、重复 ID 和未知字段；不允许命令或安装脚本。清单只描述不可变交付资产，不记录 enabled/running/用户数据，不是第二 App Registry。签名公钥可分发，私钥禁止随包；本地开发系统源的来源摘要还须满足 §4.2。
 
 系统安装器只安装文件及必要主 Host 注册，不能猜测 `$SUDO_USER` 的家目录并写其业务数据/activation，也不运行子应用或迁移。首次配置在扩展的现有产品配置页完成：经过真实扩展 origin 校验的前台主 Host 连接，在当前 OS 用户权限下执行一次幂等「完成 Natives 配置」——校验当前签名组合清单，为全部固定模块准备私有活动载荷、浏览器注册与 activation，绑定同一 `productGeneration`；全部必需模块与注册验证成功后才标记本用户产品就绪，完成前不提供虚假「打开」，应用中心不触发配置、不显示「安装基金」。普通安装包不能替用户绕过浏览器扩展安装/启用政策，这一步在产品安装说明中明确一次性完成。
 

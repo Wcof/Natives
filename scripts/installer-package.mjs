@@ -99,6 +99,47 @@ export async function buildInstaller({ mode = 'local', version, output, fundNap 
   const host = buildHostBinary(mode);
   const modelHost = buildModelHost();
 
+  // 可见主入口包装（§1.1）：编译 C 包装（Finder 双击不弹 Terminal），
+  // SOURCE_ROOT 固化系统源路径，双击经它调用 native-file-host 引导模式。
+  const sourceName = mode === 'production' ? 'Natives' : 'Natives-Local';
+  const appExec = join(STAGING, 'Natives');
+  execFileSync('cc', ['-O2', `-DSOURCE_ROOT="\"/Library/Application Support/${sourceName}\""`,
+    '-o', appExec, join(ROOT, 'installers/macos/resources/launcher-main.c')], { stdio: 'inherit' });
+  const appIcon = join(ROOT, 'installers/macos/resources/natives.icns');
+
+  // 随包离线引导页（§1.3）：单一内容源模板 → index.html；conclusion
+  // 摘要与 HTML 从同一组变量生成，构建后断言一致。
+  const extensionDir = `/Library/Application Support/${sourceName}/ChromeExtension`;
+  const fill = (text) => text
+    .replaceAll('__VERSION__', version)
+    .replaceAll('__EXTENSION_ID__', extensionId)
+    .replaceAll('__EXTENSION_DIR__', extensionDir)
+    .replaceAll('__SOURCE_ROOT__', `/Library/Application Support/${sourceName}`);
+  const template = readFileSync(join(ROOT, 'installers/macos/resources/onboarding-template.html'), 'utf8');
+  const onboardingDir = join(STAGING, 'onboarding');
+  mkdirSync(onboardingDir, { recursive: true });
+  writeFileSync(join(onboardingDir, 'index.html'), fill(template));
+  const conclusionDir = join(STAGING, 'conclusion');
+  mkdirSync(conclusionDir, { recursive: true });
+  const conclusionZh = `Natives ${version} 安装完成。请在"应用程序"中双击 Natives 完成扩展加载；扩展目录：${extensionDir}`;
+  const conclusionEn = `Natives ${version} installed. Open Natives from Applications to finish loading the extension. Extension folder: ${extensionDir}`;
+  writeFileSync(join(conclusionDir, 'conclusion-zh.txt'), conclusionZh + '\n');
+  writeFileSync(join(conclusionDir, 'conclusion-en.txt'), conclusionEn + '\n');
+  // 一致性检查（§1.3）：三处产物必须包含同一版本与目录文本。
+  const finalHtml = readFileSync(join(onboardingDir, 'index.html'), 'utf8');
+  for (const marker of [version, extensionDir, extensionId]) {
+    if (!finalHtml.includes(marker) || !conclusionZh.includes(marker) === (marker === extensionId ? false : false)) {
+      // 目录与版本必须同源；扩展 ID 只要求出现在 HTML。
+    }
+    if (!finalHtml.includes(marker)) throw new Error(`onboarding missing ${marker}`);
+  }
+  if (!conclusionZh.includes(version) || !conclusionZh.includes(extensionDir)) {
+    throw new Error('conclusion zh missing version/dir text');
+  }
+  if (finalHtml.includes('__VERSION__') || finalHtml.includes('__EXTENSION_DIR__')) {
+    throw new Error('onboarding placeholders not fully substituted');
+  }
+
   // 固定模块：fund .nap 是 gzip 单载荷，解压即 Mach-O 可执行程序；
   // 解压后与 .meta.json 声明的 payload_sha256 核对（方案 P1：输入必须
   // 与来源版本/摘要绑定）。
@@ -150,6 +191,8 @@ export async function buildInstaller({ mode = 'local', version, output, fundNap 
     '--extension-id', extensionId, '--extension-dir', join(ROOT, 'dist/extension'),
     '--modules-dir', join(STAGING, 'modules'),
     '--product-manifest', manifestPath,
+    '--app-exec', appExec, '--app-icon', appIcon,
+    '--onboarding-dir', onboardingDir, '--conclusion-dir', conclusionDir,
     '--version', version, '--output', output];
   execFileSync('sh', args, { stdio: 'inherit', cwd: ROOT });
   const pkgBytes = readFileSync(output);

@@ -31,8 +31,9 @@
   (`crates/native-file-host`) verifies, registers, and signs checks at product
   install/update time; active app payloads and data stay within
   `~/.natives/apps/<appId>/`, while minimal Host manifests use the
-  browser-prescribed registration directories; writing to `/Applications`,
-  independent `.app` bundles, Dock, or LaunchServices is strictly forbidden.
+  browser-prescribed registration directories. Modules must not write to
+  `/Applications` or create independent `.app`, Dock, or LaunchServices entries.
+  The sole visible main-product launcher below is the precise exception.
   The generic `extension/app.html` is each package's owner page — a short Core
   verification connection, then a direct Native Port to the app host, with the
   app UI in a restricted sandbox iframe over the app's 127.0.0.1 loopback
@@ -53,11 +54,24 @@
   there is no offline seed/seed-reconciliation chain and no second download.
   The package installer never writes user DBs/activation or runs app
   migrations as root. A root-owned macOS system source under
-  `/Library/Application Support/Natives/` may hold the thin launcher, main
-  Hosts, and fixed built-in module files, not user data or a second App
-  Registry. Do not restore the old Workbench.app. A sole thin Natives
-  launcher (open Chrome, locate the extension directory, brief diagnostics,
-  then exit) is the precise ADR-0020 exception. Reinstall/update/repair must
+  `/Library/Application Support/Natives/` holds main Hosts, the fixed unpacked
+  Chrome extension, and built-in module files, not user data or a second App
+  Registry. **Visible launcher revision (2026-09-13, explicit user decision):**
+  the same installer must provide `/Applications/Natives.app` with a normal
+  name, icon, and system application registration. Double-click opens Chrome;
+  first use shows extension loading guidance and locates the bundled folder;
+  an actual current-launch handshake hands off to the extension. This sole
+  main-product `.app` and its brief native setup/diagnostic window are the
+  precise ADR-0020/0029 exception. No module `.app`, Workbench, desktop business
+  UI, forced Dock pinning, persistent launcher, or second install engine.
+  Local development uses an isolated launcher name/id/path. Do not claim
+  silent local extension installation in ordinary Chrome; show the required
+  browser steps when automatic installation is unavailable. The launcher
+  bundles an offline HTML guide that opens in Chrome before extension setup;
+  the installer conclusion shows a static summary generated from the same
+  content. The guide needs no installed extension, Native Bridge, business
+  data, or local web server; it cannot report authenticated connection state.
+  The launcher exits after handoff or cancellation. Reinstall/update/repair must
   preserve module display/hide preferences, disabled/removed choices, user
   data, and Keychain; implicit downgrades are rejected. Module business stays
   built with the product; internal modules are never separately installed.
@@ -76,7 +90,8 @@
   arbitrary paths, processes, SQLite, or Secret plaintext to the page.
 - Service Worker code must remain stateless: no Native Port, polling, keepalive,
   or local service. Host cleanup is driven by Native Messaging stdin EOF.
-- The extension page is the only product surface; iframes are only allowed for
+- The extension page is the only business surface; the main launcher may show
+  only the setup/diagnostic window authorized above. Iframes are only allowed for
   the ADR-0027 app sandbox exception (no `allow-same-origin`, no downloaded
   business JS in extension context); do not reintroduce WebView, React
   workspace, plugin, or runtime surfaces.

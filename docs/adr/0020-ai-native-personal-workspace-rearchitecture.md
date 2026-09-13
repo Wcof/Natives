@@ -5,6 +5,7 @@
 - **Apps 补充**：[ADR-0027](0027-managed-apps-independent-delivery.md) 与 [ADR-0029](0029-unified-suite-preinstalled-apps.md) 精确限定官方子应用运行、统一套件预装及开发/发布分级验收。Natives 仍为唯一产品，业务不并入 Core；旧 Tauri 默认描述不得要求恢复已删除产品路径。
 - **2026-09-12 路线收敛（取代上述 Apps 补充中与单一产品整包路线冲突的表述）**：基金等均为 Natives 内置模块，随完整安装包一起安装、更新和修复；取消模块独立下载/安装/更新/卸载、在线 Catalog 驱动新 appId 与 Fund 独立 nap 发布；更新统一为"更新 Natives"。§4 官方托管应用例外中的"独立原生可执行程序交付"改读为"随完整产品交付的固定内置模块代码"；系统目录例外扩展为已签名完整产品内的固定模块文件（仍不存用户业务数据）。**允许唯一主产品薄 Natives Launcher**（只负责打开 Chrome、定位扩展目录、简短可见诊断，结束即退出）作为本 ADR 顶层结构的精确例外；仍禁止 Workbench.app、Fund.app 或业务桌面界面。详见[实施方案 §5 P0](../development/app-center-fund-implementation-plan.md)。
 - **日期**: 2026-08-19
+- **2026-09-13 可见主程序补充**：[ADR-0029](0029-unified-suite-preinstalled-apps.md) 将唯一薄 Launcher 明确为 `/Applications/Natives.app`，有正常名称、图标和系统应用登记；双击打开 Chrome，并允许首次扩展引导/简短诊断窗口。此为顶层可见入口的精确例外，不能据“扩展唯一 Surface”隐藏主程序；业务仍全部在扩展中，不恢复 Workbench/Fund.app、WebView 业务面或常驻 Runtime。
 - **决策者**: 产品方（用户）
 - **取代**: ADR-0012 的产品面/双轨与 Workshop 优先级、ADR-0015 的 Jobs 生产目标、ADR-0016 的 Capability Hub 产品目标、ADR-0019 的 Daemon Provider 执行归属
 - **保留**: ADR-0001/0002/0006 的现存 iframe 安全防线，直到对应旧运行时被完整删除

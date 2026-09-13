@@ -1,3 +1,5 @@
+// 历史迁移保留（方案 §5 P6）：ZIP/current 准备链已退出生产路线；
+// 以下函数仅用于旧安装记录的受控迁移收尾与测试 fixture。
 // Extension 受管目录准备（生产交付链，方案 §Extension ZIP）：
 // natives-extension-{version}.zip → SHA-256 校验（对 SHA256SUMS）→
 // 解压到 extensions/chrome/{version}/ → 原子切换 current 指针。

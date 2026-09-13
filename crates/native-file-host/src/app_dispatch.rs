@@ -189,39 +189,10 @@ pub(crate) fn app_dispatch(
     }
 }
 
-fn optional_u64(params: &Value, key: &str) -> Result<Option<u64>, String> {
-    match params.get(key) {
-        None => Ok(None),
-        Some(value) => value
-            .as_u64()
-            .map(Some)
-            .ok_or_else(|| format!("{key} must be a non-negative integer")),
-    }
-}
-
-fn required_u64(params: &Value, key: &str) -> Result<u64, String> {
-    optional_u64(params, key)?.ok_or_else(|| format!("{key} is required"))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::app_store::types::AppError;
-
-    #[test]
-    fn resource_ranges_reject_negative_fractional_and_string_values() {
-        for value in [
-            serde_json::json!(-1),
-            serde_json::json!(1.5),
-            serde_json::json!("1"),
-        ] {
-            assert!(optional_u64(&serde_json::json!({ "offset": value }), "offset").is_err());
-        }
-        assert_eq!(
-            optional_u64(&serde_json::json!({ "offset": 0 }), "offset").unwrap(),
-            Some(0)
-        );
-    }
 
     #[test]
     fn handshake_cannot_grant_an_origin_not_supplied_by_chrome() {
