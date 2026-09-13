@@ -40,6 +40,31 @@ static int run_host_sync(const char **argv) {
     return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 }
 
+// D02/D05 修复：chrome:// scheme 在 Chrome 首次运行前未注册到
+// LaunchServices，且首启流程会吞掉 URL。改用系统标准通道：
+// 1) 裸启动 Chrome（触发首次运行）；2) AppleScript "open location"
+// 交付 URL，带界重试（Chrome 就绪后成功）。仅用于投递，不静默安装。
+static void launchChromeBare(void) {
+    [[NSWorkspace sharedWorkspace] launchApplication:@"Google Chrome"];
+}
+
+static BOOL openChromeURLWithRetry(NSString *url, int attempts) {
+    for (int i = 0; i < attempts; i++) {
+        NSTask *task = [[NSTask alloc] init];
+        task.launchPath = @"/usr/bin/osascript";
+        task.arguments = @[@"-e", [NSString stringWithFormat:
+            @"tell application \"Google Chrome\" to open location \"%@\" with timeout 5", url]];
+        task.standardOutput = [NSPipe pipe];
+        task.standardError = [NSPipe pipe];
+        NSError *error = nil;
+        if (![task launchAndReturnError:&error]) { [NSThread sleepForTimeInterval:1.0]; continue; }
+        [task waitUntilExit];
+        if (task.terminationStatus == 0) return YES;
+        [NSThread sleepForTimeInterval:1.0];
+    }
+    return NO;
+}
+
 static BOOL chromeInstalled(void) {
     return access("/Applications/Google Chrome.app", F_OK) == 0
         || access([NSHomeDirectory() stringByAppendingPathComponent:@"Applications/Google Chrome.app"].fileSystemRepresentation, F_OK) == 0;
@@ -102,9 +127,11 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    // §1.3 状态职责：打开动作归原生 Launcher；Host 只做有界检测（--no-open）。
+    // §1.3/§1.4：裸启动 Chrome，再投递离线指南与扩展管理页（带重试）。
+    launchChromeBare();
+    [NSThread sleepForTimeInterval:1.0];
     openInChrome(ONBOARDING_PATH);  // file: 离线指南（§1.3）
-    openInChrome(@"chrome://extensions");
+    BOOL extensionsDelivered = openChromeURLWithRetry(@"chrome://extensions", 4);
 
     NSTimeInterval totalWaited = 0;
     while (YES) {
@@ -115,7 +142,9 @@ int main(int argc, char **argv) {
         BOOL chromeMissing = !chromeInstalled();
         alert.informativeText = chromeMissing
             ? @"未找到 Google Chrome。点击\"获取 Chrome\"用默认浏览器打开官方下载页；安装后点击\"重新检测\"。\n\nGoogle Chrome not found. Get Chrome opens the official page in your default browser."
-            : @"请在 Chrome 中开启开发者模式并\"加载已解压的扩展程序\"（目录已在访达中定位）。加载后本窗口会自动确认；总等待最长 10 分钟，之后可重新检测。\n\nFinish Developer Mode and Load unpacked in Chrome. This window confirms automatically; detection stops after 10 minutes and can be re-run.";
+            : extensionsDelivered
+                ? @"请在 Chrome 中开启开发者模式并\"加载已解压的扩展程序\"（目录已在访达中定位）。加载后本窗口会自动确认；总等待最长 10 分钟，之后可重新检测。\n\nFinish Developer Mode and Load unpacked in Chrome."
+                : @"扩展管理页未能自动打开：请在 Chrome 地址栏输入 chrome://extensions。其余步骤不变。\n\nThe extensions page did not open automatically; type chrome://extensions in Chrome's address bar.";
         if (chromeMissing) {
             [alert addButtonWithTitle:@"获取 Chrome"];
         } else {
@@ -148,8 +177,8 @@ int main(int argc, char **argv) {
         }
         BOOL verified = activeTask && activeTask.terminationStatus == 0 && !chromeMissing;
         if (verified) {
-            openInChrome([NSString stringWithFormat:
-                @"chrome-extension://%s/space.html", EXTENSION_ID]);
+            openChromeURLWithRetry(
+                [NSString stringWithFormat:@"chrome-extension://%s/space.html", EXTENSION_ID], 3);
             return 0; // 成功交接：Launcher 退出，应用图标保留。
         }
         // 结果窗：超时或未连接，用户选择下一步；取消结束本次引导。
@@ -170,7 +199,7 @@ int main(int argc, char **argv) {
             continue; // 重新检测：开启新一轮有界等待。
         }
         if (response == first + 1) {
-            openInChrome(@"chrome://extensions");
+            openChromeURLWithRetry(@"chrome://extensions", 3);
         } else if (response == first + 2) {
             [[NSWorkspace sharedWorkspace] openURL:[NSURL fileURLWithPath:extensionDir]
                                            options:NSWorkspaceLaunchWithoutActivation
