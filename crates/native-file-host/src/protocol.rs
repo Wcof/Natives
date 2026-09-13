@@ -169,6 +169,9 @@ pub(crate) fn validate_request(request: &Request) -> Result<(), String> {
             | "apps:rollback"
             | "apps:set_enabled"
             | "apps:set_sidebar"
+            | "apps:product_status"
+            | "apps:product_configure"
+            | "apps:open_onboarding"
     ) {
         return Err("unsupported method".into());
     }
@@ -242,11 +245,24 @@ pub(crate) fn validate_request(request: &Request) -> Result<(), String> {
         "workspace_reset" => &["workspaceId", "template", "expectedRevision"],
         "settings_get" => &["keys"],
         "settings_set" => &["entries"],
-        "apps:list" | "apps:health" | "apps:suite_prepare" => &[],
+        "apps:list"
+        | "apps:health"
+        | "apps:suite_prepare"
+        | "apps:product_status"
+        | "apps:product_configure"
+        | "apps:open_onboarding" => &[],
         "apps:handshake" => &["origin"],
         "apps:get" | "apps:recover" | "apps:rollback" => &["appId"],
         "apps:uninstall" => &["appId", "purgeData", "confirmPurge"],
-        "apps:clear_data" => &["appId", "confirmPurge"],
+        "apps:clear_data" => &[
+            "appId",
+            "requestId",
+            "confirmPurge",
+            "deleteImports",
+            "deleteCache",
+            "deleteLogs",
+            "deleteCredentials",
+        ],
         "apps:set_enabled" => &["appId", "enabled"],
         "apps:set_sidebar" => &["appId", "show", "order"],
         "apps:install_begin" => &["appId", "catalogBase64", "signature"],

@@ -340,6 +340,7 @@ pub fn run_launcher_default(args: &[String]) -> i32 {
     // D03 + 用户反馈：入口三态——系统扩展缺失走完整引导；产品已配置
     // （配置经扩展前台完成 = 扩展已装）直接进产品；扩展已装未配置进
     // 配置入口。实时连接由产品页自身握手核验，不依赖旧标记。
+    let no_open = args.iter().any(|a| a == "--no-open");
     let system_extension_ok = system_chrome_extension_dir().join("manifest.json").exists();
     let configured = AppStore::open(&crate::workspace_store::default_db_path())
         .and_then(|store| store.product_status())
@@ -348,24 +349,28 @@ pub fn run_launcher_default(args: &[String]) -> i32 {
     match decide_entry(system_extension_ok, configured, &root) {
         Entry::Product => {
             let url = format!("chrome-extension://{STABLE_EXTENSION_ID}/space.html");
-            let _ = std::process::Command::new("/usr/bin/open")
-                .args(["-a", "Google Chrome", &url])
-                .status();
+            if !no_open {
+                let _ = std::process::Command::new("/usr/bin/open")
+                    .args(["-a", "Google Chrome", &url])
+                    .status();
+            }
             println!(
                 "{}",
-                serde_json::json!({ "step": "opened_natives", "url": url })
+                serde_json::json!({ "step": if no_open { "ready" } else { "opened_natives" }, "url": url })
             );
             0
         }
         Entry::Config => {
             // §1.4 加载后自动进入配置入口；实时连接由页面握手核验。
             let url = format!("chrome-extension://{STABLE_EXTENSION_ID}/apps.html");
-            let _ = std::process::Command::new("/usr/bin/open")
-                .args(["-a", "Google Chrome", &url])
-                .status();
+            if !no_open {
+                let _ = std::process::Command::new("/usr/bin/open")
+                    .args(["-a", "Google Chrome", &url])
+                    .status();
+            }
             println!(
                 "{}",
-                serde_json::json!({ "step": "opened_config", "url": url })
+                serde_json::json!({ "step": if no_open { "ready" } else { "opened_config" }, "url": url })
             );
             0
         }
