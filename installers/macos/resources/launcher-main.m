@@ -132,6 +132,10 @@ int main(int argc, char **argv) {
     [NSThread sleepForTimeInterval:1.0];
     openInChrome(ONBOARDING_PATH);  // file: 离线指南（§1.3）
     BOOL extensionsDelivered = openChromeURLWithRetry(@"chrome://extensions", 4);
+    // 别名/定位逻辑单一来源在 Host：定位 Downloads 里的快捷方式（§1.4）。
+    const char *reveal_argv[3] = {[hostPath fileSystemRepresentation], "--reveal-extension-dir", NULL};
+    int reveal_code = run_host_sync(reveal_argv);
+    (void)reveal_code;
 
     NSTimeInterval totalWaited = 0;
     while (YES) {

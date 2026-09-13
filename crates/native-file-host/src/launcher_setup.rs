@@ -180,6 +180,10 @@ fn run(
             extension_dir.display()
         ));
     }
+    // 用户可见快捷方式独立于打开动作创建（--no-open 也要准备）：
+    // 用户反馈 2026-09-13——Downloads 里的 Natives-Extension 必须始终存在。
+    let home = dirs::home_dir().ok_or("home dir unavailable")?;
+    let _ = ensure_downloads_alias(&extension_dir, &home);
     let extension_version = read_managed_manifest_version(&extension_dir);
     let not_before = SystemTime::now();
     if !no_open {
@@ -304,6 +308,12 @@ pub fn run_launcher_default(args: &[String]) -> i32 {
     // 有界时限替代纯文件存在判定。
     // D03：不再用 30 天旧标记判成功。就绪 = 存在握手标记且其记录的
     // extensionVersion 与系统扩展 manifest 版本一致（升级后需重载）。
+    let ext_dir = system_chrome_extension_dir();
+    if ext_dir.join("manifest.json").exists() {
+        if let Some(home) = dirs::home_dir() {
+            let _ = ensure_downloads_alias(&ext_dir, &home);
+        }
+    }
     let ready = system_chrome_extension_dir().join("manifest.json").exists()
         && read_handshake_matching_version(&root, &system_chrome_extension_dir());
     if ready {
