@@ -95,10 +95,14 @@ pub(crate) fn natives_root_pub() -> PathBuf {
 #[derive(serde::Serialize)]
 struct SetupStatus {
     step: &'static str,
-    extensionReady: bool,
-    extensionDir: Option<String>,
-    extensionVersion: Option<String>,
-    handshakeVerified: bool,
+    #[serde(rename = "extensionReady")]
+    extension_ready: bool,
+    #[serde(rename = "extensionDir")]
+    extension_dir: Option<String>,
+    #[serde(rename = "extensionVersion")]
+    extension_version: Option<String>,
+    #[serde(rename = "handshakeVerified")]
+    handshake_verified: bool,
 }
 
 /// 读取握手标记；`not_before` 之后写入的标记才算本次会话的新握手。
@@ -171,14 +175,14 @@ fn run(
         if let Some(handshake) = read_fresh_handshake(natives_root, not_before) {
             let status = SetupStatus {
                 step: "handshake_verified",
-                extensionReady: true,
-                extensionDir: Some(extension_dir.to_string_lossy().into_owned()),
-                extensionVersion: handshake
+                extension_ready: true,
+                extension_dir: Some(extension_dir.to_string_lossy().into_owned()),
+                extension_version: handshake
                     .get("extensionVersion")
                     .and_then(|v| v.as_str())
                     .map(String::from)
                     .or(extension_version),
-                handshakeVerified: true,
+                handshake_verified: true,
             };
             return Ok(status);
         }
@@ -186,10 +190,10 @@ fn run(
     }
     Ok(SetupStatus {
         step: "waiting_for_user_load",
-        extensionReady: true,
-        extensionDir: Some(extension_dir.to_string_lossy().into_owned()),
-        extensionVersion: extension_version,
-        handshakeVerified: false,
+        extension_ready: true,
+        extension_dir: Some(extension_dir.to_string_lossy().into_owned()),
+        extension_version,
+        handshake_verified: false,
     })
 }
 
@@ -243,7 +247,7 @@ pub fn run_cli(args: &[String]) -> i32 {
     ) {
         Ok(status) => {
             println!("{}", serde_json::to_string(&status).unwrap_or_default());
-            if status.handshakeVerified {
+            if status.handshake_verified {
                 0
             } else {
                 2

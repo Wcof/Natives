@@ -1,18 +1,10 @@
-//! Uninstall keeps a durable cleanup receipt until every requested deletion succeeds.
+//! Built-in module projections and confirmed per-user data reset.
 
-use super::mutation::{bump_revision, lock_error, now_millis, AppStore, UninstallReceipt};
-use super::{query, types::AppError};
-use crate::{app_host_manifest, app_install};
+use super::mutation::{bump_revision, lock_error, now_millis, AppStore};
+use super::types::AppError;
+use crate::app_files;
 use rusqlite::{params, OptionalExtension};
 use serde::Serialize;
-
-#[derive(Serialize)]
-pub struct RetainedData {
-    pub app_id: String,
-    pub name: String,
-    pub cleanup_pending: bool,
-    pub purge_data: bool,
-}
 
 /// User-confirmed scope of a data reset (plan §4.3): the module's data
 /// directory is always the target; imports/cache/logs and the Keychain
@@ -40,140 +32,11 @@ pub struct ClearDataReceipt {
 }
 
 impl AppStore {
-    pub fn retained_data(&self) -> Result<Vec<RetainedData>, AppError> {
-        self.with_conn(|conn| {
-            let mut stmt = conn.prepare("SELECT app_id, name, cleanup_pending, purge_data FROM app_retained_data ORDER BY name")?;
-            let rows = stmt.query_map([], |row| Ok(RetainedData {
-                app_id: row.get(0)?, name: row.get(1)?, cleanup_pending: row.get(2)?, purge_data: row.get(3)?,
-            }))?;
-            Ok(rows.collect::<Result<Vec<_>, _>>()?)
-        })
-    }
-
-    pub fn uninstall(&self, app_id: &str) -> Result<UninstallReceipt, AppError> {
-        self.uninstall_with_data(app_id, false)
-    }
-
-    pub fn uninstall_with_data(
-        &self,
-        app_id: &str,
-        purge: bool,
-    ) -> Result<UninstallReceipt, AppError> {
-        // AC-04: record the removal intent BEFORE teardown so a crash between
-        // receipt and cleanup can never lead to a seed reinstall.
-        self.set_user_intent(app_id, "removed")?;
-        let _operation = self.operation.lock().map_err(lock_error)?;
-        app_install::validate_identifier(app_id, "app id")?;
-        let _install = app_install::acquire_app_lock(self.app_root(), app_id, false)?;
-        self.recover_app(app_id)?;
-        let _runtime = app_install::acquire_app_lock(self.app_root(), app_id, true)?;
-        let base = self.app_root().join(app_id);
-        app_install::validate_app_path(self.app_root(), &base)?;
-        let manifests = self.manifest_dir()?;
-        let (host, permissions, purge) = self.with_conn(|conn| {
-            let tx = rusqlite::Transaction::new_unchecked(conn, rusqlite::TransactionBehavior::Immediate)?;
-            let existing = tx.query_row("SELECT host, permissions_json, purge_data FROM app_retained_data WHERE app_id = ?1",
-                [app_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, bool>(2)?))).optional()?;
-            let (name, host, permissions, previous_purge) = match query::app(&tx, app_id, Some(self.app_root())) {
-                Ok(app) => {
-                    let spec: serde_json::Value = serde_json::from_str(&app.runtime_spec_json)
-                        .map_err(|_| AppError::InvalidState("invalid app runtime registration".into()))?;
-                    let host = if app.kind == super::types::KIND_MANAGED_LOCAL && app.host_registered {
-                        crate::app_activation::runtime_host_name(app_id)
-                    } else {
-                        spec.get("host").and_then(|h| h.as_str()).unwrap_or("").to_owned()
-                    };
-                    let permissions: Vec<String> = query::permissions(&tx, app_id)?.into_iter().map(|p| p.permission).collect();
-                    (app.name, host, serde_json::to_string(&permissions).map_err(|_| AppError::InvalidState("invalid permissions".into()))?,
-                        existing.as_ref().is_some_and(|entry| entry.2))
-                }
-                Err(AppError::NotFound(_)) => {
-                    let (host, permissions, was_purge) = existing.ok_or_else(|| AppError::NotFound(app_id.into()))?;
-                    (app_id.to_owned(), host, permissions, was_purge)
-                }
-                Err(error) => return Err(error),
-            };
-            if !host.is_empty() {
-                app_host_manifest::manifest_path_in(&manifests, &host)?;
-            }
-            if previous_purge && !purge {
-                return Err(AppError::InvalidState("APP_CONFIRMATION_REQUIRED: retry data deletion with confirmation".into()));
-            }
-            tx.execute("INSERT INTO app_retained_data (app_id, name, host, permissions_json, cleanup_pending, purge_data, updated_at)
-                VALUES (?1, ?2, ?3, ?4, 1, ?5, ?6) ON CONFLICT(app_id) DO UPDATE SET
-                cleanup_pending = 1, purge_data = excluded.purge_data, updated_at = excluded.updated_at",
-                params![app_id, name, host, permissions, purge, now_millis()])?;
-            tx.execute("UPDATE apps SET enabled = 0, revision = revision + 1 WHERE app_id = ?1", [app_id])?;
-            bump_revision(&tx)?;
-            tx.commit()?;
-            Ok((host, permissions, purge))
-        })?;
-
-        // Validate every deletion root before removing registration or files.
-        for sub in ["runtime", "packages", "staging"] {
-            app_install::validate_app_path(self.app_root(), &base.join(sub))?;
-        }
-        let natives = self
-            .app_root()
-            .parent()
-            .ok_or_else(|| AppError::InvalidState("invalid app root".into()))?;
-        let logs = natives.join("logs/apps").join(app_id);
-        if purge {
-            app_install::validate_app_path(natives, &logs)?;
-        }
-        if !host.is_empty() {
-            self.remove_registration(&host)?;
-            app_host_manifest::remove_manifest_in(&manifests, &host)?;
-        }
-        let _ = crate::app_activation::remove_activation_projection(self.app_root(), app_id);
-        if purge {
-            let permissions: Vec<String> = serde_json::from_str(&permissions)
-                .map_err(|_| AppError::InvalidState("invalid retained permissions".into()))?;
-            let namespace = if app_id.starts_with("com.natives.app.") {
-                app_id.to_owned()
-            } else {
-                format!("com.natives.app.{app_id}")
-            };
-            if permissions
-                .iter()
-                .any(|p| p == &format!("keychain:{namespace}"))
-            {
-                crate::app_secrets::purge_namespace(&namespace)?;
-            }
-            app_install::remove_staging_dir(&base)?;
-            app_install::remove_staging_dir(&logs)?;
-        } else {
-            app_install::remove_app_install_dirs(self.app_root(), app_id)?;
-        }
-        let revision = self.with_conn(|conn| {
-            let tx = conn.unchecked_transaction()?;
-            tx.execute("DELETE FROM app_packages WHERE app_id = ?1", [app_id])?;
-            tx.execute("DELETE FROM app_permissions WHERE app_id = ?1", [app_id])?;
-            tx.execute("DELETE FROM apps WHERE app_id = ?1", [app_id])?;
-            if purge {
-                tx.execute("DELETE FROM app_retained_data WHERE app_id = ?1", [app_id])?;
-            } else {
-                tx.execute(
-                    "UPDATE app_retained_data SET cleanup_pending = 0 WHERE app_id = ?1",
-                    [app_id],
-                )?;
-            }
-            let revision = bump_revision(&tx)?;
-            tx.commit()?;
-            Ok(revision)
-        })?;
-        Ok(UninstallReceipt {
-            app_id: app_id.into(),
-            revision,
-            data_preserved: !purge,
-        })
-    }
-
     /// Fixed built-in module cards (plan §3.4): the definition comes from the
     /// compile-time product manifest, overlaid with the user's stored
     /// preferences when a record exists, and honest availability from the
     /// actual payload on disk. A read-only projection — never a write, never
-    /// an install record.
+    /// a module registration record.
     pub fn module_projections(
         &self,
     ) -> Result<Vec<crate::app_product::ModuleProjection>, AppError> {
@@ -225,10 +88,9 @@ impl AppStore {
         })
     }
 
-    /// Restricted data reset, fully separate from `uninstall_with_data`
-    /// (plan §4.3): only the confirmed scope inside the module's private
+    /// Restricted data reset: only the confirmed scope inside the module's private
     /// directory (plus opt-in logs/Keychain) is removed; program files,
-    /// packages receipts, registration, activation, product identity and
+    /// product files, registration, activation, product identity and
     /// display/enable/order preferences are preserved, no `removed` intent
     /// is written, and `apps/<appId>/` itself is never deleted. The receipt
     /// lives in natives.db, outside every cleaned path: a completed
@@ -240,7 +102,7 @@ impl AppStore {
         request_id: &str,
         scope: ClearDataScope,
     ) -> Result<ClearDataReceipt, AppError> {
-        app_install::validate_identifier(app_id, "app id")?;
+        app_files::validate_identifier(app_id, "app id")?;
         let request_id = request_id.trim();
         if request_id.is_empty() || request_id.len() > 128 {
             return Err(AppError::InvalidState(
@@ -310,25 +172,15 @@ impl AppStore {
         }
 
         let _operation = self.operation.lock().map_err(lock_error)?;
-        let _install = app_install::acquire_app_lock(self.app_root(), app_id, false)?;
-        let recovery_pending = self.with_conn(|conn| {
-            Ok(query::app(conn, app_id, Some(self.app_root()))
-                .map(|app| app.recovery_pending)
-                .unwrap_or(false))
-        })?;
-        if recovery_pending {
-            return Err(AppError::InvalidState(
-                "APP_RECOVERY_PENDING: finish app recovery before clearing data".into(),
-            ));
-        }
+        let _operation_lock = app_files::acquire_app_lock(self.app_root(), app_id, false)?;
         // Business in use is never force-stopped or deleted under way: the
         // runtime lock stays held by the owner, so this fails with the
         // documented APP_BUSY/APP_RUNNING_ELSEWHERE and the receipt stays
         // pending for a retry after the user closes the module.
-        let _runtime = app_install::acquire_app_lock(self.app_root(), app_id, true)?;
+        let _runtime = app_files::acquire_app_lock(self.app_root(), app_id, true)?;
 
         let base = self.app_root().join(app_id);
-        app_install::validate_app_path(self.app_root(), &base)?;
+        app_files::validate_app_path(self.app_root(), &base)?;
         let natives = self
             .app_root()
             .parent()
@@ -342,13 +194,13 @@ impl AppStore {
         }
         if scope.logs {
             let logs = natives.join("logs/apps").join(app_id);
-            app_install::validate_app_path(natives, &logs)?;
+            app_files::validate_app_path(natives, &logs)?;
             targets.push(("logs", logs));
         }
         let mut cleared = Vec::new();
         for (label, path) in &targets {
             if path.exists() {
-                app_install::remove_staging_dir(path)?;
+                app_files::remove_staging_dir(path)?;
                 cleared.push((*label).into());
             }
         }
@@ -358,15 +210,8 @@ impl AppStore {
             } else {
                 format!("com.natives.app.{app_id}")
             };
-            let granted = self.with_conn(|conn| {
-                Ok(query::permissions(conn, app_id)?
-                    .into_iter()
-                    .any(|p| p.permission == format!("keychain:{namespace}")))
-            })?;
-            if granted {
-                crate::app_secrets::purge_namespace(&namespace)?;
-                cleared.push("credentials".into());
-            }
+            crate::app_secrets::purge_namespace(&namespace)?;
+            cleared.push("credentials".into());
         }
 
         let cleared_json = serde_json::to_string(&cleared)

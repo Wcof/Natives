@@ -80,6 +80,9 @@
   "aiPerfRange24h": {
     "message": "Last 24 hours"
   },
+  "aiPerfRange72h": {
+    "message": "Last 72 hours"
+  },
   "aiPerfRange30d": {
     "message": "Last 30 days"
   },
@@ -2274,7 +2277,7 @@
     "message": "Click to grant permission"
   },
   "plugin_widget_aiPerformance": {
-    "message": "AI Performance (legacy)"
+    "message": "AI Performance Overview"
   },
   "desc_aiPerformance": {
     "message": "Display AI usage, token counts, and cost metrics"
@@ -2529,163 +2532,37 @@
     "message": "Use Natives built-in modules"
   },
   "appsList": {
-    "message": "Extension Packages"
-  },
-  "appSurfaceNotFound": {
-    "message": "Extension package not found or removed"
+    "message": "Built-in Modules"
   },
   "appSurfaceOpenFailed": {
-    "message": "Extension package cannot be opened"
-  },
-  "appSurfaceNeedsUpdate": {
-    "message": "Update Natives to open this extension package"
-  },
-  "appSurfaceNeedsUpdateBody": {
-    "message": "This version of Natives protocol is not compatible with this extension package. Update Natives and retry."
+    "message": "Module cannot be opened"
   },
   "appSurfaceDisabled": {
-    "message": "Extension package disabled"
+    "message": "Module disabled"
   },
   "appSurfaceDisabledBody": {
     "message": "Re-enable it in App Center to open it."
   },
   "appSurfaceHostOffline": {
-    "message": "Native Host not connected"
-  },
-  "appSurfaceHostOfflineBody": {
-    "message": "Make sure the Natives Host is running (dev mode: npm run dev)."
-  },
-  "appSurfaceOpenCenter": {
-    "message": "Open App Center"
-  },
-  "appSurfaceOpenCenterHint": {
-    "message": "Open App Center from Settings"
-  },
-  "demoHostOk": {
-    "message": "online"
-  },
-  "demoHostLost": {
-    "message": "disconnected"
-  },
-  "demoConnecting": {
-    "message": "Connecting to demo-host…"
-  },
-  "demoVersion": {
-    "message": "Version"
-  },
-  "demoHost": {
-    "message": "Host"
-  },
-  "demoResourceTitle": {
-    "message": "Downloaded Resources"
-  },
-  "demoLoadingResource": {
-    "message": "Loading resource…"
-  },
-  "demoResourceData": {
-    "message": "Data Payload"
-  },
-  "demoNoData": {
-    "message": "Pure extension app without external packages"
-  },
-  "demoDisconnected": {
-    "message": "Host disconnected"
-  },
-  "demoPackageMissing": {
-    "message": "Resource package is missing"
-  },
-  "demoPackageCorrupt": {
-    "message": "Resource package is corrupt or has the wrong version"
-  },
-  "demoResourceImageAlt": {
-    "message": "Demo resource image"
-  },
-  "demoPingTitle": {
-    "message": "Host communication"
+    "message": "Module Host not connected"
   },
   "fundEmpty": {
-    "message": "Fund app installed — no assets yet."
+    "message": "Fund has no assets yet."
   },
   "backToSpace": {
     "message": "Back"
   },
   "appsEmpty": {
-    "message": "No extension packages available"
+    "message": "No built-in modules available"
   },
   "appsHostOffline": {
     "message": "Native host offline. Make sure Natives is running."
   },
-  "appsCatalogUnavailable": {
-    "message": "Catalog unavailable. Installed extension packages only."
-  },
-  "appsNotInstalled": {
-    "message": "Not installed"
-  },
-  "appsInstalled": {
-    "message": "Installed"
-  },
-  "appsDisabled": {
-    "message": "Disabled"
-  },
-  "appsHasUpdate": {
-    "message": "Update available"
-  },
-  "appsBroken": {
-    "message": "Broken"
-  },
-  "appsInstall": {
-    "message": "Install"
-  },
-  "appsUninstall": {
-    "message": "Uninstall"
-  },
-  "appsUpdate": {
-    "message": "Update"
-  },
   "appsOpen": {
     "message": "Open"
   },
-  "appsStop": {
-    "message": "Stop"
-  },
-  "appsStoppedToast": {
-    "message": "Extension package stopped"
-  },
-  "appsStopRequested": {
-    "message": "Stop requested. If it is active in another browser session, stop it there and retry."
-  },
-  "appsRepair": {
-    "message": "Repair"
-  },
   "appsRepairRequired": {
     "message": "Repair required"
-  },
-  "appsPublisher": {
-    "message": "Publisher"
-  },
-  "appsOfficialPublisher": {
-    "message": "Natives official"
-  },
-  "appsSource": {
-    "message": "Source"
-  },
-  "appsOfficialSignedSource": {
-    "message": "Signed official catalog"
-  },
-  "appsPermissions": {
-    "message": "Permissions"
-  },
-  "appsDownloadSize": {
-    "message": "Download size"
-  },
-  "appsCodeUsage": {
-    "message": "Runtime payload"
-  },
-  "appsCompatibility": {
-    "message": "Compatibility"
-  },
-  "appsCompatible": {
-    "message": "Compatible"
   },
   "appsUserDataUsage": {
     "message": "Personal data usage"
@@ -2693,47 +2570,8 @@
   "appsUsageNotReported": {
     "message": "Not reported by the current runtime"
   },
-  "appsResolving": {
-    "message": "Resolving catalog…"
-  },
-  "appsDownloading": {
-    "message": "Downloading package…"
-  },
-  "appsVerifying": {
-    "message": "Verifying integrity…"
-  },
-  "appsRegistering": {
-    "message": "Registering runtime…"
-  },
-  "appsCommitting": {
-    "message": "Committing to registry…"
-  },
-  "appsInstalledToast": {
-    "message": "Extension package installed"
-  },
-  "appsUninstalledToast": {
-    "message": "Extension package removed (personal data preserved)"
-  },
-  "appsUninstallTitle": {
-    "message": "Remove extension package?"
-  },
-  "appsUninstallBody": {
-    "message": "Removes the extension package and registration. Personal data is kept by default and can be deleted separately later."
-  },
-  "appsUpdateHint": {
-    "message": "V1 update: uninstall the current version, then install the new one (personal data preserved)"
-  },
-  "appsNoPermissions": {
-    "message": "No permissions required"
-  },
   "appsNeedsUpdate": {
     "message": "Update Natives to install"
-  },
-  "appsNotReleased": {
-    "message": "Package not released"
-  },
-  "appsUnsupportedPlatform": {
-    "message": "No package for this device"
   },
   "appsNetworkError": {
     "message": "Network connection failed"
@@ -2741,26 +2579,20 @@
   "appsBusy": {
     "message": "App is in use. Close it and retry."
   },
-  "appsVerificationFailed": {
-    "message": "Security verification failed. Installation stopped."
+  "appsRunningElsewhere": {
+    "message": "The previous app session is exiting. Please retry shortly."
   },
   "appsOperationFailed": {
     "message": "Operation failed. Please retry."
   },
+  "appsActivationChanged": {
+    "message": "App configuration updated. Refresh the page and retry."
+  },
+  "appsPackageInvalid": {
+    "message": "App payload verification failed. Re-run the dev seal flow."
+  },
   "appsCancelled": {
     "message": "Installation cancelled"
-  },
-  "appsEmbeddedCatalog": {
-    "message": "Remote catalog unavailable. Showing the bundled catalog."
-  },
-  "appsCatalogLoading": {
-    "message": "Loading app catalog"
-  },
-  "appsCleanupPending": {
-    "message": "Cleanup incomplete. Retry available."
-  },
-  "appsDataRetained": {
-    "message": "Uninstalled. Personal data retained."
   },
   "appsClearData": {
     "message": "Delete all personal data"
@@ -2780,9 +2612,6 @@
   "appsReady": {
     "message": "Ready"
   },
-  "appsProductConfigRequired": {
-    "message": "Finish Natives setup first"
-  },
   "appsClearing": {
     "message": "Clearing data…"
   },
@@ -2792,26 +2621,14 @@
   "appsDeleteCredentials": {
     "message": "Also delete sign-in credentials (Keychain)"
   },
-  "appsProductConfigure": {
-    "message": "Finish Natives setup"
-  },
-  "appsProductConfigured": {
-    "message": "Natives setup complete — all built-in modules ready"
-  },
   "appsProductSourceMissing": {
     "message": "No verified product source found; follow the install guide to finish installing Natives"
-  },
-  "appsPurgeChoice": {
-    "message": "Also delete all personal data, settings and credentials"
   },
   "appsPurgeWarning": {
     "message": "This deletes the app's personal data, settings, logs and credentials. This cannot be undone."
   },
   "appsPurgeConfirmTitle": {
     "message": "Permanently delete personal data?"
-  },
-  "appsRecoveryPending": {
-    "message": "Installation interrupted. Recovery is pending."
   },
   "appSurfacePaused": {
     "message": "App paused"
@@ -3088,9 +2905,6 @@
   },
   "modelUploadPreview": {
     "message": "Upload and preview"
-  },
-  "suitePrepareFailed": {
-    "message": "Suite app preparation did not fully complete; retry or repair from the App Center"
   },
   "aiPerfRangeCustom": {
     "message": "Custom"

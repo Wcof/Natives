@@ -29,7 +29,8 @@ const FUND_MODULE = {
 function clientFixture() {
   const calls = [], apps = [], modules = [JSON.parse(JSON.stringify(FUND_MODULE))];
   let lastClear = null;
-  let product = { version: '', generation: 0, configured: false, sourcePresent: true, sourceVersion: '1.0.0' };
+  let product = { version: '1.0.0', generation: 1, configured: true, sourcePresent: true, sourceVersion: '1.0.0' };
+  modules[0].configured = true;
   return {
     calls, apps, modules,
     get lastClear() { return lastClear; },
@@ -38,22 +39,12 @@ function clientFixture() {
     disconnect() { this.disconnected = true; },
     async call(method, params = {}) {
       calls.push({ method, params });
-      if (method === 'apps:handshake') return { platform: 'darwin', arch: 'arm64', version: '0.1.0', appsProtocolVersion: 4 };
+      if (method === 'apps:handshake') return { platform: 'darwin', arch: 'arm64', version: '0.1.0', appsProtocolVersion: 5 };
       if (method === 'apps:list') return {
         apps: [...apps], modules: JSON.parse(JSON.stringify(modules)),
         product: { ...product }, pendingDataResets: [],
-        revision: calls.length, retainedData: [],
+        revision: calls.length,
       };
-      if (method === 'apps:product_configure') {
-        // Host contract (plan §3.3): one transaction prepares every fixed
-        // module for this user and binds one productGeneration.
-        product = { version: '1.0.0', generation: 1, configured: true, sourcePresent: true, sourceVersion: '1.0.0' };
-        modules[0].configured = true;
-        if (!apps.some((entry) => entry.app_id === 'fund')) {
-          apps.push({ app_id: 'fund', name: '基金', version: '1.0.0', enabled: true, show_in_sidebar: true, host_registered: true });
-        }
-        return { ...product };
-      }
       if (method === 'apps:clear_data') {
         // Host contract (plan §4.3): confirmation + requestId + scope flags.
         assert.equal(params.confirmPurge, true);
@@ -76,8 +67,8 @@ function makeDom() {
 }
 
 // Direction check 1 (plan §5): the center only handshakes and reads the
-// fixed module list — catalog loads and suite_prepare calls are zero, and
-// a failed handshake stops every dependent call.
+// fixed module list is returned by the Host, and a failed handshake stops
+// every dependent call.
 {
   const dom = makeDom(), client = clientFixture();
   const call = client.call.bind(client);
@@ -88,7 +79,6 @@ function makeDom() {
   assert.equal(center.state.error, 'appsNeedsUpdate', 'incompatible Host error must be preserved');
   assert.ok(dom.list.textContent.includes(t('appsNeedsUpdate')));
   assert.ok(!client.calls.some((c) => c.method === 'apps:list'), 'failed handshake must stop dependent calls');
-  assert.ok(!client.calls.some((c) => c.method === 'apps:suite_prepare'));
   center.dispose();
 }
 // bfcache: hidden page keeps no connection; restore re-handshakes and reads.
@@ -111,49 +101,23 @@ function makeDom() {
   center.dispose();
   delete globalThis.window;
 }
-// Direction check 2 (plan §5): an empty install table still shows the
-// built-in fund module, with zero install/uninstall semantics.
+// Direction check 2 (plan §5): an empty preference table still shows the
+// built-in fund module, with no module distribution semantics.
 {
   const dom = makeDom(), client = clientFixture();
   const center = createAppCenter({ t, client });
   await center.ready;
-  assert.equal(dom.list.querySelectorAll('.app-card').length, 1, 'empty install table still shows fund');
+  assert.equal(dom.list.querySelectorAll('.app-card').length, 1, 'empty preference table still shows fund');
   assert.ok(dom.list.textContent.includes('基金'));
   assert.ok(dom.list.textContent.includes('个人基金记账、持仓与收益'));
-  const labels = [...dom.list.querySelectorAll('.action span')].map((n) => n.textContent);
-  assert.ok(!labels.includes(t('appsInstall')), 'no install action');
-  assert.ok(!labels.includes(t('appsUninstall')), 'no uninstall action');
-  assert.ok(!labels.includes(t('appsUpdate')), 'no update action');
-  assert.equal(client.calls.filter((c) => c.method === 'apps:suite_prepare').length, 0);
-  assert.ok(!client.calls.some((c) => c.method.startsWith('apps:install_')));
-  // The explicit product setup bar is shown; configuration never happens
-  // as an implicit side effect of loading or opening (plan §3.3).
-  assert.ok(dom.list.textContent.includes(t('appsProductConfigure')));
-  assert.ok(dom.list.textContent.includes(t('appsProductConfigRequired')));
-  assert.equal(client.calls.filter((c) => c.method === 'apps:product_configure').length, 0);
+  // Product configuration is completed by the first verified Host handshake;
+  // the center contains no setup/install action.
+  assert.ok(dom.list.textContent.includes(t('appsReady')));
   center.dispose();
   assert.ok(client.disconnected);
 }
-// Product setup (plan §3.3): the explicit action configures every fixed
-// module once; afterwards the center shows the ready module without it.
-{
-  const dom = makeDom(), client = clientFixture();
-  const center = createAppCenter({ t, client });
-  await center.ready;
-  const setupButton = [...dom.list.querySelectorAll('.action.primary')]
-    .find((button) => button.textContent === t('appsProductConfigure'));
-  assert.ok(setupButton, 'product setup action is offered');
-  setupButton.onclick();
-  await tick();
-  await tick();
-  assert.equal(client.calls.filter((c) => c.method === 'apps:product_configure').length, 1);
-  assert.equal(center.state.product.configured, true);
-  assert.ok(!dom.list.textContent.includes(t('appsProductConfigure')), 'setup bar disappears once configured');
-  assert.ok(dom.list.textContent.includes(t('appsReady')), 'fund card is ready after configuration');
-  center.dispose();
-}
 // Data management (plan §4.3): double confirmation, credentials opt-in,
-// apps:clear_data with requestId — and no uninstall method anywhere.
+// apps:clear_data with requestId.
 {
   const dom = makeDom(), client = clientFixture();
   client.apps.push({ app_id: 'fund', name: '基金', version: '0.1.0', enabled: true, show_in_sidebar: true, host_registered: true });
@@ -186,17 +150,16 @@ function makeDom() {
   assert.equal(client.lastClear.appId, 'fund');
   assert.equal(client.lastClear.deleteCredentials, false, 'credentials kept unless separately confirmed');
   assert.equal(client.apps.length, 0);
-  assert.ok(!client.calls.some((c) => c.method === 'apps:uninstall'), 'uninstall is retired, not an alias');
   center.dispose();
 }
 
-// ─── Phase A6: App Surface (ADR-0025 D50) ───────────────────────────────────
+// ─── Built-in module owner surface ──────────────────────────────────────────
 
-const DEMO_DETAIL = {
+const MODULE_DETAIL = {
   app: {
     app_id: 'sample',
     kind: 'managed_local',
-    name: 'Demo',
+    name: 'Sample Module',
     version: '2.0.0',
     enabled: true,
     host_registered: true,
@@ -210,8 +173,6 @@ const DEMO_DETAIL = {
     updated_at: 1,
     revision: 1,
   },
-  packages: [{ package_id: 'app-exec' }],
-  permissions: [],
 };
 
 function makeSurfaceDom() {
@@ -255,7 +216,7 @@ function fakeHostClient() {
     calls,
     async call(method, params = {}) {
       calls.push({ method, params });
-      if (method === 'app:handshake') return { protocolVersion: 1, appId: 'sample', appVersion: '2.0.0' };
+      if (method === 'app:handshake') return { protocolVersion: 2, appId: 'sample', appVersion: '2.0.0' };
       if (method === 'app:start') return { state: 'ready', port: 49152, instanceId: 'i'.repeat(22), generation: 'g'.repeat(22) };
       if (method === 'app:session' && params.op === 'rotate') return { newGeneration: 'n'.repeat(22) };
       if (method === 'app:session' && params.op === 'issue') return { generation: 'n'.repeat(22), token: 't'.repeat(43), expiresAt: 900 };
@@ -271,22 +232,22 @@ assert.equal(parseAppId('?app=com.natives.app.demo'), 'com.natives.app.demo');
 assert.equal(parseAppId('app=fund'), 'fund');
 assert.equal(parseAppId('?other=x'), '');
 assert.equal(parseAppId(''), '');
-assert.equal(appHostFor(DEMO_DETAIL.app), 'com.natives.app.hash', 'managed app uses its registered host');
-assert.equal(appHostFor({ app_id: 'fund' }), 'com.natives.file_manager', 'apps share native-file-host');
+assert.equal(appHostFor(MODULE_DETAIL.app), 'com.natives.app.hash', 'module uses its registered Host');
+assert.throws(() => appHostFor({ app_id: 'fund' }), /runtime host is missing/, 'missing Host has no Core fallback');
 
-// A6.2 installed + enabled → demo-ui mounts and reads resource via shared host
+// A6.2 configured + enabled → the generic owner opens the module Host
 {
   const domA = makeSurfaceDom();
   const hostA = fakeHostClient();
   const shellA = makeShell({
     appId: 'sample',
     stage: domA.stage,
-    getNativeClient: () => surfaceClient(DEMO_DETAIL),
+    getNativeClient: () => surfaceClient(MODULE_DETAIL),
     createHostClient: () => hostA,
   });
   await shellA.open();
   await tick();
-  assert.equal(domA.title.textContent, 'Demo', 'Surface 标题来自权威 App 记录');
+  assert.equal(domA.title.textContent, 'Sample Module', 'Surface 标题来自权威模块投影');
   const iframe = domA.stage.querySelector('iframe');
   assert.ok(iframe, '通用壳创建应用 sandbox');
   assert.equal(iframe.getAttribute('sandbox'), 'allow-scripts allow-forms');
@@ -295,29 +256,29 @@ assert.equal(appHostFor({ app_id: 'fund' }), 'com.natives.file_manager', 'apps s
   await shellA.open(); // retry path: idempotent remount must not throw
 }
 
-// A6.3 a new appId opens without an extension registry entry
+// A6.3 another product-declared module opens without an Extension registry entry
 {
   const domB = makeSurfaceDom();
   let hostCreated = 0;
-  const detailB = { ...DEMO_DETAIL, app: { ...DEMO_DETAIL.app, app_id: 'com.example.mystery' } };
+  const detailB = { ...MODULE_DETAIL, app: { ...MODULE_DETAIL.app, app_id: 'portfolio' } };
   const shellB = makeShell({
-    appId: 'com.example.mystery',
+    appId: 'portfolio',
     stage: domB.stage,
     getNativeClient: () => surfaceClient(detailB),
     createHostClient: () => { hostCreated += 1; const client = fakeHostClient();
       const call = client.call.bind(client); client.call = (method, params) => method === 'app:handshake'
-        ? Promise.resolve({ protocolVersion: 1, appId: 'com.example.mystery', appVersion: '2.0.0' }) : call(method, params); return client; },
+        ? Promise.resolve({ protocolVersion: 2, appId: 'portfolio', appVersion: '2.0.0' }) : call(method, params); return client; },
   });
   await shellB.open();
-  assert.equal(hostCreated, 1, '新 appId 使用同一通用承载链路');
-  assert.ok(domB.stage.querySelector('iframe'), '新 appId 无需扩展内置 UI');
+  assert.equal(hostCreated, 1, '另一内置模块使用同一通用承载链路');
+  assert.ok(domB.stage.querySelector('iframe'), '另一内置模块无需 Extension 内置业务 UI');
 }
 
 // A6.4 disabled app → 已停用 state, no host port
 {
   const domC = makeSurfaceDom();
   let hostCreated = 0;
-  const detailC = { ...DEMO_DETAIL, app: { ...DEMO_DETAIL.app, enabled: false } };
+  const detailC = { ...MODULE_DETAIL, app: { ...MODULE_DETAIL.app, enabled: false } };
   const shellC = makeShell({
     appId: 'sample',
     stage: domC.stage,
@@ -329,7 +290,7 @@ assert.equal(appHostFor({ app_id: 'fund' }), 'com.natives.file_manager', 'apps s
   assert.equal(hostCreated, 0, '停用应用不得打开 app host');
 }
 
-// A6.5 not installed / unknown app id → apps:get empty → 应用不存在
+// A6.5 unknown built-in module id → apps:get empty → 模块不存在
 {
   const domD = makeSurfaceDom();
   const shellD = makeShell({
@@ -339,7 +300,7 @@ assert.equal(appHostFor({ app_id: 'fund' }), 'com.natives.file_manager', 'apps s
     createHostClient: () => fakeHostClient(),
   });
   await shellD.open();
-  assert.ok(domD.stage.textContent.includes('无法打开'), '未安装应用必须显示错误状态');
+  assert.ok(domD.stage.textContent.includes('无法打开'), '未知模块必须显示错误状态');
   assert.ok(domD.toast.textContent.length > 0, '错误必须进 toast');
 }
 
@@ -352,8 +313,6 @@ assert.equal(appHostFor({ app_id: 'fund' }), 'com.natives.file_manager', 'apps s
       app_id: 'fund', kind: 'extension_app', name: '基金', version: '0.1.0',
       enabled: true, runtime_spec_json: '{"version":"0.1.0"}',
     },
-    packages: [],
-    permissions: [],
   };
   const shellE = makeShell({
     appId: 'fund',
@@ -387,11 +346,8 @@ assert.equal(appHostFor({ app_id: 'fund' }), 'com.natives.file_manager', 'apps s
 // A6.9 locales: A6 keys exist in both languages (sync requirement)
 {
   const keys = [
-    'appSurfaceNotFound', 'appSurfaceOpenFailed', 'appSurfaceNeedsUpdate',
-    'appSurfaceNeedsUpdateBody', 'appSurfaceDisabled', 'appSurfaceDisabledBody',
-    'appSurfaceHostOffline', 'appSurfaceHostOfflineBody', 'appSurfaceOpenCenter',
-    'appSurfaceOpenCenterHint', 'demoHostOk', 'demoHostLost', 'demoConnecting',
-    'demoVersion', 'demoHost', 'demoPingTitle', 'fundEmpty',
+    'appSurfaceOpenFailed', 'appSurfaceDisabled', 'appSurfaceDisabledBody',
+    'appSurfaceHostOffline', 'fundEmpty',
   ];
   for (const loc of ['zh_CN', 'en']) {
     const messages = JSON.parse(readFileSync(new URL(`./_locales/${loc}/messages.json`, import.meta.url), 'utf8'));

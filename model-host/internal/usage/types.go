@@ -75,7 +75,7 @@ type Price struct {
 }
 
 type Filter struct {
-	Range        string       `json:"range,omitempty"` // "4h", "24h", "today", "7d", "30d", "all", "custom"
+	Range        string       `json:"range,omitempty"` // "4h", "24h", "72h", "today", "7d", "30d", "all", "custom"
 	StartTime    *time.Time   `json:"startTime,omitempty"`
 	EndTime      *time.Time   `json:"endTime,omitempty"`
 	Models       []string     `json:"models,omitempty"`

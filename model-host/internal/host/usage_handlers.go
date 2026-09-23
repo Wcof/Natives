@@ -112,7 +112,7 @@ func (e *Engine) getUsageEvents(raw json.RawMessage) (*usage.EventsResult, error
 
 func validateUsageFilter(filter usage.Filter) error {
 	switch filter.Range {
-	case "", "4h", "24h", "today", "7d", "30d", "all":
+	case "", "4h", "24h", "72h", "today", "7d", "30d", "all":
 	case "custom":
 		if filter.StartTime == nil || filter.EndTime == nil || !filter.StartTime.Before(*filter.EndTime) {
 			return invalid("自定义时间范围无效")

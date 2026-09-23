@@ -1,38 +1,23 @@
-# Natives Windows installer assets
+# Windows 本地候选包
 
-These assets use only Windows PowerShell, the registry, and Chrome's external
-extension policy. They do not install a service, startup entry, tray process,
-runtime, or updater.
+Windows 当前只保留与产品一致的免费本地加载路径：扩展目录和 Native
+Hosts 一起打进 ZIP，首次运行注册 Native Messaging 后打开
+`chrome://extensions`，用户开启开发者模式并选择包内 `Extension` 目录。
+不写 Chrome 扩展商店注册表，不使用 `update_url`，也不依赖 Chrome Web
+Store 账号。
 
-## Build/package layout
-
-Put the signed release host beside these scripts as
-`natives-native-host.exe`. Sign `*.ps1`, `*.cmd`, and the host with the
-release certificate before distribution. The package is deterministic; the
-only deployment input is the real Chrome Web Store extension ID.
-
-On Windows, create the single self-extracting `Setup.exe` with the inbox
-IExpress tool:
+从仓库根目录生成候选包：
 
 ```powershell
-.\build-installer.ps1 -ExtensionId <real-32-character-id>
+npm run package:windows:local
 ```
 
-IExpress is intentionally required; if it is unavailable the build fails
-instead of silently producing a different installer. On macOS use
-`-DryRun`/`self-check.ps1` for static validation.
+输出 `dist/Natives-Windows-x64-Local.zip`。在 Windows 上解压后双击
+`安装并注册 Host.cmd`；向导会自动打开扩展管理页和扩展目录。加载成功后
+双击 `启动 Natives.cmd` 进入空间，应用中心中的 Fund 等模块随同一套
+Natives 文件提供，不存在模块级下载或安装。
 
-```powershell
-Set-ExecutionPolicy -Scope Process Bypass
-.\install.ps1 -ExtensionId <real-32-character-id>
-```
-
-`-DryRun` performs validation and prints the exact file/registry plan without
-writing files or the registry. `self-check.ps1` is safe to run on any OS and
-only checks the assets and arguments.
-
-Uninstall with the same real ID: `.\uninstall.ps1 -ExtensionId <real-32-character-id>`.
-
-The Web Store ID is intentionally not included in this repository. A release
-pipeline must supply the ID issued by Chrome Web Store; placeholders are
-rejected.
+这只是本地候选包。Windows 正式签名、实机生命周期和卸载验证通过后，才
+能进入 release 门禁；旧的 IExpress/Web Store 脚本已归档到
+`docs/archive/legacy-development/windows-webstore-installer/`，不得恢复为
+生产入口。

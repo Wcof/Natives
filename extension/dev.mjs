@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { createHash, generateKeyPairSync } from 'node:crypto';
@@ -14,11 +14,18 @@ const devExtension = join(root, 'dist', 'dev-extension');
 const devKeyPath = join(root, 'dist', '.natives-dev-extension-public-key');
 const nativeHost = join(root, 'target', 'debug', platform() === 'win32' ? 'native-file-host.exe' : 'native-file-host');
 const modelHost = join(root, 'target', 'debug', platform() === 'win32' ? 'model-host.exe' : 'model-host');
+// ADR-0031：App Center 打开内置模块需要统一 App Runtime Host；
+// dev 与安装包一致，缺它会导致 app.html 连接失败（Native Host 未连接）。
+const appRuntimeHost = join(root, 'target', 'debug', platform() === 'win32' ? 'natives-app-runtime.exe' : 'natives-app-runtime');
+const statusbarHost = join(root, 'target', 'debug', 'natives-statusbar');
 const projectHostPaths = [
   nativeHost,
   join(root, 'target', 'release', platform() === 'win32' ? 'native-file-host.exe' : 'native-file-host'),
   modelHost,
   join(root, 'target', 'release', platform() === 'win32' ? 'model-host.exe' : 'model-host'),
+  appRuntimeHost,
+  join(root, 'target', 'release', platform() === 'win32' ? 'natives-app-runtime.exe' : 'natives-app-runtime'),
+  statusbarHost,
 ].map(path => resolve(path));
 
 function posixHostPids(output, hostPaths = projectHostPaths) {
@@ -118,7 +125,50 @@ if (modelBuild.status !== 0 || !existsSync(modelHost)) throw new Error('model-ho
 const id = await prepareExtension();
 run(process.execPath, [join(extensionSource, 'install-native-host.mjs'), '--extension-id', id, '--host-path', nativeHost], 'Native Host registration failed.');
 run(process.execPath, [join(extensionSource, 'install-native-host.mjs'), '--extension-id', id, '--host-path', modelHost, '--host-name', 'com.natives.model_host', '--description', 'Natives model settings and local model proxy'], 'Model Host registration failed.');
+run('rtk', ['env', '-u', 'CARGO_TARGET_DIR', 'cargo', 'build', '-p', 'app-runtime'], 'natives-app-runtime build failed.');
+if (!existsSync(appRuntimeHost)) throw new Error(`natives-app-runtime was not created: ${appRuntimeHost}`);
+run(process.execPath, [join(extensionSource, 'install-native-host.mjs'), '--extension-id', id, '--host-path', appRuntimeHost, '--host-name', 'com.natives.local.app_runtime', '--description', 'Natives unified built-in app runtime'], 'App Runtime Host registration failed.');
+// 重编译即重密封（ADR-0029 dev revision）：runtime 二进制变化后必须同步
+// ~/.natives-local/product-source（重算 SHA、重签 dev manifest），否则扩展
+// 首次 apps:handshake 触发的 configure_product 用的还是旧载荷哈希，
+// app:handshake 会 fail closed（APP_PACKAGE_INVALID），表现为"模块无法打开"。
+run(process.execPath, [join(root, 'scripts', 'apps', 'refresh-dev-product-source.mjs')], 'refresh-dev-product-source failed (dev product source re-seal).');
+
+// 自动向 native-file-host 触发一次 apps:handshake，在构建期完成产品重配与 activation.json 密封
+await new Promise((resolve) => {
+  const host = spawn(nativeHost, [`chrome-extension://${id}/`]);
+  const msg = JSON.stringify({ id: 'dev-init-handshake', method: 'apps:handshake', params: { origin: `chrome-extension://${id}/` } });
+  const buf = Buffer.alloc(4 + Buffer.byteLength(msg));
+  buf.writeUInt32LE(Buffer.byteLength(msg), 0);
+  buf.write(msg, 4);
+  host.stdin.write(buf);
+  host.stdout.on('data', () => {
+    host.kill();
+    resolve(true);
+  });
+  host.on('error', () => resolve(false));
+  setTimeout(() => { try { host.kill(); } catch {} resolve(false); }, 3000);
+});
+
 await stopProjectHosts();
+
+let statusbarProcess = null;
+if (platform() === 'darwin') {
+  const statusbarBin = join(root, 'target', 'debug', 'natives-statusbar');
+  const buildStatusbar = spawnSync('clang', [
+    '-O2', '-framework', 'AppKit', '-framework', 'Foundation', '-framework', 'WebKit', '-lsqlite3',
+    '-I', join(root, 'installers/macos/resources'),
+    join(root, 'installers/macos/resources/launcher-main.m'),
+    join(root, 'installers/macos/resources/NativesStatusBar.m'),
+    '-o', statusbarBin,
+  ], { stdio: 'inherit' });
+
+  if (buildStatusbar.status === 0 && existsSync(statusbarBin)) {
+    statusbarProcess = spawn(statusbarBin, ['--status-bar'], { stdio: 'ignore' });
+    console.log(`macOS 菜单栏状态项已挂载 (PID: ${statusbarProcess.pid})`);
+  }
+}
+
 console.log(`Natives dev ready.\nExtension: ${devExtension}\nFiles Host: ${nativeHost}\nModel Host: ${modelHost}\nChrome will start the Host on demand for each capability; this command does not open a browser.\nPress Ctrl+C to stop dev.`);
 const keepAlive = setInterval(() => {}, 2 ** 31 - 1);
 let shuttingDown = false;
@@ -126,5 +176,8 @@ for (const signal of ['SIGINT', 'SIGTERM']) process.once(signal, async () => {
   if (shuttingDown) return;
   shuttingDown = true;
   clearInterval(keepAlive);
+  if (statusbarProcess && !statusbarProcess.killed) {
+    try { statusbarProcess.kill('SIGTERM'); } catch {}
+  }
   try { await stopProjectHosts(); } catch (error) { console.error(error.message); process.exitCode = 1; }
 });

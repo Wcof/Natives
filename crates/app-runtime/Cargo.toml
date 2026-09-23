@@ -1,0 +1,26 @@
+[package]
+name = "app-runtime"
+version = "0.1.0"
+edition = "2021"
+authors = ["Natives"]
+description = "Natives official Built-in App Runtime (natives-app-runtime)"
+publish = false
+
+[[bin]]
+name = "natives-app-runtime"
+path = "src/main.rs"
+
+[features]
+# 测试专用第二模块（计划 §44）：验证 Registry 多模块、独立进程绑定与独立数据根。
+# Release Runtime 不得启用——`natives-app-runtime --list-modules` 禁止出现 fixture/test 字样（计划 §13/§45.2）。
+test-fixture = []
+
+[dependencies]
+app-runtime-core = { path = "../app-runtime-core" }
+fund-module = { path = "../../modules/fund" }
+tokenusage-module = { path = "../../modules/tokenusage" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+tempfile = "3"

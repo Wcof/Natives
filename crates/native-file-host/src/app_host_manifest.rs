@@ -1,6 +1,5 @@
-//! Validation and removal helpers for legacy child Host registrations.
+//! Validation and path helpers for the product's Native Messaging hosts.
 
-use std::fs;
 use std::path::{Path, PathBuf};
 
 /// V1 targets Chrome on macOS/Windows/Linux (ADR-0025 D16).
@@ -24,8 +23,10 @@ pub fn chrome_manifest_dir() -> Option<PathBuf> {
 /// namespace (`com.natives.local.app.`) so the two modes never share
 /// registration files (plan §5 P1 mode isolation).
 pub(crate) fn manifest_path_in(dir: &Path, host: &str) -> std::io::Result<PathBuf> {
-    let in_namespace =
-        host.starts_with("com.natives.app.") || host.starts_with("com.natives.local.app.");
+    let in_namespace = host == "com.natives.app_runtime"
+        || host == "com.natives.local.app_runtime"
+        || host.starts_with("com.natives.app.")
+        || host.starts_with("com.natives.local.app.");
     if !in_namespace
         || host.len() > 128
         || host.split('.').any(|part| {
@@ -41,47 +42,9 @@ pub(crate) fn manifest_path_in(dir: &Path, host: &str) -> std::io::Result<PathBu
         ));
     }
     let path = dir.join(format!("{host}.json"));
-    crate::app_install::validate_app_path(dir, &path)
+    crate::app_files::validate_app_path(dir, &path)
         .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidInput, error))?;
     Ok(path)
-}
-
-/// Delete inside an explicit dir (tests / future multi-browser support).
-pub fn remove_manifest_in(dir: &Path, host: &str) -> std::io::Result<()> {
-    let path = manifest_path_in(dir, host)?;
-    if path.exists() {
-        fs::remove_file(&path)?;
-    }
-    Ok(())
-}
-
-/// Windows discovers Native Hosts through HKCU; macOS/Linux use the JSON file.
-pub(crate) fn remove_registration(dir: &Path, host: &str) -> std::io::Result<()> {
-    let path = manifest_path_in(dir, host)?;
-    #[cfg(target_os = "windows")]
-    {
-        use std::os::windows::ffi::OsStrExt;
-        use windows_sys::Win32::{
-            Foundation::{ERROR_FILE_NOT_FOUND, ERROR_PATH_NOT_FOUND},
-            System::Registry::*,
-        };
-        let subkey: Vec<u16> = format!("Software\\Google\\Chrome\\NativeMessagingHosts\\{host}\0")
-            .encode_utf16()
-            .collect();
-        unsafe {
-            let status = RegDeleteTreeW(HKEY_CURRENT_USER, subkey.as_ptr());
-            return if status == 0
-                || status == ERROR_FILE_NOT_FOUND
-                || status == ERROR_PATH_NOT_FOUND
-            {
-                Ok(())
-            } else {
-                Err(std::io::Error::from_raw_os_error(status as i32))
-            };
-        }
-    }
-    let _ = path;
-    Ok(())
 }
 
 /// Chrome extension IDs encode the public-key hash with the letters a-p.
@@ -95,6 +58,7 @@ pub fn normalize_chrome_extension_origin(origin: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
 
     #[test]
     fn origin_gate_accepts_real_chrome_ids() {
@@ -151,7 +115,7 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         let outside = base.join("outside.json");
         fs::write(&outside, b"preserved").unwrap();
-        assert!(remove_manifest_in(&dir, "../outside").is_err());
+        assert!(manifest_path_in(&dir, "../outside").is_err());
         assert_eq!(fs::read(&outside).unwrap(), b"preserved");
         fs::remove_dir_all(base).unwrap();
     }

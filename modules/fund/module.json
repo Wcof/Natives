@@ -1,0 +1,16 @@
+{
+  "appId": "fund",
+  "displayName": {
+    "zh_CN": "投资",
+    "en": "Invest"
+  },
+  "description": {
+    "zh_CN": "本地投资终端：自选池、全景行情、五档盘口、VWAP 分时与多周期 K 线划线分析、持仓流水记账。",
+    "en": "Local investment terminal: watchlist, market quotes, Level-2 depth, VWAP minute & candlestick charts, and portfolio bookkeeping."
+  },
+  "entryRoute": "app.html?app=fund",
+  "moduleApiVersion": 1,
+  "dataSchemaVersion": 2,
+  "capabilityVersion": 1,
+  "permissions": ["local-data", "external-nav-source", "keychain"]
+}

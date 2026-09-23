@@ -4,8 +4,10 @@
 
 - Start with `docs/README.md`, then read `docs/standards/README.md` and the
   relevant 1–3 standards before editing code.
-- Authority order: `docs/standards/` > ADR-0020 > other ADRs >
-  `docs/architecture/` > root documentation.
+- Authority order: ADR-0031 (current highest architecture authority) >
+  `docs/standards/` > other ADRs (historical context only) >
+  `docs/architecture/` > root documentation. Historical ADRs explain history;
+  never use them as an execution entry to restore deleted production paths.
 - A change that relaxes a MUST requires an ADR first. Do not silently work
   around it.
 - Use the task map in `docs/README.md`; do not duplicate architecture or
@@ -14,38 +16,37 @@
 ## Target architecture and current migration
 
 - Current production code is limited to the Chrome/Chromium extension,
-  `crates/native-file-host`, `crates/file-manager-core`, and the single-purpose
-  `model-host` authorized by ADR-0020. `src/`, `src-tauri/`,
-  `src-agent-daemon/`, Agent/Harness/Capability crates, Jobs, Assistant, and
-  Plugin Runtime have been deleted; do not recreate them.
-- **Official managed apps exception (ADR-0027, 2026-09-09; converged 2026-09-12 to
-  built-in modules in one complete product; supersedes the ADR-0026 Apps
-  decisions)**: Natives is the single user-facing product. Fund and other
-  official features are **built-in modules** delivered inside the complete
-  Natives installer — no module download, install, update, uninstall, Catalog
-  release, or fund `.nap`/Release outside the product. Internal modules
-  (portfolio, ledger, nav, import, migration) belong to the package and do not
-  have separate install records or product identities. Module code is built
-  with Natives and enters the full product package; installation, updates, and
-  repairs happen only at product level ("update Natives"). The Core App Store
-  (`crates/native-file-host`) verifies, registers, and signs checks at product
-  install/update time; active app payloads and data stay within
-  `~/.natives/apps/<appId>/`, while minimal Host manifests use the
-  browser-prescribed registration directories. Modules must not write to
-  `/Applications` or create independent `.app`, Dock, or LaunchServices entries.
-  The sole visible main-product launcher below is the precise exception.
-  The generic `extension/app.html` is each package's owner page — a short Core
-  verification connection, then a direct Native Port to the app host, with the
-  app UI in a restricted sandbox iframe over the app's 127.0.0.1 loopback
-  server. The shared runtime library is `crates/app-host-support`. The App
-  Center only offers open/show-hide/preferences/data management for built-in
-  modules; adding modules requires a new complete Natives version. First use
-  does data initialization only — no code download, no "installing fund".
-  This exception does NOT authorize third-party web URLs, third-party native
-  packages, Agent/Harness/Jobs, generic Plugin Runtime, Service Worker
-  ports/polling, or any fund-specific logic inside the extension/Core. Legacy
-  dynamic-registration/module-distribution paths must not remain as silent
-  fallbacks; until migration completes, do not keep two production chains.
+  `crates/native-file-host`, `crates/file-manager-core`, the single-purpose
+  `model-host` authorized by ADR-0020, and the unified product app runtime
+  `crates/app-runtime` / `crates/app-runtime-core` (producing `natives-app-runtime`
+  authorized by ADR-0031) with official built-in modules in `modules/` (such as
+  `modules/fund`). `src/`, `src-tauri/`, `src-agent-daemon/`, Agent/Harness/Capability
+  crates, Jobs, Assistant, and Plugin Runtime have been deleted; do not recreate them.
+- **Unified built-in app runtime and monorepo modules (ADR-0031, 2026-09-14; supersedes
+  per-app executable and per-app Native Host decisions in ADR-0027/0029)**: Natives is
+  the single user-facing product. Fund and other official features are **built-in modules**
+  whose source code lives in `modules/<appId>` within the Natives Monorepo and compiles
+  statically into the single product-level `natives-app-runtime` binary. There is
+  **no per-app executable (no fund-host)** and **no per-app Native Messaging Host registration
+  (no com.natives.app.a<hash>)**; the OS Native Messaging manifest registers solely
+  `com.natives.app_runtime` (or `com.natives.local.app_runtime` for local development).
+  When a user opens an app in `app.html?app=<id>`, Chrome launches an independent, on-demand
+  `natives-app-runtime` process instance (Single Runtime Binary / Multi Process Instance).
+  Unselected modules consume zero dedicated memory (≈0 dedicated runtime memory). When the
+  port disconnects (stdin EOF) or the page closes, the runtime process exits completely in
+  $\le 2$ seconds.
+  Internal modules (portfolio, ledger, nav, import, storage, migration) belong to the module
+  and do not have separate install records, card projections, or product identities.
+  The Core App Store (`crates/native-file-host`) registers and verifies product manifest v2
+  at product install/update time. User application roots (`~/.natives/apps/<appId>/`) strictly
+  contain `activation.json`, `data/` (`fund.db`), `imports/`, `cache/`, `logs/` — no executables
+  are placed in user directories.
+  The generic `extension/app.html` connects to `com.natives.app_runtime`, selects the module
+  via App Runtime Protocol v2 (`app:handshake`), and hosts the app UI in a restricted sandbox
+  iframe over loopback 127.0.0.1 (runtime defaults to `127.0.0.1:8765`, falls back to a dynamic
+  port when occupied — ADR-0032, registry in `docs/standards/technical/05-port-registry.md`).
+  Modules must not write to `/Applications` or create
+  independent `.app`, Dock, or LaunchServices entries.
 - **Unified suite delivery (ADR-0029, 2026-09-11; converged 2026-09-12 to
   single-product built-in modules)**: the Natives installer is one complete
   product containing the thin launcher entry, the Chrome extension component,
@@ -56,7 +57,17 @@
   migrations as root. A root-owned macOS system source under
   `/Library/Application Support/Natives/` holds main Hosts, the fixed unpacked
   Chrome extension, and built-in module files, not user data or a second App
-  Registry. **Visible launcher revision (2026-09-13, explicit user decision):**
+  Registry. **Dev product-source revision (2026-09-17, ADR-0029):** the
+  root-owned source is a release/installer-candidate requirement only. Everyday
+  local iteration (module UI changes, rebuilding `natives-app-runtime`, payload
+  SHA re-sealing, dev manifest re-signing) must stay in the user-writable
+  `~/.natives-local/` namespace (product source defaults to
+  `~/.natives-local/product-source/`, overridable via environment variable)
+  and must not require sudo; dev tooling must not make sudo a prerequisite of
+  routine iteration. Build the root-owned source only for installer-candidate
+  verification (A-Local/B-Local installer acceptance). Verification rules
+  (signature, payload hash/摘要) are unchanged in either layout.
+  **Visible launcher revision (2026-09-13, explicit user decision):**
   the same installer must provide `/Applications/Natives.app` with a normal
   name, icon, and system application registration. Double-click opens Chrome;
   first use shows extension loading guidance and locates the bundled folder;

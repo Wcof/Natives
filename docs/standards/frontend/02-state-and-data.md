@@ -1,103 +1,68 @@
-# 前端架构 02 · 状态、数据流与错误处理
+# 前端 02 · 状态、数据与生命周期
 
-> **版本**: 1.1.0 · **日期**: 2026-07-23  
-> **关联 ADR**: [ADR-0003](../../adr/0003-plugin-ipc-main-process-relay.md)、[ADR-0004](../../adr/0004-terminal-env-injection-new-sessions-only.md)  
-> **关联源文件**: `src/components/shell/ShellLayout.tsx`、`src/lib/follow-mode.ts`、`src/lib/tauri-adapter.ts`
+> 版本：4.0.0 · 日期：2026-09-14
 
----
+#### R-E8 · 持久状态来自 owner
 
-## 一、本篇要约束什么
-
-前端状态管理是 Natives 最易出乱的地方：ShellLayout 持有大量状态，多个面板需要同步。本篇约束三件事：**状态怎么放**、**数据怎么取（IPC 模式）**、**错误怎么处理**。无假数据红线见 `product/02`，本篇聚焦前端落点。
-
----
-
-## 二、状态归属
-
-#### R-E7 · 全局 Shell 状态集中在 ShellLayout
-- **等级**：SHOULD
-- **分类**：状态
-- **规则**：跨域的全局状态（侧栏宽度、面板模式、终端高度、当前视图、locale）**应该**集中在 `ShellLayout`（或其拆出的自定义 Hook），通过 props 下发。**禁止**在多个组件各自用 `useState` 重复持有同一份全局状态。
-- **为什么**：单一真相源避免「侧栏在 A 组件折叠了，B 组件还以为展开」的不一致。
-- **检查方法**：新增全局可见状态时，确认它是否已在 ShellLayout 管理。
-
-#### R-E7.1 · 全局 AppearancePreference 单一协调权威
 - **等级**：MUST
-- **分类**：状态、主题
-- **规则**：
-  - Host `settings:theme` 为全应用唯一持久权威；Renderer 端的 `AppearanceCoordinator` 独占 Host 读写、Zod 校验、并发序列化、广播监听与 DOM/CSS 变量分发。
-  - DOM（`html[data-theme]`）是派生输出 Sink，**严禁**作为反向权威；React `ThemeContext` 仅暴露只读模型与 `select` 动作。
-  - Workspace snapshot、路由切换、返回按钮与子页面**严禁**直接调用 `applyTheme` 或覆盖全局主题设置。
-  - 布局手势生命周期严格维持 `idle → draft → commit | rollback`；失败或取消时必须通过 canonical snapshot 还原状态。
-- **为什么**：见 ADR-0022。消除多处直接写 DOM / DB 导致的竞态、FOUC 与返回覆盖。
+- 页面启动先加载 Host snapshot/query，再建立事件订阅；DOM 和内存对象只是投影。
+- Chrome storage 只保存语言、外观、视图等前端偏好，不保存 Host 业务状态、Secret 或计费权威。
+- 主题持久值当前为 `archive | volt`；非法值回退 `archive`。
 
-#### R-E8 · 局部状态就近，跨组件复用提为 Hook
-- **等级**：SHOULD
-- **分类**：状态
-- **规则**：只在一个组件内用的状态**应该**就地 `useState`。当同一段状态逻辑在 2+ 组件复用时，**应该**提取到 `src/hooks/`（如现有的 `useFocusTrap`、`useFollowMode`、`use-file-drop`）。**禁止**为复用而把局部状态硬塞进全局。
-- **为什么**：复用与隔离的平衡；过早全局化比重复更危险。
-- **检查方法**：第二次写相同状态逻辑时，提取 Hook。
+#### R-E9 · 草稿与提交分离
 
----
-
-## 三、数据获取（IPC 模式）
-
-#### R-E9 · Renderer 取数只走 `tauri-adapter`
 - **等级**：MUST
-- **分类**：状态、安全
-- **规则**：Renderer 获取任何 Host 侧数据**必须**经 `src/lib/tauri-adapter.ts`（或项目约定的等价封装）→ Tauri `invoke` / event → Host command。**禁止**在业务组件中散落裸 `invoke` 字符串、**禁止**用 `fetch` 打本地 HTTP 服务作为 Host 数据通道（本地 HTTP 是 **Workshop 插件** 通道）、**禁止**自造第二套 IPC。
-- **为什么**：adapter 统一命名、错误分类与类型；绕过它会破坏审计面与隔离约定。
-- **检查方法**：业务组件不直接拼 command 名绕过 adapter；无对 Host 职责数据走本地 HTTP `fetch`。
+- 输入、拖拽、缩放、平移期间使用局部 draft。
+- commit 使用 expected revision/mtime；失败恢复最后确认快照并给出可执行错误。
+- pointer move 不写 Host/DB；stop/flush 最多一次提交。
 
-#### R-E10 · 异步取数必须有加载/错误/成功三态
+#### R-E10 · 异步状态诚实
+
 - **等级**：MUST
-- **分类**：状态、无假数据
-- **规则**：任何从 Main/IPC 取数的 UI **必须**处理三个状态：`loading`（加载态）、`error`（错误态，走 `classifyError`）、`success`（数据）。**禁止**假设取数永远成功、**禁止**在 loading 时显示假数据占位。
-- **正例**：`if (loading) return <Spinner/>; if (error) return <ErrorState .../>; return <Data/>;`
-- **反例**：`const data = await fetch(...); return <List items={data}/>` —— 没有处理 pending 与 rejected。
-- **为什么**：IPC 会失败（Main 忙、DB 锁、模块缺失）；不处理就崩在用户脸上。
-- **检查方法**：每个异步取数组件核对三态覆盖。
+- 每个异步视图区分 loading、ready、empty、error、unsupported。
+- 请求 generation/id 防止旧响应覆盖新状态。
+- 刷新失败可以保留最后成功数据，但必须显示 stale/error 和重试。
 
-#### R-E11 · 监听广播更新状态，不轮询
-- **等级**：SHOULD
-- **分类**：状态、性能
-- **规则**：需要实时性的数据（模块列表、通知、设置变更）**应该**监听 Main 的 `db-state-changed` 等广播 channel 主动同步，**禁止**用 `setInterval` 高频轮询 IPC。
-- **为什么**：广播是单向总线（防线 4）的设计姿态；轮询浪费 CPU 与 IPC 带宽。
-- **检查方法**：搜 `setInterval` 配合 IPC 调用的组合。
+#### R-E11 · 事件与查询页面级去重
 
-#### R-E11b · 重 IO 数据使用 Session 缓存 + 冷热分离
-- **等级**：SHOULD
-- **分类**：状态、性能
-- **规则**：需要从后端读取的重 IO 数据（如 Claude usage 统计、Codex session 扫描）**应该**在前端层使用 Session 级别的模块级缓存（`Map<string, CacheEntry>`，TTL 按数据类型分档），避免同一 SPA 会话内重复 IPC 调用。热数据（轻量、高频变化）TTL ≤ 60s，冷数据（重量、低频变化）TTL ≤ 120s。**禁止**无缓存地在每次组件挂载时重新发起重 IO IPC 全量调用。
-- **为什么**：Dashboard 等页面用户频繁切换进出，无缓存每次挂载都触发 3-5 次 IPC + 文件 I/O，造成卡顿和资源浪费。
-- **正例**：`page.tsx` 用 `getCached<T>('usage')` 检查缓存，命中则不发起 `usage.refresh()`；冷数据用 `Promise.resolve().then()` 延迟到下一帧加载，不阻塞热数据渲染。
-- **检查方法**：重 IO IPC 调用（`usage.refresh`、耗时的 `fs.*`）是否有前端缓存保护。**简单滞后刷新**（用户进入 Dashboard 时展示旧缓存，后台静默更新）是可接受的手段。
-
----
-
-## 四、错误处理
-
-#### R-E12 · 捕获的错误必须经 classifyError 后再展示
 - **等级**：MUST
-- **分类**：状态、无假数据
-- **规则**：所有面向用户展示的错误**必须**经 `classifyError()`（见 `product/02` R-F5）。组件内 `try/catch` 捕获后**应该**用 `showErrorToast(err)` 或渲染 `ErrorState`，**禁止** `console.error` 后静默吞掉、**禁止**弹原始异常。
-- **为什么**：统一错误体验 + 不泄露内部细节 + 不丢错误。
-- **检查方法**：搜空 `catch` 与 `console.error` 后无用户反馈的路径。
+- 同一 Native Host 在一个页面内优先共享 client；相同查询按规范化参数与 revision 合并。
+- Host event 只建立一份页面级订阅，再分发给当前 renderer。
+- 缓存必须有容量、revision/TTL 和清理条件；不得用空 catch 把失败变空数据。
 
-#### R-E13 · 异步副作用要有清理
-- **等级**：SHOULD
-- **分类**：状态、性能
-- **规则**：`useEffect` 中订阅的事件、广播、定时器**应该**在 cleanup 中取消，避免组件卸载后更新状态（报错 / 内存泄漏）。
-- **为什么**：React 严格模式下未清理的副作用会告警并可能泄漏。
-- **检查方法**：每个 `useEffect` 检查返回的 cleanup 函数。
+#### R-E12 · 所有副作用有 disposer
 
----
+- **等级**：MUST
+- `addEventListener`、Chrome listener、timer、observer、object URL、Native Port 和 renderer 都要有 owner。
+- 重绘前调用旧 disposer；destroy/pagehide/disconnect 清除 pending、timer 和 DOM 引用。
+- BFCache pageshow 只恢复一次，不重复注册监听。
 
-## 五、本篇合规自检清单
+#### R-E13 · 隐藏态停止非必要工作
 
-- [ ] 我没有重复持有全局状态，全局状态在 ShellLayout（R-E7）。
-- [ ] 我的取数走 `tauri-adapter`，没有绕过 adapter（R-E9）。
-- [ ] 我的异步 UI 覆盖了 loading/error/success 三态（R-E10）。
-- [ ] 实时数据用广播同步而非轮询（R-E11）。
-- [ ] 我的错误经 `classifyError` 后展示，没有静默吞掉或弹原始异常（R-E12）。
-- [ ] 我的 `useEffect` 都有 cleanup（R-E13）。
+- **等级**：MUST
+- `document.hidden` 时暂停时钟、背景轮播、自动刷新和无任务 Native Port。
+- 可见后先重算真实状态，再恢复调度；不能补跑隐藏期间每一次 tick。
+- 用户运行中的数据迁移/写入可继续，但 UI timer 与业务任务必须分开。
+
+#### R-E14 · 错误统一分类
+
+- **等级**：MUST
+- 页面展示稳定 code 对应的本地化信息和 action。
+- 原始异常、路径、SQL、命令、堆栈和 Secret 不进入 UI。
+- retryable 才显示重试；权限、安装或安全问题提供对应修复入口。
+
+#### R-E15 · 模态与焦点使用浏览器原生能力
+
+- **等级**：MUST
+- 优先语义化 `<dialog>`、button、input、a；打开后聚焦首个有效控件，关闭后恢复触发点。
+- Escape 取消当前非破坏性操作；确认结果由 dialog returnValue/明确状态读取。
+- 禁止 `alert`、`prompt`、`confirm`。
+
+## 合规自检
+
+- [ ] Host 是业务状态 authority。
+- [ ] draft/commit/revision 边界明确。
+- [ ] query、event、timer 没有按 Widget 重复。
+- [ ] 每个副作用可释放，BFCache 不重复注册。
+- [ ] hidden 停止非必要工作。
+- [ ] 错误和模态可理解、可访问。

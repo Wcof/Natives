@@ -33,6 +33,8 @@ body { margin:0; overflow:hidden; display:grid; grid-template-columns:var(--side
 body.sidebar-collapsed { grid-template-columns:52px minmax(0,1fr); }
 body.sidebar-collapsed #app-sidebar { padding:16px 8px 10px; background:var(--surface-2); border-right:1px solid var(--border); }
 body.sidebar-collapsed #app-sidebar > :not(.brand) { display:none; }
+body.sidebar-collapsed:has(#app-stage:not([hidden])) { grid-template-columns:minmax(0,1fr); }
+body.sidebar-collapsed:has(#app-stage:not([hidden])) #app-sidebar { display:none !important; }
 body.sidebar-collapsed .brand { justify-content:center; padding:0; }
 body.sidebar-collapsed .brand > :not(#toggle-sidebar) { display:none; }
 body.sidebar-collapsed #toggle-sidebar { margin:0; }
@@ -75,6 +77,20 @@ a.app-menu-item { text-decoration:none; }
 .app-menu-item { display:flex; align-items:center; gap:10px; width:100%; min-height:36px; padding:0 9px; border-color:transparent; color:var(--muted); background:transparent; text-align:left; }
 .app-menu-item:hover { color:var(--text); background:var(--hover); }
 .app-menu-item.active { color:var(--accent); border-color:var(--accent); background:var(--selected); }
+/* 内嵌模块视图：与文件内容区互斥，占满 .layout 内容格。
+   grid-column 跨满所有列：预览面板隐藏后 .layout 若仍带 .preview-open
+   的两列模板，第二列会留下文档管理器的空白条。 */
+#app-stage.embedded-app-view { grid-column:1 / -1; grid-row:1; min-width:0; min-height:0; overflow:hidden; background:var(--surface); position:relative; }
+#app-stage.embedded-app-view .managed-app-frame { width:100%; height:100%; min-height:0; }
+/* 嵌入应用视图的常驻侧栏折叠按钮（参考 space-toolbar-btn 的悬浮圆形样式） */
+.app-stage-toggle-sidebar {
+  position:absolute; top:10px; left:10px; z-index:5;
+  width:30px; height:30px; min-height:30px; padding:0;
+  border:1px solid var(--border); border-radius:50%;
+  background:var(--surface-2); color:var(--muted);
+  opacity:0.85; transition:all .15s ease;
+}
+.app-stage-toggle-sidebar:hover { opacity:1; color:var(--text); background:var(--hover); border-color:var(--accent); }
 #settings-entry { margin-top:auto; min-height:40px; padding-top:10px; padding-bottom:10px; border-top:1px solid var(--border); border-radius:var(--radius); }
 .settings-entry { display:flex; align-items:center; gap:10px; width:100%; min-height:40px; padding:0 9px; border:1px solid transparent; color:var(--muted); background:transparent; text-align:left; text-decoration:none; }
 .settings-entry:hover,.settings-entry[aria-expanded="true"] { background:var(--hover); color:var(--text); border-color:var(--control); }

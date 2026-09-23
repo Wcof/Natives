@@ -48,11 +48,11 @@ function fakeStorage() {
   };
 }
 
-const demoApps = [
+const modules = [
   {
-    app_id: 'com.natives.app.demo',
-    kind: 'extension_app',
-    name: 'Demo',
+    app_id: 'portfolio',
+    kind: 'managed_local',
+    name: 'Portfolio',
     version: '0.1.0',
     enabled: true,
     show_in_sidebar: true,
@@ -67,19 +67,19 @@ const demoApps = [
 ];
 
 // 1. host rows → projection: only enabled + sidebar-visible apps, typed app route
-const projection = projectionFromApps(demoApps, 5);
+const projection = projectionFromApps(modules, 5);
 assert.equal(projection.revision, 5);
 assert.equal(projection.items.length, 1);
-assert.equal(projection.items[0].appId, 'com.natives.app.demo');
-assert.equal(projection.items[0].label, 'Demo');
-assert.equal(projection.items[0].route, 'app.html?app=com.natives.app.demo');
+assert.equal(projection.items[0].appId, 'portfolio');
+assert.equal(projection.items[0].label, 'Portfolio');
+assert.equal(projection.items[0].route, 'app.html?app=portfolio');
 assert.equal(projection.items[0].order, 0);
 
-// disabled or hidden apps never enter the projection (ADR-0025 D38)
+// Disabled or hidden modules never enter the navigation projection.
 const filtered = projectionFromApps(
   [
-    { ...demoApps[0], enabled: false },
-    { ...demoApps[0], show_in_sidebar: false },
+    { ...modules[0], enabled: false },
+    { ...modules[0], show_in_sidebar: false },
   ],
   5,
 );
@@ -104,11 +104,11 @@ assert.equal(filesNav.innerHTML, spaceNav.innerHTML, 'Files 与 Space 的「应�
 const filesItems = filesNav.querySelectorAll('.app-menu-item');
 assert.equal(filesItems.length, 1);
 assert.equal(filesItems[0].dataset.kind, NAVIGATION_KIND_APP);
-assert.equal(filesItems[0].dataset.appId, 'com.natives.app.demo');
+assert.equal(filesItems[0].dataset.appId, 'portfolio');
 assert.ok(filesItems[0].getAttribute('href').startsWith('app.html?app='), 'app 不得伪装成 filesystem path');
-assert.ok(filesNav.innerHTML.includes('Demo'), '分区显示应用名');
+assert.ok(filesNav.innerHTML.includes('Portfolio'), '分区显示模块名');
 
-// 4. live sync: uninstall (empty projection) makes the section disappear on both pages
+// 4. live sync: hiding all modules makes the section disappear on both pages
 const unFiles = await mountAppMenu(document.createElement('nav'), { t, storage }).then((un) => un);
 const syncedNavA = document.createElement('nav');
 const syncedNavB = document.createElement('nav');
@@ -120,22 +120,22 @@ const unA = await (async () => {
   return mountAppMenu(syncedNavB, { t, storage });
 })();
 await saveAppNavigation({ revision: 6, items: [] }, storage);
-assert.equal(syncedNavB.hidden, true, '卸载后 Space 侧栏分区消失');
+assert.equal(syncedNavB.hidden, true, '隐藏全部模块后 Space 侧栏分区消失');
 // files page re-render is driven by the same storage event
 const emptyLoaded = await loadAppNavigation(storage);
 renderAppMenuInto(syncedNavA, emptyLoaded, { t });
-assert.equal(syncedNavA.hidden, true, '卸载后 Files 侧栏分区消失');
+assert.equal(syncedNavA.hidden, true, '隐藏全部模块后 Files 侧栏分区消失');
 assert.equal(syncedNavA.querySelectorAll('.app-menu-section').length, 0);
 unA();
 unFiles();
 
-// 5. 0 App → no section at all (ADR-0025 D38)
+// 5. No visible module means no navigation section.
 const zeroNav = document.createElement('nav');
 renderAppMenuInto(zeroNav, { revision: 1, items: [] }, { t });
 assert.equal(zeroNav.hidden, true);
 assert.deepEqual(appSectionFromProjection({ revision: 1, items: [] }, { t }), []);
 
-// 6. staleness detection (D37: host revision ≠ projection revision → rebuild)
+// 6. Host revision mismatch makes the cache stale.
 assert.equal(isStaleProjection({ revision: 1, items: [] }, 1), false);
 assert.equal(isStaleProjection({ revision: 1, items: [] }, 2), true);
 assert.equal(isStaleProjection(null, 0), false);
@@ -158,4 +158,4 @@ for (const loc of ['zh_CN', 'en']) {
 await clearAppNavigation(storage);
 assert.deepEqual((await loadAppNavigation(storage)).items, []);
 
-console.log('app-navigation-projection: Gate A3 checks passed (two-surface parity, uninstall removal, typed nav, 0-app rule)');
+console.log('app-navigation-projection: two-surface parity, hide sync, typed navigation and empty-state checks passed');

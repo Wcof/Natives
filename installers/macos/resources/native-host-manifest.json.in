@@ -1,5 +1,5 @@
 {
-  "name": "com.natives.file_manager",
+  "name": "__NM_CORE__",
   "description": "Natives local file manager Native Messaging Host",
   "path": "__SOURCE_ROOT__/native-file-host",
   "type": "stdio",

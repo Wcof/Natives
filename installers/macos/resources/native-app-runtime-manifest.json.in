@@ -1,0 +1,7 @@
+{
+  "name": "__NM_APP_RUNTIME__",
+  "description": "Natives official Built-in App Runtime",
+  "path": "__SOURCE_ROOT__/hosts/natives-app-runtime",
+  "type": "stdio",
+  "allowed_origins": ["chrome-extension://__EXTENSION_ID__/"]
+}

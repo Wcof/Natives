@@ -1,13 +1,11 @@
-//! `apps:*` protocol dispatch (ADR-0025 D47).
-//!
-//! Registry queries, verified package transfer, activation, recovery and cleanup.
+//! `apps:*` protocol dispatch for built-in module projection and data management.
 
 use crate::app_store::AppStore;
 use crate::protocol::Request;
 use serde_json::Value;
 
-/// `caller_origin` comes from Chrome's launch argument. Handshakes only
-/// verify it; installation rejects a missing origin.
+/// `caller_origin` comes from Chrome's launch argument. Handshakes verify it
+/// and perform the one-time per-user product projection when needed.
 pub(crate) fn app_dispatch(
     store: &AppStore,
     request: &Request,
@@ -28,38 +26,36 @@ pub(crate) fn app_dispatch(
                     "APP_ORIGIN_MISMATCH: caller origin does not match Chrome launch origin".into(),
                 );
             }
+            // The installer already delivered and signed the complete product.
+            // First handshake performs the one-time per-user projection so the
+            // App Center never presents a module-level setup/install action.
+            // 计划 §24：N→N+1 升级必须重新配置 Product——触发条件是
+            // needs_configuration（source 新版本 / manifest 变更 / 未 applied），
+            // 不能因为数据库里 configured=true 就跳过 N+1 配置。
+            let product = store.product_status().map_err(|error| error.to_string())?;
+            if product.needs_configuration {
+                store
+                    .configure_product(&origin)
+                    .map_err(|error| format!("{}: {error}", error.code()))?;
+            }
             Ok(serde_json::json!({
                 "ok": true, "origin": origin,
-                "appsProtocolVersion": 4,
+                "appsProtocolVersion": 5,
                 "platform": if cfg!(target_os = "macos") { "darwin" } else { std::env::consts::OS },
                 "arch": match std::env::consts::ARCH { "aarch64" => "arm64", "x86_64" => "x64", other => other },
                 "version": env!("CARGO_PKG_VERSION")
             }))
         }
-        // Single-product route (ADR-0027/0029, 2026-09-12 convergence): the
-        // module-distribution chain is retired. Every one of these methods is
-        // rejected BEFORE any storage, network or registry change; the
-        // store-level transaction primitives remain available only to the
-        // product install/update layer (plan §3.4). Old clients are told to
-        // update Natives / reload the extension, never silently re-routed.
-        "apps:suite_prepare"
-        | "apps:install_begin"
-        | "apps:install_chunk"
-        | "apps:install_finish"
-        | "apps:install_commit"
-        | "apps:install_abort"
-        | "apps:uninstall"
-        | "apps:rollback" => Err(format!(
-            "APP_RETIRED_METHOD: {} is retired; built-in modules ship inside the complete Natives product — update Natives and reload the extension",
-            request.method
-        )),
         "apps:list" => {
             let apps = store.apps().map_err(|error| error.to_string())?;
-            let modules = store.module_projections().map_err(|error| error.to_string())?;
-            let pending_resets = store.pending_data_resets().map_err(|error| error.to_string())?;
+            let modules = store
+                .module_projections()
+                .map_err(|error| error.to_string())?;
+            let pending_resets = store
+                .pending_data_resets()
+                .map_err(|error| error.to_string())?;
             let product = store.product_status().map_err(|error| error.to_string())?;
             let revision = store.global_revision().map_err(|error| error.to_string())?;
-            let retained = store.retained_data().map_err(|error| error.to_string())?;
             Ok(serde_json::json!({
                 "apps": apps,
                 "modules": modules,
@@ -69,18 +65,18 @@ pub(crate) fn app_dispatch(
                     "configured": product.configured,
                     "sourcePresent": product.source_present,
                     "sourceVersion": product.source_version,
+                    "integrityValid": product.integrity_valid,
+                    "current": product.current,
+                    "needsConfiguration": product.needs_configuration,
                 },
                 "pendingDataResets": pending_resets,
                 "revision": revision,
-                "retainedData": retained,
             }))
         }
         "apps:open_onboarding" => {
             // §1.3：用户从产品内重新查看同版本安装说明；只允许固定安装
             // 路径，无参数、无网络、不写任何状态。
-            let path = std::path::PathBuf::from(
-                "/Applications/Natives.app/Contents/Resources/onboarding/index.html",
-            );
+            let path = onboarding_path();
             ensure_onboarding_present(&path)?;
             std::process::Command::new("/usr/bin/open")
                 .args(["-a", "Google Chrome", &path.to_string_lossy()])
@@ -95,24 +91,6 @@ pub(crate) fn app_dispatch(
             let status = store.product_status().map_err(|error| error.to_string())?;
             serde_json::to_value(status).map_err(|error| error.to_string())
         }
-        "apps:product_configure" => {
-            // Plan §3.3: the "Finish Natives setup" action runs only on the
-            // foreground connection whose origin Chrome itself supplied and
-            // the page already verified via apps:handshake.
-            let origin = caller_origin.ok_or(
-                "APP_ORIGIN_MISMATCH: product configuration requires a Chrome-verified foreground connection",
-            )?;
-            if store.caller_origin().as_deref() != Some(origin) {
-                return Err(
-                    "APP_ORIGIN_MISMATCH: product configuration requires a verified handshake on this connection"
-                        .into(),
-                );
-            }
-            let status = store
-                .product_configure(origin)
-                .map_err(|error| format!("{}: {error}", error.code()))?;
-            serde_json::to_value(status).map_err(|error| error.to_string())
-        }
         "apps:get" => {
             let app_id = params
                 .get("appId")
@@ -123,23 +101,13 @@ pub(crate) fn app_dispatch(
                 .map_err(|error| error.to_string())?;
             Ok(serde_json::to_value(detail).map_err(|error| error.to_string())?)
         }
-        "apps:recover" => {
-            let app_id = params
-                .get("appId")
-                .and_then(Value::as_str)
-                .ok_or("appId is required")?;
-            store
-                .recover_install(app_id)
-                .map_err(|error| format!("{}: {error}", error.code()))?;
-            Ok(serde_json::json!({ "ok": true }))
-        }
         "apps:health" => {
-            // Registry health only; install probes and App health are separate.
+            // Registry health only; module health is owned by the module host.
             let revision = store.global_revision().map_err(|error| error.to_string())?;
             Ok(serde_json::json!({ "status": "ok", "revision": revision }))
         }
         "apps:clear_data" => {
-            // Plan §4.3: data reset is fully separate from uninstall — a
+            // Plan §4.3: data reset is a separate, explicit operation — a
             // restricted, receipt-journaled scope deletion that preserves
             // code, registration, activation and user preferences.
             let app_id = params
@@ -156,9 +124,18 @@ pub(crate) fn app_dispatch(
                 );
             }
             let scope = crate::app_store::ClearDataScope {
-                imports: params.get("deleteImports").and_then(Value::as_bool).unwrap_or(false),
-                cache: params.get("deleteCache").and_then(Value::as_bool).unwrap_or(false),
-                logs: params.get("deleteLogs").and_then(Value::as_bool).unwrap_or(false),
+                imports: params
+                    .get("deleteImports")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                cache: params
+                    .get("deleteCache")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+                logs: params
+                    .get("deleteLogs")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
                 credentials: params
                     .get("deleteCredentials")
                     .and_then(Value::as_bool)
@@ -213,6 +190,17 @@ fn ensure_onboarding_present(path: &std::path::Path) -> Result<(), String> {
     Ok(())
 }
 
+fn onboarding_path() -> std::path::PathBuf {
+    let app_name = if cfg!(debug_assertions) {
+        "Natives Local.app"
+    } else {
+        "Natives.app"
+    };
+    std::path::PathBuf::from(format!(
+        "/Applications/{app_name}/Contents/Resources/onboarding/index.html"
+    ))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -227,6 +215,7 @@ mod tests {
         ));
         std::fs::create_dir_all(&root).unwrap();
         let store = AppStore::open_at(&root.join("test.db"), root.join("apps")).unwrap();
+        store.set_manifest_dir(root.join("manifests"));
         let origin = "chrome-extension://abcdefghijklmnopabcdefghijklmnop/";
         let request: Request = serde_json::from_value(serde_json::json!({
             "id": "origin-check", "method": "apps:handshake", "params": { "origin": origin }
@@ -258,6 +247,7 @@ mod tests {
         ));
         std::fs::create_dir_all(&root).unwrap();
         let store = AppStore::open_at(&root.join("test.db"), root.join("apps")).unwrap();
+        store.set_manifest_dir(root.join("manifests"));
         (root, store)
     }
 
@@ -267,65 +257,17 @@ mod tests {
     }
 
     #[test]
-    fn retired_distribution_methods_reject_before_any_write() {
-        let (root, store) = temp_store("retired");
-        for method in [
-            "apps:suite_prepare",
-            "apps:install_begin",
-            "apps:install_chunk",
-            "apps:install_finish",
-            "apps:install_commit",
-            "apps:install_abort",
-            "apps:uninstall",
-            "apps:rollback",
-        ] {
-            // Full-looking parameters must not matter: rejection happens
-            // before any parse, storage, network or registry change.
-            let error = dispatch_json(
-                &store,
-                serde_json::json!({
-                    "id": "retired", "method": method,
-                    "params": { "appId": "fund", "catalogBase64": "x", "signature": "y", "purgeData": true }
-                }),
-            )
-            .unwrap_err();
-            assert!(error.starts_with("APP_RETIRED_METHOD"), "{method}: {error}");
-        }
-        assert!(store.apps().unwrap().is_empty(), "no app record written");
-        assert_eq!(store.global_revision().unwrap(), 0, "revision untouched");
-        assert!(store.pending_data_resets().unwrap().is_empty());
-
-        // The list still projects the fixed built-in modules from the
-        // product manifest: an empty install table must show fund without
-        // any install semantics.
-        let response = dispatch_json(
-            &store,
-            serde_json::json!({ "id": "l", "method": "apps:list", "params": {} }),
-        )
-        .unwrap();
-        assert_eq!(response["modules"][0]["appId"], "fund");
-        assert_eq!(response["modules"][0]["present"], false);
-        assert_eq!(response["modules"][0]["configured"], false);
-        assert_eq!(response["modules"][0]["enabled"], true);
-        assert_eq!(response["product"]["configured"], false);
-        // sourcePresent/version 反映机器真实系统源状态，不在此断言。
-        drop(store);
-        std::fs::remove_dir_all(root).unwrap();
-    }
-
-    #[test]
     fn clear_data_reset_preserves_code_and_replays_completed_receipt() {
         let (root, store) = temp_store("clear-data");
         let apps = root.join("apps");
         let base = apps.join("fund");
-        for dir in ["data", "imports", "cache", "runtime/1.0.0", "packages"] {
+        for dir in ["data", "imports", "cache", "runtime/1.0.0"] {
             std::fs::create_dir_all(base.join(dir)).unwrap();
         }
         std::fs::write(base.join("data/ledger.json"), b"{}").unwrap();
         std::fs::write(base.join("imports/x.csv"), b"a,b\n").unwrap();
         std::fs::write(base.join("cache/t.json"), b"{}").unwrap();
         std::fs::write(base.join("runtime/1.0.0/app"), b"#!/bin/sh\nexit 0\n").unwrap();
-        std::fs::write(base.join("packages/fund.nap"), b"payload").unwrap();
         std::fs::write(base.join("activation.json"), b"{}").unwrap();
         store
             .with_conn(|conn| {
@@ -360,10 +302,6 @@ mod tests {
         assert!(!base.join("imports").exists(), "imports scope cleared");
         assert!(base.join("cache").exists(), "unselected scope preserved");
         assert!(base.join("runtime/1.0.0/app").exists(), "code preserved");
-        assert!(
-            base.join("packages/fund.nap").exists(),
-            "receipts preserved"
-        );
         assert!(
             base.join("activation.json").exists(),
             "activation preserved"
@@ -401,7 +339,7 @@ mod tests {
         .unwrap_err();
         assert!(error.starts_with("APP_CONFLICT"), "{error}");
 
-        // Confirmation is mandatory; uninstall is retired, not an alias.
+        // Confirmation is mandatory.
         let error = dispatch_json(
             &store,
             serde_json::json!({
@@ -429,6 +367,7 @@ mod tests {
         let present = missing.with_extension("html");
         std::fs::write(&present, b"guide").unwrap();
         assert!(ensure_onboarding_present(&present).is_ok());
+        assert!(onboarding_path().ends_with("Contents/Resources/onboarding/index.html"));
         let _ = std::fs::remove_file(&present);
     }
 

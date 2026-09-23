@@ -12,11 +12,11 @@ const IGNORED_DIRS = new Set([
 const ALLOWED_EXCEED_REASONS = new Map([
   ['crates/native-file-host/src/tests.rs', 'Aggregated host test suite containing extensive IPC scenarios'],
   ['crates/file-manager-core/src/file_manager/file_manager_tests.rs', 'Comprehensive core filesystem operations test suite'],
+  ['crates/app-runtime/src/main.rs', 'Natives product-level unified Built-in App Runtime shell and loopback HTTP server'],
+  ['modules/fund/src/ledger.rs', 'Fund double-entry transaction and FIFO lot accounting engine with comprehensive unit tests'],
+  ['modules/fund/src/portfolio.rs', 'Fund holding projection, cost calculation, and NAV replay with comprehensive unit tests'],
   ['extension/files.js', 'Workspace shell controller: files.html surface, section routing and app-menu wiring'],
-  ['crates/native-file-host/src/app_store/mutation.rs', 'App Store mutation layer: install/commit/rollback state machine and runtime registration'],
-  ['crates/native-file-host/src/app_store/install.rs', 'App Store install engine: v4 chunked transfer and staged activation state machine'],
-  ['crates/native-file-host/src/app_store/tests.rs', 'App Store test suite: v4 signed catalog install, update and cleanup scenarios'],
-  ['scripts/apps/fixtures/sample-host/sample_host.rs', 'Sample managed app test fixture: activation verification, lock hierarchy, and runtime HTTP server'],
+  ['scripts/apps/fixtures/sample-host/sample_host.rs', 'Built-in module Host fixture: activation verification, lock hierarchy, and runtime HTTP server'],
   ['extension/tests/space-seven-widgets-verify.test.mjs', 'AI seven-widget space visual acceptance harness: appearance/font/chart-switch scenarios with Shadow DOM assertions'],
 ]);
 

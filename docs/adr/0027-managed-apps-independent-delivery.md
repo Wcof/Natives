@@ -5,7 +5,8 @@
 - 2026-09-11 补充：[ADR-0029](0029-unified-suite-preinstalled-apps.md) 决定统一套件预装、受限系统安装源与本地/发布分级验收，取代本文冲突的逐包获取含义和无条件私有根表述；独立运行/更新、Core 单一安装权威及其余安全规则不变。本文保留原决策背景，具体新增规则以 0029 与当前 Standards/契约为准。
 - 2026-09-11 架构整改明确（Managed Multiple Hosts）：重新定义“独立交付”（Independent Delivery）为五维独立：独立源码（Independent Source）、独立构建（Independent Build）、独立版本（Independent Version）、独立更新（Independent Update）、独立回滚（Independent Rollback）。同时明确：**Independent Delivery != Independent User Installation**。官方托管子应用的首发版本（Initial Release）随 Natives Suite Seed 统一交付，无需用户进行远端二次下载；受控独立 Native Host（如 fund-host）保留作为托管子应用运行载荷，禁止将业务编译进 Core（禁止 Fund builtin 化），Core 统一管控其生命周期。
 - 2026-09-12 路线收敛（用户最终决定，取代本文冲突的独立交付语义）：Natives 是唯一产品，基金等均为**内置模块**，全部随 Natives 完整安装包一起构建、安装、更新和修复。**取消模块独立下载、独立安装、独立升级、独立回滚、独立 Release、在线 Catalog 驱动新 appId 与 Fund 独立 nap 发布**；应用中心不再有"可添加/应用商店"语义。新增模块只能通过新的完整 Natives 版本交付。本文其余安全、数据、生命周期与沙箱约束继续有效；凡与本次收敛冲突的"独立发布/独立更新/不重发 Core/不重发扩展"表述一律以本注记为准，配套 MUST 同步见 [实施方案 §5 P0](../development/app-center-fund-implementation-plan.md)。
-- 最近修订：2026-09-12。
+- 最近修订：2026-09-14。
+- **2026-09-14 统一内置应用 Runtime 架构取代（ADR-0031）**：[ADR-0031](0031-unified-builtin-app-runtime-and-monorepo-modules.md) 已正式取代本文关于“每模块一个 App Host executable（如 fund-host）”、“每模块 Native Messaging Host（如 com.natives.app.a<hash>）”、“runtime payload 可执行文件落地”以及“独立 executable 激活”的决策。整个 Natives 收敛为唯一产品级 `natives-app-runtime`，由单一 Native Host `com.natives.app_runtime` 登记；各内置应用编译进该 Runtime，但运行时仍通过 Chrome Native Messaging 机制按需拉起独立的 Runtime 进程实例（Single Runtime Binary / Multi Process Instance），生命周期以进程为隔离边界。本文关于 `app.html` owner、sandbox iframe、127.0.0.1 动态 loopback、Bearer Token、数据物理隔离、按需启动与 stdin EOF 2秒彻底回收的约束继续保留有效。
 - 产品依据：用户确认轻量 Core、应用独立扩展、按需运行与回收；先改造应用中心，再适配基金扩展包；明确 Natives 是唯一产品，托管扩展包是 Natives 的组成部分；允许修订冲突的 ADR-0026。
 - 技术选择：本 ADR 是本轮提出的落地方案，不把技术细节写成用户已经逐项确认的事实。
 - 执行入口：[两阶段实施方案](../development/app-center-fund-implementation-plan.md)。

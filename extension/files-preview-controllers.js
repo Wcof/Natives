@@ -245,12 +245,16 @@ export function createPreviewControllers({ $, call, t, session, setStatus, toast
     if (!/\.(md|markdown|mdx)$/i.test(item.name)) return;
     const section = document.createElement('section'); section.className = 'markdown-preview';
     const heading = document.createElement('p'); heading.className = 'preview-meta muted'; heading.textContent = t('markdownPreview', 'Markdown preview'); section.append(heading);
-    let fenced = false; let codeBlock; let currentList = null; let currentListType = null; let currentTable = null; let nodes = 0;
+    let fenced = false; let codeBlock; let codeBuffer = ''; let currentList = null; let currentListType = null; let currentTable = null; let nodes = 0;
+    // fenced 代码块逐行累积进纯字符串缓冲，闭合/结束时一次性赋给 textContent。
+    // 直接 code.textContent += line 会让 DOM 每行都序列化整棵子树再重建（O(n²)），
+    // 长代码块下主线程被阻塞，表现为进入阅读态即“卡死”。
+    const flushCodeBuffer = () => { if (codeBlock) (codeBlock.querySelector('code') || codeBlock).textContent = codeBuffer; };
     const lines = String(content || '').slice(0, 128 * 1024).split(/\r?\n/);
     for (let i = 0; i < lines.length && nodes < 1000; i++) {
       const line = lines[i].slice(0, 4_000);
       if (/^\s*```/.test(line)) {
-        fenced = !fenced; currentList = null; currentTable = null;
+        flushCodeBuffer(); fenced = !fenced; codeBlock = undefined; codeBuffer = ''; currentList = null; currentTable = null;
         if (fenced) {
           codeBlock = document.createElement('pre'); const code = document.createElement('code');
           const langMatch = line.match(/^\s*```([a-zA-Z0-9_-]+)/); if (langMatch) code.className = `language-${langMatch[1]}`;
@@ -258,7 +262,7 @@ export function createPreviewControllers({ $, call, t, session, setStatus, toast
         }
         continue;
       }
-      if (fenced) { const code = codeBlock.querySelector('code') || codeBlock; code.textContent += `${line}\n`; continue; }
+      if (fenced) { codeBuffer += `${line}\n`; continue; }
       const trimmed = line.trim();
       if (!trimmed) { currentList = null; currentTable = null; continue; }
       if (/^(?:-{3,}|\*{3,}|_{3,})$/.test(trimmed)) { currentList = null; currentTable = null; section.append(document.createElement('hr')); nodes++; continue; }
@@ -318,6 +322,7 @@ export function createPreviewControllers({ $, call, t, session, setStatus, toast
       currentList = null; currentTable = null;
       const p = document.createElement('p'); renderInlineMarkdown(trimmed, p); section.append(p); nodes++;
     }
+    flushCodeBuffer(); // 文件以未闭合 fenced 块结尾时补写缓冲内容
     if (generation === session.previewGeneration && editorState?.path === item.path) body.append(section);
   }
   function parseCsvRows(content) {

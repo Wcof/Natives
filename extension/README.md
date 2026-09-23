@@ -6,7 +6,7 @@
 
 可在 Finder 中直接双击 `extension/files.html`。通过 `file://` 打开时，同一页面会自动进入带示例文件的静态预览模式，用于检查布局、三套皮肤、列表/网格、图标尺寸和预览面板；底栏会明确显示“静态预览 · 未连接本地磁盘”。静态预览不会读取或修改磁盘，也不能代替扩展模式的 Native Messaging、真实文件操作和生命周期验收。
 
-扩展构建使用仓库根目录的 `npm run extension:release`；Tauri/AI Workspace target 属于迁移期 Legacy，不作为文件扩展发布链路。
+扩展构建使用仓库根目录的 `npm run extension:release`；发布链只包含当前 Extension、Native Hosts 和完整产品安装器。
 
 ## 一键开发（macOS/Linux）
 
@@ -60,9 +60,9 @@ Windows 的 Native Messaging 只能由 HKCU 注册表发现，无法安全隔离
 4. 打开 `chrome://extensions`，启用开发者模式，加载 `extension/` 未打包扩展。若需要接管本地 Markdown 文件（`file://`），请在扩展详情页中手动开启“允许访问文件网址”。
 5. 点击工具栏的“文件管理”按钮，或在新标签页点击文件入口；打开文件页时 Chrome 会按需启动 Files Host。在文件页或个人空间的设置菜单点击“模型设置”时，Chrome 才启动 Model Host。
 
-## 正式安装（尚未发布）
+## 完整产品安装（尚未发布）
 
-正式版本将由 Chrome Web Store 提供扩展和稳定 ID，由 macOS/Windows 原生安装器自动注册 Native Host；用户只需完成 Chrome 的一次扩展启用确认。CWS ID、签名证书、公证和 Windows 实机验证尚未完成，当前不能宣称正式发布已完成。
+正式版本由 Natives macOS/Windows 安装器随包提供扩展、Native Hosts 和内置模块。首次运行打开离线指南，用户按 Chrome 要求加载随包目录；之后扩展以固定 ID 连接 Native Hosts。正式签名、公证和 Windows 实机验证尚未完成，当前不能宣称正式发布已完成。
 
 ## 排错
 
@@ -71,12 +71,12 @@ Windows 的 Native Messaging 只能由 HKCU 注册表发现，无法安全隔离
 - 只有“模型设置”连接失败：确认 `com.natives.model_host` 清单已注册且指向当前 `target/debug/model-host`；模型配置和 OAuth Secret 不属于 Files Host。
 - 修改 Host 路径或扩展 ID 后，先运行 `node extension/install-native-host.mjs --uninstall`，再重新注册，最后重载扩展。
 
-## 从桌面启动工作台
+## 从桌面打开 Natives 页面
 
-如果希望保留 Chrome 的正常标签栏，只自动打开一个工作台标签页：
+如果希望保留 Chrome 的正常标签栏，只自动打开一个 Natives 页面：
 
 ```sh
-node extension/launch-workbench.mjs
+node extension/launch-natives.mjs
 ```
 
 注册脚本会自动保存扩展 ID，所以后续不需要再传参数。macOS 可设置 `NATIVES_BROWSER=Chromium` 选择 Chromium；Linux 和 Windows 会按顺序查找已安装的 Chrome/Chromium。把这条命令制作成桌面快捷方式后，双击即可打开普通 Chrome 窗口并新建工作台标签。

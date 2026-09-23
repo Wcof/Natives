@@ -1,42 +1,18 @@
-# Legacy Removal Death List（ADR-0020 §7 死亡证明）
+# Legacy 删除证明
 
-> **状态**: 执行中（2026-08-20）
-> **依据**: ADR-0020 §7「Legacy 删除必须有引用清单、迁移/回滚证据与 death proof」
-> **原则**: 删除前必须先完成替代路径与数据保护；禁止「先 rm -rf 再修编译」；
-> 禁止仅删除 crate 留下前端 dead UI 或旧表写路径。
+> 状态：2026-09-14 已执行。本文是当前删除结果，不是未来架构草案。
 
-## 1. 已确认死亡并可安全删除（无任何生产引用）
+已从生产代码和活动规范移除：旧桌面工作台、通用 Agent/Daemon/Jobs/Plugin Runtime、模块发现目录、分块传输与模块安装事务、Seed/独立 Release 分发及其 GitHub Actions 工作流、独立卸载/回滚 API、扩展单独 ZIP/current 产物、Windows Web Store/IExpress 安装链、macOS 外部扩展模板，以及重复的扩展运行时。
 
-| 路径 | 引用证据 | 处置 | 状态 |
-|---|---|---|---|
-| `examples/minimal-agent/` | 仅 `crates/agent-core/src/facade.rs:16` 注释提及；非 workspace 成员；无 CI/脚本引用 | DELETE | 本阶段删除 |
-| `extension-host/` | 全仓库 grep 仅文档/审计/`architecture-check.mjs` 提及；无 `src/`、`src-tauri/`、`package.json`、CI 生产引用 | DELETE | 本阶段删除 |
+当前生产入口只有：
 
-## 2. 待 Host ProxyEngine cutover 后删除（当前仍为生产路径）
+- `extension/`：Chrome Extension 页面、静态资源和 AI 用量界面；
+- `crates/native-file-host`：Files Host、产品清单校验、内置模块注册和用户数据管理；
+- `crates/file-manager-core`：文件领域逻辑；
+- `model-host`：单用途 Provider/OAuth/Keychain/loopback Host；
+- `crates/app-runtime` / `crates/app-runtime-core`：统一 `natives-app-runtime` 可执行文件（ADR-0031）与官方内置模块编译期注册；
+- `modules/`：官方 Built-in App（如 `modules/fund`）源码与 UI。
 
-> AGENTS.md / ADR-0020：当前 Provider 执行仍走 `Renderer → Host → UDS → Agent Daemon`
-> 为 current production fact。ADR-0020 P0 parity（三协议 fixture、stream lifecycle、
-> OAuth、Key Pool、Secret migration）通过后一次切到 Host，再同批删除 Daemon caller/fallback。
+旧文件已移动到 [`docs/archive/`](../archive/README.md)，不参与活动索引和门禁。历史 ADR 保留原文，依靠 supersedes/历史标记记录决策链；不得从历史 ADR 恢复已删除的生产路径。
 
-| 路径 | 现状 | 删除前置条件 |
-|---|---|---|
-| `src-agent-daemon/**` | 生产执行器（`routing.rs` 等），`production.rs:588` 仍使用 | P0 parity + Host ProxyEngine cutover |
-| `crates/agent-core/**` | Daemon 运行依赖；`facade.rs` 注释引 minimal-agent | Daemon 删除后 |
-| `crates/harness-core/**` | agent-core 依赖 | 同上 |
-| `crates/assistant-protocol/**` | `src-tauri/Cargo.toml`、`provider-adapters/Cargo.toml` 生产依赖（wire types） | 新边界类型接管后 |
-| `crates/capability-gateway/**` | Daemon/legacy 依赖链 | 同上 |
-| `crates/contract-linter/**` | `src-tauri/Cargo.toml` 生产依赖 | 旧 Module/Workshop 移除后 |
-| `src/components/assistant/**`、`jobs/**`、`capabilities/**`、`library/**` 前端 | Shell/MainContent 仍有路由分支 | 新 IA 入口替代后 |
-| `src-tauri/src/assistant_service/`、`runtime/{claude_cli,codex_cli}.rs` 等 AgentRuntime wrapper | 旧执行语义 | AI Tool Integration adapter 接管后 |
-
-## 3. 本阶段已完成
-
-- `examples/minimal-agent/` 删除（无生产引用，仅 legacy 注释提及）。
-- `extension-host/` 删除（无生产引用；Plugin Runtime 语义由 ADR-0020 冻结）。
-- 删除后 `architecture-check.mjs` 的 `LEGACY_FROZEN_DIRS` 保留条目无害（walk 跳过缺失目录）。
-
-## 4. 验收
-
-- `rtk cargo check --workspace` 通过（删除不破坏编译）。
-- `rtk npm run typecheck` 通过（前端无 extension-host 引用残留）。
-- 剩余第 2 节路径保持原状，等待 P0 parity cutover（跨模块拉通阶段）。
+验收：`npm run standards:check` 检查旧入口不存在、活动 Standards 无旧架构标识、核心 Host 协议无旧分发方法；Rust、Extension、性能和安装门禁在最终发布前继续执行。

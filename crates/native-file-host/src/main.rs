@@ -11,15 +11,15 @@ use std::thread;
 
 mod app_activation;
 mod app_dispatch;
+mod app_files;
 #[cfg(debug_assertions)]
 mod app_fixture;
-mod app_host;
 mod app_host_manifest;
-mod app_install;
 mod app_product;
 mod app_secrets;
 mod app_signing;
 mod app_store;
+mod app_tree_hash;
 mod batch;
 mod dispatch;
 mod extension_provision;
@@ -90,14 +90,6 @@ fn main() -> io::Result<()> {
     let app_store_singleton = match AppStore::open(&workspace_store::default_db_path()) {
         Ok(store) => {
             store.set_caller_origin(std::env::args().nth(1).as_deref());
-            let _ = store.clean_legacy_manifests();
-            if let Err(error) = store.recover_interrupted() {
-                eprintln!("app install recovery pending: {}", error.code());
-            }
-            // AC-07: suite seed reconciliation no longer runs at startup —
-            // first-run preparation happens on a verified foreground
-            // connection via `apps:suite_prepare` (visible, cancellable by
-            // closing the page, errors surfaced to the center).
             Some(store)
         }
         Err(error) => {

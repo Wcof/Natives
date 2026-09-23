@@ -20,10 +20,12 @@
       <symbol id="i-target" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" /><circle cx="12" cy="12" r="3" /></symbol>
       <symbol id="i-bolt" viewBox="0 0 24 24"><path d="m13 2-8 12h6l-1 8 9-13h-6z" /></symbol>
       <symbol id="i-close" viewBox="0 0 24 24"><path d="M6 6l12 12" /><path d="M18 6 6 18" /></symbol>
+      <symbol id="i-panel" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2" /><path d="M9 4v16" /></symbol>
     </svg>
 
     <nav class="apps-nav">
       <div class="brand"><svg class="icon"><use href="#i-bolt" /></svg><span data-i18n="appName">Natives</span></div>
+      <button id="apps-toggle-sidebar-btn" class="apps-nav-item collapse" type="button" data-i18n-title="collapseSidebar" title="折叠侧栏" aria-label="折叠侧栏" aria-pressed="false"><svg class="icon"><use href="#i-panel" /></svg><span data-i18n="collapseSidebar">折叠侧栏</span></button>
       <button id="nav-center" class="apps-nav-item active" type="button"><svg class="icon"><use href="#i-grid" /></svg><span data-i18n="appsCenter">应用中心</span></button>
       <div class="spacer"></div>
       <button id="nav-back" class="apps-nav-item back" type="button"><svg class="icon"><use href="#i-back" /></svg><span data-i18n="backToSpace">返回</span></button>
@@ -35,7 +37,12 @@
         <span class="sub" data-i18n="appsCenterSub">管理可选 Natives 应用</span>
       </header>
       <div id="apps-list" class="apps-list" role="list"></div>
+      <!-- 模块内嵌视图：点击侧边栏模块时在内容区内渲染，左侧导航保持不变 -->
+      <div id="app-stage" hidden></div>
     </main>
+
+    <!-- 侧栏折叠后的浮动展开按钮（与空间模块 collapse icon 一致） -->
+    <button id="apps-expand-sidebar-btn" class="apps-expand-btn" type="button" hidden data-i18n-title="expandSidebar" title="展开侧栏" aria-label="展开侧栏" aria-pressed="true"><svg class="icon"><use href="#i-panel" /></svg></button>
 
     <div id="apps-toast" class="apps-toast" role="status" hidden></div>
     <script type="module" src="apps.js"></script>

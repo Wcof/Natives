@@ -63,9 +63,11 @@ export function createSpaceWorkspaceTree({ $, t, activateWorkspace, renameWorksp
     closeMenu();
     const tree = $('workspace-tree');
     tree.replaceChildren();
+    // 内嵌应用视图打开时，侧边栏「应用」分区持有高亮，工作区树保持无选中
+    const appViewOpen = document.getElementById('app-stage')?.hidden === false;
     for (const workspace of session?.workspaces || []) {
       const item = document.createElement('div');
-      item.className = `ws-item${workspace.id === activeWorkspaceId ? ' active' : ''}`;
+      item.className = `ws-item${!appViewOpen && workspace.id === activeWorkspaceId ? ' active' : ''}`;
 
       const displayName = formatWorkspaceDisplayName(workspace.name);
       const select = document.createElement('button');
@@ -73,7 +75,7 @@ export function createSpaceWorkspaceTree({ $, t, activateWorkspace, renameWorksp
       select.className = 'ws-select';
       select.textContent = displayName;
       select.title = displayName;
-      select.setAttribute('aria-current', workspace.id === activeWorkspaceId ? 'page' : 'false');
+      select.setAttribute('aria-current', !appViewOpen && workspace.id === activeWorkspaceId ? 'page' : 'false');
       select.onclick = () => activateWorkspace(workspace.id);
       select.oncontextmenu = (event) => {
         event.preventDefault();

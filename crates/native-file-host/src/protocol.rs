@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 pub(crate) const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
 
 /// Hard cap for an Extension → Host request frame. File import still needs
-/// more than 512 KiB; managed-app chunks themselves remain below 512 KiB.
+/// more than 512 KiB.
 pub(crate) const MAX_INCOMING_FRAME_BYTES: usize = 1024 * 1024;
 const MAX_ID_BYTES: usize = 128;
 const MAX_METHOD_BYTES: usize = 64;
@@ -155,22 +155,12 @@ pub(crate) fn validate_request(request: &Request) -> Result<(), String> {
             | "settings_set"
             | "apps:handshake"
             | "apps:list"
-            | "apps:suite_prepare"
             | "apps:get"
             | "apps:health"
-            | "apps:install_begin"
-            | "apps:install_chunk"
-            | "apps:install_finish"
-            | "apps:install_commit"
-            | "apps:install_abort"
-            | "apps:uninstall"
             | "apps:clear_data"
-            | "apps:recover"
-            | "apps:rollback"
             | "apps:set_enabled"
             | "apps:set_sidebar"
             | "apps:product_status"
-            | "apps:product_configure"
             | "apps:open_onboarding"
     ) {
         return Err("unsupported method".into());
@@ -179,7 +169,9 @@ pub(crate) fn validate_request(request: &Request) -> Result<(), String> {
         return Err("params must be an object".into());
     }
     let allowed: &[&str] = match request.method.as_str() {
-        "version" | "roots" | "open_trash" => &[],
+        // version 握手携带 extensionVersion（dispatch.rs 落握手标记用）
+        "version" => &["extensionVersion"],
+        "roots" | "open_trash" => &[],
         "list_dir" => &[
             "path",
             "offset",
@@ -245,15 +237,9 @@ pub(crate) fn validate_request(request: &Request) -> Result<(), String> {
         "workspace_reset" => &["workspaceId", "template", "expectedRevision"],
         "settings_get" => &["keys"],
         "settings_set" => &["entries"],
-        "apps:list"
-        | "apps:health"
-        | "apps:suite_prepare"
-        | "apps:product_status"
-        | "apps:product_configure"
-        | "apps:open_onboarding" => &[],
+        "apps:list" | "apps:health" | "apps:product_status" | "apps:open_onboarding" => &[],
         "apps:handshake" => &["origin"],
-        "apps:get" | "apps:recover" | "apps:rollback" => &["appId"],
-        "apps:uninstall" => &["appId", "purgeData", "confirmPurge"],
+        "apps:get" => &["appId"],
         "apps:clear_data" => &[
             "appId",
             "requestId",
@@ -265,22 +251,11 @@ pub(crate) fn validate_request(request: &Request) -> Result<(), String> {
         ],
         "apps:set_enabled" => &["appId", "enabled"],
         "apps:set_sidebar" => &["appId", "show", "order"],
-        "apps:install_begin" => &["appId", "catalogBase64", "signature"],
-        "apps:install_chunk" => &[
-            "installId",
-            "packageId",
-            "offset",
-            "dataBase64",
-            "chunkSha256",
-        ],
-        "apps:install_finish" => &["installId", "packageId", "artifactBytes"],
-        "apps:install_commit" => &["installId"],
-        "apps:install_abort" => &["installId", "errorCode", "errorMessage"],
         _ => &[],
     };
     let params = request.params.as_object().expect("validated object");
-    if params.keys().any(|key| !allowed.contains(&key.as_str())) {
-        return Err("unknown parameter".into());
+    if let Some(key) = params.keys().find(|key| !allowed.contains(&key.as_str())) {
+        return Err(format!("unknown parameter: {key}"));
     }
     if request.method == "create_zip" {
         let Some(paths) = params.get("paths").and_then(Value::as_array) else {
@@ -314,24 +289,12 @@ pub(crate) fn validate_request(request: &Request) -> Result<(), String> {
         "uploadId",
         "conflict",
         "appId",
-        "catalogBase64",
-        "signature",
-        "installId",
-        "packageId",
-        "dataBase64",
-        "chunkSha256",
     ] {
         if let Some(value) = params.get(key) {
             let Some(text) = value.as_str() else {
                 return Err("parameter must be a string".into());
             };
-            let maximum = if request.method == "apps:install_chunk" && key == "dataBase64" {
-                crate::app_store::types::INSTALL_CHUNK_DATA_MAX_BASE64_BYTES
-            } else if request.method == "apps:install_begin" && key == "catalogBase64" {
-                crate::app_store::types::CATALOG_MAX_BYTES * 4 / 3 + 4
-            } else {
-                4 * 1024 * 1024
-            };
+            let maximum = 4 * 1024 * 1024;
             if text.len() > maximum {
                 return Err("parameter is too long".into());
             }
@@ -352,11 +315,7 @@ pub(crate) fn validate_request(request: &Request) -> Result<(), String> {
                 return Err("invalid limit".into());
             }
             if key == "offset" {
-                let max_offset = if request.method == "apps:install_chunk" {
-                    crate::app_store::types::MANAGED_WIRE_MAX_BYTES
-                } else {
-                    100_000
-                };
+                let max_offset = 100_000;
                 if number > max_offset {
                     return Err("invalid offset".into());
                 }
@@ -438,27 +397,6 @@ pub(crate) fn validate_request(request: &Request) -> Result<(), String> {
 mod tests {
     use super::*;
 
-    #[test]
-    fn app_chunk_request_accepts_frame_budget_without_relaxing_file_limits() {
-        let mut request: Request = serde_json::from_value(serde_json::json!({
-            "id": "package", "method": "apps:install_chunk",
-            "params": { "installId": "tx", "packageId": "host", "offset": 0,
-                "dataBase64": "AAAA", "chunkSha256": "ab" }
-        }))
-        .unwrap();
-        assert!(
-            validate_request(&request).is_ok(),
-            "package method must reach dispatch"
-        );
-        let maximum = crate::app_store::types::INSTALL_CHUNK_DATA_MAX_BASE64_BYTES;
-        request.params["dataBase64"] = Value::String("A".repeat(maximum));
-        assert!(validate_request(&request).is_ok());
-        request.params["data"] = Value::String("A".repeat(maximum + 1));
-        assert!(validate_request(&request).is_err());
-        request.method = "write_file".into();
-        request.params = serde_json::json!({ "parent": ".", "name": "a", "data": "A".repeat(4 * 1024 * 1024 + 1) });
-        assert!(validate_request(&request).is_err());
-    }
     use std::io::Cursor;
 
     #[test]
@@ -476,12 +414,11 @@ mod tests {
     }
 
     #[test]
-    fn reads_package_frame_at_incoming_limit() {
-        // 32 MiB header must be accepted (package payloads live here);
-        // only the declared length is checked, the body is not allocated
+    fn reads_frame_at_incoming_limit() {
+        // Only the declared length is checked; the body is not allocated
         // when the stream ends first.
         let mut stream = (MAX_INCOMING_FRAME_BYTES as u32).to_ne_bytes().to_vec();
-        stream.extend_from_slice(br#"{"id":"1","method":"apps:install_package"}"#);
+        stream.extend_from_slice(br#"{"id":"1","method":"import_chunk"}"#);
         assert_eq!(
             read_frame(&mut Cursor::new(stream)),
             None, // body shorter than declared: EOF, not a size rejection

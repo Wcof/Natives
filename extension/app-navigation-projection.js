@@ -1,8 +1,9 @@
-// App Navigation Projection (ADR-0025 D37/D38).
+// Built-in module navigation projection.
 //
-// The App Store in natives.db is the single source of truth. This module
-// is the UI cache for global sidebar surfaces (files.html, space.html):
-// it is written only after a successful App Store mutation and read by
+// The signed product manifest defines available modules; natives.db owns
+// user display preferences. This module is the UI cache for global sidebar
+// surfaces (files.html, space.html): it is written only after a verified Host
+// projection and read by
 // surfaces that must stay 0-Native-Port (space.html / newtab never start
 // a host to render "应用").
 //
@@ -10,9 +11,9 @@
 //   { revision: <host revision>, items: [ { appId, label, icon, route, order } ] }
 //
 // Projection items never carry secrets, package data, or business data —
-// only the four navigation fields plus revision (ADR-0025 D35).
+// only the four navigation fields plus revision.
 //
-// Typed navigation (ADR-0025 D40): an app item is
+// Typed navigation: a module item is
 //   { kind: 'app', target: '<appId>' }
 // and must never masquerade as a filesystem path.
 
@@ -22,7 +23,7 @@ export const NAVIGATION_KIND_APP = 'app';
 
 const DEFAULT_PROJECTION = Object.freeze({ revision: 0, items: [] });
 
-// ADR-0025 D38: with zero apps the "应用" section is absent entirely.
+// With zero visible modules the "应用" section is absent entirely.
 function sanitizeProjection(raw) {
   if (!raw || typeof raw !== 'object') return { ...DEFAULT_PROJECTION, items: [] };
   const revision = Number.isFinite(Number(raw.revision)) ? Number(raw.revision) : 0;
@@ -45,9 +46,8 @@ export function isStaleProjection(projection, hostRevision) {
   return sanitizeProjection(projection).revision !== Number(hostRevision);
 }
 
-// Map authoritative App Store rows (apps:list result) into projection
-// items. Only enabled apps that opt into the sidebar are projected
-// (ADR-0025 D38: 0 App → section absent).
+// Map the authoritative apps:list result into projection items. Only enabled
+// built-in modules that opt into the sidebar are projected.
 export function projectionFromApps(apps, revision) {
   const items = Array.isArray(apps)
     ? apps
@@ -77,14 +77,14 @@ function appIconFromSurface(surfaceJson) {
 // (files.html via FilesSidebar, space.html directly) call this so the
 // section markup is identical by construction (Gate A3).
 // `nav` must be an existing <nav> element; the section is appended and
-// hidden when the projection is empty (ADR-0025 D38).
+// hidden when the projection is empty.
 export function renderAppMenuInto(nav, projection, options = {}) {
   if (!nav) return;
   const { t = (key, fallback) => fallback || key, iconBase = '' } = options;
   const section = appSectionFromProjection(projection, { t });
   nav.replaceChildren();
   if (section.length === 0) {
-    // 0 App → no section at all (ADR-0025 D38)
+    // No visible module means no section.
     nav.hidden = true;
     return;
   }
@@ -116,7 +116,7 @@ function escapeHtml(value) {
 }
 
 // Load the projection, render it into `nav`, and keep it in sync with
-// chrome.storage.local changes (install/uninstall from any page).
+// chrome.storage.local changes (product refresh or preference changes).
 // Returns an unsubscribe function.
 export async function mountAppMenu(nav, options = {}) {
   const { t = (key, fallback) => fallback || key, iconBase = '', storage = globalThis.chrome?.storage } = options;
@@ -161,7 +161,7 @@ export async function clearAppNavigation(storage = globalThis.chrome?.storage) {
 }
 
 // Build the sidebar "应用" section from a projection.
-// Returns [] when there is nothing to show (ADR-0025 D38: 0 App → no section).
+// Returns [] when there is nothing to show.
 export function appSectionFromProjection(projection, options = {}) {
   const { t = (key, fallback) => fallback || key } = options;
   const clean = sanitizeProjection(projection);

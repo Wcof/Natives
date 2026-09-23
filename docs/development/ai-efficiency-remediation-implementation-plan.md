@@ -467,7 +467,7 @@ rtk node extension/tests/space-ai-layout-verify.test.mjs
 - 1 万/10 万/50 万事件的查询与增量扫描性能；
 - 页面隐藏、删除最后一张卡、pagehide、Host EOF 后无遗留 Port、timer 或 collector。
 
-性能结果必须使用同一设备、Release 构建和相同数据集记录前后值。扩展包当前接近预算，新增前端代码优先复用现有视图和控件；不得通过提高预算掩盖增长。
+性能结果必须使用同一设备、Release 构建和相同数据集记录前后值。Extension 发布产物当前接近预算，新增前端代码优先复用现有视图和控件；不得通过提高预算掩盖增长。
 
 ## 13. 完成报告格式
 

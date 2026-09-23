@@ -1,5 +1,5 @@
 {
-  "name": "com.natives.model_host",
+  "name": "__NM_MODEL__",
   "description": "Natives model settings and local model proxy",
   "path": "__SOURCE_ROOT__/model-host",
   "type": "stdio",

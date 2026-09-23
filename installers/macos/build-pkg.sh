@@ -24,12 +24,13 @@ usage() {
   exit 2
 }
 mode= host= extension_id= extension_dir= modules_dir= product_manifest=
-app_exec= app_icon= onboarding_dir= conclusion_dir= model_host= launcher=
+app_exec= app_icon= onboarding_dir= conclusion_dir= model_host= launcher= app_runtime=
 version=1.0.0 output= pkg_sign= product_sign=
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --mode) mode=${2:-}; shift 2;;
     --host) host=${2:-}; shift 2;;
+    --app-runtime) app_runtime=${2:-}; shift 2;;
     --model-host) model_host=${2:-}; shift 2;;
     --launcher) launcher=${2:-}; shift 2;;
     --extension-id) extension_id=${2:-}; shift 2;;
@@ -55,11 +56,13 @@ case "$mode" in
     # 绝不与 production 共用注册命名空间。
     bundle_id=com.natives.local.app; display_name="Natives Local"
     nm_core=com.natives.local.file_manager; nm_model=com.natives.local.model_host
+    nm_app_runtime=com.natives.local.app_runtime
     url_name=com.natives.local.setup;;
   production)
     source_name=Natives; app_name="Natives.app"; setup_scheme=natives-setup
     bundle_id=com.natives.app; display_name="Natives"
     nm_core=com.natives.file_manager; nm_model=com.natives.model_host
+    nm_app_runtime=com.natives.app_runtime
     url_name=com.natives.setup;;
   *) echo 'error: --mode must be explicitly local or production' >&2; exit 1;;
 esac
@@ -87,10 +90,14 @@ tmp=$(mktemp -d "${TMPDIR:-/tmp}/natives-pkg.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT INT TERM
 payload=$tmp/payload
 source_root="$payload/Library/Application Support/$source_name"
-mkdir -p "$source_root" "$payload/Library/Google/Chrome/NativeMessagingHosts" \
+mkdir -p "$source_root" "$source_root/hosts" "$payload/Library/Google/Chrome/NativeMessagingHosts" \
   "$payload/Library/Application Support/Chromium/NativeMessagingHosts"
 
 install -m 755 "$host" "$source_root/native-file-host"
+install -m 755 "$host" "$source_root/hosts/native-file-host"
+if [ -n "$app_runtime" ] && [ -x "$app_runtime" ]; then
+  install -m 755 "$app_runtime" "$source_root/hosts/natives-app-runtime"
+fi
 # 可见主入口 /Applications/Natives.app（用户决定 2026-09-13，ADR-0029 修订）：
 # 正常 bundle、Info.plist、图标与引导资源；不设 Hidden/LSUIElement。
 app_root="$payload/Applications/$app_name"
@@ -136,11 +143,15 @@ printf '%s\n' "$extension_id" > "$source_root/extension-id"
 # (contract §3.2). No External Extensions store entries (plan §5 P1).
 for browser in "$payload/Library/Google/Chrome/NativeMessagingHosts" \
                "$payload/Library/Application Support/Chromium/NativeMessagingHosts"; do
-  sed -e "s/__EXTENSION_ID__/$extension_id/g" -e "s|__SOURCE_ROOT__|/Library/Application Support/$source_name|g" \
+  sed -e "s/__NM_CORE__/$nm_core/g" -e "s/__EXTENSION_ID__/$extension_id/g" -e "s|__SOURCE_ROOT__|/Library/Application Support/$source_name|g" \
     "$base/resources/native-host-manifest.json.in" > "$browser/$nm_core.json"
   if [ -n "$model_host" ] && [ -x "$model_host" ]; then
-    sed -e "s/__EXTENSION_ID__/$extension_id/g" -e "s|__SOURCE_ROOT__|/Library/Application Support/$source_name|g" \
+    sed -e "s/__NM_MODEL__/$nm_model/g" -e "s/__EXTENSION_ID__/$extension_id/g" -e "s|__SOURCE_ROOT__|/Library/Application Support/$source_name|g" \
       "$base/resources/native-model-host-manifest.json.in" > "$browser/$nm_model.json"
+  fi
+  if [ -n "$app_runtime" ] && [ -x "$app_runtime" ]; then
+    sed -e "s/__NM_APP_RUNTIME__/$nm_app_runtime/g" -e "s/__EXTENSION_ID__/$extension_id/g" -e "s|__SOURCE_ROOT__|/Library/Application Support/$source_name|g" \
+      "$base/resources/native-app-runtime-manifest.json.in" > "$browser/$nm_app_runtime.json"
   fi
 done
 

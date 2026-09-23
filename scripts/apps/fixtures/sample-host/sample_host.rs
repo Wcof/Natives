@@ -3,11 +3,11 @@
 // 运行锁/运行槽、127.0.0.1 动态端口 loopback 服务、bearer 会话鉴权、EOF 两秒退出。
 // 安全协议（framing 限额、锁、会话、随机数）复用 crates/app-host-support；
 // 本夹具只保留 HTTP 服务、内嵌 UI 与方法分发，作为支持库的第二接入范例。
-use app_host_support::framing::{read_frame, write_frame};
-use app_host_support::http::{write_preflight, write_response as write_http_response, HttpRequest};
-use app_host_support::lock::{acquire_runtime, RuntimeLease, RuntimeUnavailable};
-use app_host_support::origin::chrome_extension_origin;
-use app_host_support::session::{random_id, SessionManager};
+use app_runtime_core::framing::{read_frame, write_frame};
+use app_runtime_core::http::{write_preflight, write_response as write_http_response, HttpRequest};
+use app_runtime_core::lock::{acquire_runtime, RuntimeLease, RuntimeUnavailable};
+use app_runtime_core::origin::chrome_extension_origin;
+use app_runtime_core::session::{random_id, SessionManager};
 use std::io::Read;
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 fn package_identity() -> (String, String) {
-    app_host_support::layout::installed_identity()
+    app_runtime_core::layout::installed_identity()
         .unwrap_or_else(|| ("sample".into(), "1.0.0".into()))
 }
 
@@ -165,7 +165,7 @@ fn error_body(code: &str, message: &str) -> String {
     )
 }
 
-fn error_body_of(error: &app_host_support::error::AppErrorBody) -> String {
+fn error_body_of(error: &app_runtime_core::error::AppErrorBody) -> String {
     format!(
         "{{\"code\":{},\"message\":{},\"retryable\":{}}}",
         json_str(&error.code),
@@ -479,7 +479,7 @@ fn main() {
         let apps_root = std::env::var("NATIVES_APPS_ROOT")
             .map(PathBuf::from)
             .unwrap_or_else(|_| {
-                app_host_support::layout::installed_apps_root()
+                app_runtime_core::layout::installed_apps_root()
                     .unwrap_or_else(|| dirs_home().join(".natives").join("apps"))
             });
         let data_dir = apps_root.join(&app_id).join("data");
@@ -518,7 +518,7 @@ fn main() {
     let apps_root = std::env::var("NATIVES_APPS_ROOT")
         .map(PathBuf::from)
         .unwrap_or_else(|_| {
-            app_host_support::layout::installed_apps_root()
+            app_runtime_core::layout::installed_apps_root()
                 .unwrap_or_else(|| dirs_home().join(".natives").join("apps"))
         });
     eprintln!(
@@ -601,7 +601,7 @@ fn handle_method(
         }
         "app:start" => {
             let expected_gen = json_get_u64(params, "expectedActivationGeneration");
-            if let Err((err_code, msg)) = app_host_support::verify_activation_with_generation(
+            if let Err((err_code, msg)) = app_runtime_core::verify_activation_with_generation(
                 &shared.apps_root,
                 &shared.app_id,
                 &shared.app_version,
@@ -639,7 +639,7 @@ fn handle_method(
                     write_response(
                         id,
                         false,
-                        &error_body("APP_BUSY", "app is being installed or upgraded"),
+                        &error_body("APP_BUSY", "Natives is configuring or updating this module"),
                     );
                     return;
                 }
@@ -661,7 +661,7 @@ fn handle_method(
                 }
             };
             // 先检查、取得锁后再检查，消除检查后被停用/更新的窗口
-            if let Err((err_code, msg)) = app_host_support::verify_activation_with_generation(
+            if let Err((err_code, msg)) = app_runtime_core::verify_activation_with_generation(
                 &shared.apps_root,
                 &shared.app_id,
                 &shared.app_version,

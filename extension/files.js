@@ -16,7 +16,8 @@ import { bindFilesToolbar } from './files-toolbar.js';
 import { bindFilesWorkspaceInteractions } from './files-workspace-bindings.js';
 import { createFilesLocale, loadFilesUiState, storageGet, storageSet } from './files-preferences.js';
 import { createFilesHostConnection } from './files-host-connection.js';
-import { loadAppNavigation, saveAppNavigation, projectionFromApps, isStaleProjection, mountAppMenu } from './app-navigation-projection.js';
+import { loadAppNavigation, saveAppNavigation, projectionFromApps, isStaleProjection, mountAppMenu, renderAppMenuInto, NAVIGATION_KIND_APP } from './app-navigation-projection.js';
+import { createEmbeddedAppSurface } from './app.js';
 import { createFilesFeedback } from './files-feedback.js';
 import { createFilesWatchController } from './files-watch-controller.js';
 import { fileUri, normalizePathInput, parentAndName, parseOpenMarkdownUrl, pathParts, renderFilesBreadcrumb } from './files-paths.js';
@@ -165,6 +166,8 @@ function renderBreadcrumb(path) {
 function navigate(path, push = true) {
   if (typeof path === 'string' && path) storageSet('natives-last-path', path).catch(() => {});
   if (!path) return;
+  // 从内嵌应用视图切回文件视图：只切显示，不销毁会话（5 分钟空闲后回收）。
+  if (embeddedAppId) showEmbeddedView(false);
   if (path === session.currentPath) {
     loadDirectory(path);
     return;
@@ -192,6 +195,15 @@ function navigateNow(path, push) {
   searchController.cancelActiveSearches();
   searchController.setGlobalMode(false);
   session.navigate(path, push);
+  if (push) {
+    const url = new URL(location.href);
+    url.searchParams.delete('app');
+    url.searchParams.delete('root');
+    url.searchParams.set('path', path);
+    if (location.search !== url.search) {
+      history.pushState({ type: 'path', path }, '', url.pathname + url.search);
+    }
+  }
   searchController.setSearchQuery('');
   if ($('search')) $('search').value = '';
   if ($('quick-filter')) $('quick-filter').value = '';
@@ -292,6 +304,30 @@ async function loadDirectory(path) {
     await watchController.applyPendingFollow(path);
   } catch (error) {
     if (token !== directoryToken || session.currentPath !== path) return;
+    // macOS TCC：首次进入桌面/文稿/下载等受保护目录时，read_dir 立即返回
+    // EPERM 并异步弹授权框；用户点"允许"后本次调用已失败。授权即时生效，
+    // 无需重启进程——自动重试一次，让授权后的首次浏览直接出结果。
+    const denied = /denied|permission|eperm|eacc/i.test(String(error?.message || ''));
+    if (denied) {
+      try {
+        const retry = await call('list_dir', {
+          path,
+          offset: session.pageOffset,
+          limit: PAGE_SIZE,
+          sortBy: session.sortBy,
+          sortDir: session.sortDirection,
+          showHidden: session.showHidden,
+        });
+        if (token === directoryToken && session.currentPath === path) {
+          session.entries = sortEntries(retry.entries || []);
+          renderEntries();
+          renderStatusBar();
+          setStatus('');
+          $('entries')?.removeAttribute('aria-busy');
+          return;
+        }
+      } catch { /* 重试仍失败则走通用错误展示 */ }
+    }
     session.entries = [];
     session.selectedPaths.clear();
     session.lastSelectedIndex = -1;
@@ -563,10 +599,26 @@ async function refreshAppProjection() {
   // refreshes the sidebar UI cache while connected. Writes are skipped
   // when the projection is already current to avoid storage churn.
   try {
-    const { apps, revision } = await call('apps:list');
+    let listResult = await call('apps:list');
+    let apps = listResult?.apps || [];
+    let revision = listResult?.revision || 0;
+    if (listResult?.product?.needsConfiguration) {
+      try {
+        const origin = globalThis.location?.origin || `chrome-extension://${globalThis.chrome?.runtime?.id}/`;
+        await call('apps:handshake', { origin });
+        listResult = await call('apps:list');
+        apps = listResult?.apps || [];
+        revision = listResult?.revision || 0;
+      } catch {}
+    }
+    const projection = projectionFromApps(apps, revision);
+    const nav = $('app-menu-apps');
+    if (nav) {
+      renderAppMenuInto(nav, projection, { t });
+    }
     const current = await loadAppNavigation();
     if (isStaleProjection(current, revision)) {
-      await saveAppNavigation(projectionFromApps(apps, revision));
+      await saveAppNavigation(projection);
     }
   } catch {
     // apps:* is optional at the transport level (older host build); the
@@ -581,11 +633,20 @@ async function init() {
     await loadUiState();
     const version = await versionRequest;
     if (version?.protocolVersion !== 1) throw new Error(t('nativeHostIncompatible', 'Native Host 协议不兼容'));
-    refreshAppProjection().catch(() => {});
+    await refreshAppProjection().catch(() => {});
     const roots = await call('roots');
     rootPaths = roots.map((root) => root.path);
     bindAppMenu(roots);
+    const searchParams = new URLSearchParams(location.search);
+    const appParam = searchParams.get('app');
+    const rootParam = searchParams.get('root');
+    const pathParam = searchParams.get('path');
     const openParam = new URLSearchParams(location.search).get('open');
+
+    if (appParam) {
+      openEmbeddedApp(appParam, { pushState: false });
+    }
+
     if (openParam !== null) {
       const openPath = parseOpenMarkdownUrl(openParam);
       if (!openPath) {
@@ -609,18 +670,50 @@ async function init() {
         renderHomeWelcome();
         return;
       }
+    } else if (rootParam) {
+      const matched = roots.find((r) => r.id === rootParam || r.name?.toLowerCase() === rootParam?.toLowerCase());
+      if (matched && matched.path) {
+        navigate(matched.path, false);
+      } else {
+        renderHomeWelcome();
+      }
+    } else if (pathParam) {
+      const statResult = await call('stat', { path: pathParam }).catch(() => ({}));
+      if (statResult?.found && statResult.isDir) {
+        navigate(pathParam, false);
+      } else {
+        renderHomeWelcome();
+      }
+    } else {
+      const stored = await storageGet('natives-last-path', '');
+      const result = stored ? await call('stat', { path: stored }).catch(() => ({})) : {};
+      const hasHarness = searchParams.has('ui-harness') || searchParams.has('self-test');
+      if (result?.found && result.isDir) navigate(stored, false);
+      else if (hasHarness && roots[0]) navigate(roots[0].path, false);
+      else if (!appParam) renderHomeWelcome();
     }
-    const stored = await storageGet('natives-last-path', '');
-    const result = stored ? await call('stat', { path: stored }).catch(() => ({})) : {};
-    const hasHarness = new URLSearchParams(location.search).has('ui-harness') || new URLSearchParams(location.search).has('self-test');
-    if (result?.found && result.isDir) navigate(stored, false);
-    else if (hasHarness && roots[0]) navigate(roots[0].path, false);
-    else renderHomeWelcome();
   } catch (error) {
     setStatus(error.message || t('hostConnectionFailed', 'Native Host 连接失败'), 'error');
     if ($('retry')) $('retry').hidden = false;
   }
 }
+
+// 浏览器前进/后退监听
+window.addEventListener('popstate', () => {
+  const params = new URLSearchParams(location.search);
+  const appId = params.get('app');
+  const path = params.get('path');
+  if (appId) {
+    openEmbeddedApp(appId, { pushState: false });
+  } else {
+    if (embeddedAppId) {
+      leaveEmbeddedView({ pushState: false });
+    }
+    if (path && path !== session.currentPath) {
+      navigate(path, false);
+    }
+  }
+});
 
 previewLayout = bindFilesPreviewLayout({ $, session, storageSet, t });
 
@@ -668,6 +761,110 @@ bindFilesEntryEffects({
 updateSortDirection();
 updateNavigationButtons();
 
+// 内嵌应用视图：点击侧边栏「应用」分区项时不做页面导航，而是在内容区
+// 内嵌挂载模块 iframe；会话跨视图保活，空闲 5 分钟后自动回收。
+let embeddedSurface, embeddedAppId;
+function showEmbeddedView(showApp) {
+  // 只隐藏文件内容区（#app-stage 是 .layout 的子节点，藏 .layout 会把
+  // 模块视图一起藏掉——这是「浏览文件后再点投资失效」的根因）。
+  const content = document.querySelector('.layout > .content');
+  if (content) content.hidden = showApp;
+  const preview = $('preview');
+  if (preview) preview.hidden = showApp;
+  // 内嵌应用视图上方不显示文档管理器的导航/排序工具栏
+  const toolbar = document.querySelector('header.toolbar');
+  if (toolbar) {
+    toolbar.hidden = showApp;
+    // toolbar 占据网格首行（固定 52px），隐藏时收起该行，避免应用视图上方留空条
+    document.body.style.gridTemplateRows = showApp ? '0 minmax(0,1fr) 0' : '';
+  }
+  // 子应用视图不显示文档管理器的 status-bar（与 toolbar 同收第三行）
+  const statusBar = $('status-bar');
+  if (statusBar) statusBar.hidden = showApp;
+  const stage = $('app-stage');
+  if (stage) stage.hidden = !showApp;
+}
+function setAppActive(appId) {
+  const items = document.querySelectorAll('#app-menu-apps .app-menu-item');
+  items.forEach((item) => {
+    const match = appId && item.dataset.kind === NAVIGATION_KIND_APP && item.dataset.appId === appId;
+    item.classList.toggle('active', Boolean(match));
+    item.setAttribute('aria-current', match ? 'page' : 'false');
+  });
+}
+function leaveEmbeddedView({ pushState = true } = {}) {
+  embeddedSurface = undefined;
+  embeddedAppId = undefined;
+  showEmbeddedView(false);
+  setAppActive('');
+  if (session.currentPath) {
+    filesSidebar?.setActivePath(session.currentPath);
+    renderFilesBreadcrumb($('breadcrumb'), session.currentPath, navigate);
+  } else {
+    filesSidebar?.setActivePath('');
+    renderFilesBreadcrumb($('breadcrumb'), pathParts(''));
+  }
+  if (pushState) {
+    const url = new URL(location.href);
+    url.searchParams.delete('app');
+    if (session.currentPath) url.searchParams.set('path', session.currentPath);
+    if (location.search !== url.search) {
+      history.pushState({ type: 'path', path: session.currentPath }, '', url.pathname + (url.search || ''));
+    }
+  }
+}
+function openEmbeddedApp(appId, { pushState = true } = {}) {
+  if (embeddedAppId === appId) {
+    showEmbeddedView(true);
+    setAppActive(appId);
+    filesSidebar?.setActivePath('');
+    if (pushState) {
+      const url = new URL(location.href);
+      url.searchParams.delete('path');
+      url.searchParams.delete('root');
+      url.searchParams.set('app', appId);
+      if (location.search !== url.search) {
+        history.pushState({ type: 'app', appId }, '', url.pathname + url.search);
+      }
+    }
+    return;
+  }
+  embeddedSurface?.dispose?.();
+  embeddedSurface = undefined;
+  const stage = $('app-stage');
+  if (!stage) return;
+  embeddedAppId = appId;
+  showEmbeddedView(true);
+  setAppActive(appId);
+  filesSidebar?.setActivePath('');
+  if (pushState) {
+    const url = new URL(location.href);
+    url.searchParams.delete('path');
+    url.searchParams.delete('root');
+    url.searchParams.set('app', appId);
+    if (location.search !== url.search) {
+      history.pushState({ type: 'app', appId }, '', url.pathname + url.search);
+    }
+  }
+  embeddedSurface = createEmbeddedAppSurface({
+    appId,
+    stage,
+    onClosed: () => { if (embeddedAppId === appId) leaveEmbeddedView(); },
+  });
+  void embeddedSurface.open();
+}
+function bindEmbeddedAppNavigation() {
+  const nav = $('app-menu-apps');
+  if (!nav) return;
+  nav.addEventListener('click', (event) => {
+    const item = event.target.closest('.app-menu-item');
+    if (!item || item.dataset.kind !== NAVIGATION_KIND_APP || !item.dataset.appId) return;
+    event.preventDefault();
+    openEmbeddedApp(item.dataset.appId);
+  });
+  globalThis.window?.addEventListener('pagehide', () => embeddedSurface?.dispose?.());
+}
+
 async function bootstrap() {
   await Promise.race([localeReady, new Promise((resolve) => setTimeout(resolve, 1_000))]);
   document.documentElement.lang = filesLocale.language === 'en' ? 'en' : 'zh-CN';
@@ -677,6 +874,7 @@ async function bootstrap() {
   // from chrome.storage.local — no extra host round-trip is needed here
   // because refreshAppProjection() already updated it for this page.
   mountAppMenu($('app-menu-apps'), { t }).catch(() => {});
+  bindEmbeddedAppNavigation();
   filesSidebar = createFilesSidebar({
     container: $('app-sidebar'),
     resizer: $('sidebar-resizer'),
@@ -699,6 +897,14 @@ async function bootstrap() {
     onAppsCenter: (anchor) => openAppsCenter(anchor).catch((error) => toast(error.message, 'error')),
     t: (key, fallback) => t(key, fallback),
   });
+  // 嵌入应用视图的常驻折叠按钮：与侧栏 brand 内按钮同一 toggle 路径。
+  const stageToggleBtn = $('app-stage-toggle-sidebar-btn');
+  if (stageToggleBtn) {
+    stageToggleBtn.addEventListener('click', () => {
+      filesSidebar.toggle();
+      applySidebarCollapsed();
+    });
+  }
   init();
 }
 
@@ -710,11 +916,13 @@ function applySidebarCollapsed() {
   else {
     document.querySelector('.layout')?.classList.toggle('sidebar-collapsed', sidebarCollapsed);
     document.body.classList.toggle('sidebar-collapsed', sidebarCollapsed);
-    const button = $('toggle-sidebar');
-    if (button) {
-      button.setAttribute('aria-pressed', String(sidebarCollapsed));
-      button.title = t(sidebarCollapsed ? 'expandSidebar' : 'collapseSidebar', sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar');
-      button.setAttribute('aria-label', button.title);
-    }
+  }
+  // 嵌入应用视图的常驻悬浮按钮（参考 space-toggle-sidebar-btn）：
+  // 侧栏折叠后 brand 内原按钮不可见，由它承担折叠/展开与状态同步。
+  const stageToggle = $('app-stage-toggle-sidebar-btn');
+  if (stageToggle) {
+    stageToggle.setAttribute('aria-pressed', String(sidebarCollapsed));
+    stageToggle.title = t(sidebarCollapsed ? 'expandSidebar' : 'collapseSidebar', sidebarCollapsed ? '展开侧栏' : '折叠侧栏');
+    stageToggle.setAttribute('aria-label', stageToggle.title);
   }
 }

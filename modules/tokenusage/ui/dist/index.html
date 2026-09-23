@@ -1,0 +1,558 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Token Monitor</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --glass-rgb: 48, 52, 56;
+        --overlay-rgb: 255, 255, 255;
+        --line-rgb: 232, 238, 244;
+        --panel-rgb: 16, 21, 30;
+        --sunken-rgb: 4, 8, 13;
+        --glass-alpha: 0.72;
+        --line-alpha: 0.12;
+        --glass: rgba(var(--glass-rgb), var(--glass-alpha));
+        --glass-filter: blur(32px) saturate(115%);
+        --line: rgba(var(--line-rgb), var(--line-alpha));
+        --line-strong: rgba(var(--line-rgb), 0.24);
+        --text: #eef5fb;
+        --muted: #a3adbb;
+        --accent: #b7ead4;
+        --accent-rgb: 183, 234, 212;
+        --number: #f3fbf7;
+        --blue: #73bdf5;
+        --orange: #f4a073;
+        --purple: #b394f4;
+        --yellow: #f1d973;
+        --red: #f47788;
+        --shadow: rgba(0, 0, 0, 0.45);
+        --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+      }
+      [data-theme="light"] {
+        color-scheme: light;
+        --glass-rgb: 246, 247, 249;
+        --overlay-rgb: 15, 18, 24;
+        --line-rgb: 24, 28, 36;
+        --panel-rgb: 255, 255, 255;
+        --sunken-rgb: 188, 196, 206;
+        --glass: rgba(var(--glass-rgb), 0.9);
+        --text: #1c1f26;
+        --muted: #5b626d;
+        --accent: #2563eb;
+        --accent-rgb: 37, 99, 235;
+        --number: #111827;
+      }
+      * { box-sizing: border-box; margin: 0; padding: 0; }
+      html, body {
+        width: 100%;
+        height: 100%;
+        background: transparent;
+        color: var(--text);
+        font-family: var(--font-mono);
+        font-size: 11px;
+        user-select: none;
+        overflow: hidden;
+      }
+      .shell {
+        position: relative;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+        width: 100%;
+        height: 100%;
+        padding: 16px 18px;
+        background: var(--glass);
+        box-shadow: 0 22px 55px var(--shadow);
+        -webkit-backdrop-filter: var(--glass-filter);
+        backdrop-filter: var(--glass-filter);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        overflow: hidden;
+      }
+      /* Titlebar */
+      .titlebar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding-bottom: 8px;
+        border-bottom: 1px solid var(--line);
+      }
+      .app-title {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 13px;
+        font-weight: 700;
+        letter-spacing: 0.02em;
+        color: var(--text);
+      }
+      .app-title-mark {
+        color: var(--accent);
+        font-size: 14px;
+      }
+      .live-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: #22c55e;
+        box-shadow: 0 0 8px #22c55e;
+      }
+      .status-text {
+        font-size: 10px;
+        color: var(--muted);
+        margin-top: 2px;
+      }
+      .period-tabs {
+        display: flex;
+        gap: 2px;
+        background: rgba(var(--sunken-rgb), 0.5);
+        padding: 2px;
+        border-radius: 6px;
+        border: 1px solid var(--line);
+      }
+      .period-tab {
+        padding: 4px 10px;
+        border: none;
+        background: transparent;
+        color: var(--muted);
+        cursor: pointer;
+        border-radius: 4px;
+        font-size: 10px;
+        font-weight: 600;
+        letter-spacing: 0.05em;
+        transition: all 120ms ease;
+      }
+      .period-tab.active {
+        background: var(--accent);
+        color: #0b0f17;
+      }
+      /* Total Panel (Iconic Token Monitor style) */
+      .total-panel {
+        padding: 6px 2px 14px;
+        border-bottom: 1px solid var(--line);
+      }
+      .total-label {
+        font-size: 10px;
+        font-weight: 600;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+        text-transform: uppercase;
+      }
+      .total-number-row {
+        display: flex;
+        align-items: baseline;
+        gap: 12px;
+        margin-top: 4px;
+      }
+      .total-number {
+        font-size: clamp(34px, 9vw, 48px);
+        font-weight: 600;
+        color: var(--number);
+        font-variant-numeric: tabular-nums;
+        line-height: 1.05;
+      }
+      .cost {
+        font-size: 14px;
+        font-weight: 600;
+        color: var(--accent);
+        font-variant-numeric: tabular-nums;
+      }
+      /* View Switcher */
+      .view-switcher {
+        display: flex;
+        gap: 6px;
+        overflow-x: auto;
+        padding-bottom: 2px;
+        scrollbar-width: none;
+      }
+      .view-switcher::-webkit-scrollbar { display: none; }
+      .view-btn {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 5px 12px;
+        border-radius: 20px;
+        border: 1px solid var(--line);
+        background: rgba(var(--panel-rgb), 0.4);
+        color: var(--muted);
+        cursor: pointer;
+        font-size: 11px;
+        font-weight: 500;
+        white-space: nowrap;
+        transition: all 120ms ease;
+      }
+      .view-btn:hover {
+        background: rgba(var(--panel-rgb), 0.8);
+        color: var(--text);
+      }
+      .view-btn.active {
+        background: rgba(var(--accent-rgb), 0.15);
+        color: var(--accent);
+        border-color: rgba(var(--accent-rgb), 0.4);
+      }
+      /* Content Container */
+      .content-area {
+        flex: 1;
+        overflow-y: auto;
+        padding-right: 2px;
+        scrollbar-width: thin;
+        scrollbar-color: var(--line) transparent;
+      }
+      /* Breakdown List (Tools) */
+      .breakdown {
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .tool-row {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        padding: 8px 10px;
+        border-radius: 8px;
+        background: rgba(var(--panel-rgb), 0.3);
+        border: 1px solid var(--line);
+        transition: background 120ms ease;
+      }
+      .tool-row:hover {
+        background: rgba(var(--panel-rgb), 0.6);
+      }
+      .tool-row-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      .tool-brand {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .tool-dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+      }
+      .tool-name {
+        font-weight: 600;
+        font-size: 12px;
+        color: var(--text);
+      }
+      .tool-metrics {
+        display: flex;
+        align-items: baseline;
+        gap: 10px;
+        font-variant-numeric: tabular-nums;
+      }
+      .tool-tokens {
+        font-weight: 600;
+        color: var(--number);
+      }
+      .tool-cost {
+        color: var(--accent);
+        font-size: 10px;
+      }
+      .progress-track {
+        width: 100%;
+        height: 4px;
+        background: rgba(var(--sunken-rgb), 0.6);
+        border-radius: 2px;
+        overflow: hidden;
+      }
+      .progress-fill {
+        height: 100%;
+        border-radius: 2px;
+        transition: width 300ms ease;
+      }
+      /* Limits View */
+      .limits-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+        gap: 12px;
+      }
+      .limit-card {
+        background: rgba(var(--panel-rgb), 0.4);
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 12px 14px;
+        display: flex;
+        flex-direction: column;
+        gap: 10px;
+      }
+      .limit-head {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      .limit-title {
+        font-weight: 600;
+        font-size: 12px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .status-pill {
+        padding: 2px 6px;
+        border-radius: 4px;
+        font-size: 9px;
+        font-weight: 600;
+        text-transform: uppercase;
+      }
+      .status-ok { background: rgba(16, 185, 129, 0.15); color: #22c55e; }
+      .status-not_configured { background: rgba(148, 163, 184, 0.15); color: var(--muted); }
+      .limit-meters {
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+      }
+      .meter-label-row {
+        display: flex;
+        justify-content: space-between;
+        font-size: 10px;
+        color: var(--muted);
+      }
+      /* Sessions & Models Table */
+      table.data-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 11px;
+      }
+      table.data-table th {
+        text-align: left;
+        padding: 8px 10px;
+        color: var(--muted);
+        border-bottom: 1px solid var(--line);
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
+      }
+      table.data-table td {
+        padding: 10px;
+        border-bottom: 1px solid rgba(var(--line-rgb), 0.06);
+      }
+      table.data-table tr:hover td {
+        background: rgba(var(--panel-rgb), 0.4);
+      }
+      /* Footer */
+      .footer {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding-top: 10px;
+        border-top: 1px solid var(--line);
+      }
+      .live-token-rate {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 11px;
+        font-weight: 600;
+        color: var(--accent);
+        font-variant-numeric: tabular-nums;
+      }
+      .footer-actions {
+        display: flex;
+        gap: 8px;
+      }
+      .btn-icon {
+        width: 26px;
+        height: 26px;
+        border-radius: 6px;
+        border: 1px solid var(--line);
+        background: rgba(var(--panel-rgb), 0.4);
+        color: var(--text);
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 13px;
+        transition: all 120ms ease;
+      }
+      .btn-icon:hover {
+        background: rgba(var(--panel-rgb), 0.8);
+        border-color: var(--line-strong);
+      }
+      /* Modal */
+      .modal-backdrop {
+        position: fixed;
+        inset: 0;
+        background: rgba(0, 0, 0, 0.7);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 100;
+        backdrop-filter: blur(8px);
+      }
+      .modal-window {
+        width: 90%;
+        max-width: 640px;
+        max-height: 80vh;
+        background: rgba(22, 27, 34, 0.95);
+        border: 1px solid var(--line-strong);
+        border-radius: 12px;
+        padding: 18px;
+        overflow-y: auto;
+        box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5);
+      }
+      .turn-card {
+        background: rgba(var(--sunken-rgb), 0.5);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 10px;
+        margin-bottom: 8px;
+      }
+      .turn-header {
+        display: flex;
+        justify-content: space-between;
+        color: var(--muted);
+        font-size: 10px;
+        margin-bottom: 6px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <!-- Titlebar -->
+      <header class="titlebar">
+        <div>
+          <div class="app-title">
+            <span class="app-title-text">Token Monitor</span>
+            <span class="app-title-mark">Σ</span>
+            <span class="live-dot" title="Live stream connected"></span>
+          </div>
+          <div class="status-text" id="status-text">Local-first · Live</div>
+        </div>
+        <nav class="period-tabs" aria-label="Period tabs">
+          <button class="period-tab active" data-period="today">天</button>
+          <button class="period-tab" data-period="week">周</button>
+          <button class="period-tab" data-period="month">月</button>
+          <button class="period-tab" data-period="allTime">总</button>
+        </nav>
+      </header>
+
+      <!-- Total Panel -->
+      <section class="total-panel">
+        <div class="total-label">TOTAL TOKENS</div>
+        <div class="total-number-row">
+          <div id="totalTokens" class="total-number">0</div>
+          <div id="cost" class="cost">$0.00</div>
+        </div>
+      </section>
+
+      <!-- View Switcher -->
+      <nav class="view-switcher" role="tablist">
+        <button class="view-btn active" data-view="home">🏠 主页 (Home)</button>
+        <button class="view-btn" data-view="limits">🎯 额度 (Limits)</button>
+        <button class="view-btn" data-view="tools">🛠️ 工具 (Tools)</button>
+        <button class="view-btn" data-view="sessions">💬 会话 (Sessions)</button>
+        <button class="view-btn" data-view="models">🤖 模型 (Models)</button>
+        <button class="view-btn" data-view="trends">📈 趋势 (Trends)</button>
+      </nav>
+
+      <!-- Content Area -->
+      <main class="content-area" id="content-area">
+        <!-- 1. Home View -->
+        <section id="view-home" class="breakdown">
+          <!-- Populated by JS -->
+        </section>
+
+        <!-- 2. Limits View -->
+        <section id="view-limits" class="limits-grid" style="display:none;">
+          <!-- Populated by JS -->
+        </section>
+
+        <!-- 3. Tools View -->
+        <section id="view-tools" style="display:none;">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>工具名称</th>
+                <th>分类</th>
+                <th>Token 消耗</th>
+                <th>费用 (USD)</th>
+                <th>会话数</th>
+                <th>状态</th>
+              </tr>
+            </thead>
+            <tbody id="tools-table-body"></tbody>
+          </table>
+        </section>
+
+        <!-- 4. Sessions View -->
+        <section id="view-sessions" style="display:none;">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>会话标题 / 项目</th>
+                <th>工具</th>
+                <th>Token 消耗</th>
+                <th>费用</th>
+                <th>消息数</th>
+                <th>时间</th>
+              </tr>
+            </thead>
+            <tbody id="sessions-table-body"></tbody>
+          </table>
+        </section>
+
+        <!-- 5. Models View -->
+        <section id="view-models" style="display:none;">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>模型</th>
+                <th>输入</th>
+                <th>输出</th>
+                <th>总 Token</th>
+                <th>费用</th>
+              </tr>
+            </thead>
+            <tbody id="models-table-body"></tbody>
+          </table>
+        </section>
+
+        <!-- 6. Trends View -->
+        <section id="view-trends" style="display:none;">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th>日期</th>
+                <th>工具</th>
+                <th>Token 消耗</th>
+                <th>费用</th>
+                <th>会话数</th>
+              </tr>
+            </thead>
+            <tbody id="trends-table-body"></tbody>
+          </table>
+        </section>
+      </main>
+
+      <!-- Footer -->
+      <footer class="footer">
+        <div class="live-token-rate">
+          <span>⚡</span>
+          <span id="liveRateText">0 tok/s</span>
+        </div>
+        <div class="footer-actions">
+          <button id="btn-refresh" class="btn-icon" title="扫描刷新">⟳</button>
+        </div>
+      </footer>
+    </div>
+
+    <!-- Session Detail Modal -->
+    <div id="session-modal" class="modal-backdrop" style="display:none;">
+      <div class="modal-window">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+          <strong id="modal-title" style="font-size:13px;">会话明细</strong>
+          <button id="btn-modal-close" class="btn-icon" style="border:none;">✕</button>
+        </div>
+        <div id="modal-content"></div>
+      </div>
+    </div>
+
+    <script src="/app.js"></script>
+  </body>
+</html>

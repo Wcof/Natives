@@ -70,7 +70,10 @@ fn version_rejects_parameters() {
         method: "version".into(),
         params: json!({"extra": true}),
     };
-    assert_eq!(validate_request(&request).unwrap_err(), "unknown parameter");
+    assert_eq!(
+        validate_request(&request).unwrap_err(),
+        "unknown parameter: extra"
+    );
 }
 
 #[test]
@@ -394,7 +397,10 @@ fn rejects_unknown_method_parameters_and_bad_limits() {
         method: "roots".into(),
         params: json!({"path": "/tmp"}),
     };
-    assert_eq!(validate_request(&unknown).unwrap_err(), "unknown parameter");
+    assert_eq!(
+        validate_request(&unknown).unwrap_err(),
+        "unknown parameter: path"
+    );
     let bad_limit = Request {
         id: "x".into(),
         method: "list_dir".into(),

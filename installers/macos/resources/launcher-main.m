@@ -9,6 +9,7 @@
  *   步骤 2 提供"重新检测"接续；成功后由 Host 打开产品页并退出。
  * 不碰 ~/Downloads，不弹 Terminal，不创建常驻检测服务。 */
 #import <AppKit/AppKit.h>
+#import "NativesStatusBar.h"
 #include <stdlib.h>
 #include <unistd.h>
 
@@ -103,6 +104,14 @@ static StatusController *sharedStatus = nil;
 @property(strong) NSButton *btnCancel;
 @property(strong) NSButton *btnRetry;
 @property() dispatch_block_t deadline;
+@end
+
+/// 两步引导：步骤 1 打开扩展管理页；步骤 2 访达定位 + 重新检测接续。
+@interface WizardController : NSObject <NSWindowDelegate>
+@property(strong) NSWindow *window;
+@property(strong) NSView *step1View;
+@property(strong) NSView *step2View;
+- (void)setupUI;
 @end
 
 @implementation StatusController
@@ -221,13 +230,6 @@ static StatusController *sharedStatus = nil;
     [NSApp terminate:nil];
 }
 
-@end
-
-/// 两步引导：步骤 1 打开扩展管理页；步骤 2 访达定位 + 重新检测接续。
-@interface WizardController : NSObject <NSWindowDelegate>
-@property(strong) NSWindow *window;
-@property(strong) NSView *step1View;
-@property(strong) NSView *step2View;
 @end
 
 @implementation WizardController
@@ -364,10 +366,30 @@ static StatusController *sharedStatus = nil;
 @end
 
 int main(int argc, char **argv) {
-    (void)argc; (void)argv;
     NSApplication *app = [NSApplication sharedApplication];
+
+    // 检查是否作为常驻顶栏/菜单栏启动
+    BOOL statusBarOnly = NO;
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--status-bar") == 0 || strcmp(argv[i], "--menu-bar") == 0) {
+            statusBarOnly = YES;
+            break;
+        }
+    }
+
+    if (statusBarOnly) {
+        // 作为无 Dock 图标的系统菜单栏常驻应用运行
+        [app setActivationPolicy:NSApplicationActivationPolicyAccessory];
+        [[NativesStatusBar sharedBar] setupStatusItem];
+        [app run];
+        return 0;
+    }
+
     [app setActivationPolicy:NSApplicationActivationPolicyRegular];
     [app activateIgnoringOtherApps:YES];
+
+    // 启动同时挂载菜单栏组件，供日常状态排版预览
+    [[NativesStatusBar sharedBar] setupStatusItem];
 
     NSString *manifestPath = [NSString stringWithFormat:@"%s/ChromeExtension/manifest.json", SOURCE_ROOT];
     BOOL manifestInstalled = [[NSFileManager defaultManager] fileExistsAtPath:manifestPath];

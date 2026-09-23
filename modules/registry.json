@@ -1,0 +1,15 @@
+{
+  "schemaVersion": 1,
+  "apps": [
+    {
+      "appId": "fund",
+      "crate": "fund-module",
+      "manifest": "modules/fund/module.json"
+    },
+    {
+      "appId": "tokenusage",
+      "crate": "tokenusage-module",
+      "manifest": "modules/tokenusage/module.json"
+    }
+  ]
+}

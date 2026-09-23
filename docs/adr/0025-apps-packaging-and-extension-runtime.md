@@ -1,6 +1,6 @@
 # ADR-0025：Apps 打包与扩展应用运行时（App Packaging & Extension App Runtime）
 
-- **状态**: 已接受（2026-09-06）；**Apps 目标决策已被 ADR-0027 取代（2026-09-09，A0 生效）**
+- **状态**: 已接受（2026-09-06）；**Apps 目标决策已被 ADR-0027 取代（2026-09-09，A0 生效），并由 [ADR-0031](0031-unified-builtin-app-runtime-and-monorepo-modules.md) 进一步取代（2026-09-14，收敛为统一 Monorepo 模块与单一 App Runtime 二进制）**
 - **决策者**: 产品方（用户）
 - **取代范围注记（2026-09-09 新增）**:
   - **ADR-0027 取代本 ADR 的以下决策**：构建期 UI 白名单（`app-module-registry.js` / Extension App UI 随扩展发布）、旧 Catalog/协议预算（Catalog v2、`.nap` ≤ 5 MiB wire / 20 MiB payload）、旧运行呈现方式（扩展内置 UI mount）。新目标见 ADR-0027 与 [托管应用契约 v1](../contracts/managed-app-contract.md)。

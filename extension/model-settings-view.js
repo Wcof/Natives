@@ -12,6 +12,7 @@ export function createModelSettingsView({ t, onAction }) {
   let activeUsageTab = 'overview';
   let activeAdvancedTab = 'basic';
   let toastTimer = null;
+  let noticeTimer = null;
 
   const dialog = document.createElement('dialog');
   dialog.className = 'model-settings-dialog';
@@ -79,6 +80,8 @@ export function createModelSettingsView({ t, onAction }) {
             </header>
             <div class="model-apps-container" data-role="appsContainer">
               <div class="apps-list" data-role="appsList" role="list"></div>
+              <!-- 模块内嵌视图：点击模块时在对话框内容区渲染，左侧导航保持不变 -->
+              <div id="app-stage" hidden></div>
             </div>
           </section>
           <section class="model-settings-page" data-page-panel="custom">
@@ -150,7 +153,11 @@ export function createModelSettingsView({ t, onAction }) {
   return {
     dialog,
     open() { if (!dialog.open) dialog.showModal(); },
-    close() { dialog.close(); },
+    close() {
+      clearTimeout(noticeTimer);
+      clearTimeout(toastTimer);
+      dialog.close();
+    },
     setPage(page) {
       activePage = page;
       for (const item of dialog.querySelectorAll('[data-page]')) {
@@ -192,8 +199,23 @@ export function createModelSettingsView({ t, onAction }) {
     get activeUsageTab() { return activeUsageTab; },
     get activeAdvancedTab() { return activeAdvancedTab; },
     setLoading(loading) { roles.loading.hidden = !loading; dialog.setAttribute('aria-busy', String(loading)); },
-    showError(message) { roles.error.hidden = !message; roles.error.querySelector('p').textContent = message || ''; if (message) roles.notice.hidden = true; },
-    showNotice(message) { roles.notice.hidden = !message; roles.notice.textContent = message || ''; },
+    showError(message) {
+      clearTimeout(noticeTimer);
+      roles.error.hidden = !message;
+      roles.error.querySelector('p').textContent = message || '';
+      if (message) roles.notice.hidden = true;
+    },
+    showNotice(message, duration = 3500) {
+      clearTimeout(noticeTimer);
+      roles.notice.hidden = !message;
+      roles.notice.textContent = message || '';
+      if (message && duration > 0) {
+        noticeTimer = setTimeout(() => {
+          roles.notice.hidden = true;
+          roles.notice.textContent = '';
+        }, duration);
+      }
+    },
     showToast(message) {
       triggerToast(message);
     },

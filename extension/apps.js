@@ -1,14 +1,13 @@
 // App Center owns its Native Port and projects the fixed built-in modules of
 // the complete Natives product (plan §3.4/§4): open, show/hide, preferences
-// and data management. Module download/install/update/uninstall are retired
-// (2026-09-12 convergence): the center never loads a catalog, never calls
-// suite_prepare or the chunked install chain, and a failed handshake stops
-// every dependent call instead of falling back to a legacy path.
+// and data management. Modules are shipped in the complete product; the
+// center has no module distribution or remote discovery path.
 import { createNativeClient } from './native-client.js';
 import { saveAppNavigation, projectionFromApps } from './app-navigation-projection.js';
-import { storageGet } from './files-preferences.js';
+import { storageGet, storageSet } from './files-preferences.js';
 import { appLifecycle } from './app-lifecycle.js';
 import { classifyAppError } from './app-errors.js';
+import { createAppShell } from './app.js';
 
 // AC-11: standalone pages inherit the product appearance preference and
 // follow its changes instead of a hardcoded theme.
@@ -34,14 +33,14 @@ export function createAppCenter({
 } = {}) {
   const list = customList || (typeof document !== 'undefined' ? document.getElementById('apps-list') : null);
   const toast = customToast || (typeof document !== 'undefined' ? document.getElementById('apps-toast') : null);
-  const state = { apps: [], modules: [], retained: [], pendingResets: [], product: null,
+  const state = { apps: [], modules: [], pendingResets: [], product: null,
     revision: 0, host: null, loading: true, error: null, busy: new Map(), failures: new Map() };
   let toastTimer, idleTimer, disposed = false, suspended = false;
   const dialogs = new Set();
   let lifecycle = appLifecycle();
   const native = client || createNativeClient({
     host: 'com.natives.file_manager', timeoutMs: 20_000,
-    writeMethods: new Set(['apps:clear_data', 'apps:recover', 'apps:set_enabled', 'apps:set_sidebar', 'apps:open_onboarding']),
+    writeMethods: new Set(['apps:clear_data', 'apps:set_enabled', 'apps:set_sidebar', 'apps:open_onboarding']),
     onDisconnect: (error, intentional) => {
       state.host = null;
       if (!intentional && !disposed) { state.error = classifyAppError(error); render(); }
@@ -99,7 +98,7 @@ export function createAppCenter({
     state.host = null;
     const origin = globalThis.chrome?.runtime?.getURL?.('') || globalThis.location?.origin;
     const host = await native.call('apps:handshake', { origin });
-    if (host.appsProtocolVersion !== 4) {
+    if (host.appsProtocolVersion !== 5) {
       throw Object.assign(new Error('app host update required'), { code: 'APP_HOST_UPDATE_REQUIRED' });
     }
     state.host = host;
@@ -112,7 +111,6 @@ export function createAppCenter({
       if (disposed || suspended) return;
       state.apps = snapshot.apps || [];
       state.modules = snapshot.modules || [];
-      state.retained = snapshot.retainedData || [];
       state.pendingResets = snapshot.pendingDataResets || [];
       state.product = snapshot.product || null;
       state.revision = snapshot.revision;
@@ -123,8 +121,7 @@ export function createAppCenter({
     scheduleIdle();
   }
   async function reconnect() {
-    // Plan §3.4: a failed handshake stops every dependent call. There is no
-    // catalog reload, no suite preparation and no legacy fallback chain.
+    // A failed handshake stops every dependent call; there is no fallback host.
     try { await handshake(); }
     catch (error) { state.error = classifyAppError(error); render(); return; }
     await refresh();
@@ -145,13 +142,13 @@ export function createAppCenter({
   function items() {
     const entries = new Map();
     // Fixed modules come from the Host's product manifest projection: an
-    // empty install table still shows every built-in module of the product.
+    // empty preference table still shows every built-in module of the product.
     for (const module of state.modules) {
       entries.set(module.appId, {
         app_id: module.appId,
         name: localized(module.name) || module.appId,
         description: module.description || null,
-        icon: module.appId === 'fund' ? 'grid' : 'box',
+        icon: module.icon || 'grid',
         entryRoute: module.entryRoute || '',
         present: Boolean(module.present),
         configured: Boolean(module.configured),
@@ -171,28 +168,15 @@ export function createAppCenter({
         fixed: false,
       };
       Object.assign(entry, {
-        installed: true,
-        installedVersion: app.version,
+        registered: true,
+        version: app.version,
         enabled: app.enabled,
         showInSidebar: app.show_in_sidebar,
-        recoveryPending: app.recovery_pending,
         needsMigration: app.needs_migration,
         hostRegistered: app.host_registered,
         sidebarOrder: app.sidebar_order,
       });
       entries.set(app.app_id, entry);
-    }
-    for (const retained of state.retained) {
-      const entry = entries.get(retained.app_id) || {
-        app_id: retained.app_id,
-        name: retained.name || retained.app_id,
-        description: null,
-        icon: 'box',
-        entryRoute: `app.html?app=${encodeURIComponent(retained.app_id)}`,
-        fixed: false,
-      };
-      Object.assign(entry, { retained: true, cleanupPending: retained.cleanup_pending, purgeData: retained.purge_data });
-      entries.set(retained.app_id, entry);
     }
     return [...entries.values()].sort((a, b) => String(a.name).localeCompare(String(b.name)));
   }
@@ -207,19 +191,10 @@ export function createAppCenter({
     if (disposed || suspended || !list) return;
     list.replaceChildren();
     if (state.error) list.append(statusRow(state.error, reconnect));
-    // Plan §3.3: the explicit "Finish Natives setup" action prepares every
-    // fixed module of the product for this OS user — never per-module
-    // installs, and only when a verified product source is available.
-    if (!state.error && state.product && state.product.configured === false) {
-      if (state.product.sourcePresent) {
-        const setup = node('div', 'apps-notice');
-        setup.setAttribute('role', 'status');
-        setup.append(node('span', '', t('appsProductConfigRequired')));
-        setup.append(action('bolt', t('appsProductConfigure'), () => configureProduct(), { primary: true }));
-        list.append(setup);
-      } else {
-        list.append(statusRow('appsProductSourceMissing'));
-      }
+    // Product projection is prepared by the first verified Host handshake;
+    // the center never exposes a module installation/configuration action.
+    if (!state.error && state.product && !state.product.sourcePresent) {
+      list.append(statusRow('appsProductSourceMissing'));
     }
     const entries = items();
     if (state.loading && !entries.length) list.append(statusRow('appsLoading'));
@@ -233,20 +208,6 @@ export function createAppCenter({
       await native.call('apps:open_onboarding', {});
     }));
     list.append(guide);
-  }
-  async function configureProduct() {
-    if (state.busy.size) throw Object.assign(new Error('app busy'), { code: 'APP_BUSY' });
-    state.loading = true;
-    render();
-    try {
-      await native.call('apps:product_configure', {});
-      setToast(t('appsProductConfigured'));
-    } catch (error) {
-      if (!disposed) state.error = classifyAppError(error);
-    } finally {
-      state.loading = false;
-      if (!disposed) await refresh();
-    }
   }
   function toggle(label, checked, onChange) {
     const container = node('label', 'apps-toggle');
@@ -273,7 +234,7 @@ export function createAppCenter({
     const description = localized(entry.description);
     if (description) body.append(node('div', 'desc', description));
     const meta = node('div', 'meta');
-    const version = entry.installedVersion || entry.version;
+    const version = entry.version;
     if (version) meta.append(node('span', '', `v${version}`));
     // §4.1: no store fields. Data usage stays honestly "not reported"
     // until a module owner provides real numbers (plan §3.4).
@@ -287,38 +248,27 @@ export function createAppCenter({
       actions.append(node('span', 'status', t(busy.stage)));
     } else {
       let status;
-      if (entry.cleanupPending || resetPending) status = 'appsCleanupPending';
-      else if (entry.recoveryPending) status = 'appsRecoveryPending';
+      if (resetPending) status = 'appsClearing';
       else if (entry.needsMigration) status = 'appsNeedsMigration';
-      else if (entry.installed && !entry.hostRegistered) status = 'appsRepairRequired';
-      else if (entry.installed) status = entry.enabled ? 'appsReady' : 'appsDisabled';
-      else if (entry.fixed) status = entry.present && entry.configured ? 'appsReady' : 'appsProductConfigRequired';
-      else if (entry.retained) status = 'appsDataRetained';
-      else status = 'appsProductConfigRequired';
+      else if (entry.registered && !entry.hostRegistered) status = 'appsRepairRequired';
+      else if (entry.registered) status = entry.enabled ? 'appsReady' : 'appsDisabled';
+      else if (entry.fixed) status = entry.present && entry.configured ? 'appsReady' : 'appsProductSourceMissing';
+      else status = 'appsProductSourceMissing';
       actions.append(node('span', 'status', t(status)));
-      if (entry.recoveryPending) {
-        actions.append(action('refresh', t('appsRepair'), async () => {
-          await stopOwner(entry.app_id);
-          lifecycle.notify('maintenance', entry.app_id);
-          try { await native.call('apps:recover', { appId: entry.app_id }); }
-          finally { lifecycle.notify('changed', entry.app_id); await refresh(); }
-        }, { disabled }));
-      }
-      const openable = (entry.installed || (entry.fixed && entry.present))
-        && entry.enabled && !entry.cleanupPending && !resetPending
-        && !entry.recoveryPending && !entry.needsMigration;
+      const openable = (entry.registered || (entry.fixed && entry.present))
+        && entry.enabled && !resetPending
+        && !entry.needsMigration;
       if (openable) {
+        article.classList.add('clickable');
+        article.onclick = (e) => {
+          if (e.target.closest('button, input, label, a')) return;
+          openApp(entry);
+        };
         actions.append(action('open', t('appsOpen'), () => openApp(entry), { primary: true, disabled }));
       }
-      if (entry.installed && entry.enabled) {
-        actions.append(action('stop', t('appsStop'), async () => {
-          const stopped = await stopOwner(entry.app_id);
-          setToast(t(stopped ? 'appsStoppedToast' : 'appsStopRequested'));
-        }, { disabled }));
-      }
-      // Preferences only exist once the module is configured (an apps
-      // record exists); a not-yet-configured module has no rows to toggle.
-      if (entry.installed) {
+      // Preferences only exist once the module is configured (an apps row
+      // exists); a not-yet-configured module has no row to toggle.
+      if (entry.registered) {
         body.append(toggle(t('appsEnabled'), entry.enabled, async (enabled) => {
           if (!enabled) { await stopOwner(entry.app_id); lifecycle.notify('maintenance', entry.app_id); }
           try { await native.call('apps:set_enabled', { appId: entry.app_id, enabled }); }
@@ -327,7 +277,7 @@ export function createAppCenter({
         body.append(toggle(t('appsShowInSidebar'), entry.showInSidebar, (show) =>
           native.call('apps:set_sidebar', { appId: entry.app_id, show })));
         // §4.3: data management is the only destructive action, fully
-        // separate from the retired uninstall; it keeps code, registration
+        // separate from product code; it keeps code, registration
         // and preferences and requires double confirmation.
         actions.append(action('trash', t('appsClearData'), () => confirmClearData(entry), { danger: true, disabled }));
       }
@@ -417,9 +367,46 @@ export function createAppCenter({
       cancel.focus();
     });
   }
+  // 内嵌打开：模块视图渲染在本页内容区内（#app-stage），左侧导航保持
+  // 不变；重复点击聚焦已有会话，不再另开 app.html 标签页（§4 去重语义
+  // 由内嵌 shell 的 run 计数承担）。
+  let embeddedShell, embeddedAppId;
   function openApp(entry) {
-    // §4: focus the module's existing page in this profile before opening a
-    // new one; repeated opens never spawn duplicate surfaces.
+    const appId = entry.app_id || parseEmbeddedAppId(entry);
+    if (!appId) return;
+    const stage = document.getElementById('app-stage');
+    if (!stage) return openAppExternal(entry);
+    const head = document.querySelector('.apps-content-head');
+    if (embeddedShell && embeddedAppId === appId) {
+      list.hidden = true;
+      if (head) head.hidden = true;
+      stage.hidden = false;
+      return;
+    }
+    closeEmbedded();
+    list.hidden = true;
+    if (head) head.hidden = true;
+    stage.hidden = false;
+    embeddedAppId = appId;
+    embeddedShell = createAppShell({ appId, stage });
+    void embeddedShell.open();
+  }
+  function parseEmbeddedAppId(entry) {
+    const route = entry.entryRoute || '';
+    return new URLSearchParams(route.split('?')[1] || '').get('app') || entry.appId || '';
+  }
+  function closeEmbedded() {
+    embeddedShell?.dispose?.();
+    embeddedShell = undefined;
+    embeddedAppId = undefined;
+    const stage = document.getElementById('app-stage');
+    if (stage) { stage.replaceChildren(); stage.hidden = true; }
+    const head = document.querySelector('.apps-content-head');
+    if (head) head.hidden = false;
+    if (list) list.hidden = false;
+  }
+  // 兜底：无内嵌容器时保持原有独立页打开路径。
+  function openAppExternal(entry) {
     const route = entry.entryRoute || `app.html?app=${encodeURIComponent(entry.app_id)}`;
     const url = globalThis.chrome?.runtime?.getURL ? globalThis.chrome.runtime.getURL(route) : route;
     const base = url.split('?')[0];
@@ -437,6 +424,7 @@ export function createAppCenter({
   }
   function suspend() {
     suspended = true;
+    closeEmbedded();
     for (const close of dialogs) close(null);
     native.disconnect?.();
     lifecycle.close();
@@ -460,6 +448,49 @@ export function createAppCenter({
   document.addEventListener?.('visibilitychange', scheduleIdle);
   const back = document.getElementById('nav-back');
   if (back) back.onclick = () => { dispose(); globalThis.location.assign('space.html'); };
+  const navCenter = document.getElementById('nav-center');
+  if (navCenter) navCenter.onclick = () => { closeEmbedded(); };
+
+  // 侧栏折叠：与空间模块同一交互（按钮 / ⌘B，状态持久化）。
+  // 折叠后整个侧栏隐藏，左上角浮动 icon 按钮负责重新展开。
+  const toggleSidebarBtn = document.getElementById('apps-toggle-sidebar-btn');
+  const expandSidebarBtn = document.getElementById('apps-expand-sidebar-btn');
+  const applySidebarCollapsed = (collapsed) => {
+    document.body.classList.toggle('apps-sidebar-collapsed', collapsed);
+    if (toggleSidebarBtn) {
+      toggleSidebarBtn.setAttribute('aria-pressed', String(collapsed));
+      const title = collapsed ? (t('expandSidebar', '展开侧栏')) : (t('collapseSidebar', '折叠侧栏'));
+      toggleSidebarBtn.title = title;
+      toggleSidebarBtn.setAttribute('aria-label', title);
+    }
+    if (expandSidebarBtn) {
+      expandSidebarBtn.hidden = !collapsed;
+      expandSidebarBtn.setAttribute('aria-pressed', String(!collapsed));
+    }
+    const frame = document.querySelector('#app-stage iframe, #app-stage .managed-app-frame');
+    frame?.contentWindow?.postMessage({ type: 'sidebar-state', collapsed }, '*');
+  };
+  if (toggleSidebarBtn) {
+    toggleSidebarBtn.onclick = () => {
+      const collapsed = !document.body.classList.contains('apps-sidebar-collapsed');
+      applySidebarCollapsed(collapsed);
+      storageSet('natives-apps-sidebar-collapsed', collapsed).catch(() => {});
+    };
+    storageGet('natives-apps-sidebar-collapsed', false).then(applySidebarCollapsed).catch(() => {});
+  }
+  if (expandSidebarBtn) {
+    expandSidebarBtn.onclick = () => {
+      applySidebarCollapsed(false);
+      storageSet('natives-apps-sidebar-collapsed', false).catch(() => {});
+    };
+  }
+  document.addEventListener('keydown', (event) => {
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'b') {
+      event.preventDefault();
+      toggleSidebarBtn?.click();
+    }
+  });
+
   document.querySelectorAll('[data-i18n]').forEach((el) => { el.textContent = t(el.dataset.i18n, el.textContent); });
   const ready = reconnect();
   return { refresh, state, dispose, ready };

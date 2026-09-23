@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { distributableFiles } from '../scripts/extension-package.mjs';
 
@@ -10,7 +11,7 @@ const [manifest, background, files, nativeClient, filesHtml, filesBootstrap, fil
   readFile(new URL('./files.html', import.meta.url), 'utf8'),
   readFile(new URL('./files-bootstrap.js', import.meta.url), 'utf8'),
   readFile(new URL('./files.css', import.meta.url), 'utf8'),
-  readFile(new URL('./launch-workbench.mjs', import.meta.url), 'utf8'),
+  readFile(new URL('./launch-natives.mjs', import.meta.url), 'utf8'),
   readFile(new URL('./dev.mjs', import.meta.url), 'utf8'),
   readFile(new URL('./_locales/en/messages.json', import.meta.url), 'utf8'),
   readFile(new URL('./_locales/zh_CN/messages.json', import.meta.url), 'utf8'),
@@ -64,6 +65,18 @@ const manifestData = JSON.parse(manifest);
 assert.equal(manifestData.chrome_url_overrides.newtab, 'space.html');
 assert.ok(manifestData.permissions.includes('storage'), 'files page persists UI state through chrome.storage.local');
 assert.doesNotMatch(manifestData.chrome_url_overrides.newtab, /newtab\.html/, 'legacy newtab page must stay retired in favor of the space page');
+assert.equal(manifestData.side_panel, undefined, 'side_panel must not be configured in manifest');
+assert.ok(!manifestData.permissions?.includes('sidePanel'), 'sidePanel permission must not be requested');
+const declaredPaths = [
+  manifestData.chrome_url_overrides?.newtab,
+  manifestData.background?.service_worker,
+  ...Object.values(manifestData.action?.default_icon || {}),
+  ...Object.values(manifestData.icons || {}),
+  ...(manifestData.content_scripts || []).flatMap((cs) => [...(cs.js || []), ...(cs.css || [])]),
+].filter(Boolean);
+for (const relPath of declaredPaths) {
+  assert.ok(existsSync(new URL(`./${relPath}`, import.meta.url)), `manifest referenced file must exist: ${relPath}`);
+}
 assert.match(filesBundle, /document\.documentElement\.lang = (?:selectedLanguage|language) === 'en'/);
 assert.match(filesBundle, /chrome\.storage\?\.onChanged\?\.addListener/);
 assert.doesNotMatch(files, /new Promise\([^\n]+chrome\.storage\.local\.(?:get|set)/, 'storage bootstrap must not hang behind callback-wrapped Chrome APIs');

@@ -1,0 +1,16 @@
+{
+  "appId": "tokenusage",
+  "displayName": {
+    "zh_CN": "Token 统计",
+    "en": "Token Usage"
+  },
+  "description": {
+    "zh_CN": "AI 编程工具 Token 用量与费用监控：实时统计、额度预警、会话拆解与多设备同步。",
+    "en": "AI coding tools token & cost monitor: real-time stats, quota alerts, session breakdown, and multi-device sync."
+  },
+  "entryRoute": "app.html?app=tokenusage",
+  "moduleApiVersion": 1,
+  "dataSchemaVersion": 1,
+  "capabilityVersion": 1,
+  "permissions": ["local-data", "keychain"]
+}

@@ -80,6 +80,9 @@
   "aiPerfRange24h": {
     "message": "近 24 小时"
   },
+  "aiPerfRange72h": {
+    "message": "近 72 小时"
+  },
   "aiPerfRange30d": {
     "message": "近 30 天"
   },
@@ -2274,7 +2277,7 @@
     "message": "点击授权权限"
   },
   "plugin_widget_aiPerformance": {
-    "message": "AI 效能（旧版）"
+    "message": "AI 效能总览"
   },
   "desc_aiPerformance": {
     "message": "展示 AI 调用量、Token 与成本趋势与统计"
@@ -2529,163 +2532,37 @@
     "message": "使用 Natives 内置功能"
   },
   "appsList": {
-    "message": "扩展包列表"
-  },
-  "appSurfaceNotFound": {
-    "message": "扩展包未安装或已移除"
+    "message": "内置模块"
   },
   "appSurfaceOpenFailed": {
-    "message": "扩展包无法打开"
-  },
-  "appSurfaceNeedsUpdate": {
-    "message": "需要更新 Natives 后才能打开"
-  },
-  "appSurfaceNeedsUpdateBody": {
-    "message": "当前 Natives 协议不兼容此扩展包，请更新 Natives 后重试。"
+    "message": "模块无法打开"
   },
   "appSurfaceDisabled": {
-    "message": "扩展包已停用"
+    "message": "模块已停用"
   },
   "appSurfaceDisabledBody": {
     "message": "请在应用中心重新启用后打开。"
   },
   "appSurfaceHostOffline": {
-    "message": "Native Host 未连接"
-  },
-  "appSurfaceHostOfflineBody": {
-    "message": "请确认 Natives Host 正在运行（开发模式：npm run dev）。"
-  },
-  "appSurfaceOpenCenter": {
-    "message": "打开应用中心"
-  },
-  "appSurfaceOpenCenterHint": {
-    "message": "请在设置中打开应用中心"
-  },
-  "demoHostOk": {
-    "message": "在线"
-  },
-  "demoHostLost": {
-    "message": "已断开"
-  },
-  "demoConnecting": {
-    "message": "正在连接 demo-host…"
-  },
-  "demoVersion": {
-    "message": "版本"
-  },
-  "demoHost": {
-    "message": "Host"
-  },
-  "demoResourceTitle": {
-    "message": "已下载资源内容"
-  },
-  "demoLoadingResource": {
-    "message": "正在读取资源…"
-  },
-  "demoResourceData": {
-    "message": "数据载荷"
-  },
-  "demoNoData": {
-    "message": "纯扩展应用，无外部数据包"
-  },
-  "demoDisconnected": {
-    "message": "Host 已断开"
-  },
-  "demoPackageMissing": {
-    "message": "资源包缺失"
-  },
-  "demoPackageCorrupt": {
-    "message": "资源包损坏或版本不一致"
-  },
-  "demoResourceImageAlt": {
-    "message": "Demo 资源图片"
-  },
-  "demoPingTitle": {
-    "message": "Host 通信"
+    "message": "模块 Host 未连接"
   },
   "fundEmpty": {
-    "message": "基金应用已安装，暂无资产。"
+    "message": "基金暂无资产。"
   },
   "backToSpace": {
     "message": "返回"
   },
   "appsEmpty": {
-    "message": "暂无可安装扩展包"
+    "message": "暂无内置模块"
   },
   "appsHostOffline": {
     "message": "Native Host 未连接，请确认 Natives 已启动"
   },
-  "appsCatalogUnavailable": {
-    "message": "扩展包目录暂不可用，仅显示已安装扩展包"
-  },
-  "appsNotInstalled": {
-    "message": "未安装"
-  },
-  "appsInstalled": {
-    "message": "已安装"
-  },
-  "appsDisabled": {
-    "message": "已停用"
-  },
-  "appsHasUpdate": {
-    "message": "有更新"
-  },
-  "appsBroken": {
-    "message": "异常"
-  },
-  "appsInstall": {
-    "message": "安装"
-  },
-  "appsUninstall": {
-    "message": "卸载"
-  },
-  "appsUpdate": {
-    "message": "更新"
-  },
   "appsOpen": {
     "message": "打开"
   },
-  "appsStop": {
-    "message": "停止"
-  },
-  "appsStoppedToast": {
-    "message": "扩展包已停止"
-  },
-  "appsStopRequested": {
-    "message": "已请求停止；如仍在其他浏览器会话中使用，请在该会话停止后重试"
-  },
-  "appsRepair": {
-    "message": "修复"
-  },
   "appsRepairRequired": {
     "message": "需要修复"
-  },
-  "appsPublisher": {
-    "message": "发布者"
-  },
-  "appsOfficialPublisher": {
-    "message": "Natives 官方"
-  },
-  "appsSource": {
-    "message": "来源"
-  },
-  "appsOfficialSignedSource": {
-    "message": "已签名的官方目录"
-  },
-  "appsPermissions": {
-    "message": "权限"
-  },
-  "appsDownloadSize": {
-    "message": "下载大小"
-  },
-  "appsCodeUsage": {
-    "message": "运行时载荷"
-  },
-  "appsCompatibility": {
-    "message": "兼容性"
-  },
-  "appsCompatible": {
-    "message": "兼容"
   },
   "appsUserDataUsage": {
     "message": "个人数据占用"
@@ -2693,47 +2570,8 @@
   "appsUsageNotReported": {
     "message": "当前运行时未报告"
   },
-  "appsResolving": {
-    "message": "解析目录…"
-  },
-  "appsDownloading": {
-    "message": "下载安装包…"
-  },
-  "appsVerifying": {
-    "message": "校验完整性…"
-  },
-  "appsRegistering": {
-    "message": "注册运行时…"
-  },
-  "appsCommitting": {
-    "message": "写入应用库…"
-  },
-  "appsInstalledToast": {
-    "message": "扩展包已就绪"
-  },
-  "appsUninstalledToast": {
-    "message": "扩展包已移除（个人数据保留）"
-  },
-  "appsUninstallTitle": {
-    "message": "移除扩展包？"
-  },
-  "appsUninstallBody": {
-    "message": "将移除扩展包程序与相关注册，默认保留个人数据。保留的数据可稍后单独清除。"
-  },
-  "appsUpdateHint": {
-    "message": "V1 更新：先卸载当前版本，再安装新版本（个人数据保留）"
-  },
-  "appsNoPermissions": {
-    "message": "无权限需求"
-  },
   "appsNeedsUpdate": {
     "message": "需要更新 Natives"
-  },
-  "appsNotReleased": {
-    "message": "尚未发布安装包"
-  },
-  "appsUnsupportedPlatform": {
-    "message": "暂无适用于此设备的安装包"
   },
   "appsNetworkError": {
     "message": "网络连接失败"
@@ -2741,26 +2579,20 @@
   "appsBusy": {
     "message": "应用仍在使用中，请关闭后重试"
   },
-  "appsVerificationFailed": {
-    "message": "安全校验失败，已停止安装"
+  "appsRunningElsewhere": {
+    "message": "上一个应用会话正在退出，请稍候重试"
   },
   "appsOperationFailed": {
     "message": "操作未完成，请重试"
   },
+  "appsActivationChanged": {
+    "message": "应用配置已更新，请刷新页面重试"
+  },
+  "appsPackageInvalid": {
+    "message": "应用载荷校验失败，请重新运行 dev 密封流程"
+  },
   "appsCancelled": {
     "message": "已取消安装"
-  },
-  "appsEmbeddedCatalog": {
-    "message": "远端目录不可用，正在显示随扩展发布的目录"
-  },
-  "appsCatalogLoading": {
-    "message": "正在加载应用目录"
-  },
-  "appsCleanupPending": {
-    "message": "清理未完成，可重试"
-  },
-  "appsDataRetained": {
-    "message": "已卸载，个人数据已保留"
   },
   "appsClearData": {
     "message": "删除全部个人数据"
@@ -2780,9 +2612,6 @@
   "appsReady": {
     "message": "就绪"
   },
-  "appsProductConfigRequired": {
-    "message": "需先完成 Natives 配置"
-  },
   "appsClearing": {
     "message": "正在清除数据…"
   },
@@ -2792,26 +2621,14 @@
   "appsDeleteCredentials": {
     "message": "同时删除登录凭据（Keychain）"
   },
-  "appsProductConfigure": {
-    "message": "完成 Natives 配置"
-  },
-  "appsProductConfigured": {
-    "message": "Natives 配置完成，全部内置模块就绪"
-  },
   "appsProductSourceMissing": {
     "message": "未找到已验证的产品安装源，请按安装说明完成 Natives 安装"
-  },
-  "appsPurgeChoice": {
-    "message": "同时删除全部个人数据、配置和凭据"
   },
   "appsPurgeWarning": {
     "message": "此操作会删除该应用的个人数据、配置、日志和凭据，无法恢复。"
   },
   "appsPurgeConfirmTitle": {
     "message": "确认永久删除个人数据？"
-  },
-  "appsRecoveryPending": {
-    "message": "安装中断，待恢复后重试"
   },
   "appSurfacePaused": {
     "message": "应用已暂停"
@@ -3088,9 +2905,6 @@
   },
   "modelUploadPreview": {
     "message": "上传并预览"
-  },
-  "suitePrepareFailed": {
-    "message": "随附应用准备未全部完成，可在应用中心重试或修复"
   },
   "aiPerfRangeCustom": {
     "message": "自定义"

@@ -1,168 +1,95 @@
-# 技术架构 02 · 五大防线与安全红线
+# 技术 02 · 安全边界
 
-> **版本**: 2.0.0 · **日期**: 2026-08-19
-> **关联 ADR**: [ADR-0020](../../adr/0020-ai-native-personal-workspace-rearchitecture.md)（Secret ownership 与 legacy 删除）、[ADR-0001](../../adr/0001-session-token-handshake.md)（Session Token 握手）、[ADR-0002](../../adr/0002-postmessage-origin-verification.md)（来源验证）、[ADR-0006](../../adr/0006-iframe-crash-detection.md)（崩溃检测）、[ADR-0008](../../adr/0008-electron-to-tauri-migration.md)（Tauri 迁移）
-> **关联源文件**: `src-tauri/`、`src/lib/iframe-sandbox.ts`、`src/lib/iframe-manager.ts`、`src/lib/token-manager.ts`
+> 版本：4.0.0 · 日期：2026-09-14
+> 依据：ADR-0020、ADR-0023、ADR-0027、ADR-0029、托管应用契约
 
----
-
-## 一、本篇要约束什么
-
-Natives 把不可信的第三方代码（插件）以 iframe 形式跑在用户桌面上，还管理着用户的凭证与终端。**这是本项目最敏感的约束集合**——任一红线失守都可能导致凭证泄露、任意代码执行、或插件越权。本篇把五大防线与若干安全红线写成 MUST。
-
----
-
-## 二、五大防线（不可妥协）
-
-### 防线 1 · 子进程生命周期 & PID 轮询看门狗
-
-#### R-S1 · 子进程必须挂看门狗
-- **等级**：MUST
-- **分类**：安全、进程
-- **规则**：所有由 Main 派生的长驻子进程（HTTP 服务、终端 PTY、本地创意 dev server 等）**必须**由 Tauri 命令管理；运行时必须有不依赖 Renderer 的周期性退出轮询，父进程死亡时必须以进程组/平台树终止方式自动退出。HTTP 服务**必须**启动时自动选择空闲端口，**禁止**硬编码端口。
-- **为什么**：防止 Main 崩溃后子进程成为孤儿，持续占用端口或泄露凭证环境。
-- **检查方法**：新增长驻子进程时核对是否注册 Tauri 生命周期回调、是否动态选端口。
-
-### 防线 2 · iframe 沙箱（插件隔离的核心）
-
-#### R-S2 · iframe sandbox 属性红线
-- **等级**：MUST
-- **分类**：安全
-- **规则**：插件 iframe 的 `sandbox` 属性**必须**为 `allow-scripts allow-forms`，**必须不**包含 `allow-same-origin`、`allow-top-navigation`、`allow-popups`（除非有 ADR 豁免）。
-- **正例**：`<iframe sandbox="allow-scripts allow-forms" src="...">`
-- **反例**：为了「方便调试」加 `allow-same-origin` → 插件可访问父窗口、cookie、storage，沙箱形同虚设。
-- **为什么**：见 ADR-0002。`allow-same-origin` 会让插件脱离沙箱，是本项目最危险的单点配置错误。
-- **检查方法**：`grep -r "sandbox=" src/components` 逐一核对属性值。
-
-#### R-S3 · 来源验证用 MessageEvent.source，不用 origin
-- **等级**：MUST
-- **分类**：安全
-- **规则**：基座验证 postMessage 来源时**必须**用 `MessageEvent.source` 窗口引用匹配（创建 iframe 时保存 `contentWindow`，收消息时比对），**禁止**依赖 `event.origin`（sandbox iframe 的 origin 是 `"null"`，无法区分）。
-- **为什么**：见 ADR-0002。用 origin 验证在 sandbox iframe 下完全失效。
-- **检查方法**：所有 `window.addEventListener('message', ...)` handler 必须含 `source` 比对逻辑。
-
-#### R-S4 · Session Token 两阶段握手
-- **等级**：MUST
-- **分类**：安全
-- **规则**：插件与基座的每次 Bridge 通信（postMessage 与 HTTP）**必须**携带有效 Session Token。Token **必须**经两阶段握手下发：iframe 加载后主动请求 → 基座验证 source 引用后下发。插件重载时**必须**重新握手。
-- **为什么**：见 ADR-0001。Token 防止 XSS 注入的脚本冒充插件劫持 IPC/HTTP。
-- **检查方法**：HTTP 路由的认证中间件、postMessage handler 的 token 校验是否齐备。
-
-#### R-S5 · 插件静态资源路径前缀隔离
-- **等级**：MUST
-- **分类**：安全、命名
-- **规则**：每个插件的静态资源**必须**走独立路径前缀 `/modules/{moduleId}/`，HTTP 服务**必须**校验请求的 moduleId 与 Token 对应的 moduleId 一致，**禁止**跨模块读取文件。
-- **为什么**：路径隔离是文件层面的最后一道防线，配合 Token 防止插件 A 读插件 B 的代码。
-- **检查方法**：HTTP 静态文件 handler 的 moduleId 一致性校验。
-
-#### R-S6 · HTTP 服务必须注入 CSP
-- **等级**：MUST
-- **分类**：安全
-- **规则**：本地 HTTP 服务响应插件资源时**必须**注入 `Content-Security-Policy` 头，限制 `connect-src` 到本地、禁止 `allow-top-navigation`。CSP 放宽需走 ADR。
-- **为什么**：纵深防御，即使 sandbox 被绕过也限制插件的网络外联。
-- **检查方法**：HTTP 响应头是否含 CSP。
-
-### 防线 3 · 完整 PTY 终端
-
-#### R-S7 · 终端用 portable-pty，降级路径要显式
-- **等级**：SHOULD
-- **分类**：安全、进程
-- **规则**：终端**应该**优先用 `portable-pty` 以支持 TUI/resize；若编译失败**应该**降级到 `child_process.spawn`，但**必须**在日志中显式记录降级，**禁止**静默降级。
-- **为什么**：portable-pty 提供完整 PTY 语义；静默降级会让 TUI 程序静默失效，难排查。
-- **检查方法**：降级分支是否打日志。
-
-#### R-S8 · 终端 Session Token 防劫持
-- **等级**：MUST
-- **分类**：安全
-- **规则**：终端 IPC（write/resize/kill）**必须**校验调用方为可信的 Renderer（经 Tauri adapter），**禁止**接受来自 iframe 的直接终端指令。终端会话**必须不**与插件共享同一 Token 域。
-- **为什么**：防 XSS 注入脚本通过劫持 IPC 操控终端（终端持有注入的凭证）。
-- **检查方法**：终端 IPC handler 的来源校验。
-
-### 防线 4 · 数据库单向总线 & 状态广播
-
-#### R-S9 · 配置变更必须广播
-- **等级**：MUST
-- **分类**：状态、数据
-- **规则**：Main 中任何影响 Renderer 展示的 DB 变更（设置、模块状态、通知等）**必须**通过 `db-state-changed` IPC 广播，Renderer 监听后同步。**禁止**依赖 Renderer 主动轮询或手动刷新。
-- **为什么**：单向总线保证多窗口/多面板状态一致，无需用户刷新。
-- **检查方法**：DB 写操作后是否触发广播；Renderer 是否监听对应 channel。
-
-### 防线 5 · FOUC Guard & Zod 验证
-
-#### R-S10 · 窗口先隐藏，主题就绪后再显示
-- **等级**：MUST
-- **分类**：交互、性能、安全
-- **规则**：
-  - Tauri v2 窗口**必须**以 `visible: false` 启动。
-  - Renderer 启动由 `RootClient` 执行 `get_theme` → Zod 校验 → 注入 `html[data-theme]` 与全量 CSS 变量 → 发送 `theme_ready_signal` → Host 收到后才显示窗口。
-  - 若 Host 读取超时或异常，**必须**使用受控 `dark` fallback 显窗并保留分类错误以供重试，**严禁**在主题就绪前提前显窗导致 FOUC 闪烁。
-- **为什么**：防 FOUC（Flash of Unstyled Content），避免用户看到无主题的裸界面或错误主题闪烁。
-- **检查方法**：`tauri.conf.json` 含 `visible: false`；存在严格的 `theme_ready_signal` 握手。
-
-#### R-S11 · 主题与配置参数必须经 Zod 校验
-- **等级**：MUST
-- **分类**：数据、主题
-- **规则**：从 SQLite 读取的主题色、布局尺寸、配置参数**必须**经 Zod schema 校验后才注入 DOM / 使用（如颜色 hex 正则、像素范围）。**禁止**把未校验的 DB 值直接写进 CSS 变量。
-- **为什么**：损坏的配置不应让界面崩溃或注入非法 CSS。
-- **检查方法**：`theme-engine.ts` 的 `ThemeSchema` 校验是否覆盖所有注入字段。
-
-#### R-S11.1 · Child WebView 独立信任域与能力隔离
-- **等级**：MUST
-- **分类**：安全、沙箱
-- **规则**：
-  - Apps Web Surface 创建的 Child WebView 必须保持独立信任域，**严禁**注入主窗口 Tauri IPC、本地文件读写、进程 spawn、Shell、Secret 或 Workshop Session Token。
-  - WebView 的 URL 必须通过严格的 Scheme 与 Host 白名单校验；加载第三方 Web 应用不得使其具备超越受限 Web 环境的任何能力。
-- **为什么**：第三方 Web 页面可能包含恶意脚本，防止跨域逃逸和本地凭证环境泄露。
-
----
-
-## 三、凭证安全红线
-
-#### R-S12 · 持久 Secret 必须由 OS Keychain 持有
-- **等级**：MUST
-- **分类**：安全、数据
-- **规则**：API Key、OAuth access/refresh token、client secret、代理口令等持久 Secret **必须**写入 OS Keychain；SQLite 只保存非敏感 metadata 与 opaque `secret_ref`。**禁止**把密文与其解密主密钥共同存放在 SQLite 作为完成态设计；**禁止**明文落盘、进入 Renderer、事件或日志。
-
-  从既有 AES-256-GCM / KEK-DEK 数据迁移时，流程**必须**幂等且可回滚：读取旧密文 → 写 Keychain → 回读验证 → 原子切换 `secret_ref` → 延后清理旧密文。Keychain locked/unavailable、进程崩溃和重复启动都必须保持可恢复；未验证前不得删除旧数据。
-- **正例**：Host 用 scoped `SecretStore` interface 读写 Keychain，DB 只记录 `secret_ref`、masked suffix、revision 与状态。
-- **反例**：`provider_kek` 与 `api_key_encrypted` 同在 `natives.db`，或失败时把 token 写临时文件。
-- **为什么**：同盘主密钥无法抵抗数据库文件泄露；OS Keychain 提供独立访问控制与设备级保护。
-- **检查方法**：migration/rollback/locked tests；扫描 DB、日志、事件、临时目录与 Debug 输出；验证 Keychain 删除只发生在引用切换和回滚窗口结束后。
-
-#### R-S13 · 凭证不进 Renderer 内存明文
-- **等级**：SHOULD
-- **分类**：安全
-- **规则**：Renderer **应该**只在「需要展示」时获取凭证掩码（如 `sk-...xxxx`），**禁止**在 Renderer 长期持有完整凭证明文。终端注入等场景由 Main 直接完成，不把明文交给 Renderer。
-- **为什么**：Renderer 是 XSS 的攻击面，内存里的明文凭证可被脚本窃取。
-- **检查方法**：Tauri adapter 暴露的凭证相关 API 是否仅返回掩码。
-
-#### R-S14 · 官方托管应用供应链与承载隔离防线（ADR-0027，取代 ADR-0026/ADR-0025 对应决策，2026-09-09 生效）
-> 2026-09-13 主产品入口精确例外（ADR-0029）：同一完整安装器可以且必须安装 `/Applications/Natives.app` 并进行正常系统应用登记，Launcher 及资源同样验证平台签名与最终摘要。该例外只包含薄打开/引导/诊断入口，不允许内置模块创建独立 `.app`，不改变下述活动模块私有路径、数据/Secret、沙箱及平台信任要求；不自动修改 Chrome profile/企业策略或绕过浏览器安装确认。
+#### R-S1 · Native Messaging 注册最小化与单一 App Runtime 身份
 
 - **等级**：MUST
-- **分类**：安全、供应链、Apps
-- **规则**：
-  - App Catalog 必须为签名产物（Catalog v3，Ed25519，公钥固定于 Core 信任根）；Host 在可信边界重新验签原文、条目元数据并对实际字节计算摘要，禁止信任前端 alreadyVerified 或前端 hash。签名失败、hash 不匹配、平台/架构不符、超尺寸一律拒绝。2026-09-12 收敛：签名 Catalog/验签/事务能力只在完整产品安装/更新层使用，用于核验安装包内固定模块文件；不再存在运行时模块分发链路，无模块独立下载。
-  - 浏览器侧禁止在线下载执行代码（JS/WASM/远程 DSL 解释器、`eval`/`new Function`）；应用业务代码不进入扩展执行上下文，业务由独立官方 App Host（内置模块程序，随完整产品交付）承载。
-  - Native Host 名称（runtimeHost）由 Core 计算并持久化于安装收据；注册为受限 manifest，不接受页面/Catalog 提供的任意命令、绝对路径或 Host 名称。安装路径由 Core 统一决定于 `~/.natives/apps/<appId>/`；`../`、绝对路径、`C:\`、`~/`、symlink 逃逸必须被拒绝；禁止写入 `/Applications`、独立 `.app` bundle、系统 Dock 或 LaunchServices 产品注册。本机载荷不进入 `/Applications` 绝不等于免除代码签名、公证和权限校验：每个正式分发平台的构建载荷必须具有真实平台代码签名与可验证凭据（macOS 须 Developer ID 签名与公证，Windows 须 Authenticode，Linux 须官方发布验签与 ELF 权限控制），禁止通过移除 quarantine、关闭 Gatekeeper 或使用任意 shell 脚本规避安全机制，未使用正式平台身份签名的载荷仅限于下述隔离本地开发模式，macOS 本机代码保留 ad-hoc/开发签名。
-  - app.html 应用 iframe sandbox 精确为 `allow-scripts allow-forms`，禁止 `allow-same-origin`/`allow-top-navigation`/`allow-popups`/downloads；会话鉴权（两阶段握手、≥128bit challenge、32 字节 CSPRNG bearer token、15 分钟上限、load/navigation 立即撤销）、CORS（仅 Origin: null + 指定 method/header + 有效 bearer，无 cookie/credentials）、Host header 校验、单帧 ≤ 512 KiB 与 HTTP 限额必须按[托管应用契约 v1](../../contracts/managed-app-contract.md) §5/§7 实现。旧通用路径前缀规则（插件 `/modules/{id}/`）不再适用于 Apps；Apps 改为每应用独立端口与资源域。
-  - 应用专属 Secret（凭据/Token）只进 OS Keychain（namespace `com.natives.app.<id>`），禁止进入 `*.db`/`natives.db`/日志/前端/`chrome.storage`；Core 清理仅按精确 service/属性或带冒号分隔完整 target 前缀匹配。
-  - 原生程序按用户权限运行，本防线不宣称对恶意原生程序有 OS 级沙箱；官方发布签名审查是信任前提，第三方 native 包明确拒绝。
-  - **统一套件（ADR-0029；2026-09-12 收敛为整包统一交付）**：套件本身被信任不替代内部可执行程序验证。完整产品安装包内的固定模块文件与 bundle manifest 必须验签并与实际字节核对；包内不能提供任意启动路径/安装脚本。系统目录只允许主程序/主 Host 和固定内置模块文件，Core 以当前用户权限完成注册与首次数据初始化；root 安装器不得运行用户业务或触碰其 DB/Keychain。源中路径逃逸、链接、错误 owner/权限均拒绝。
-  - **隔离本地开发（ADR-0029）**：无需 Developer ID/公证的例外必须由非生产构建身份、显式开发启动、独立根/注册/Keychain 命名空间与本机构建摘要共同限定，不能靠 fixture 字段或环境变量自授。生产构建拒绝开发信任根和开发包；本地模式仍验 Catalog、hash、格式、来源、权限、会话和数据恢复。开发钥匙可用于隔离 fixture，绝不能打进正式包。
-  - **证据不可混用**：A-Local/B-Local 不代表平台签名、公证或生产 A/B Gate 通过；系统拦截时报告实际文件路径、摘要及签名/评估结果，禁止无界重试、伪造成功或自动点击放行。只读诊断不修改隔离属性或系统信任设置。
-- **为什么**：独立原生应用引入可执行载荷供应链与本地服务攻击面；签名、Host 侧重验、sandbox、会话鉴权、限额与 Secret 隔离是不可缺的防线。
-- **检查方法**：`scripts/apps/check-catalog-signature.mjs`、`check-app-security.mjs`、`check-package-budget.mjs` 与契约黑盒套件全绿；Path Security Gate 测试覆盖逃逸向量；真实浏览器验证 sandbox/CORS/Token 撤销。
+- 系统原生 Native Messaging 注册收敛且固定：Files Host（`com.natives.file_manager`）、Model Host（`com.natives.model_host`）及 App Runtime Host（`com.natives.app_runtime`，本地开发 `com.natives.local.app_runtime`）。
+- 严禁为各个内置应用动态生成或注册独立 Native Messaging Host（废除 `com.natives.app.a<hash>` 动态注册）。
+- Manifest 只允许发布清单中的固定 Extension origin，路径指向受验签的产品可执行文件。
+- Host 名称和路径由安装器/Core 计算；页面和模块声明不得覆盖。
+- 修复/卸载只修改本产品拥有的收据和注册项。
 
----
+#### R-S2 · Native 帧和方法白名单
 
-## 四、本篇合规自检清单
+- **等级**：MUST
+- 长度前缀、最大帧、字段类型、字符串/数组长度和方法白名单在 Host 边界校验。
+- 未知方法、未知字段、越界值、坏 JSON 和超大帧必须在产生副作用前拒绝。
+- 写方法需要显式 request id、revision 或等价冲突保护；不得信任页面的 verified 标记。
 
-- [ ] 我没有给 iframe 加 `allow-same-origin` / `allow-top-navigation`（R-S2）。
-- [ ] postMessage 来源验证用的是 `source` 不是 `origin`（R-S3）。
-- [ ] 新增的 IPC/HTTP 通信都校验了 Session Token（R-S4, R-S8）。
-- [ ] DB 写操作后触发了 `db-state-changed` 广播（R-S9）。
-- [ ] 持久 Secret 位于 OS Keychain；DB 只有 opaque reference；迁移可恢复且无明文落盘/日志（R-S12）。
-- [ ] 新增子进程已设进程组并接入后端退出轮询（R-S1）。
-- [ ] 主题/配置经 Zod 校验后才注入（R-S11）。
-- [ ] 触及防线时已记录影响与验证结果；放宽或废除 MUST 必须先写 ADR，改变安全边界或 authority 按既有 ADR 流程处理。保持现有约束的实现修复无需新增 ADR；记录要求本身不构成用户批准门槛。
+#### R-S3 · 文件能力最小化
+
+- **等级**：MUST
+- Files Host 只允许用户授权 root 内的路径；所有 canonicalize、symlink/reparse point、`..`、绝对路径和竞态检查在 Host 完成。
+- 页面不得获得任意进程、SQLite、Keychain 或明文 Secret 能力。
+- 预览、搜索、导入和写入继续遵守尺寸、类型、并发与取消上限。
+
+#### R-S4 · Secret 只由 OS Keychain 持有
+
+- **等级**：MUST
+- 持久 API key、OAuth token、refresh token 和模块 Secret 只进 OS Keychain。
+- SQLite、JSON、前端 storage、产品清单、日志和错误只保存引用或掩码。
+- Keychain locked/denied/unavailable 必须显示可恢复错误，不回退明文文件。
+- 删除 Secret 是独立危险操作，必须二次确认并可重试。
+
+#### R-S5 · Model Host 网络边界
+
+- **等级**：MUST
+- Local Proxy 只绑定 `127.0.0.1` 动态或受控端口并鉴权。
+- 不暴露通用管理 API、任意文件/进程能力或企业多租户控制面。
+- Provider 请求、OAuth callback 和工具探测必须有超时、取消、重定向/来源校验和日志脱敏。
+
+#### R-S6 · App iframe sandbox 固定
+
+- **等级**：MUST
+- sandbox 精确允许 `allow-scripts allow-forms`。
+- 禁止 `allow-same-origin`、顶层导航、弹窗、下载、cookie 和 credentials。
+- `postMessage` 必须同时校验保存的 `contentWindow`、generation 和 challenge；`origin` 为 `null` 不是身份。
+- iframe load/navigation、隐藏停止和页面关闭立即撤销旧 token。
+
+#### R-S7 · App loopback 鉴权
+
+- **等级**：MUST
+- 每个按需启动的 App Runtime 进程只绑定 `127.0.0.1:0`，校验 Host header。
+- 两阶段握手使用至少 128-bit challenge 和 32-byte CSPRNG bearer；token 最长 15 分钟并绑定 generation。
+- CORS 只允许 `Origin: null`、声明的方法/头和有效 bearer。
+- 单帧、请求体、响应、并发和速率必须有上限。
+
+#### R-S8 · 产品级完整性
+
+- **等级**：MUST
+- 正式安装、更新和修复验证 Product Manifest、平台/架构、精确长度、双 SHA-256 和平台代码签名。
+- 所有可执行代码属于 Natives Product Code（安装在系统产品源 `/Library/Application Support/Natives/hosts/` 下），用户应用数据目录（`~/.natives/apps/<appId>/`）严禁写入或保存任何 executable（废除 `runtime/<version>/app` 模式）。
+- 模块代码随完整产品交付；不得从页面、Catalog、远程 URL 或模块脚本下载执行代码。
+- macOS 正式载荷需要 Developer ID 与公证；Windows 需要 Authenticode；Linux 需要官方发布验签和权限控制。
+- 不得移除 quarantine、关闭 Gatekeeper 或以 shell 绕过平台安全。
+
+#### R-S9 · 开发身份隔离
+
+- **等级**：MUST
+- 本地模式使用独立产品身份、Extension ID、注册目录、数据根、Keychain namespace 和开发信任根。
+- 环境变量或 fixture 字段不能把生产构建切成开发信任。
+- 正式构建拒绝开发 key、fixture 和 ad-hoc 身份。
+
+#### R-S10 · 日志与错误脱敏
+
+- **等级**：MUST
+- Authorization、token、API key、用户主目录和业务敏感内容写日志前统一脱敏。
+- 页面只收到稳定错误 code、用户可理解信息和可执行 action；不暴露堆栈、SQL、命令或 Secret。
+
+#### R-S11 · 浏览器安装现实边界
+
+- **等级**：MUST
+- 普通 Chrome 无法由本地应用静默安装开发者扩展时，Launcher 必须打开扩展管理页、随包扩展目录和本地指南。
+- 不得声称已自动安装、降低 Chrome 安全策略或使用未支持的启动参数。
+
+## 合规自检
+
+- [ ] origin、Host 名称、路径和方法均由可信边界决定。
+- [ ] Secret 只在 Keychain 和 Host 短期内存。
+- [ ] iframe/loopback 两阶段鉴权与撤销完整。
+- [ ] 模块没有远程代码和独立下载链。
+- [ ] 开发与正式身份隔离。
+- [ ] 日志与错误无敏感明文。

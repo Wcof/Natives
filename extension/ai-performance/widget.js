@@ -15,6 +15,7 @@ import { CHARTS, DEFAULT_CHART, CHART_NEEDS, CHART_OPTIONS } from './charts.js';
 
 const RANGES = [
   ['24h', 'aiPerfRange24h', '近 24 小时'],
+  ['72h', 'aiPerfRange72h', '近 72 小时'],
   ['7d', 'aiPerfRange7d', '近 7 天'],
   ['30d', 'aiPerfRange30d', '近 30 天'],
   ['custom', 'aiPerfRangeCustom', '自定义'],
@@ -70,7 +71,8 @@ const WIDGET_STYLES = `
      由 space-dashboard:applyWidgetDisplayStyles 注入本卡片根）；
      不再回读全局 --text/--accent/--display-font/--muted，不覆盖空间外观。 */
   .ai-perf { display:flex; flex-direction:column; gap:10px; width:100%; height:100%; min-width:0; color:var(--space-widget-text, inherit); box-sizing:border-box; }
-  .ai-perf-number { display:flex; flex-direction:column; gap:4px; align-items:flex-start; }
+  .ai-perf-number { display:flex; flex-direction:column; gap:4px; align-items:flex-start; box-sizing:border-box; width:100%; padding:14px 16px; border-radius:16px; background:color-mix(in srgb, var(--space-widget-text, #ffffff) 8%, transparent); backdrop-filter:blur(20px); -webkit-backdrop-filter:blur(20px); border:1px solid color-mix(in srgb, var(--space-widget-text, #ffffff) 16%, transparent); }
+  .ai-perf-number.ai-perf-drillable { cursor:pointer; }
   .ai-perf-number-value { font-family:inherit; font-size:var(--space-widget-metric-size, 22px); line-height:1.15; color:currentColor; font-weight:var(--space-widget-weight, 700); letter-spacing:-0.02em; font-variant-numeric:tabular-nums; }
   .ai-perf-number-label { font-size:12px; line-height:1.4; color:var(--space-widget-text-secondary, inherit); font-weight:500; }
   .ai-perf-number-sub { font-size:12px; line-height:1.4; color:var(--space-widget-text-secondary, inherit); margin-top:2px; font-variant-numeric:tabular-nums; }
@@ -496,9 +498,10 @@ function renderLockedSettings(def, container, data = {}, onChange = () => {}, { 
     `
       : '';
 
-  const rangeSelect = def.view
-    ? ''
-    : `
+  // 用量类锁定组件（有 metric）与旧总览一样提供周期选择；
+  // limits/attention/savings 视图无时间窗语义，保持隐藏。
+  const rangeSelect = def.metric
+    ? `
       <label class="inspector-field">
         <span>${escapeHtml(t('aiPerfSettingRange', '统计范围'))}</span>
         <select data-role="ai-perf-range">
@@ -511,7 +514,8 @@ function renderLockedSettings(def, container, data = {}, onChange = () => {}, { 
         </select>
       </label>
       ${config.range === 'custom' ? customTimesInputs(config, t) : ''}
-    `;
+    `
+    : '';
 
   wrap.innerHTML = `${chartSelect}${subMetricSelect}${rangeSelect}
     <p class="inspector-hint">${escapeHtml(

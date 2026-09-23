@@ -146,6 +146,8 @@ func filterTimeRange(f Filter, now time.Time, loc *time.Location) (time.Time, ti
 		return now.Add(-4 * time.Hour), now
 	case "24h":
 		return now.Add(-24 * time.Hour), now
+	case "72h":
+		return now.Add(-72 * time.Hour), now
 	case "7d":
 		return now.AddDate(0, 0, -7), now
 	case "30d":

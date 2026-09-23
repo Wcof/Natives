@@ -56,9 +56,9 @@
       </nav>
       <nav class="app-menu" data-i18n-aria-label="productMenu" aria-label="产品菜单">
         <div class="app-menu-section"><span data-i18n="navDocuments">文档</span>
-          <a class="app-menu-item" href="files.html"><svg class="icon"><use href="#i-panel" /></svg><span data-i18n="desktop">桌面</span></a>
-          <a class="app-menu-item" href="files.html"><svg class="icon"><use href="#i-download" /></svg><span data-i18n="downloads">下载</span></a>
-          <a class="app-menu-item" href="files.html"><svg class="icon"><use href="#i-file" /></svg><span data-i18n="documents">文档</span></a>
+          <a class="app-menu-item" href="files.html?root=desktop"><svg class="icon"><use href="#i-panel" /></svg><span data-i18n="desktop">桌面</span></a>
+          <a class="app-menu-item" href="files.html?root=downloads"><svg class="icon"><use href="#i-download" /></svg><span data-i18n="downloads">下载</span></a>
+          <a class="app-menu-item" href="files.html?root=documents"><svg class="icon"><use href="#i-file" /></svg><span data-i18n="documents">文档</span></a>
         </div>
       </nav>
       <nav id="app-menu-apps" class="app-menu" data-i18n-aria-label="navApps" aria-label="应用" hidden></nav>
@@ -67,6 +67,8 @@
     </aside>
 
     <div class="space-shell">
+      <!-- 内嵌模块视图：侧边栏应用在本内容区渲染，侧边栏保持不变 -->
+      <main id="app-stage" class="embedded-app-view" data-i18n-aria-label="navApps" aria-label="应用" hidden></main>
       <main id="dashboard-host" class="dashboard-host" data-i18n-aria-label="dashboard" aria-label="Dashboard"></main>
 
       <div id="dashboard-toolbar" class="dashboard-toolbar">

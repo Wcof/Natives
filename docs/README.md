@@ -1,90 +1,38 @@
-# Natives 文档索引
+# Natives 文档入口
 
-> **当前目标**: Chrome Files Workspace（AI Native Personal Workspace 的文件产品入口）
-> **冻结决策**: [ADR-0020](./adr/0020-ai-native-personal-workspace-rearchitecture.md)
-> **Chromium 文件管理迁移**: [ADR-0023](./adr/0023-chromium-extension-files-surface.md)
-> **原则**: 约束进 `standards/`；决策进 `adr/`；当前实现与迁移证据进既有 `architecture/` 文档。
+> 版本：v4.0 · 2026-09-14
 
-## 权威顺序
+Natives 是单一用户产品：Chrome Extension 提供界面，Rust native-file-host 提供 Files 与产品配置，Go Model Host 提供 AI Provider/OAuth/Keychain/loopback，Rust natives-app-runtime 提供内置应用通用运行时，Fund 等功能作为 Monorepo 内置应用模块随同一个安装包交付。
 
-| 优先级 | 路径 | 角色 |
-|---|---|---|
-| 1 | [`standards/`](./standards/README.md) | 当前 MUST / SHOULD / MAY |
-| 2 | [ADR-0020](./adr/0020-ai-native-personal-workspace-rearchitecture.md) | 产品、IA、Host authority、Secret、Legacy 冻结 |
-| 3 | [`adr/`](./adr/) 其它 ADR | 仍未被 ADR-0020 取代的决策与历史 |
-| 4 | [`architecture/`](./architecture/) | 当前源码现状、迁移设计、测试证据 |
-| 5 | Home Workspace Patch（2026-08-19） | Home / Widget / Navigation 专项方案 |
-| 6 | 历史讨论与研究 | 仅溯源，不驱动新实现 |
+## 当前架构
 
-## 目标产品地图
+- 唯一界面：`extension/`；Service Worker 无状态，页面按需连接 Native Messaging。
+- 文件与产品 Host：`crates/native-file-host`；文件领域逻辑：`crates/file-manager-core`。
+- AI Host：`model-host`；不得扩展为通用 Agent、Jobs、Plugin Runtime 或第二数据库权威。
+- 内置模块与统一运行时：所有官方内置应用归入 `modules/` 并编译进统一 `natives-app-runtime`，系统 Native Messaging 注册单一 `com.natives.app_runtime`。打开时按需启动独立 Runtime 进程实例，关闭时 2 秒内彻底退出回收全部资源；没有模块下载、独立可执行文件、独立 Native Host 注册、独立安装或独立 Release。Runtime loopback 默认绑定 `127.0.0.1:8765`（占用回退动态端口，实际端口经 `app:start` 上报），见 ADR-0032 与[端口注册表](standards/technical/05-port-registry.md)。
+- 性能、内存回收、安全、数据和可访问性规则继续有效，分别见 `standards/technical/04-performance.md`、`02-security.md`、`03-data.md`、`06-built-in-modules.md`、`07-built-in-app-development.md` 和 `ui-ux/`。
 
-```text
-AiNative
-├── 首页                 多 Workspace Personal Home（ADR-0021：Workspace 生命周期 + Grid/Canvas 双布局 + Widget Catalog）
-├── 文件                 CRUD / Trash / Watch / Search
-├── 应用                 App / RuntimeSpec / RuntimeInstance / Surface
-├── AI
-│   ├── AI Resources     Provider / Connection / Credential
-│   ├── Local Proxy      Messages / Chat / Responses / Key Pool
-│   └── AI Tools         Claude Code / Codex / Gemini / OpenCode
-├── 数据与用量           Usage / Cost / Status
-└── 设置                 General / Appearance / AI / Personal summary
-```
+## 阅读顺序
 
-## 当前迁移事实（2026-08-25 更新）
+1. [Standards](standards/README.md)
+2. 适用 [ADR](adr/)
+3. [Contracts](contracts/)
+4. 当前架构文档和领域实现
+5. [Legacy archive](archive/README.md) 只用于追溯
 
-> 当前生产代码为 `extension/` + `crates/native-file-host` + `crates/file-manager-core`，以及 ADR-0020 授权的单用途 `model-host`；旧 AI Workspace/Tauri/通用 Daemon 域仍保持删除。Model Host 只负责模型配置、OAuth、Keychain Secret 与 loopback 兼容代理，不属于 Files Host，也不得演化为通用 Runtime。
-
-- **ADR-0022（Appearance Preference、Workspace 交互与 Apps Web Surface 统一权威）**已接受：
-  - 主题持久权威收敛为 Host `settings:theme`（词表 `dark | light`），由 `AppearanceCoordinator` 单一协调；`workspaces.theme` 降为 v30 迁移存根；
-  - Workspace 布局手势严格遵循 `idle → draft → commit | rollback`，移动期间写库为 0，有效 stop 单次原子写入；恢复 Structured Grid 标题栏拖拽与八向缩放，Free Canvas 采用屏幕空间恒定缩放手柄；
-  - Apps `AppView` 统一 camelCase 序列化契约，`appId` 保持真实唯一身份；Web Surface 运行时由单例 `BrowserStateHandle` 托管生命周期与 LRU 预算。
-
-- Workspace V2 目标架构 ADR-0021（Multi-Workspace + Grid/Canvas 双布局 + Design System V2）已接受，取代 ADR-0020 §1/§3 冲突范围（其余 ADR-0020 决策继续有效）；冻结契约见 `contracts/workspace-v2-contract.md`，Host SQLite 为 Workspace 唯一权威（v27 迁移 7 表已注册），旧 localStorage 权威判定为 delete（`development/g009-localstorage-conclusion.md`）。
-
-- PWSV2 Personal Workspace V2 完整重设计裁决（2026-08-23）：布局模式词表 `structured | free`（structured 为默认，历史词 `compact` 废弃）；旧 `workspace_tabs` 内容 tab 表降为 legacy，新增 `workspace_open_tabs`（Workspace 会话）与 `workspace_templates`（内置/个人模板）；workspaces 软删 `deleted_at` + `default_layout_mode` + `template_source_id/template_version`；widget `enabled`/`config_version`/`appearance`/`z_index`（`enabled = NOT hidden` 映射）；layout `layout_mode`/`layout_version` + `UNIQUE(workspace_id, layout_mode, breakpoint)`；Browse/Edit 双态 + `Classic Personal Dashboard` 内置模板；增量迁移 **v29**（v28 为应用中心迁移）。见 ADR-0021 修订 §PWSV2 与契约修订头。
-- 旧 Tauri/Next/通用 Daemon 生产路径已删除；文件产品只使用 Rust Files Host，模型设置使用隔离的单用途 Model Host。
-- 首页 `/` 已是 PersonalWorkspace Home（Grid Widget + 5 个默认 Widget 接真实 Domain）；完整 Usage Dashboard 已迁至数据/用量页（`/usage`）；设置个人概览只保留摘要；Sidebar 折叠为 64px Icon Rail（含数据/用量入口）。
-- P0-A 已通过：三协议 fixture/transport、Key Pool、SecretStore、secret scan（PASS）；P0-B 逐文件审计已落档（`provider-adapters-p0b-audit.md`）。
-- Legacy 死亡清单保留为删除证据；Tauri/Next/Daemon、Agent、Jobs、Capabilities、Workshop/Plugin Runtime 生产代码已删除，不得重新引入。
-- 当前剩余门禁属于发布证据：Chrome Web Store 真实 ID、平台签名/公证、Windows 实机安装验证及跨平台发布检查；不构成文件代码闭环阻塞。
-
-## 按任务速查
+## 任务速查
 
 | 任务 | 先读 |
 |---|---|
-| Natives 单一应用与内置模块（2026-09-13 安装实物审计） | [唯一实施方案](development/app-center-fund-implementation-plan.md)（§1.4 用户操作与前台接续、§2 HEAD `9f4b21e4`/实际 PKG 审计、§5 安装工作包、§6 整包交付、§8.4 安装专项实操、§10 Agent 指令）；现有候选已有可见主 .app、HTML、扩展与真实基金；重点补齐模式隔离、首次握手/产品配置、可取消引导、有效结尾页、签名和更新修复。产品仍整包内置，遵循 [ADR-0029](adr/0029-unified-suite-preinstalled-apps.md) 与 [契约](contracts/managed-app-contract.md)。本次仅审计并更新方案，没有重新安装或执行真实 Chrome/正式发布验收 |
-| 任何编码 | `standards/README.md` + 相关 1–3 篇 |
-| Apps Framework / 应用中心 / App 打包分发 | **ADR-0027**（取代 ADR-0026/ADR-0025 Apps 目标决策）+ `standards/technical/06-sub-apps.md` + [托管应用契约 v1](contracts/managed-app-contract.md) + `standards/technical/02` (R-S14) + `standards/technical/04` (R-P13) + `standards/technical/03` (R-D1) |
-| 全局产品/IA/Legacy | ADR-0020 + `standards/product/01-positioning.md` |
-| 主题偏好与外观协调 | **ADR-0022** + `contracts/appearance-preference-contract.md` + `standards/ui-ux/01` + `standards/frontend/02` (R-E7.1) |
-| 多 Workspace/Grid/Canvas/Widget/Data View | **ADR-0021** + **ADR-0022** + `contracts/workspace-v2-contract.md` + `standards/ui-ux/02` + `standards/technical/04` (R-P11) |
-| Apps / Web Surface 运行时 | **ADR-0022** + `contracts/apps-web-surface-contract.md` + `standards/technical/01` (R-T5) + `standards/technical/05` (R-B12) |
-| P0 Proxy/OAuth/Secret | `architecture/provider-proxy-architecture.md` + technical 01/02/03/05 |
-| P0 provider-adapters 逐文件处置 | `architecture/provider-adapters-p0b-audit.md`（Keep/Extract/Rewrite/Delete 矩阵） |
-| Legacy 删除 | `architecture/legacy-death-list.md`（死亡证明 + 待 cutover 路径） |
-| Home/Grid/Widget/Sidebar | Home Workspace Patch 的 00/08/13/16/20/24/31/33 + frontend/performance/ui-ux standards |
-| Files | `architecture/FILE_MANAGER_AUDIT.md` + data/backend/performance standards |
-| 现行规范、性能与内存回收一体化整改 | [完整方案](architecture/application-performance-remediation.md)（Standards v4、旧 Catalog/`.nap`/Seed 链死亡证明、S0–S4、M0–M5、Release/30 分钟真实 Chrome 验收）+ technical/04 |
-| Apps / 应用中心 V2 | `pm-context/apps-center-ai-requirements.md` + `creative-app-*` 现状文档 + layering/security/backend standards |
-| Usage/Data | `application-performance-remediation.md` + product/02 + performance standard |
-| 空间 AI 效能：独立成本/Token/会话组件、多 Agent 统计与可视化样式 | [总方案](development/ai-efficiency-components-plan.md) + [当前整改实施方案](development/ai-efficiency-remediation-implementation-plan.md)（E0–E8、逐工具验收、完整交付门槛）+ [ADR-0028](adr/0028-ai-performance-usage-widget-regression.md) + [ADR-0030](adr/0030-ai-usage-ledger-and-collection-boundaries.md) + ui-ux/01–02 + technical/04 |
-| 旧 Daemon/Agent 删除 | `NATIVE-DAEMON-CAPABILITY-MAP.md`、`NATIVE_ENGINE_FULL_REMEDIATION.md` 仅作引用清单 + ADR-0020 death proof |
-| Release Gate | `development/natives-agent-t12-release-gate-report.md`（旧基线）+ ADR-0020 新 Gate；不得把旧绿灯当新架构完成 |
-
-## 目录角色
-
-- `standards/`: 当前可执行约束。
-- `adr/`: 决策与取代关系。
-- `architecture/`: 当前源码和迁移设计；必须明确 Target 与 Legacy。
-- `development/`: 构建、发布与运行策略。
-- `harness/`, `superpowers/`: 历史 Agent/Harness 研究，只用于 Legacy 审计和删除，不用于新增能力。
-- `img/`: 文档图片。
+| 单一产品、内置 Fund 和 App Center | [托管应用契约](contracts/managed-app-contract.md)、[内置模块标准](standards/technical/06-built-in-modules.md)、[应用中心实施方案](development/app-center-fund-implementation-plan.md) |
+| 安装、引导、打包和发布 | [应用中心实施方案](development/app-center-fund-implementation-plan.md)、[当前架构](architecture/ARCHITECTURE.md) |
+| Files | [Files 审计](architecture/FILE_MANAGER_AUDIT.md) |
+| AI 用量、成本、会话和提醒 | [AI 效能总方案](development/ai-efficiency-components-plan.md)、[整改方案](development/ai-efficiency-remediation-implementation-plan.md)、ADR-0030 |
+| 性能和内存回收 | [性能整改方案](architecture/application-performance-remediation.md)、[性能标准](standards/technical/04-performance.md) |
+| Provider、OAuth、Secret | ADR-0020、[Security](standards/technical/02-security.md)、[Data](standards/technical/03-data.md) |
+| 本地 loopback 端口申请与登记 | [端口注册表](standards/technical/05-port-registry.md)、ADR-0032 |
+| 旧方案处置 | [Legacy 删除证明](architecture/legacy-death-list.md)、[历史归档](archive/README.md) |
 
 ## 变更纪律
 
-1. 放宽/废除 MUST：先 ADR，再同步 Standards。
-2. 产品目标/IA/authority：修订 ADR-0020，并同步 product/layering/security。
-3. 迁移证据：更新现有领域 architecture 文档，不新建重复进度快照。
-4. 安全防线在旧运行时删除前继续有效，不因“未来会删除”提前放宽。
-5. 任何完成声明必须区分 current production、isolated Spike、partial 与 target。
+活动目录中的文档必须描述当前代码和当前决策。废弃方案移入 `docs/archive/`；ADR 保留历史正文但必须有 supersedes 关系。放宽 MUST 或改变产品边界先更新 ADR，再同步 Standards、Contracts 和门禁。完成声明必须区分本地验证、发布验证和未验证项。

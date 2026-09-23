@@ -10,7 +10,8 @@ const extensionId = args.get('extension-id');
 const hostPath = args.get('host-path');
 const hostName = args.get('host-name') || 'com.natives.file_manager';
 const description = args.get('description');
-if (!/^com\.natives\.[a-z0-9_]+$/.test(hostName)) {
+// ADR-0031：本地开发 host 名含 local 段（com.natives.local.app_runtime）。
+if (!/^com\.natives(\.[a-z0-9_]+)+$/.test(hostName)) {
   console.error('Native Host 名称无效。');
   process.exit(1);
 }

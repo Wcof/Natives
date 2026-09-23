@@ -1,62 +1,65 @@
-# 产品架构 02 · 功能与诚实状态
+# 产品 02 · 功能状态与发布门槛
 
-> **版本**: 3.0.0 · **日期**: 2026-08-19
-> **关联 ADR**: [ADR-0020](../../adr/0020-ai-native-personal-workspace-rearchitecture.md)
-> **说明**: 本篇取代旧 Assistant / Agent / Workshop / Capability 功能清单。
+> 版本：4.0.0 · 日期：2026-09-14
 
-## 一、状态规则
+#### R-F1 · 状态必须可验证
 
-#### R-F1 · 功能状态必须可验证
 - **等级**：MUST
-- **分类**：无假数据、错误处理
-- **规则**：功能只能声明为 `implemented`、`partial`、`unsupported` 或 `unavailable`；`implemented` **必须**有真实 source、调用链和测试证据。错误不得转换成空数组、零值或成功 toast。
+- `implemented` 必须具备真实 source、生产调用链和测试证据。
+- `partial` 必须说明缺口；`unsupported` 必须说明边界；`unavailable` 必须说明当前失败原因。
 
-#### R-F2 · 用户可见数据必须有真实来源
+#### R-F2 · 用户可见数据必须真实
+
 - **等级**：MUST
-- **分类**：无假数据
-- **规则**：文件、应用状态、Provider health、quota、usage、cost、进程、端口和工具检测结果**必须**来自真实领域 query。无来源显示 Unknown/Unavailable；估算值必须标注估算。
+- 文件、应用、Provider、quota、usage、cost、进程、端口和工具检测结果必须来自领域 query。
+- 无来源显示 Unknown/Unavailable；估算显示“约”或“估算”，并携带价格/时间口径。
 
-#### R-F3 · 空态、加载态、错误态分离
+#### R-F3 · 四种 UI 状态分离
+
 - **等级**：MUST
-- **分类**：交互、错误处理
-- **规则**：UI **必须**区分 loading、empty、error、unsupported；不得用 skeleton 永久遮蔽失败，不得把 error 当 empty。
+- 每个异步视图区分 loading、empty、error、unsupported。旧数据可在刷新失败时保留，但必须显示 stale/error。
 
-## 二、目标功能域
+## 目标功能矩阵
 
-| 域 | P0/P1 目标 | 禁止扩展 |
+| 域 | 当前目标 | 禁止扩展 |
 |---|---|---|
-| Home | 多 Workspace（创建/打开/切换/关闭/重开/置顶/排序/重命名/复制/模板/删除，Close 只关会话、Delete 才删资源）、Grid/Canvas 双布局、增删移缩复制配隐重置、Widget Catalog（搜索/分类/添加/选择/配置）、Data View 四模式（List/Table/Board/Calendar） | Widget Runtime/市场、Plugin 平台、无限画布 |
-| Files | CRUD、Trash、Watch、Search、Recent/Favorite、预览入口 | 为 Home 重写文件系统 authority |
-| Apps | App / RuntimeSpec / RuntimeInstance / Surface / PackageSpec（ADR-0027 托管应用模型；2026-09-12 收敛为整包内置模块）、应用中心（内置模块打开/显示隐藏/设置/数据管理，状态诚实有来源）、产品级安装/更新核验与崩溃恢复、通用 app.html owner 页面、签名组合清单核验固定模块文件 | 把 App 当 Widget；在线下载执行代码；模块独立下载/安装/更新/卸载与应用商店语义；第二 App Registry；清单指定安装路径；CI 尺寸豁免；把安装中/已停止/运行于别处伪装成成功 |
-| AI Resources | Provider / Connection / Credential、多 Key、OAuth、模型目录与健康 | 把 protocol 当 Provider、明文 Secret |
-| Local Proxy | Messages / Chat Completions / Responses、tools/stream/reasoning、Key Pool、usage | 企业 Gateway、多租户计费、第二 Event Platform |
-| AI Tool Integration | Detect/Inspect/Backup/Plan/Apply/Verify/Rollback | 直接覆盖用户配置、无回滚写入 |
-| Data & Usage | 现有 source parser、归一、聚合、完整 Usage 页 | 新统一 Event Platform、假 quota/cost |
-| Settings | 通用/外观/AI/Proxy/工具/个人摘要 | 把完整 Usage Dashboard 当 Home |
+| Home | 多 Workspace、Structured/Free、Widget 目录、布局与外观 | 运行时插件、无限画布 |
+| Files | CRUD、Trash、Watch、Search、Recent/Favorite、预览与编辑 | 第二文件 authority |
+| Apps | 内置模块打开、显示隐藏、偏好、数据管理、故障恢复 | 模块下载/安装/更新/卸载、在线商店 |
+| AI | Provider/Connection/Credential、Local Proxy、工具检测与安全配置注入 | 通用 Agent Runtime、企业 Gateway |
+| Data & Usage | 多 AI 工具 Token、成本、会话、账单、预算与提醒 | 假 quota、第二 Event Platform |
+| Settings | 通用、外观、AI、工具、后台常驻和安装诊断 | 重复业务页面 |
+| Launcher | 打开 Chrome、扩展安装引导、目录定位、简短诊断 | 第二套业务 UI、后台常驻 |
 
-## 三、硬 Gate
+#### R-F4 · AI 与 Secret Gate
 
-#### R-F4 · Protocol 与 Secret Gate
 - **等级**：MUST
-- **分类**：安全、错误处理
-- **规则**：Proxy 上线前**必须**通过三协议真实 fixture、tool/reasoning/usage/stop reason、异常 EOF、取消回收、Key Pool 与 OAuth refresh 测试。Secret 迁移上线前**必须**通过 Keychain write/read/verify/rollback/locked 与 disk/log scan。
+- Provider/Proxy 上线前覆盖协议 fixture、stream/取消/EOF、Key Pool、OAuth refresh 和 Keychain locked/rollback。
+- Secret 不得进入页面、磁盘明文、日志或错误详情。
 
-#### R-F5 · AI Tool 配置写入 Gate
+#### R-F5 · AI 工具配置写入 Gate
+
 - **等级**：MUST
-- **分类**：数据、安全
-- **规则**：任何 AI 工具配置修改**必须**先 inspect，生成 plan，原子 backup，apply 后 verify；失败必须 rollback。不得在未识别格式上盲写。
+- 配置修改必须按 Detect → Inspect → Backup → Plan → Apply → Verify → Rollback 执行。
+- 未识别工具/版本/格式不得盲写；用户文件失败时保留原件和备份。
 
-#### R-F6 · Home 性能 Gate
+#### R-F6 · Home 与生命周期 Gate
+
 - **等级**：MUST
-- **分类**：性能
-- **规则**：Home 不得按 Widget 数量重复相同 query/timer；drag/resize pointer move 写 DB 次数必须为 0；hidden/background 资源必须停止；20 Widget、循环 resize/sidebar、soak 与 packaged Tauri/WebKit 必须验收。
+- 相同 query/timer 不随 Widget 数量线性增长；drag/resize move 写库为 0；hidden 工作暂停。
+- 20 Widget、100 次增删/布局循环和 30 分钟真实 Chrome soak 必须满足性能标准。
 
-## 四、Legacy Death Proof
+#### R-F7 · 完整产品 Gate
 
-最终发布前必须证明：
+- **等级**：MUST
+- 候选必须包含 Launcher、Extension、主 Host 和发布清单声明的真实内置模块。
+- 断网首次打开只初始化数据；重装、修复、升级保留偏好、用户数据和 Keychain；隐式降级拒绝。
+- 本地开发验收与正式签名/公证/发布验收必须分列。
 
-- 新 IA 是唯一生产入口；
-- Assistant/Jobs/Capabilities/Agent Daemon/Agent crates/Plugin Runtime 无生产引用；
-- 旧 schema 迁移与回滚可验证，secret 不残留明文或同盘主密钥；
-- 无孤儿进程、端口、PTY、Watcher、Timer、Listener、WebView、Socket、Task；
-- 完整 typecheck/lint/test/perf、Rust workspace、协议/迁移/构建 Gate 通过。
+## 发布前死亡证明
+
+- 旧工作台、Daemon、Agent、Jobs、Capabilities、Workshop、Plugin Runtime 无生产引用。
+- 旧模块发现、传输、独立打包、独立可执行文件（如 `fund-host`）、独立 Native Messaging 注册（如 `com.natives.app.a<hash>`）和用户目录 `runtime/<version>/app` 载荷无生产引用。
+- 产品内置应用使用统一 `natives-app-runtime` 二进制，无独立模块可执行文件。
+- 无孤儿进程、端口、Watcher、Timer、Listener、Native Port 或任务；模块页面关闭或断开后 ≤2 秒进程完全退出。
+- 当前 Standards、架构检查、Extension、Rust、Go、性能和完整安装路径全部通过。

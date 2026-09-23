@@ -7,7 +7,8 @@ import { widgetPlugins } from './plugins/widgets/index.js';
 export { WIDGET_KEYS, BACKGROUND_KEYS, POSITIONS, sanitizeHtml, escapeHtml, backgroundPlugins, widgetPlugins };
 
 const DEFAULT_ZH_NAMES = {
-  'widget/aiPerformance': 'AI 效能（旧版）',
+  // 兼容历史配置；新建入口使用下面七个独立组件。
+  'widget/aiPerformance': 'AI 效能总览',
   // R1：七个独立 AI 效能组件的展示名。
   'widget/aiCost': 'AI 成本',
   'widget/aiTokens': 'Token 用量',

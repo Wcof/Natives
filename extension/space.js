@@ -9,7 +9,8 @@ import { createSpaceToolbar } from './space-toolbar.js';
 import { createSpaceNameModal } from './space-modal-name.js';
 import { createSpaceDeleteModal } from './space-modal-delete.js';
 import { createSidebarController } from './sidebar-controller.js';
-import { mountAppMenu } from './app-navigation-projection.js';
+import { mountAppMenu, NAVIGATION_KIND_APP } from './app-navigation-projection.js';
+import { createEmbeddedAppSurface } from './app.js';
 import { createSettingsMenu } from './settings-menu.js';
 import { createGlobalSearchModal } from './global-search-modal.js';
 import { createWorkspaceMutationQueue } from './space-write-queue.js';
@@ -173,8 +174,22 @@ async function loadWorkspaceSnapshot(id) {
 }
 
 async function activateWorkspace(id) {
+  // 从内嵌应用视图切回空间视图：只切显示，不销毁会话（5 分钟空闲后回收）。
+  if (typeof embeddedAppId !== 'undefined' && embeddedAppId) leaveEmbeddedView();
+  await activateWorkspaceInner(id);
+}
+
+async function activateWorkspaceInner(id, { pushState = true } = {}) {
   if (id === activeWorkspaceId && activeSnapshot) return;
   activeWorkspaceId = id;
+  if (pushState) {
+    const url = new URL(location.href);
+    url.searchParams.delete('app');
+    url.searchParams.set('workspace', id);
+    if (location.search !== url.search) {
+      history.pushState({ type: 'workspace', workspaceId: id }, '', url.pathname + url.search);
+    }
+  }
   try { await nativeCall('workspace_open_tab', { workspaceId: id }); } catch {}
   await loadWorkspaceSnapshot(id);
   wsTree.render(session, activeWorkspaceId);
@@ -183,7 +198,12 @@ async function activateWorkspace(id) {
 async function refreshSession() {
   session = await nativeCall('workspace_session');
   if (!activeWorkspaceId || !session.workspaces.some(w => w.id === activeWorkspaceId)) {
-    activeWorkspaceId = session.activeWorkspaceId || session.workspaces[0]?.id || null;
+    const urlWs = new URLSearchParams(location.search).get('workspace');
+    if (urlWs && session.workspaces.some(w => w.id === urlWs)) {
+      activeWorkspaceId = urlWs;
+    } else {
+      activeWorkspaceId = session.activeWorkspaceId || session.workspaces[0]?.id || null;
+    }
   }
   wsTree.render(session, activeWorkspaceId);
   if (activeWorkspaceId) await loadWorkspaceSnapshot(activeWorkspaceId);
@@ -317,6 +337,7 @@ async function init() {
   // "应用" section renders from the projection UI cache written by the
   // App Center / files page, and tracks chrome.storage changes live.
   mountAppMenu($('app-menu-apps'), { t }).catch(() => {});
+  bindEmbeddedAppNavigation();
 
   $('workspace-create').onclick = () => nameModal.open(null);
 
@@ -341,6 +362,126 @@ async function init() {
       clearTimeout(idleTimer);
     }
   });
+
+  // 原生路由还原：刷新或带参数访问时，优先还原指定应用或工作区
+  const initialParams = new URLSearchParams(location.search);
+  const targetApp = initialParams.get('app');
+  if (targetApp) {
+    openEmbeddedApp(targetApp, { pushState: false });
+  }
+
+  // 浏览器前进/后退监听
+  window.addEventListener('popstate', () => {
+    const params = new URLSearchParams(location.search);
+    const appId = params.get('app');
+    const wsId = params.get('workspace');
+    if (appId) {
+      openEmbeddedApp(appId, { pushState: false });
+    } else {
+      if (embeddedAppId) {
+        leaveEmbeddedView({ pushState: false });
+      }
+      if (wsId && wsId !== activeWorkspaceId) {
+        void activateWorkspaceInner(wsId, { pushState: false });
+      }
+    }
+  });
+}
+
+// 内嵌应用视图：点击侧边栏「应用」分区项时不做页面导航，而是在内容区
+// 内嵌挂载模块 iframe；会话跨视图保活，空闲 5 分钟后自动回收。
+let embeddedSurface, embeddedAppId;
+// 进入应用视图时记住工作区树的选中项，退出时恢复（互斥高亮：内容区显示
+// 基金时侧边栏只允许「应用」分区高亮，避免基金与个人空间同时选中）。
+let rememberedWsActive;
+function setAppActive(appId) {
+  const items = document.querySelectorAll('#app-menu-apps .app-menu-item');
+  items.forEach((item) => {
+    const match = appId && item.dataset.kind === NAVIGATION_KIND_APP && item.dataset.appId === appId;
+    item.classList.toggle('active', Boolean(match));
+    item.setAttribute('aria-current', match ? 'page' : 'false');
+  });
+}
+function showEmbeddedView(showApp) {
+  const dashboard = $('dashboard-host');
+  if (dashboard) dashboard.hidden = showApp;
+  const toolbar = $('dashboard-toolbar');
+  if (toolbar) toolbar.hidden = showApp;
+  const empty = $('space-empty-state');
+  // 恢复时按当前快照的卡片数还原空态显示。dashboard-host 是 Shadow 宿主，
+  // 光层 childElementCount 恒为 0，不能用其判断是否有卡片（会误显空态）。
+  if (empty && !showApp) empty.hidden = (activeSnapshot?.widgets || []).length > 0;
+  const stage = $('app-stage');
+  if (stage) stage.hidden = !showApp;
+  // 工作区树与应用项互斥高亮
+  if (showApp) {
+    rememberedWsActive = $('workspace-tree')?.querySelector('.ws-item.active') || null;
+    rememberedWsActive?.classList.remove('active');
+    rememberedWsActive?.querySelector('.ws-select')?.setAttribute('aria-current', 'false');
+  } else if (rememberedWsActive?.isConnected) {
+    rememberedWsActive.classList.add('active');
+    rememberedWsActive.querySelector('.ws-select')?.setAttribute('aria-current', 'page');
+  }
+  if (!showApp) rememberedWsActive = undefined;
+}
+function leaveEmbeddedView({ pushState = true } = {}) {
+  embeddedSurface = undefined;
+  embeddedAppId = undefined;
+  showEmbeddedView(false);
+  setAppActive('');
+  if (pushState) {
+    const url = new URL(location.href);
+    url.searchParams.delete('app');
+    if (activeWorkspaceId) url.searchParams.set('workspace', activeWorkspaceId);
+    if (location.search !== url.search) {
+      history.pushState({ type: 'workspace', workspaceId: activeWorkspaceId }, '', url.pathname + (url.search || ''));
+    }
+  }
+}
+function openEmbeddedApp(appId, { pushState = true } = {}) {
+  if (embeddedAppId === appId) {
+    showEmbeddedView(true);
+    setAppActive(appId);
+    if (pushState) {
+      const url = new URL(location.href);
+      url.searchParams.set('app', appId);
+      if (location.search !== url.search) {
+        history.pushState({ type: 'app', appId }, '', url.pathname + url.search);
+      }
+    }
+    return;
+  }
+  embeddedSurface?.dispose?.();
+  embeddedSurface = undefined;
+  const stage = $('app-stage');
+  if (!stage) return;
+  embeddedAppId = appId;
+  showEmbeddedView(true);
+  setAppActive(appId);
+  if (pushState) {
+    const url = new URL(location.href);
+    url.searchParams.set('app', appId);
+    if (location.search !== url.search) {
+      history.pushState({ type: 'app', appId }, '', url.pathname + url.search);
+    }
+  }
+  embeddedSurface = createEmbeddedAppSurface({
+    appId,
+    stage,
+    onClosed: () => { if (embeddedAppId === appId) leaveEmbeddedView(); },
+  });
+  void embeddedSurface.open();
+}
+function bindEmbeddedAppNavigation() {
+  const nav = $('app-menu-apps');
+  if (!nav) return;
+  nav.addEventListener('click', (event) => {
+    const item = event.target.closest('.app-menu-item');
+    if (!item || item.dataset.kind !== NAVIGATION_KIND_APP || !item.dataset.appId) return;
+    event.preventDefault();
+    openEmbeddedApp(item.dataset.appId);
+  });
+  globalThis.window?.addEventListener('pagehide', () => embeddedSurface?.dispose?.());
 }
 
 init().catch((err) => toast(`${t('pageError', '页面初始化失败')}：${err.message}`));

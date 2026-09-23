@@ -11,4 +11,4 @@ name = "sample-host"
 path = "sample_host.rs"
 
 [dependencies]
-app-host-support = { path = "../../../../crates/app-host-support" }
+app-runtime-core = { path = "../../../../crates/app-runtime-core" }

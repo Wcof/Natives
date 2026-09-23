@@ -1,123 +1,131 @@
-# 技术架构 04 · 性能规范
+# 技术 04 · 性能与资源生命周期
 
-> **版本**: 1.0.0 · **日期**: 2026-07-24
-> **关联**: `docs/standards/README.md`、`docs/architecture/application-performance-remediation.md`
+> 版本：4.0.0 · 日期：2026-09-14
+> 当前整改与证据记录：[`../../architecture/application-performance-remediation.md`](../../architecture/application-performance-remediation.md)
 
-本篇是 Natives 性能约束的唯一权威来源。性能优化必须先测量、再修改，并使用同一设备和同一数据集比较前后结果。
+## 统一预算
 
-## 性能预算
+| 指标 | 预算 |
+|---|---:|
+| 冷启动到可交互 p75 | ≤ 2.5 s |
+| 普通交互 p95 | ≤ 100 ms |
+| 已缓存页面切换 | ≤ 300 ms |
+| 主线程单任务 | ≤ 50 ms |
+| 可见动画 | ≥ 55 FPS |
+| 单入口初始 JS/CSS gzip | ≤ 350 KiB |
+| Extension 分发体积估算 | ≤ 360 KiB |
+| 空闲 60 s 总 CPU | ≤ 2% |
+| 30 分钟循环空闲回落后 RSS 增长 | ≤ 15% |
+| Files Host Release RSS | ≤ 12 MiB |
+| Files Host 空闲 CPU | ≤ 0.5% |
+| Files/App Host EOF 退出 | ≤ 2 s |
+| 10k 目录首 100 项查询 p95 | ≤ 50 ms |
+| Model Host 首快照冷启动 p75 | ≤ 2.5 s |
+| Model Host 热快照 p95 | ≤ 300 ms |
+| Model Host 空闲 RSS | ≤ 256 MiB |
+| Model Host 空闲 CPU | ≤ 5% |
+| Model Host EOF 退出 | ≤ 1 s |
+| 每 appId 业务实例 | ≤ 1 |
+| 同用户活动 App Host | ≤ 4 |
 
-基准环境为 Apple Silicon、16GB 内存、macOS、Release 构建、1440×900。标准数据集为 500 个会话、单会话 2,000 条消息、20,000 个运行事件、5,000 个目录项、500 张图片和 200 个创意应用。
+#### R-P1 · 性能结论必须可比较
 
-- 冷启动到主 Shell 可交互：5 次测试 p75 ≤ 2.5 秒。
-- 点击、输入、选择反馈：30 次测试 p95 ≤ 100ms；缓存页面切换 p95 ≤ 300ms。
-- 典型交互中单个主线程任务 ≤ 50ms，动画 ≥ 55 FPS。
-- `/layout + 当前入口页面` 去重后的初始 JS ≤ 350KB gzip。
-- 无任务空闲 60 秒后核心进程组平均 CPU ≤ 2%，Widget ≤ 3%。
-- 主窗口、WebView、Daemon 空闲总 RSS ≤ 350MB；30 分钟导航/会话循环增长 ≤ 15%。
-- 热 IPC p95 ≤ 50ms；重 IO 必须在 100ms 内先显示加载反馈。
-
-## 强制规则
-
-#### R-P1 · 性能改动必须有可比证据
 - **等级**：MUST
-- **分类**：性能、质量
-- **规则**：必须在相同设备、构建类型、数据集和操作路径下记录前后结果。
-- **为什么**：没有固定基线的“优化”无法证明收益，也无法发现回退。
+- 同设备、系统/Chrome 版本、构建类型、数据集和操作路径记录 before/after。
+- 报告原始样本、p50/p75/p95、RSS/CPU、进程数和失败项；单次通过不能证明稳定。
+- Release 结论必须来自 Release 构建；本地 debug 只用于定位。
 
-#### R-P2 · 禁止主线程阻塞
+#### R-P2 · 页面主线程不做重 IO
+
 - **等级**：MUST
-- **分类**：性能、IPC
-- **规则**：Renderer 主线程和 Tauri 同步命令不得执行预计超过 16ms 的阻塞工作；文件、进程、网络、系统扫描必须异步并进入 `spawn_blocking` 或等价线程池。
-- **为什么**：一次同步扫描或休眠即可阻塞输入、绘制和 WebView 响应。
+- 文件、SQLite、进程、工具日志、Provider 网络和大数据聚合只在所属 Host。
+- 页面解析/渲染预计超过 16 ms 的工作应切片、延迟或窗口化。
+- pointer move 只改草稿内存；stop/flush 最多一次持久化。
 
-#### R-P3 · 渲染纯净且副作用可清理
+#### R-P3 · 副作用必须可释放
+
 - **等级**：MUST
-- **分类**：性能、状态
-- **规则**：渲染阶段禁止发起 IPC、文件、网络、进程和异步副作用；订阅、定时器、观察器必须 cleanup，并在页面隐藏时暂停。
-- **为什么**：渲染副作用会重复执行，未清理副作用会造成泄漏和重复请求。
+- 每个 event listener、timer、observer、Native Port、object URL 和异步 owner 都有明确 disposer。
+- 页面/Widget 重绘前先 dispose 旧实例；页面隐藏时暂停非必要工作。
+- 测试必须覆盖 destroy、pagehide、BFCache restore 和异常 disconnect。
 
-#### R-P4 · 数据增长必须有界
+#### R-P4 · 页面级去重
+
 - **等级**：MUST
-- **分类**：性能、数据
-- **规则**：持久增长数据必须分页、窗口化或设置明确上限；超过 200 个 UI 项不得一次性创建完整 DOM。
-- **为什么**：无界列表会同时放大 IPC、序列化、布局、绘制和内存成本。
+- 相同领域 query、时间 tick、可见性监听和刷新事件按页面共享。
+- Widget 数量增加不得线性增加 Host 查询、SQLite 查询、Native Port 或永久 timer。
+- 用户启动的倒计时按绝对目标时间恢复，隐藏不造成时间漂移。
 
-#### R-P5 · 实时状态优先事件
-- **等级**：SHOULD
-- **分类**：性能、状态
-- **规则**：实时状态优先广播和事件推送；轮询必须可见性门控，普通轮询周期不得短于 5 秒，纯计时 UI 不高于 1Hz。
-- **为什么**：轮询会在无变化时持续消耗 CPU、IPC 和外部 CLI。
+#### R-P5 · 数据与 DOM 有界
 
-#### R-P6 · 流式更新必须批处理和限额
 - **等级**：MUST
-- **分类**：性能、流式
-- **规则**：流事件按帧批处理；高频 delta 合并到实时状态，不得永久保存；Renderer 保留事件必须有上限。
-- **为什么**：逐事件复制大型状态会产生 O(n²) 分配和渲染压力。
+- 超过 200 项的 UI 使用分页、窗口或虚拟化；缓存、Map、Set、队列和日志有容量与失效条件。
+- Usage 必须验证 10k/100k/500k 事件；Files 必须验证 10k/100k 目录项。
+- 请求取消或调用方销毁后，不得长期保留 DOM、配置或响应缓冲。
 
-#### R-P7 · 重型能力必须延迟加载
+#### R-P6 · 事件优先且隐藏门控
+
 - **等级**：MUST
-- **分类**：性能、Bundle
-- **规则**：编辑器、图表、弹窗和重型页面只在需要时加载；未打开功能不得进入初始 JS 执行路径。
-- **为什么**：首屏成本决定启动和首次交互，不应被低频功能拖慢。
+- 实时状态优先 Host event；轮询必须有真实必要性、可见性门控和下限周期。
+- 纯时间 UI 最高 1 Hz；后台轮播、刷新和同步在 hidden 时停止。
+- Service Worker 禁止轮询、Native Port 和 keepalive。
 
-#### R-P8 · 动画优先 CSS
-- **等级**：SHOULD
-- **分类**：性能、UI
-- **规则**：优先 CSS/SVG 动画；禁止多个组件各自运行永久 rAF；必须支持 `prefers-reduced-motion`。
-- **为什么**：JS 动画会占用主线程，组件数量增加后成本线性叠加。
+#### R-P7 · 按需加载与按需进程
 
-#### R-P9 · 缓存和并发必须有上限
 - **等级**：MUST
-- **分类**：性能、资源
-- **规则**：缓存必须有容量、失效条件和并发上限；禁止无界 Map、数组和 Promise 队列。
-- **为什么**：缓存和并发失控会把短时峰值变成长期内存与进程压力。
+- 未打开入口不进入其初始依赖图；重型图表、预览和设置视图按需加载。
+- Files/App Host 未打开时进程数为 0。
+- Model Host 默认由页面连接拥有；resident 仅用户显式开启，最多一个 worker。
 
-#### R-P10 · 性能门禁必须合入
+#### R-P8 · Files 生命周期
+
 - **等级**：MUST
-- **分类**：质量、CI
-- **规则**：类型检查、Lint、生产构建、Bundle 预算和性能回归检查属于合入门禁；不得使用基线豁免掩盖超预算。
-- **为什么**：性能回退通常来自普通功能改动，必须在同一流水线阻断。
+- 文件页未打开时无 Host；hidden 且无任务 60 秒断开。
+- EOF 后取消 Watch、导入和后台任务并等待回收。
+- Release RSS、CPU、目录查询和退出满足统一预算。
 
-#### R-P11 · 画布手势零写入与 WebView 运行时有界预算
+#### R-P9 · 内置模块生命周期与进程级资源回收
+
 - **等级**：MUST
-- **分类**：性能、资源
-- **规则**：
-  - Structured Grid 与 Free Canvas 拖拽与缩放期间，`pointermove` 过程中 IPC / SQLite 写入次数**必须恒为 0**；交互期间渲染帧率保持 **≥ 55 FPS**；仅在有效 stop 时触发最多 1 次原子写入。
-  - Apps Web Surface 运行时实例必须受严格预算限制：活跃 child WebView 上限最多 **6** 个，总实例上限 **10** 个。超出预算时触发 LRU 休眠（Hibernate）回收 WebKit 渲染进程，**严禁**无界创建 child WebView 导致内存耗尽。
-- **为什么**：见 ADR-0022。高频写库与无界 WebView 实例是桌面应用最严重的卡顿与崩溃诱因。
+- 未运行模块零内存（≈0 dedicated runtime memory）：未被打开激活的模块不分配堆内存、不打开 SQLite 数据库、不创建 HTTP 路由、不启动 Timer/Worker。
+- 隐藏 60 秒、页面关闭或 Native Port 断开（stdin EOF）后进入统一 shutdown：停止模块、移除 iframe、撤销 token、断开 Port。
+- **硬 Gate：Native Port 断开（stdin EOF）到 App Runtime Process 退出时间 $\le 2$ 秒**。
+- 进程退出后由操作系统彻底回收全部内存与句柄：Module Process = 0, Listener = 0, Timer = 0, Worker Thread = 0, SQLite Connection = 0, Network Client = 0。
+- 冷启动 p75 ≤ 2.5 s；反复打开/关闭循环测试（至少 20 次）无孤儿进程、无端口泄漏、无监听残留、无锁泄漏。
+- 新 Fund Ready RSS 不得比旧 Fund Ready RSS 回归 > 10%。
 
-#### R-P12 · Chrome Files Surface 零常驻预算
+#### R-P10 · Model Host 生命周期
+
 - **等级**：MUST
-- **分类**：性能、生命周期、分发
-- **规则**：
-  - 新标签页不得连接 Native Host；Service Worker 不得持有 Native Port、轮询或用计时器保活。
-  - 文件页面按需直连 Host；`pagehide` 必须断开，隐藏且无进行中操作 60 秒后必须断开。
-  - 最后端口关闭后 Host 必须在 2 秒内退出；未打开文件页面时 Host 的 CPU、RSS、GPU 占用均为 0。
-  - Release Host 空闲 RSS ≤ 12 MB、60 秒平均 CPU ≤ 0.5%，不得创建 GPU 进程或上下文。
-  - 扩展估算包 Hard Gate ≤ 360 KiB（368,640 bytes；2026-09-13 用户决定自 300 KiB 上调 20%，ADR-0024 修订）；`native-file-host` 目标 ≤ 3 MiB，过渡硬 Gate ≤ 4 MiB（ADR-0025 D19，与 `scripts/perf/check-native-host.mjs` 对齐）；安装包目标 ≤ 10 MB，超出必须给出文件级归因。
-  - 安装、启动和更新不得引入 Electron/Tauri 壳、daemon、托盘常驻进程或后台更新轮询。
-- **为什么**：Natives 复用用户已有 Chrome，增量成本必须限制在当前文件 Surface，而不是复制浏览器或常驻运行时。
+- 配置快照不等待无关 Usage、价格、导入或全部 Secret 预热。
+- Usage/Proxy 初始化可以延迟，但首次相关请求必须完整、单次且错误诚实。
+- resident=false 时最后连接关闭后退出；resident=true 时状态可见、单实例、可关闭。
 
-#### R-P13 · 官方托管应用包与运行预算（ADR-0027，取代 ADR-0026/ADR-0025 对应预算，2026-09-09 生效）
+#### R-P11 · 动画与视觉成本
+
 - **等级**：MUST
-- **分类**：性能、分发、Apps
-- **规则**（详见 [托管应用契约 v1](../../contracts/managed-app-contract.md)）：
-  - 单个平台应用下载包（gzip 单载荷 `.nap`）wire ≤ 32 MiB、解压 payload ≤ 128 MiB，精确长度与双 SHA-256 校验；这是本方案对原生可执行载荷的新增目标上限，不是实测值。32/128 MiB 修改原因是交付物从纯资源变为可执行应用；Core 原有预算（R-P12 的扩展 360 KiB（2026-09-13 上调，ADR-0024 修订）、native-file-host 4 MiB Gate、12 MB 空闲 RSS、0.5% 空闲 CPU）**不放宽**。
-  - 应用代码占用 = 活跃版本 + 上一版本；staging 有界，峰值至多三份载荷；个人数据/导入原件/迁移备份另计。超过 Gate 的 CI 必须直接失败；禁止 `ALLOW_OVERSIZE`/`SKIP_APP_SIZE_CHECK`/baseline waiver 等豁免；修改 Gate 数字本身必须新增 ADR。
-  - 未启动或已停止应用的应用进程、监听端口、业务定时器必须为 0；EOF/停止至应用退出 ≤ 2 秒；标准样例启动 ready 同机 Release 5 次 p75 ≤ 2.5 秒。
-  - 并发：每 appId 至多一个运行实例；每 OS 用户命名空间至多四个活动应用实例（共享运行槽文件锁保证，禁止仅用 tabs.query 做竞态数量检查）；到上限明确提示。
-  - Native 单帧 < 1 MiB（安装传输帧 ≤ 512 KiB）；应用 HTTP 请求/响应默认 ≤ 1 MiB，大批量分页/分块。
-  - Apps 不使用旧 WebView LRU 实例预算（R-P11 的 Tauri child WebView 部分对 Apps 标记历史）。Core/App 分账：性能改动必须有同设备 Release 前后对比证据（R-P1），样例与基金分别提交实际尺寸、RSS、CPU 和打开/关闭循环证据，禁止用新上限掩盖 Core 回归。
-- **为什么**：独立原生应用把预算从静态资源扩展到可执行载荷；分账与有界回收防止应用逃逸 Core 门禁。
-- **检查方法**：`scripts/apps/check-package-budget.mjs` 更新为 32/128 MiB 与载荷结构检查；`perf:check` 全绿；30 分钟循环与回收证据随 A-G9 提交。
+- 装饰动画优先 transform/opacity，不为每个组件运行永久 rAF。
+- 支持 `prefers-reduced-motion`；持续 spinner 在减弱动效下静止或替换。
+- blur/filter/shadow 不得让滚动、拖拽或低性能设备超预算。
 
-## 提交前清单
+#### R-P12 · 性能门禁不能自欺
 
-- [ ] 有同设备、同数据集前后证据（R-P1）。
-- [ ] 无同步阻塞 IO、sleep 或渲染期副作用（R-P2、R-P3）。
-- [ ] 长列表、事件、缓存和并发均有界（R-P4、R-P6、R-P9、R-P11）。
-- [ ] 画布手势 move 写入为 0，stop 写入 ≤1（R-P11）。
-- [ ] 未打开文件页时 Native Host 为 0 进程；包体、RSS、CPU、GPU 与退出延迟通过 R-P12 门禁。
-- [ ] 重型能力按需加载，动画不运行无界 rAF（R-P7、R-P8）。
-- [ ] `npm run perf:check` 和相关 Rust 测试通过（R-P10）。
+- **等级**：MUST
+- 门禁必须构建或验证当前源码对应的二进制，不能只比较单个源文件 mtime。
+- 不支持的 CPU/RSS/平台项不得以 PASS 混入正式结论。
+- 不得调大预算、删除样本或启用常驻来掩盖回归。
+
+## 验收场景
+
+真实 Chrome 先预热 5 分钟，再运行 30 分钟：循环 Home/Files/Apps/Model 设置、20 个 Widget、
+7 个 AI 效能卡片、5 个时钟卡片、基金打开/隐藏/关闭。至少每 10 秒采集 Renderer 和各 Host
+的 RSS、CPU、进程、Port、timer/listener。结束后空闲 60 秒，按统一预算判定。
+
+## 合规自检
+
+- [ ] before/after 条件一致，Release 样本不少于 5 个。
+- [ ] 每个副作用有 owner 和 disposer。
+- [ ] hidden 无不必要唤醒，非驻留资源归零。
+- [ ] 长数据、DOM、缓存和并发有界。
+- [ ] 所有产品入口单独计算首屏依赖。
+- [ ] 30 分钟增长 ≤15%，不支持项明确阻断或标记。

@@ -183,6 +183,9 @@ func (s *Store) buildFilterWhereIn(f Filter, loc *time.Location) (string, []inte
 	case "24h":
 		clauses = append(clauses, "requested_at >= ?")
 		args = append(args, now.Add(-24*time.Hour).Format(time.RFC3339))
+	case "72h":
+		clauses = append(clauses, "requested_at >= ?")
+		args = append(args, now.Add(-72*time.Hour).Format(time.RFC3339))
 	case "today":
 		todayStart := todayStartUTC(now, loc)
 		clauses = append(clauses, "requested_at >= ?")

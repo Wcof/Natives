@@ -1,34 +1,23 @@
-//! Read-side queries for the App Store registry.
+//! Read-side queries for built-in module state.
 
+use super::types::{App, AppError};
 use rusqlite::Connection;
 
-use super::types::{App, AppError, AppPackage, AppPermission, InstallTransaction};
-
 const APP_COLUMNS: &str = "app_id, kind, name, version, enabled, show_in_sidebar, \
-     sidebar_order, runtime_spec_json, surface_json, manifest_json, \
-     installed_at, updated_at, revision, host_registered, \
-     EXISTS(SELECT 1 FROM app_install_transactions AS recovery WHERE recovery.app_id = apps.app_id \
-     AND (recovery.state IN ('committing', 'rolling_back') \
-     OR (recovery.state = 'installed' AND recovery.rollback_json != ''))), \
-     needs_migration";
+    sidebar_order, runtime_spec_json, surface_json, manifest_json, installed_at, \
+    updated_at, revision, host_registered, needs_migration";
 
 fn map_app(row: &rusqlite::Row<'_>, apps_root: Option<&std::path::Path>) -> rusqlite::Result<App> {
     let app_id: String = row.get(0)?;
     let kind: String = row.get(1)?;
-    let host_registered: bool = row.get::<_, i64>(13)? != 0;
-    // Core-derived runtimeHost (contract §2): managed_local apps expose
-    // `com.natives.app.<sha256(app_id)>` in this authoritative projection;
-    // app.html must never read it from a static UI mapping.
-    let runtime_host = if kind == super::types::KIND_MANAGED_LOCAL && host_registered {
-        Some(crate::app_activation::runtime_host_name(&app_id))
-    } else {
-        None
-    };
+    let host_registered = row.get::<_, i64>(13)? != 0;
+    let runtime_host = (kind == super::types::KIND_MANAGED_LOCAL && host_registered)
+        .then(|| crate::app_activation::runtime_host_name(&app_id));
     let activation_generation = apps_root.and_then(|root| {
         crate::app_activation::read_activation_projection(root, &app_id)
             .ok()
             .flatten()
-            .and_then(|v| v.get("generation").and_then(serde_json::Value::as_u64))
+            .and_then(|value| value.get("generation").and_then(serde_json::Value::as_u64))
     });
     Ok(App {
         app_id,
@@ -46,139 +35,40 @@ fn map_app(row: &rusqlite::Row<'_>, apps_root: Option<&std::path::Path>) -> rusq
         revision: row.get(12)?,
         host_registered,
         runtime_host,
-        recovery_pending: row.get::<_, i64>(14)? != 0,
-        needs_migration: row.get::<_, i64>(15)? != 0,
+        needs_migration: row.get::<_, i64>(14)? != 0,
         activation_generation,
     })
 }
 
-/// All registered apps, sidebar order first (ADR-0025 D38).
 pub(crate) fn apps(
     conn: &Connection,
     apps_root: Option<&std::path::Path>,
 ) -> Result<Vec<App>, AppError> {
-    let mut stmt = conn.prepare(&format!(
-        "SELECT {APP_COLUMNS} FROM apps ORDER BY sidebar_order, app_id"
-    ))?;
-    let rows = stmt.query_map([], |row| map_app(row, apps_root))?;
-    let mut out = Vec::new();
-    for row in rows {
-        out.push(row?);
-    }
-    Ok(out)
+    let mut statement = conn.prepare(&format!("SELECT {APP_COLUMNS} FROM apps WHERE kind = 'managed_local' ORDER BY sidebar_order, app_id"))?;
+    let rows = statement.query_map([], |row| map_app(row, apps_root))?;
+    Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }
 
-/// One app row.
 pub(crate) fn app(
     conn: &Connection,
     app_id: &str,
     apps_root: Option<&std::path::Path>,
 ) -> Result<App, AppError> {
     conn.query_row(
-        &format!("SELECT {APP_COLUMNS} FROM apps WHERE app_id = ?1"),
+        &format!("SELECT {APP_COLUMNS} FROM apps WHERE app_id = ?1 AND kind = 'managed_local'"),
         [app_id],
         |row| map_app(row, apps_root),
     )
     .map_err(|error| match error {
-        rusqlite::Error::QueryReturnedNoRows => AppError::NotFound(app_id.to_string()),
+        rusqlite::Error::QueryReturnedNoRows => AppError::NotFound(app_id.into()),
         other => AppError::Sql(other),
     })
 }
 
-/// Package receipts for one app.
-pub(crate) fn packages(conn: &Connection, app_id: &str) -> Result<Vec<AppPackage>, AppError> {
-    let mut stmt = conn.prepare(
-        "SELECT app_id, package_id, kind, version, platform, arch, wire_size, payload_size, \
-         artifact_sha256, payload_sha256, installed_path, installed_at \
-         FROM app_packages WHERE app_id = ?1 ORDER BY package_id",
-    )?;
-    let rows = stmt.query_map([app_id], |row| {
-        Ok(AppPackage {
-            app_id: row.get(0)?,
-            package_id: row.get(1)?,
-            kind: row.get(2)?,
-            version: row.get(3)?,
-            platform: row.get(4)?,
-            arch: row.get(5)?,
-            wire_size: row.get(6)?,
-            payload_size: row.get(7)?,
-            artifact_sha256: row.get(8)?,
-            payload_sha256: row.get(9)?,
-            installed_path: row.get(10)?,
-            installed_at: row.get(11)?,
-        })
-    })?;
-    let mut out = Vec::new();
-    for row in rows {
-        out.push(row?);
-    }
-    Ok(out)
-}
-
-/// Permission grants for one app.
-pub(crate) fn permissions(conn: &Connection, app_id: &str) -> Result<Vec<AppPermission>, AppError> {
-    let mut stmt = conn.prepare(
-        "SELECT app_id, permission, granted, granted_at \
-         FROM app_permissions WHERE app_id = ?1 ORDER BY permission",
-    )?;
-    let rows = stmt.query_map([app_id], |row| {
-        Ok(AppPermission {
-            app_id: row.get(0)?,
-            permission: row.get(1)?,
-            granted: row.get::<_, i64>(2)? != 0,
-            granted_at: row.get(3)?,
-        })
-    })?;
-    let mut out = Vec::new();
-    for row in rows {
-        out.push(row?);
-    }
-    Ok(out)
-}
-
-/// One install transaction.
-pub(crate) fn transaction(
-    conn: &Connection,
-    install_id: &str,
-) -> Result<InstallTransaction, AppError> {
-    conn.query_row(
-        "SELECT install_id, app_id, from_version, to_version, request_json, state, \
-         staging_path, started_at, completed_at, error_code, error_message \
-         FROM app_install_transactions WHERE install_id = ?1",
-        [install_id],
-        |row| {
-            Ok(InstallTransaction {
-                install_id: row.get(0)?,
-                app_id: row.get(1)?,
-                from_version: row.get(2)?,
-                to_version: row.get(3)?,
-                request_json: row.get(4)?,
-                state: row.get(5)?,
-                staging_path: row.get(6)?,
-                started_at: row.get(7)?,
-                completed_at: row.get(8)?,
-                error_code: row.get(9)?,
-                error_message: row.get(10)?,
-            })
-        },
-    )
-    .map_err(|error| match error {
-        rusqlite::Error::QueryReturnedNoRows => {
-            AppError::NotFound(format!("install transaction {install_id}"))
-        }
-        other => AppError::Sql(other),
-    })
-}
-
-/// Monotonic global revision for the navigation projection (ADR-0025 D37).
 pub(crate) fn global_revision(conn: &Connection) -> Result<i64, AppError> {
-    match conn.query_row(
+    Ok(conn.query_row(
         "SELECT revision FROM app_meta WHERE key = 'app_store'",
         [],
         |row| row.get(0),
-    ) {
-        Ok(revision) => Ok(revision),
-        Err(rusqlite::Error::QueryReturnedNoRows) => Ok(0),
-        Err(error) => Err(AppError::Sql(error)),
-    }
+    )?)
 }

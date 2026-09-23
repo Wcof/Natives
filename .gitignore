@@ -6,7 +6,7 @@ node_modules/
 out/
 
 # Build
-dist/
+/dist/
 build/
 *.tsbuildinfo
 next-env.d.ts
@@ -54,6 +54,7 @@ Thumbs.db
 .claude/
 .rtk/
 .superpowers/
+.pi/
 
 # AI 指令文件 (Agent 提示词/术语表/上下文)
 AGENTS.md
@@ -65,8 +66,10 @@ PROMPT.md
 skills-lock.json
 COVERAGE_MANIFEST.md
 
-# 归档废弃代码 (保留在 Git 历史中即可)
+# 归档废弃方案（docs/archive 作为可追溯、非权威目录保留）
 archive/
+!docs/archive/
+!docs/archive/**
 
 # 插件模板/示例 (非项目核心代码)
 plugin-template/
@@ -96,6 +99,7 @@ References/
 # OAuth, API Keys, Credentials and Private Config
 *.token
 *.pem
+!modules/**/cacert.pem
 *.key
 auth.json
 accounts.json
@@ -112,8 +116,9 @@ credentials.json
 
 Natives-source-clean.zip
 
-# ADR-0025 D30: build artifacts and Native App packages never belong in Git.
-*.nap
+# Product build artifacts never belong in Git.
 *.exe
 *.dll
 *.dylib
+*.nap
+invest-host

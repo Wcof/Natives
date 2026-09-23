@@ -1,0 +1,18 @@
+[package]
+name = "tokenusage-module"
+version = "0.1.0"
+edition = "2021"
+authors = ["Natives"]
+description = "Natives official Built-in Token Usage Module (Library)"
+publish = false
+
+[dependencies]
+app-runtime-core = { path = "../../crates/app-runtime-core" }
+rusqlite = { version = "0.32", features = ["bundled", "backup"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+ureq = { version = "2", default-features = false, features = ["tls", "json", "gzip"] }
+
+[dev-dependencies]
+tempfile = "3"

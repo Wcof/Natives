@@ -2,7 +2,10 @@
 members = [
     "crates/file-manager-core",
     "crates/native-file-host",
-    "crates/app-host-support",
+    "crates/app-runtime-core",
+    "crates/app-runtime",
+    "modules/fund",
+    "modules/tokenusage",
     "scripts/apps/fixtures/sample-host",
 ]
 resolver = "2"

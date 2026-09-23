@@ -2,26 +2,26 @@
 // installers/macos/build-pkg.sh 的全部输入——
 //   Host 二进制（local 模式用 debug 构建：本地开发信任根 + Natives-Local 源，
 //               production 用 release 构建 + 正式签名身份）
+//   app-runtime（Rust 构建，内置各官方模块）
 //   model-host（Go 构建）
 //   解压扩展目录（scripts/extension-package.mjs 的 dist/extension）
-//   固定模块文件（相邻 Natives-App-Fund 的 .nap 单载荷解压为可执行）
-//   已签名产品组合清单 product-manifest.json/.sig（Ed25519，dev/生产密钥）
+//   官方内置模块 UI 静态资产（modules/fund/ui/dist/）
+//   已签名产品组合清单 product-manifest.json/.sig（Schema 2，Ed25519，dev/生产密钥）
 // pkgbuild/productbuild 只发生在 build-pkg.sh；这里不再有第二布局，
-// 不组装 Natives.app，不写 /Applications，不产生 seeds。
-import { existsSync, mkdirSync, rmSync, writeFileSync, copyFileSync, readFileSync, readdirSync, createReadStream, createWriteStream, chmodSync } from 'node:fs';
+// 不暴露模块级安装入口；主 Natives.app 由 build-pkg.sh 组装并安装。
+import { existsSync, mkdirSync, rmSync, writeFileSync, copyFileSync, readFileSync, readdirSync, chmodSync, statSync } from 'node:fs';
+import { treeSha256 } from './lib/tree-hash.mjs';
 import { createHash } from 'node:crypto';
 import { join, resolve, dirname, basename } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { execFileSync, spawnSync } from 'node:child_process';
-import { pipeline } from 'node:stream/promises';
-import { createGunzip } from 'node:zlib';
+import { execFileSync } from 'node:child_process';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const STAGING = resolve(ROOT, 'dist/installer-input');
 const digest = (bytes) => createHash('sha256').update(bytes).digest('hex');
 
 function usage() {
-  console.error('usage: node scripts/installer-package.mjs --mode local|production [--version V] [--output PATH] [--fund-nap PATH] [--pkg-sign ID] [--product-sign ID]');
+  console.error('usage: node scripts/installer-package.mjs --mode local|production [--version V] [--output PATH] [--pkg-sign ID] [--product-sign ID]');
   process.exit(2);
 }
 
@@ -29,11 +29,6 @@ function rustTargetArch() {
   const host = execFileSync('rustc', ['-vV'], { encoding: 'utf8' })
     .split('\n').find((l) => l.startsWith('host:')).split(':')[1].trim();
   return host.includes('aarch64') ? 'arm64' : 'x64';
-}
-
-function gunzipTo(napPath, outPath) {
-  mkdirSync(dirname(outPath), { recursive: true });
-  return pipeline(createReadStream(napPath), createGunzip(), createWriteStream(outPath));
 }
 
 // 自检：安装输入树内不得出现开发环境残留目录（node_modules/target/.git）。
@@ -63,6 +58,15 @@ function buildHostBinary(mode) {
   return bin;
 }
 
+function buildAppRuntimeBinary(mode) {
+  const profile = mode === 'production' ? 'release' : 'debug';
+  execFileSync('rtk', ['env', '-u', 'CARGO_TARGET_DIR', 'cargo', 'build',
+    '-p', 'app-runtime', ...(profile === 'release' ? ['--release'] : [])], { stdio: 'inherit', cwd: ROOT });
+  const bin = resolve(ROOT, `target/${profile}/natives-app-runtime`);
+  if (!existsSync(bin)) throw new Error(`missing ${bin}`);
+  return bin;
+}
+
 function buildModelHost() {
   execFileSync('go', ['build', '-o', join(STAGING, 'model-host'), '.'], { stdio: 'inherit', cwd: join(ROOT, 'model-host') });
   const bin = join(STAGING, 'model-host');
@@ -81,7 +85,7 @@ function signProductManifest(manifestBytes, keyPath) {
   return signature;
 }
 
-export async function buildInstaller({ mode = 'local', version, output, fundNap, fundNapVersionOverride, manifestKey, pkgSign, productSign } = {}) {
+export async function buildInstaller({ mode = 'local', version, output, manifestKey, pkgSign, productSign } = {}) {
   if (mode !== 'local' && mode !== 'production') usage();
   if (!version) {
     version = JSON.parse(readFileSync(join(ROOT, 'extension/manifest.json'), 'utf8')).version;
@@ -106,11 +110,13 @@ export async function buildInstaller({ mode = 'local', version, output, fundNap,
   const sourceName = mode === 'production' ? 'Natives' : 'Natives-Local';
   const setupScheme = mode === 'production' ? 'natives-setup' : 'natives-setup-local';
   const appExec = join(STAGING, 'Natives');
-  execFileSync('cc', ['-O2', '-framework', 'AppKit',
+  execFileSync('cc', ['-O2', '-framework', 'AppKit', '-framework', 'WebKit', '-lsqlite3',
     '-DSOURCE_ROOT="' + `/Library/Application Support/${sourceName}` + '"',
     '-DEXTENSION_ID="' + extensionId + '"',
     '-DSETUP_SCHEME="' + setupScheme + '"',
-    '-o', appExec, join(ROOT, 'installers/macos/resources/launcher-main.m')], { stdio: 'inherit' });
+    '-o', appExec,
+    join(ROOT, 'installers/macos/resources/launcher-main.m'),
+    join(ROOT, 'installers/macos/resources/NativesStatusBar.m')], { stdio: 'inherit' });
   const appIcon = join(ROOT, 'installers/macos/resources/natives.icns');
 
   // 随包离线引导页（§1.3）：单一内容源模板 → index.html；conclusion
@@ -152,54 +158,64 @@ export async function buildInstaller({ mode = 'local', version, output, fundNap,
     if (pattern.test(finalHtml)) throw new Error(`onboarding contains forbidden content: ${pattern}`);
   }
 
-  // 固定模块：fund .nap 是 gzip 单载荷，解压即 Mach-O 可执行程序；
-  // 解压后与 .meta.json 声明的 payload_sha256 核对（方案 P1：输入必须
-  // 与来源版本/摘要绑定）。
-  // D13：版本同源绑定——--version 与扩展 manifest 不一致即失败；
-  // Fund 的 meta.version 与 app.json.version 不一致即失败。
-  if (fundNapVersionOverride && fundNapVersionOverride !== version) {
-    throw new Error(`--version ${fundNapVersionOverride} != extension manifest version ${version}`);
-  }
-  const napPath = fundNap || findFundNap();
-  const meta = JSON.parse(readFileSync(`${napPath}.meta.json`, 'utf8'));
-  const appDir = join(STAGING, 'modules/fund', meta.version);
-  mkdirSync(appDir, { recursive: true });
-  const exe = join(appDir, 'app');
-  await pipeline(createReadStream(napPath), createGunzip(), createWriteStream(exe));
-  chmodSync(exe, 0o755);
-  const payloadSha256 = digest(readFileSync(exe));
-  if (meta.payload_sha256 && meta.payload_sha256 !== payloadSha256) {
-    throw new Error(`fund payload hash mismatch: ${meta.payload_sha256} != ${payloadSha256}`);
-  }
+  // 编译并核验统一 App Runtime 二进制（ADR-0031：所有官方内置应用编译进唯一 app-runtime）
+  const appRuntimeBin = buildAppRuntimeBinary(mode);
+  const appRuntimeSha256 = digest(readFileSync(appRuntimeBin));
+  const appRuntimeBytes = statSync(appRuntimeBin).size;
 
-  // 产品组合清单：与 host 端 app_store/product.rs 的读取格式一致，
-  // Ed25519 分离签名（local 用开发信任根私钥，生产由 --manifest-key 提供）。
-  const appJson = JSON.parse(readFileSync(resolve(ROOT, '../Natives-App-Fund/app.json'), 'utf8'));
-  if (appJson.version !== meta.version) {
-    throw new Error(`fund version drift: app.json ${appJson.version} != nap meta ${meta.version}`);
-  }
+// 官方内置模块清单：唯一来源 modules/registry.json + module.json（ADR-0031 §8）。
+  // Installer 不硬编码模块特例；新增官方模块只需改 registry。
+  const registry = JSON.parse(readFileSync(resolve(ROOT, 'modules/registry.json'), 'utf8'));
+  const modules = registry.apps.map((entry) => {
+    const meta = JSON.parse(readFileSync(resolve(ROOT, entry.manifest), 'utf8'));
+    if (meta.appId !== entry.appId) {
+      throw new Error(`registry appId ${entry.appId} != module.json appId ${meta.appId}`);
+    }
+    const uiDist = resolve(ROOT, 'modules', entry.appId, 'ui/dist');
+    const uiDst = join(STAGING, 'modules', entry.appId, 'ui');
+    mkdirSync(uiDst, { recursive: true });
+    if (!existsSync(join(uiDist, 'index.html'))) {
+      throw new Error(`module ${entry.appId} UI missing: modules/${entry.appId}/ui/dist/index.html (run module UI build first)`);
+    }
+    copyFileSync(join(uiDist, 'index.html'), join(uiDst, 'index.html'));
+    return {
+      appId: meta.appId,
+      entryRoute: meta.entryRoute,
+      moduleApiVersion: meta.moduleApiVersion,
+      dataSchemaVersion: meta.dataSchemaVersion,
+      capabilityVersion: meta.capabilityVersion,
+      ui: {
+        path: `modules/${meta.appId}/ui`,
+        treeSha256: treeSha256(uiDst),
+      },
+    };
+  });
+
+  // 产品组合清单 Schema 2（ADR-0031）：
+  // 声明唯一 appRuntime 与各内置模块元数据（UI 资源树、协议契约），不声明独立可执行文件
   const arch = rustTargetArch();
   const manifest = {
-    schemaVersion: 1,
+    schemaVersion: 2,
     product: 'natives',
     version,
     platform: 'darwin',
     arch,
-    modules: [{
-      appId: appJson.appId,
-      version: appJson.version,
-      entryRoute: 'app.html?app=fund',
-      name: appJson.name,
-      artifactPath: `modules/fund/${appJson.version}/app`,
-      payloadSha256,
-    }],
-  };
-  manifest.launcher = {
-    // 模式隔离（plan §5 P1）：bundle ID 按模式写入，与 build-pkg.sh 的
-    // Info.plist 及 product.rs 的配置校验严格一致。
-    bundleId: mode === 'local' ? 'com.natives.local.app' : 'com.natives.app',
-    executableSha256: digest(readFileSync(appExec)),
-    onboardingSha256: digest(readFileSync(join(onboardingDir, 'index.html'))),
+    launcher: {
+      bundleId: mode === 'local' ? 'com.natives.local.app' : 'com.natives.app',
+      executableSha256: digest(readFileSync(appExec)),
+      onboardingSha256: digest(readFileSync(join(onboardingDir, 'index.html'))),
+    },
+    extension: {
+      path: 'ChromeExtension',
+      treeSha256: treeSha256(join(ROOT, 'dist/extension')),
+    },
+    appRuntime: {
+      protocolVersion: 2,
+      path: 'hosts/natives-app-runtime',
+      bytes: appRuntimeBytes,
+      sha256: appRuntimeSha256,
+    },
+    modules,
   };
   const manifestBytes = Buffer.from(JSON.stringify(manifest, null, 2) + '\n');
   const manifestPath = join(STAGING, 'product-manifest.json');
@@ -207,7 +223,7 @@ export async function buildInstaller({ mode = 'local', version, output, fundNap,
   const keyPath = manifestKey
     || (mode === 'production'
       ? null
-      : resolve(ROOT, 'scripts/apps/keys/catalog-trust-dev.private.pem'));
+      : resolve(ROOT, 'scripts/apps/keys/product-trust-dev.private.pem'));
   if (!keyPath) throw new Error('production requires --manifest-key (production product signing key)');
   if (!existsSync(keyPath)) throw new Error(`missing product signing key: ${keyPath}`);
   const signature = signProductManifest(manifestBytes, keyPath);
@@ -218,7 +234,7 @@ export async function buildInstaller({ mode = 'local', version, output, fundNap,
   output = output || join(ROOT, 'dist/installer', `Natives-${version}-macOS-${arch}-${mode}.pkg`);
   const engine = join(ROOT, 'installers/macos/build-pkg.sh');
   const args = ['installers/macos/build-pkg.sh',
-    '--mode', mode, '--host', host, '--model-host', modelHost,
+    '--mode', mode, '--host', host, '--model-host', modelHost, '--app-runtime', appRuntimeBin,
     ...(pkgSign ? ['--pkg-sign', pkgSign] : []),
     ...(productSign ? ['--product-sign', productSign] : []),
     '--extension-id', extensionId, '--extension-dir', join(ROOT, 'dist/extension'),
@@ -231,7 +247,7 @@ export async function buildInstaller({ mode = 'local', version, output, fundNap,
   const pkgBytes = readFileSync(output);
   const sums = [
     `${digest(pkgBytes)}  ${basename(output)}`,
-    `${payloadSha256}  modules/fund/${meta.version}/app`,
+    `${appRuntimeSha256}  hosts/natives-app-runtime`,
   ].join('\n') + '\n';
   writeFileSync(join(dirname(output), 'SHA256SUMS'), sums);
 
@@ -264,18 +280,6 @@ export async function buildInstaller({ mode = 'local', version, output, fundNap,
   return { pkg: output, dmg: dmgPath, sha256: digest(pkgBytes), dmgSha256: digest(dmgBytes), size: pkgBytes.length, extensionId, manifest };
 }
 
-function findFundNap() {
-  const arch = rustTargetArch();
-  const fundDist = resolve(ROOT, '../Natives-App-Fund/dist');
-  const candidates = arch === 'arm64'
-    ? ['fund-0.1.0-aarch64-apple-darwin.nap']
-    : ['fund-0.1.0-x86_64-apple-darwin.nap'];
-  for (const name of candidates) {
-    if (existsSync(join(fundDist, name))) return join(fundDist, name);
-  }
-  throw new Error(`missing fund .nap for ${arch} in ${fundDist} (build the fund repo first)`);
-}
-
 if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) {
   const args = process.argv.slice(2);
   const options = {};
@@ -283,7 +287,6 @@ if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).
     if (args[i] === '--mode') options.mode = args[++i];
     else if (args[i] === '--version') options.version = args[++i];
     else if (args[i] === '--output') options.output = args[++i];
-    else if (args[i] === '--fund-nap') options.fundNap = args[++i];
     else if (args[i] === '--manifest-key') options.manifestKey = args[++i];
     else if (args[i] === '--pkg-sign') options.pkgSign = args[++i];
     else if (args[i] === '--product-sign') options.productSign = args[++i];

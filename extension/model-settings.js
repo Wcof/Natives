@@ -3,7 +3,7 @@ import { createModelSettingsView, renderNewProvider } from './model-settings-vie
 import { handleAdvancedAction, handleAdvancedSubmit } from './model-advanced-controller.js';
 import { localizedModelError } from './model-settings-errors.js';
 import { handleUsageAction, handleUsageSubmit } from './model-usage-controller.js';
-import { userTimezone } from './ai-performance/metrics.js';
+import { userTimezone } from './tokenusage/index.js';
 import { handleAgentAction, loadAgentClients } from './model-agent-controller.js';
 import { openAccountModelsDialog } from './model-account-models-dialog.js';
 
@@ -255,9 +255,7 @@ class ModelSettings {
       if (this.view.activePage === 'apps') {
         this.view.setLoading(true);
         try {
-          if (this.appCenter) {
-            await Promise.all([this.appCenter.reloadCatalog(), this.appCenter.refresh()]);
-          }
+          if (this.appCenter) await this.appCenter.refresh();
         } finally {
           this.view.setLoading(false);
         }

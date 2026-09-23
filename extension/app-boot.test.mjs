@@ -33,7 +33,7 @@ globalThis.chrome = {
             if (request.method === 'apps:get' && request.params.appId === app.app_id) result = { app, packages: [], permissions: [] };
             else error = 'appId is required';
           } else if (host === app.runtime_host) {
-            if (request.method === 'app:handshake') result = { protocolVersion: 1, appId: app.app_id, appVersion: app.version };
+            if (request.method === 'app:handshake') result = { protocolVersion: 2, appId: app.app_id, appVersion: app.version };
             else if (request.method === 'app:start') result = { state: 'ready', port: 49152, instanceId: 'i'.repeat(22), generation: 'g'.repeat(22) };
             else if (request.method === 'app:session') result = { newGeneration: 'n'.repeat(22) };
             else if (request.method === 'app:stop') result = { stopped: true };

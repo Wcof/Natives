@@ -1,154 +1,79 @@
-# 技术架构 03 · 数据与持久化
+# 技术 03 · 数据、迁移与恢复
 
-> **版本**: 2.0.0 · **日期**: 2026-08-19
-> **关联 ADR**: [ADR-0005](../../adr/0005-plugin-state-preservation-strategy.md)（状态分层）、[ADR-0008](../../adr/0008-electron-to-tauri-migration.md)（Tauri 迁移）
-> **关联源文件**: `src-tauri/src/db.rs`、`src-tauri/src/env_manager.rs`
+> 版本：4.0.0 · 日期：2026-09-14
 
----
+## Authority 表
 
-## 一、本篇要约束什么
+| 数据 | 唯一 writer | 页面可见形式 |
+|---|---|---|
+| Files roots、收藏、最近、Workspace、布局、App 登记/偏好 | Files Host | Native query/event projection |
+| 文件内容与目录 | Files Host 经 `file-manager-core` | 分页/窗口化结果 |
+| Provider、Connection、非秘密配置 | Model Host | snapshot/query |
+| Credential 与模块 Secret | OS Keychain | 引用、状态、掩码 |
+| Usage、价格、账单、会话聚合 | Model Host Usage Store | 分页聚合结果 |
+| 内置模块业务数据 | 对应 App Runtime Process | 模块业务 API |
+| Extension 本地偏好 | Chrome storage，仅限展示偏好 | 当前页面派生状态 |
 
-数据层的约束决定系统能否安全演进。本篇钉死三件事：**数据存在哪**、**如何隔离**、**如何迁移**，外加**原子写入**与**状态分层**两条横切约束。
+#### R-D1 · 用户数据只在约定根
 
----
-
-## 二、数据存放位置
-
-#### R-D1 · 非 Secret 用户数据集中在 `~/.natives/`
 - **等级**：MUST
-- **分类**：数据、命名
-- **规则**：除 OS Keychain 持有的 Secret 外，应用自有用户数据（SQLite、应用文件、日志）**必须**集中在 `~/.natives/` 目录下，结构如下：
-  ```
-  ~/.natives/
-  ├── natives.db        # SQLite（WAL）
-  ├── modules/          # 历史模块数据，仅迁移/清理，不新增模块安装体系
-  ├── apps/             # 官方子应用代码与私有数据（ADR-0027/0029）
-  │   └── <appId>/
-  │       ├── runtime/<version>/  # 已验证的活动/上版载荷，旧 packages 仅迁移
-  │       ├── data/            # App 私有用户数据；由受限领域接口访问
-  │       ├── cache/  imports/  staging/
-  ├── migrations/       # 可恢复迁移 checkpoint（禁止明文 Secret）
-  └── logs/             # 运行日志（apps/<appId>/ 子目录）
-  ```
-  Secret **必须**按 R-S12 进入 OS Keychain；DB 只保存 opaque reference。**禁止**把其它用户数据散落到项目目录或任意路径；**禁止**用 env 变量随意覆盖此根目录（除非有受控测试夹具）。
+- 用户数据位于当前用户的 Natives 私有根；模块数据位于 `~/.natives/apps/<appId>/data/`。
+- 浏览器规定的 Native Messaging 注册目录只放最小 manifest，不放业务数据。
+- 系统级产品目录只放签名代码和固定资源，不写用户 DB、activation 或业务迁移。
 
-  **App 数据分账（ADR-0027，取代 ADR-0026/ADR-0025 对应决策，2026-09-09 生效；2026-09-12 收敛为内置模块随完整产品交付）**：`natives.db` 内的 App Store 表是安装状态、收据与 Native Host 注册的唯一权威，只由 `native-file-host` 写入；应用自有业务库独立存放于 `apps/<appId>/data/`，由官方 App Host 独占写入并独立迁移（`data/.migration.json` journal、一致性备份、`backups/<migrationId>/` 有界保留）。App Store 与业务库分别写、分别迁移：应用禁止连接 natives.db 写业务表，Core 禁止创建应用业务表（如 portfolio/transactions/nav）。代码升级不覆盖用户数据；产品级卸载默认保留 `data/`、`imports/` 与迁移备份；「删除应用及全部个人数据」必须二次确认。不依赖 beforeunload 保存业务数据：未落盘成功即视为未保存。模块代码随完整 Natives 安装包交付，不进入用户数据目录之外的独立可升级安装根。
-  **统一套件的数据边界（ADR-0029；2026-09-12 收敛为整包统一交付）**：系统目录 `/Library/Application Support/Natives/` 只允许主程序/主 Host 与固定内置模块文件，不是用户数据根；相应 local-development 系统源使用独立 `Natives-Local` 目录。Core 按 OS 用户分别初始化 App Store；安装器不得猜测登录用户、向其 HOME 写 DB 或运行迁移。安装来源、收据及用户移除选择通过现有 App Store 增量迁移记录，不创建并行 Registry；产品重装不降级、不清数据/Keychain、不撤销用户移除选择。受控本地开发数据根与 Keychain 必须与正式空间分开，不自动复制真实基金记录或凭据。
-- **为什么**：dotfile 目录模式与兄弟项目（CodePilot/Natives2）一致，便于备份、迁移、清理。
-- **检查方法**：新增持久化路径时核对是否在 `~/.natives/` 下。
+#### R-D2 · SQLite 初始化一致
 
----
-
-## 三、命名空间隔离
-
-#### R-D2 · 插件数据按 module_id 命名空间隔离
 - **等级**：MUST
-- **分类**：数据、安全
-- **规则**：插件的 KV 数据（`module_data` 表）**必须**以 `(module_id, key)` 复合主键隔离。任何 Bridge `db.get/set/list` 调用**必须**由 Main 强制注入调用方的 `module_id`，**禁止**接受插件自报的 module_id。
-- **正例**：插件 A 调 `natives.db.get('x')` → Main 用 Token 反查出的 moduleId 拼 key。
-- **反例**：让插件在参数里传 `moduleId: 'com.B'` 去读 B 的数据 → 违反。
-- **为什么**：命名空间隔离是插件互不干扰的数据底线；信任插件自报 id 等于没有隔离。
-- **检查方法**：Bridge `db.*` handler 是否忽略请求参数里的 moduleId、改用 Token 反查。
+- 每个 DB 在连接初始化时启用 foreign keys；需要并发读写的 DB 使用 WAL 和明确 busy timeout。
+- 事务边界覆盖完整不变量；错误时回滚，不提交半状态。
+- 同一 non-reentrant Mutex guard 作用域内不得再次调用会获取同一锁的公共方法。
 
----
+#### R-D3 · 迁移只向前且幂等
 
-## 四、Schema 迁移
-
-#### R-D3 · 用增量迁移，不改表重建
 - **等级**：MUST
-- **分类**：数据
-- **规则**：DB schema 变更**必须**用增量迁移：启动时 `PRAGMA table_info()` 检查现有列，用 `ALTER TABLE ADD COLUMN` 补齐缺失列。**禁止** `DROP TABLE` 重建（会丢用户数据）。表结构变更需配合文件锁防并发迁移。
-- **正例**：`src-tauri/src/db.rs` 的 `apply_migrations()` 函数已是增量模式。
-- **为什么**：用户数据不可丢；重建表在已发布版本上是事故。
-- **检查方法**：新增字段是否走 `ALTER`；是否有 `DROP TABLE`。
+- schema 迁移有单调版本、事务、重复执行测试和坏状态恢复。
+- 禁止为加列直接 DROP/重建用户表。
+- 产品隐式降级拒绝；代码回退不得覆盖已接受的新数据。
 
-#### R-D3.1 · 主题持久化权威收敛与 v30 增量迁移
+#### R-D4 · 重要文件原子写
+
 - **等级**：MUST
-- **分类**：数据、主题
-- **规则**：
-  - 增量迁移 **v30** 必须将全局主题单一权威收敛到 `settings:theme`。
-  - 迁移判定优先级：有效且存在的 `settings:theme` > 活跃 workspace legacy theme > `dark`。
-  - 迁移过程必须幂等、事务化，**严禁**让历史 Workspace 主题覆盖用户已保存的全局偏好。
-  - `workspaces.theme` 物理列保留用于迁移审计与回滚证据，生产读写与 DTO 全部切断，只有在 death proof 建立后才能另行清理。
-- **为什么**：见 ADR-0022。消除 Workspace 与 Settings 的双写与竞态覆盖。
+- 配置、收据、activation、journal 和用户文档采用同目录临时文件 → flush/fsync → rename。
+- 并发编辑使用 revision、mtime 或内容摘要检测冲突。
+- 权限设置在公开路径前完成；失败清理临时文件。
 
-#### R-D4 · 新表/新字段必须开 WAL 与外键
+#### R-D5 · 产品代码与用户数据分离
+
 - **等级**：MUST
-- **分类**：数据
-- **规则**：DB 初始化**必须**启用 `PRAGMA journal_mode=WAL` 与 `PRAGMA foreign_keys=ON`。外键**应该**带 `ON DELETE CASCADE` 或 `SET NULL` 明确级联策略。新增表需在本篇附录登记（见文末）。
-- **为什么**：WAL 提升并发写性能；外键保证引用完整性。
-- **检查方法**：`database.ts` 初始化含两个 PRAGMA。
+- 完整产品安装/更新只更换受验签代码和固定模块文件；所有可执行代码位于系统产品源目录。
+- 用户应用根目录（`~/.natives/apps/<appId>/`）严格只用于保存 `activation.json`、`data/`、`imports/`、`cache/`、`logs/`，严禁在用户目录下存放可执行文件（彻底废弃 `runtime/<version>/app` 模式）。
+- 首次打开模块才以当前用户权限初始化或迁移业务数据。
+- 重装、修复和更新保留模块显示偏好、用户数据和 Keychain。
 
----
+#### R-D6 · 清除数据是独立危险操作
 
-## 五、原子写入
-
-#### R-D5 · 配置与文件写入用「临时文件 + fsync + rename」
 - **等级**：MUST
-- **分类**：数据
-- **规则**：覆盖重要文件（配置、凭证、用户文档）时**必须**用原子写入：写到临时文件 → `fsync` → `rename` 覆盖原文件。涉及并发编辑（如 Agent 与用户同时改同一文件）时**必须**用 mtime 冲突检测。
-- **为什么**：崩溃或并发写入会导致半写文件损坏，对凭证/文档是灾难。
-- **检查方法**：新增文件写入逻辑时核对是否原子写；`state-persistence.ts` 是否已遵循。
+- 隐藏模块、停止运行、更新产品与清除数据是不同动作。
+- 清数据前显示范围并二次确认；失败保存 `cleanup_pending` 或等价可重试状态。
+- 不删除产品外路径、其他用户数据或不属于该 appId 的 Keychain 项。
 
----
+#### R-D7 · 数据增长有界
 
-## 六、状态分层（插件状态保留）
+- **等级**：MUST
+- 长列表、Usage events、历史、缓存和日志必须分页、限额、轮转或按保留策略清理。
+- UI 不一次性承载完整历史；导出可以流式读取权威数据。
+- 删除/压缩策略必须可解释，不能静默丢失计费或用户文件。
 
-承接 ADR-0005。
+#### R-D8 · 迁移与导入可取消
 
-#### R-D6 · 插件状态遵循热/温/冷/持久四层
-- **等级**：SHOULD
-- **分类**：状态、性能
-- **规则**：插件 iframe 状态**应该**按四层管理：
+- **等级**：MUST
+- 长任务有 progress、cancel 和 crash recovery；取消后不留下半注册、半写文件或持锁状态。
+- 模块迁移先备份、验证后提交；已接受新写入后不得自动恢复旧备份。
 
-| 层 | 含义 | 何时进入 |
-|----|------|---------|
-| 热 | 当前可见，JS 内存保留 | 用户正在使用 |
-| 温 | 最近 N 个后台 iframe，隐藏但保留 | 切换走，未达上限 |
-| 冷/销毁 | 超出温层上限，销毁 iframe | LRU 淘汰 |
-| 持久 | 插件主动 `natives.db.set()` 保存 | 插件显式调用 |
+## 合规自检
 
-温层上限**应该**可配置（默认约 5）。销毁前**应该**给插件 `beforeunload` 机会存盘。
-- **为什么**：见 ADR-0005。分层在内存与体验间取平衡。
-- **检查方法**：`iframe-manager.ts` 的 LRU 与心跳逻辑是否覆盖四层。
-
----
-
-## 七、本篇合规自检清单
-
-- [ ] 非 Secret 数据在 `~/.natives/`；Secret 在 OS Keychain；DB 只有 opaque reference（R-D1/R-S12）。
-- [ ] 插件数据按 module_id 隔离，且 moduleId 来自 Token 反查而非插件自报（R-D2）。
-- [ ] schema 变更走增量 `ALTER`，没有 `DROP TABLE`（R-D3）。
-- [ ] 新表启用了 WAL + 外键级联策略（R-D4）。
-- [ ] 重要文件写入用了原子写 + mtime 冲突检测（R-D5）。
-
----
-
-## 附录：当前表清单
-
-> 新增表请在此登记，并补 `ALTER` 迁移逻辑。schema 版本见 `settings._schema_version`（v8 起增量演进，当前 head v28；PWSV2 追加 v29，见 ADR-0021 修订 §PWSV2）。
-
-| 表 | 用途 |
-|----|------|
-| `modules` | 模块注册表 |
-| `apps` / `app_packages` / `app_permissions` | App 安装权威、包收据与权限 |
-| `app_install_transactions` / `app_package_stages` | 安装事务、恢复日志与包暂存状态 |
-| `app_meta` / `app_retained_data` | 导航版本与可重试的卸载、个人数据清理记录 |
-| `module_permissions` | 模块权限声明 |
-| `settings` | 用户设置（KV） |
-| `module_data` | 插件数据（按 module_id 隔离） |
-| `workshop_cache` | 创意工坊元数据缓存 |
-| `env_profiles` | 环境配置组 |
-| `external_creative_apps` | 外部 GitHub 容器创意应用（ADR-0013，v7） |
-| `creative_app_env` | 外部应用 env（AES-GCM，级联删除） |
-| `local_creative_apps` | 本地项目创意的启动方案与运行状态（v8） |
-| `local_creative_env` | 本地项目 env（AES-GCM，级联删除，v8） |
-| `env_variables` | 环境变量（加密） |
-| `notifications` | 通知历史 |
-| `module_order` | 侧边栏排序 |
-| `permission_audit_log` | 权限审计日志 |
-| `usage_dashboard_snapshots` | 用量看板快照缓存（按 time_zone 主键，v6） |
-| `workspaces` / `workspace_open_tabs`* / `workspace_context_items` / `workspace_widgets` / `workspace_layouts` / `workspace_view_states` / `workspace_tool_profiles` | Workspace V2 七表（v27 建表） |
-| `workspace_templates` | Workspace 内置/个人模板 manifest（PWSV2，v29） |
-
-\* 旧内容 tab 表 `workspace_tabs`（v27）PWSV2 起降为 legacy（无 production 读/写）；Workspace 会话由新表 `workspace_open_tabs`（v29）承载，death proof 后删除旧表。
+- [ ] 每类数据只有一个 writer。
+- [ ] schema 与文件更新原子、幂等、可恢复。
+- [ ] 产品更新不以 root 写用户数据。
+- [ ] 清数据和代码操作分离。
+- [ ] 长期增长数据有界。
