@@ -181,6 +181,19 @@ export function createAppShell({
       return;
     }
 
+    // 会话续期：页面 401（token 15 分钟 TTL 过期）后申请换发新 token。
+    // 同 generation 内 issue 新 challenge 即可，无需 rotate/重载页面。
+    if (event.data?.type === 'renew-session') {
+      if (!host || !frame || !generation) return;
+      try {
+        const challenge = randomId();
+        const issued = await host.call('app:session', { instanceId, op: 'issue', challenge });
+        if (!frame || issued.generation !== generation) return;
+        frame.contentWindow.postMessage({ type: 'welcome', generation, challenge, token: issued.token, expiresAt: issued.expiresAt }, '*');
+      } catch { /* 下一次请求仍会 401，页面按错误路径提示 */ }
+      return;
+    }
+
     if (event.data?.type !== 'hello') return;
     helloReceived = true;
     if (event.data.generation !== generation || event.data.challenge !== challenge) return;

@@ -5,7 +5,22 @@
 // 握手令牌（app.js 的握手流程写入，api()/authFetch() 读取）
 let _tokenVal = null;
 let tokenResolver = null;
-const tokenPromise = new Promise(resolve => { tokenResolver = resolve; });
+let tokenPromise = new Promise(resolve => { tokenResolver = resolve; });
+// token 过期（15 分钟 TTL）后无续期机制，长开页面必然 401。
+// 401 时向扩展申请重新握手：发 renew-session → 扩展 issue 新 token → welcome 写入。
+let _renewing = null;
+function rehandshake() {
+  if (!_renewing) {
+    _tokenVal = null;
+    tokenPromise = new Promise(resolve => { tokenResolver = resolve; });
+    window.parent.postMessage({ type: "renew-session" }, "*");
+    _renewing = Promise.race([
+      tokenPromise,
+      new Promise(resolve => setTimeout(() => resolve(null), 4000)),
+    ]).finally(() => { _renewing = null; });
+  }
+  return _renewing;
+}
 
 const state = {
   get token() { return _tokenVal; },
@@ -53,14 +68,18 @@ async function ensureToken() {
 
 // API 与通信基座
 async function api(method, url, body) {
-  await ensureToken();
   const headers = { "Content-Type": "application/json" };
-  if (_tokenVal) headers["Authorization"] = "Bearer " + _tokenVal;
-  const r = await fetch(url, {
-    method: method,
-    headers: headers,
-    body: body ? JSON.stringify(body) : undefined
-  });
+  const send = () => {
+    if (_tokenVal) headers["Authorization"] = "Bearer " + _tokenVal;
+    return fetch(url, {
+      method: method,
+      headers: headers,
+      body: body ? JSON.stringify(body) : undefined
+    });
+  };
+  let r = await send();
+  // token 过期（APP_SESSION_INVALID）时重新握手换新 token 并重试一次。
+  if (r.status === 401 && await rehandshake()) r = await send();
   if (!r.ok) {
     const j = await r.json().catch(() => ({}));
     throw new Error(j.message || j.error || r.statusText);
@@ -70,12 +89,17 @@ async function api(method, url, body) {
 
 // 带鉴权头的 fetch 请求，避免出现 APP_SESSION_INVALID
 async function authFetch(url, options = {}) {
-  await ensureToken();
-  const headers = Object.assign({}, options.headers);
-  if (_tokenVal && !headers["Authorization"] && !headers["authorization"]) {
-    headers["Authorization"] = "Bearer " + _tokenVal;
-  }
-  return fetch(url, Object.assign({}, options, { headers }));
+  const send = () => {
+    const headers = Object.assign({}, options.headers);
+    if (_tokenVal && !headers["Authorization"] && !headers["authorization"]) {
+      headers["Authorization"] = "Bearer " + _tokenVal;
+    }
+    return fetch(url, Object.assign({}, options, { headers }));
+  };
+  let r = await send();
+  // token 过期（APP_SESSION_INVALID）时重新握手换新 token 并重试一次。
+  if (r.status === 401 && await rehandshake()) r = await send();
+  return r;
 }
 
 // 主题取色：Canvas 绘制统一从 CSS 变量读取，随 volt/archive 主题与涨跌色同步。
