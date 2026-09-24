@@ -67,6 +67,12 @@ class ModelSettings {
     });
     this.view.dialog.addEventListener('submit', (event) => this.handleSubmit(event));
     this.view.dialog.addEventListener('model-provider-submit', (event) => this.saveProvider(event));
+    // 全局"默认大模型"选择器：空 detail = 取消默认。
+    this.view.dialog.addEventListener('model-default-model-change', (event) => {
+      const { providerId = '', modelId = '' } = event.detail || {};
+      const revision = this.snapshot?.revision;
+      this.mutate(() => this.api.setDefaultModel({ providerId, modelId, expectedRevision: revision }));
+    });
   }
   setLocale({ t, language, returnFocus }) { this.t = t; this.language = language; this.returnFocus = returnFocus; }
   setInitialPage(page) { this.initialPage = page; }

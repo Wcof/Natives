@@ -217,6 +217,8 @@ func (e *Engine) dispatch(ctx context.Context, method string, raw json.RawMessag
 		return e.reconfigureGateway(e.setModelEnabled(raw))
 	case "model_models_refresh":
 		return e.reconfigureGateway(e.refreshModels(ctx, raw))
+	case "model_default_model_set":
+		return e.setDefaultModel(raw)
 	case "model_gateway_set_resident":
 		return e.setResident(raw)
 	case "model_gateway_restart":

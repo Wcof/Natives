@@ -216,6 +216,10 @@ func (e *Engine) deleteProvider(raw json.RawMessage) (domain.Snapshot, error) {
 			return invalid("内置 OAuth 供应商不能删除")
 		}
 		snapshot.Providers = slices.DeleteFunc(snapshot.Providers, func(value domain.Provider) bool { return value.ID == input.ProviderID })
+		// 供应商被删时清掉指向它的默认模型引用。
+		if snapshot.DefaultModel.ProviderID == input.ProviderID {
+			snapshot.DefaultModel = domain.DefaultModelRef{}
+		}
 		return nil
 	})
 	if err != nil && oldKeyErr == nil {
@@ -304,6 +308,10 @@ func (e *Engine) deleteModel(raw json.RawMessage) (domain.Snapshot, error) {
 			return err
 		}
 		provider.Models = slices.DeleteFunc(provider.Models, func(model domain.Model) bool { return model.ID == input.ModelID })
+		// 默认模型引用被删时一并清除，避免悬挂引用。
+		if snapshot.DefaultModel.ProviderID == input.ProviderID && snapshot.DefaultModel.ModelID == input.ModelID {
+			snapshot.DefaultModel = domain.DefaultModelRef{}
+		}
 		return nil
 	})
 }
@@ -333,6 +341,43 @@ func (e *Engine) setModelEnabled(raw json.RawMessage) (domain.Snapshot, error) {
 			}
 		}
 		return notFound()
+	})
+}
+
+func (e *Engine) setDefaultModel(raw json.RawMessage) (domain.Snapshot, error) {
+	var input struct {
+		ExpectedRevision *int64 `json:"expectedRevision"`
+		ProviderID       string `json:"providerId"`
+		ModelID          string `json:"modelId"`
+	}
+	if json.Unmarshal(raw, &input) != nil {
+		return domain.Snapshot{}, invalid("默认模型参数无效")
+	}
+	if err := requireRevision(input.ExpectedRevision); err != nil {
+		return domain.Snapshot{}, err
+	}
+	return e.repo.Update(input.ExpectedRevision, func(snapshot *domain.Snapshot) error {
+		if input.ProviderID == "" || input.ModelID == "" {
+			// 空参数 = 取消默认模型。
+			snapshot.DefaultModel = domain.DefaultModelRef{}
+			return nil
+		}
+		provider, err := findProvider(snapshot, input.ProviderID)
+		if err != nil {
+			return err
+		}
+		if provider.Kind != "custom" {
+			return invalid("只能选择自定义供应商下的模型")
+		}
+		model := slices.IndexFunc(provider.Models, func(m domain.Model) bool { return m.ID == input.ModelID })
+		if model < 0 {
+			return notFound()
+		}
+		if !provider.Models[model].Enabled || !provider.Enabled {
+			return invalid("默认模型必须处于启用状态")
+		}
+		snapshot.DefaultModel = domain.DefaultModelRef{ProviderID: input.ProviderID, ModelID: input.ModelID}
+		return nil
 	})
 }
 

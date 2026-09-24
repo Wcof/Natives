@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/ldh/natives/model-host/internal/agentclients"
+	"github.com/ldh/natives/model-host/internal/domain"
 )
 
 const fallbackGatewayAPIKey = "123456"
@@ -123,6 +125,19 @@ func (e *Engine) applyAgentClientConfig(ctx context.Context, raw json.RawMessage
 	switch mode {
 	case "apply", "default":
 		targetModel := strings.TrimSpace(params.Model)
+		if targetModel == "" {
+			// 用户在"自定义模型"里设置的默认模型优先（须仍存在且启用）。
+			snapshot, loadErr := e.repo.Load()
+			if loadErr == nil && snapshot.DefaultModel.ProviderID != "" {
+				if provider, pErr := findProvider(&snapshot, snapshot.DefaultModel.ProviderID); pErr == nil && provider.Enabled {
+					if idx := slices.IndexFunc(provider.Models, func(m domain.Model) bool {
+						return m.ID == snapshot.DefaultModel.ModelID && m.Enabled
+					}); idx >= 0 {
+						targetModel = snapshot.DefaultModel.ModelID
+					}
+				}
+			}
+		}
 		if targetModel == "" {
 			targetModel = agentclients.DefaultModelForClient(params.Client)
 		}

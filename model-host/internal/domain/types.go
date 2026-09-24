@@ -102,7 +102,15 @@ type Snapshot struct {
 	Providers     []Provider `json:"providers"`
 	Accounts      []Account  `json:"accounts"`
 	Gateway       Gateway    `json:"gateway"`
-	UpdatedAt     string     `json:"updatedAt"`
+	// DefaultModel：用户指定的默认模型（providerId+modelId），空表示未设置。
+	DefaultModel DefaultModelRef `json:"defaultModel,omitempty"`
+	UpdatedAt    string          `json:"updatedAt"`
+}
+
+// DefaultModelRef 指向 providers 内某个 custom 供应商下的已启用模型。
+type DefaultModelRef struct {
+	ProviderID string `json:"providerId"`
+	ModelID    string `json:"modelId"`
 }
 
 func NewSnapshot() Snapshot {

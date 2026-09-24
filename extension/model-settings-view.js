@@ -336,8 +336,49 @@ function providerButton(provider, selectedID, badge, label) {
   return item;
 }
 
+// 全局"默认大模型"选择区块：唯一入口，跨所有自定义供应商选择一个已启用模型。
+function renderDefaultModelSelector(snapshot, t) {
+  const section = element('div', 'model-default-model-section');
+  const label = element('h3', 'model-list-title', t('modelDefaultModel', '默认大模型'));
+  const select = document.createElement('select');
+  select.name = 'defaultModel';
+  select.setAttribute('aria-label', t('modelDefaultModel', '默认大模型'));
+  const current = snapshot.defaultModel || {};
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = t('modelDefaultModelNone', '未设置（各处使用各自回退模型）');
+  select.append(placeholder);
+  for (const provider of snapshot.providers) {
+    if (provider.kind !== 'custom' || !provider.enabled) continue;
+    const enabled = provider.models.filter((model) => model.enabled);
+    if (!enabled.length) continue;
+    const group = document.createElement('optgroup');
+    group.label = provider.name;
+    for (const model of enabled) {
+      const option = document.createElement('option');
+      option.value = `${provider.id}::${model.id}`;
+      option.textContent = model.displayName || model.id;
+      option.selected = current.providerId === provider.id && current.modelId === model.id;
+      group.append(option);
+    }
+    select.append(group);
+  }
+  select.addEventListener('change', () => {
+    const [providerId, modelId] = select.value.split('::');
+    select.dispatchEvent(new CustomEvent('model-default-model-change', {
+      bubbles: true,
+      detail: { providerId: providerId || '', modelId: modelId || '' },
+    }));
+  });
+  const hint = element('p', 'muted', t('modelDefaultModelHint', '全局唯一默认：AI 对话与智能体配置在未显式指定模型时将使用它。'));
+  section.append(label, select, hint);
+  return section;
+}
+
 function renderCustomDetail(container, provider, snapshot, t) {
   container.replaceChildren();
+  // 全局"默认大模型"选择器：跨所有自定义供应商唯一生效，避免每处各设默认导致歧义。
+  container.append(renderDefaultModelSelector(snapshot, t));
   const form = document.createElement('form');
   form.className = 'model-provider-form';
   form.dataset.providerId = provider.id;
@@ -368,7 +409,7 @@ function renderCustomDetail(container, provider, snapshot, t) {
     const edit = button('edit-model', t('edit', '编辑')); edit.dataset.modelId = model.id;
     const toggle = button('toggle-model', model.enabled ? t('disable', '禁用') : t('enable', '启用')); toggle.dataset.modelId = model.id; toggle.dataset.enabled = String(!model.enabled);
     const remove = button('delete-model', t('delete', '删除'), 'danger'); remove.dataset.modelId = model.id;
-    actions.append(edit, toggle, remove); row.append(actions); list.append(row);
+    actions.append(setDefault, edit, toggle, remove); row.append(actions); list.append(row);
   }
   if (!provider.models.length) list.append(emptyState(t('modelNoModels', '暂无模型'), t('modelNoModelsHint', '自动获取，或使用下面的表单手动添加。')));
   list.append(modelForm(t)); container.append(list);
