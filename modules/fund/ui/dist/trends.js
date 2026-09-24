@@ -107,9 +107,13 @@ function selectStock(code, name) {
 }
 
 // ===== 主分析流水线 =====
+// 请求令牌：连续搜索/切换标的时，旧请求的晚到响应不得覆盖新图表（否则K线在
+// 两个标的数据之间来回跳、出现"一闪一闪"的假大阳线）。
+let _analyzeSeq = 0;
 async function analyze(symbol) {
   tState.currentSymbol = symbol;
   clearInterval(_refreshTimer);
+  const seq = ++_analyzeSeq;
 
   const qb = document.getElementById('quote-bar');
   if (qb) qb.innerHTML = '<span class="qb-name flat">正在分析中...</span>';
@@ -127,6 +131,7 @@ async function analyze(symbol) {
     ]);
 
     const data = await analyzeRes.json();
+    if (seq !== _analyzeSeq) return; // 已有更新的分析请求，丢弃旧响应
     if (data.error) {
       if (qb) qb.innerHTML = `<span class="qb-name" style="color:#ff2d2d">${data.error}</span>`;
       return;
@@ -168,15 +173,17 @@ async function analyze(symbol) {
       chanlunData = null;
       tState.dailyChanlun = null;
     }
+    if (seq !== _analyzeSeq) return; // 缠论晚到响应同样丢弃
     if (trends.chan) {
       trends.chan.renderChanlunDaily(chanlunData);
       trends.chan.applyChanlunDailyOverlay(chanlunData);
     }
 
-    if (tState.currentView === 'minute') {
+    if (tState.currentView === 'minute' && tState.currentSymbol === symbol) {
       loadMinute(symbol);
     }
 
+    if (seq !== _analyzeSeq) return; // 不为旧标的启动行情轮询
     _refreshTimer = setInterval(() => refreshQuote(symbol), 2000);
   } catch(e) {
     if (qb) qb.innerHTML = `<span class="qb-name" style="color:#ff2d2d">分析失败: ${e.message}</span>`;
@@ -185,9 +192,12 @@ async function analyze(symbol) {
 
 async function refreshQuote(symbol) {
   try {
+    // 只处理当前标的的行情，切换标的后的在途旧响应直接丢弃
+    if (symbol !== tState.currentSymbol) return;
     const r = await authFetch(`/api/trends/quote?symbol=${symbol}`);
     const q = await r.json();
-    if (!q.error) {
+    // 响应期间可能已切换标的，二次校验后再落图
+    if (!q.error && symbol === tState.currentSymbol) {
       updateQuote(q);
       if (trends.chart?.refreshKlineLastCandle) {
         trends.chart.refreshKlineLastCandle(q);
@@ -212,6 +222,8 @@ async function loadMinute(symbol) {
       authFetch(`/api/trends/minute?symbol=${symbol}`),
       authFetch(`/api/trends/chanlun_minute?symbol=${symbol}`),
     ]);
+    // 切换标的后的在途分时响应直接丢弃，避免旧分时覆盖新标的图表
+    if (tState.currentSymbol !== symbol) return;
     const data = await minuteRes.json();
     if (data.error) {
       if (charts.minuteChart) {

@@ -165,6 +165,9 @@
   
   /* 侧栏折叠：与文档管理一致（按钮 / ⌘B，状态记忆，彻底折叠不留任何残余条） */
   .workspace-body.side-collapsed .side-column { display: none !important; width: 0 !important; }
+  /* 趋势页签例外：信号面板常驻右栏，不受看板折叠影响（折叠按钮此时无操作对象） */
+  .workspace-body.side-collapsed.trends-active .side-column { display: flex !important; width: var(--fund-side-width, 390px) !important; }
+  .workspace-body.side-collapsed.trends-active .side-resizer { display: block !important; }
   .collapse-btn {
     display: inline-flex; align-items: center; justify-content: center; gap: 4px;
     border: 1px solid var(--natives-border); background: transparent;
@@ -384,10 +387,11 @@
   
 
   /* ===== 趋势分析与实时买卖点专属样式（源项目 1:1 复刻） ===== */
-  font-family: 'Microsoft YaHei', 'Segoe UI', sans-serif;
-  background: #000;
-  color: #ccc;
-}
+  body {
+    font-family: 'Microsoft YaHei', 'Segoe UI', sans-serif;
+    background: #000;
+    color: #ccc;
+  }
 
 /* ===== 顶部栏 ===== */
 .topbar {
@@ -502,17 +506,16 @@
 #view-trends { height: 100%; display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
 .trends-workspace { flex: 1; height: 100%; display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
 .trends-workspace .main {
-  flex: 1; min-height: 0; height: auto; display: grid; grid-template-columns: 1fr 340px;
-  gap: 1px; background: #1a1a1a; overflow: hidden;
+  flex: 1; min-height: 0; height: auto; display: grid; grid-template-columns: 1fr;
+  gap: 0; background: #1a1a1a; overflow: hidden;
 }
 .left-panel { flex: 1; background: #000; display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
 .chart-container { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-height: 0; position: relative; }
 #kline-chart { flex: 1; width: 100%; min-height: 220px; }
-.right-panel { background: #0a0a0a; overflow-y: auto; padding: 10px; display: flex; flex-direction: column; gap: 10px; min-height: 0; }
-.workspace-body.trends-active .side-column,
-.workspace-body.trends-active .side-resizer {
-  display: none !important;
-}
+.right-panel { background: #0a0a0a; overflow-y: auto; padding: 10px; display: none; flex-direction: column; gap: 10px; min-height: 0; }
+.workspace-body.trends-active .right-panel { display: flex; }
+/* 看板随页签联动：非趋势页签显示盘口卡片，趋势页签显示信号卡片 */
+.workspace-body.trends-active .side-fund-content { display: none !important; }
 
 /* ===== 图表工具栏 ===== */
 .chart-toolbar {
@@ -790,6 +793,11 @@
 
 @media (max-width: 1100px) { .main { grid-template-columns: 1fr; } }
 
+/* ===== 右栏信号面板滚动条适配 ===== */
+.right-panel ::-webkit-scrollbar { width: 6px; }
+.right-panel ::-webkit-scrollbar-track { background: #0a0a0a; }
+.right-panel ::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+
 /* ===== 自选/历史功能 ===== */
 .watch-wrap { position: relative; display: flex; align-items: center; gap: 4px; }
 .wc-btn {
@@ -1021,6 +1029,7 @@
       </nav>
     </div>
     <div class="header-right">
+      <button class="collapse-btn" id="btn-manual-refresh" title="立即刷新行情（休市时也可手动拉取）"><svg class="svg-icon" aria-hidden="true"><use href="#i-arrow" /></svg><span class="btn-text"> 刷新行情</span></button>
       <button class="collapse-btn" id="btn-toggle-side" title="折叠看板 (⌘B)" aria-pressed="false"><svg class="svg-icon" aria-hidden="true"><use href="#i-panel-right" /></svg><span class="btn-text"> 折叠看板</span></button>
       <span class="ws-badge offline" id="ws-status" title="Host WebSocket 连接状态">WS 离线</span>
       <button class="btn" id="btn-color-mode" title="红涨绿跌 / 绿涨红跌 切换"><svg class="svg-icon" aria-hidden="true"><use href="#i-palette" /></svg> 红涨绿跌</button>
@@ -1169,8 +1178,6 @@
               <button class="hs-btn" onclick="analyze('600519')">茅台</button>
               <button class="hs-btn" onclick="analyze('601899')">紫金矿业</button>
               <button class="hs-btn" onclick="analyze('600276')">恒瑞医药</button>
-              <button class="hs-btn" onclick="analyze('588170')">科创半导体</button>
-              <button class="hs-btn" onclick="analyze('000001')">平安银行</button>
             </div>
             <button class="scan-btn" id="scan-btn" onclick="openScan()">扫描买入</button>
             <div class="mode-toggle">
@@ -1246,84 +1253,6 @@
                 </div>
                 <div class="loading-overlay" id="loading"><div class="spinner"></div></div>
                 <div id="signal-tooltip"></div>
-              </div>
-            </div>
-
-            <!-- ===== 右侧：信号 ===== -->
-            <div class="right-panel">
-              <!-- 一句话总结（小白第一眼看的） -->
-              <div class="summary-card" id="summary-card">
-                <div class="sc-header">AI 分析结论</div>
-                <div class="sum-body" id="sum-body">
-                  <div class="sum-action-row">
-                    <span class="sum-badge sum-badge-watch">等待分析</span>
-                    <span class="sum-strength">--</span>
-                    <span class="sum-score-big flat">--</span>
-                  </div>
-                  <div class="sum-text" style="color:#666">输入股票代码或点击上方热门股票开始分析</div>
-                </div>
-              </div>
-
-              <!-- 操作计划（具体怎么操作） -->
-              <div class="plan-card" id="plan-card" style="display:none">
-                <div class="sc-header" style="color:var(--natives-accent)">操作计划</div>
-                <div class="plan-body" id="plan-body"></div>
-              </div>
-
-              <!-- 大盘环境 -->
-              <div class="signal-card" id="market-card" style="display:none">
-                <div class="sc-header" style="color:#4fc3f7" onclick="toggleCard(this)"><span class="sc-arrow">▼</span>大盘环境</div>
-                <div id="market-body" style="padding:8px 12px;font-size:12px;line-height:1.6"></div>
-              </div>
-
-              <!-- 模块评分 -->
-              <div class="signal-card" data-card="module">
-                <div class="sc-header" onclick="toggleCard(this)"><span class="sc-arrow">▼</span>模块评分</div>
-                <div class="module-list" id="module-list"></div>
-              </div>
-
-              <!-- 买卖信号 -->
-              <div class="signal-card" data-card="signals">
-                <div class="sc-header" onclick="toggleCard(this)"><span class="sc-arrow">▼</span>买卖信号</div>
-                <div class="sig-list" id="sig-list"></div>
-              </div>
-
-              <!-- CANSLIM -->
-              <div class="signal-card" data-card="canslim">
-                <div class="sc-header" onclick="toggleCard(this)"><span class="sc-arrow">▼</span>CAN SLIM</div>
-                <div class="cs-grid" id="cs-grid"></div>
-                <div id="cs-simple"></div>
-              </div>
-
-              <!-- 关键价位 -->
-              <div class="signal-card" data-card="levels">
-                <div class="sc-header" onclick="toggleCard(this)"><span class="sc-arrow">▼</span>关键价位</div>
-                <div class="kl-grid" id="kl-grid"></div>
-              </div>
-
-              <!-- 缠论日线/周线分析 -->
-              <div class="chanlun-card" id="chanlun-daily-card" data-card="chanlun-daily" style="display:none">
-                <div class="sc-header" style="color:#7F77DD" id="chanlun-daily-title" onclick="toggleCard(this)"><span class="sc-arrow">▼</span><span id="chanlun-daily-label">缠论日线分析</span></div>
-                <div class="cl-body" id="chanlun-daily-body"></div>
-              </div>
-
-              <!-- 缠论分时分析 -->
-              <div class="chanlun-card" id="chanlun-card" data-card="chanlun-minute">
-                <div class="sc-header" style="color:var(--natives-accent)" onclick="toggleCard(this)"><span class="sc-arrow">▼</span>缠论分时分析</div>
-                <div class="cl-body" id="chanlun-body"></div>
-              </div>
-
-              <!-- 信号准确率 -->
-              <div class="signal-card signal-accuracy-card" id="accuracy-card" data-card="accuracy">
-                <div class="sc-header" onclick="toggleCard(this)"><span class="sc-arrow">▼</span>信号准确率</div>
-                <div class="sa-stats" id="sa-stats"></div>
-                <div class="sa-detail" id="sa-detail"></div>
-              </div>
-
-              <!-- 风险提示 -->
-              <div class="signal-card" id="risk-card" data-card="risk" style="display:none">
-                <div class="sc-header" style="color:#ffc107" onclick="toggleCard(this)"><span class="sc-arrow">▼</span>风险提示</div>
-                <div class="sig-list" id="risk-list"></div>
               </div>
             </div>
           </div>
@@ -1496,6 +1425,84 @@
           </div>
         </div>
       </div>
+
+      <!-- 2. 趋势分析页签：AI 决策信号卡片（随顶部导航切换联动显示） -->
+      <div class="right-panel">
+        <!-- 一句话总结（小白第一眼看的） -->
+        <div class="summary-card" id="summary-card">
+          <div class="sc-header">AI 分析结论</div>
+          <div class="sum-body" id="sum-body">
+            <div class="sum-action-row">
+              <span class="sum-badge sum-badge-watch">等待分析</span>
+              <span class="sum-strength">--</span>
+              <span class="sum-score-big flat">--</span>
+            </div>
+            <div class="sum-text" style="color:#666">输入股票代码或点击上方热门股票开始分析</div>
+          </div>
+        </div>
+
+        <!-- 操作计划（具体怎么操作） -->
+        <div class="plan-card" id="plan-card" style="display:none">
+          <div class="sc-header" style="color:var(--natives-accent)">操作计划</div>
+          <div class="plan-body" id="plan-body"></div>
+        </div>
+
+        <!-- 大盘环境 -->
+        <div class="signal-card" id="market-card" style="display:none">
+          <div class="sc-header" style="color:#4fc3f7" onclick="toggleCard(this)"><span class="sc-arrow">▼</span>大盘环境</div>
+          <div id="market-body" style="padding:8px 12px;font-size:12px;line-height:1.6"></div>
+        </div>
+
+        <!-- 模块评分 -->
+        <div class="signal-card" data-card="module">
+          <div class="sc-header" onclick="toggleCard(this)"><span class="sc-arrow">▼</span>模块评分</div>
+          <div class="module-list" id="module-list"></div>
+        </div>
+
+        <!-- 买卖信号 -->
+        <div class="signal-card" data-card="signals">
+          <div class="sc-header" onclick="toggleCard(this)"><span class="sc-arrow">▼</span>买卖信号</div>
+          <div class="sig-list" id="sig-list"></div>
+        </div>
+
+        <!-- CANSLIM -->
+        <div class="signal-card" data-card="canslim">
+          <div class="sc-header" onclick="toggleCard(this)"><span class="sc-arrow">▼</span>CAN SLIM</div>
+          <div class="cs-grid" id="cs-grid"></div>
+          <div id="cs-simple"></div>
+        </div>
+
+        <!-- 关键价位 -->
+        <div class="signal-card" data-card="levels">
+          <div class="sc-header" onclick="toggleCard(this)"><span class="sc-arrow">▼</span>关键价位</div>
+          <div class="kl-grid" id="kl-grid"></div>
+        </div>
+
+        <!-- 缠论日线/周线分析 -->
+        <div class="chanlun-card" id="chanlun-daily-card" data-card="chanlun-daily" style="display:none">
+          <div class="sc-header" style="color:#7F77DD" id="chanlun-daily-title" onclick="toggleCard(this)"><span class="sc-arrow">▼</span><span id="chanlun-daily-label">缠论日线分析</span></div>
+          <div class="cl-body" id="chanlun-daily-body"></div>
+        </div>
+
+        <!-- 缠论分时分析 -->
+        <div class="chanlun-card" id="chanlun-card" data-card="chanlun-minute">
+          <div class="sc-header" style="color:var(--natives-accent)" onclick="toggleCard(this)"><span class="sc-arrow">▼</span>缠论分时分析</div>
+          <div class="cl-body" id="chanlun-body"></div>
+        </div>
+
+        <!-- 信号准确率 -->
+        <div class="signal-card signal-accuracy-card" id="accuracy-card" data-card="accuracy">
+          <div class="sc-header" onclick="toggleCard(this)"><span class="sc-arrow">▼</span>信号准确率</div>
+          <div class="sa-stats" id="sa-stats"></div>
+          <div class="sa-detail" id="sa-detail"></div>
+        </div>
+
+        <!-- 风险提示 -->
+        <div class="signal-card" id="risk-card" data-card="risk" style="display:none">
+          <div class="sc-header" style="color:#ffc107" onclick="toggleCard(this)"><span class="sc-arrow">▼</span>风险提示</div>
+          <div class="sig-list" id="risk-list"></div>
+        </div>
+      </div>
     </div>
     </div>
   </div>
@@ -1536,7 +1543,6 @@
   </div>
   <!-- 信号变更提醒浮层 -->
   <div class="toast-container" id="toast-container"></div>
-</div>
 <!-- 源文件按能力域拆分于 ui/dist/*.js；此处单次加载由 Host 编译期拼接的 bundle -->
 <script src="app.js"></script>
 </body>

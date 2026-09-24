@@ -355,7 +355,17 @@ function renderKline(klines, signal) {
 
   const total = dates.length;
   const defaultDays = Math.min(60, total);
-  const ds = total > defaultDays ? (1 - defaultDays / total) * 100 : 0;
+  let ds = total > defaultDays ? (1 - defaultDays / total) * 100 : 0;
+  let de = 100;
+  // 同一标的重复渲染（页签重进/轮询触发）时保留用户当前缩放区间，避免图表跳变
+  const sameSymbol = tState.currentRenderedSymbol === tState.currentSymbol && tState.klineData.length;
+  if (sameSymbol && charts.klineChart) {
+    try {
+      const dz = charts.klineChart.getOption().dataZoom?.[0];
+      if (dz && dz.start != null && dz.end != null) { ds = dz.start; de = dz.end; }
+    } catch(e) {}
+  }
+  tState.currentRenderedSymbol = tState.currentSymbol;
 
   charts.klineChart.setOption({
     backgroundColor: C.bg,
@@ -421,8 +431,8 @@ function renderKline(klines, signal) {
       }
     },
     dataZoom: [
-      { type: 'inside', start: ds, end: 100, zoomOnMouseWheel: true, moveOnMouseMove: true, moveOnMouseWheel: false },
-      { type: 'slider', start: ds, end: 100, height: 28, bottom: 8,
+      { type: 'inside', start: ds, end: de, zoomOnMouseWheel: true, moveOnMouseMove: true, moveOnMouseWheel: false },
+      { type: 'slider', start: ds, end: de, height: 28, bottom: 8,
         borderColor: '#222', backgroundColor: '#0a0a0a',
         fillerColor: 'rgba(205,242,75,0.1)',
         selectedDataBackground: { lineStyle: { color: '#cdf24b' }, areaStyle: { color: 'rgba(205,242,75,0.15)' } },
@@ -450,13 +460,13 @@ function renderKline(klines, signal) {
     }],
     tooltip: { trigger: 'axis', formatter: p => p[0] ? `<div style="font-size:11px">${p[0].axisValue}<br/>量 ${fmtVol(p[0].value)}</div>` : '' },
     dataZoom: [
-      { type: 'inside', start: ds, end: 100, zoomOnMouseWheel: true, moveOnMouseMove: true },
-      { type: 'slider', start: ds, end: 100, show: false },
+      { type: 'inside', start: ds, end: de, zoomOnMouseWheel: true, moveOnMouseMove: true },
+      { type: 'slider', start: ds, end: de, show: false },
     ],
   }, true);
 
   bindZoomSync();
-  updateZoomInfo(ds, 100);
+  updateZoomInfo(ds, de);
   if (trends.indicator?.renderIndicator) {
     trends.indicator.renderIndicator(tState.currentIndicator);
   }
@@ -729,6 +739,20 @@ function refreshKlineLastCandle(q) {
   const d = new Date();
   const today = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
   if (last.date !== today) return;
+
+  // 行情源与K线源价格基准不一致（如K线走了不复权fallback、行情走了另一数据源）
+  // 时，直接合并会把最后一根K线变成脱离真实走势的假大阳/大阴线。偏离超过该
+  // 板块单日涨跌停极限判定为基准错位，跳过本次合并，保持上一帧K线，等待下一
+  // 次 analyze 全量重绘对齐。主板±10%、创业板/科创板±20%、北交所±30%。
+  const base = last.close > 0 ? last.close : (last.open || 0);
+  if (base > 0) {
+    const s = tState.currentSymbol || '';
+    const limit = (s.startsWith('300') || s.startsWith('688')) ? 0.21
+      : (s.startsWith('920') || s.startsWith('8')) ? 0.31 : 0.11;
+    if (Math.abs(q.price - base) / base > limit) {
+      return;
+    }
+  }
 
   last.close = q.price;
   last.high = Math.max(last.high, q.high || q.price);

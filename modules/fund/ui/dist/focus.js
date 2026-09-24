@@ -55,7 +55,8 @@ function exitFocus() {
   document.body.classList.remove("focus-mode");
   if (ws) ws.hidden = true;
   // 搬回原位：主栏区块回到 main-column 内 chart-control-bar 之前的顺序，
-  // 盘口区块回到 side-column 内 side-header 之前的顺序。
+  // 盘口区块回到 side-column 内 side-fund-content 之前的顺序（趋势信号
+  // right-panel 在 side-fund-content 之后，不受影响）。
   const mainCol = document.querySelector(".main-column");
   const sideCol = document.getElementById("side-fund-content") || document.getElementById("side-dashboard");
   const anchorMain = document.querySelector(".main-column .search-box, .main-column section");
@@ -63,10 +64,9 @@ function exitFocus() {
     const node = center.querySelector(sel);
     if (node && mainCol) mainCol.insertBefore(node, anchorMain);
   });
-  const anchorSide = sideCol ? sideCol.querySelector(".side-header ~ *, .alert-box") : null;
   MOVE_TO_RIGHT.forEach((sel) => {
     const node = right.querySelector(sel);
-    if (node && sideCol) sideCol.insertBefore(node, anchorSide);
+    if (node && sideCol) sideCol.insertBefore(node, sideCol.firstChild);
   });
   actions.redrawChart();
 }

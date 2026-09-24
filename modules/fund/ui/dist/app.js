@@ -224,8 +224,11 @@ window.addEventListener("message", function(e) {
     document.documentElement.dataset.theme = msg.appearance === "light" ? "archive" : "volt";
     window.parent.postMessage({ type: "hello", generation: msg.generation, challenge: msg.challenge }, "*");
   } else if (msg.type === "welcome") {
+    // 首次 welcome 走完整初始化；续期（renew-session 换发）只更新 token，
+    // 不重复 initApp，避免重启轮询定时器/重复拉数据。
+    const firstInit = !state.token;
     state.token = msg.token;
-    initApp();
+    if (firstInit) initApp();
   } else if (msg.type === "theme") {
     document.documentElement.dataset.theme = msg.appearance === "light" ? "archive" : "volt";
     actions.redrawChart();
@@ -243,20 +246,42 @@ function initApp() {
     actions.initTrends();
   }
 
-  // 视口感知调度：前台时轮询作为 WS 的弹性备份
+  // 视口感知 + 交易时段分级调度：market-session 按开市状态选择周期——
+  // 开市 3s（秒级），休市 30min（分钟级兜底，页面保持静止）。
   // runtime 后端无 /ws 端点，WS 实际永远离线：自选表行情必须走轮询兜底，
   // 否则表格只在启动取一次数，此后永不更新（表现为"没数据/不动"）。
+  // tick 回调只在「开市 / 调度器初始 / 手动刷新」三种情况下干活；
+  // 休市期间定时唤醒后直接 return，不发起任何请求、不触发任何重绘。
   let watchlistPollCount = 0;
-  setInterval(function() {
-    if (document.visibilityState === "visible") {
-      actions.refreshTickers();
-      if (!state.wsConnected) {
-        actions.loadDetailQuote();
-        // 自选表 6s 一刷（每两次轮询一次），与 tickers/详情的 3s 错开减负
-        if (watchlistPollCount++ % 2 === 0) actions.refreshWatchlist();
+  let lastTickOpen = null;
+  const session = globalThis.Fund.marketSession;
+  session.startScheduler(function(tick) {
+    const firstRun = lastTickOpen === null;
+    const switched = !firstRun && lastTickOpen !== tick.open;
+    lastTickOpen = tick.open;
+    // 干活条件：开市轮询 / 开休市切换后首刷 / 手动刷新 / 调度器初始首刷
+    const shouldWork = tick.open || tick.manual || tick.reason === "init" || switched;
+    if (!shouldWork) return;
+    if (document.visibilityState !== "visible" && tick.reason !== "init") return;
+
+    actions.refreshTickers();
+    if (!state.wsConnected) {
+      actions.loadDetailQuote();
+      // 自选表开市期 6s 一刷（每两次轮询一次），与 tickers/详情的 3s 错开减负；
+      // 休市首刷/手动刷新时立即刷一次
+      if (tick.manual || switched || firstRun || (tick.open && watchlistPollCount++ % 2 === 0)) {
+        actions.refreshWatchlist();
       }
     }
-  }, 3000);
+  });
+  // 手动刷新入口（下拉刷新/快捷键可调用）：休市时也能立即拉一次最新数据
+  actions.requestFundRefresh = session.requestManualRefresh;
+  const manualRefreshBtn = document.getElementById("btn-manual-refresh");
+  if (manualRefreshBtn) {
+    manualRefreshBtn.addEventListener("click", function() {
+      session.requestManualRefresh();
+    });
+  }
 }
 
 setTimeout(function() {

@@ -223,15 +223,17 @@ def fetch_kline(symbol: str, count: int = 250, period: str = "day", adjust: str 
     if klines:
         log.debug(f"腾讯K线成功 {symbol}: {len(klines)}条")
     else:
-        # 2. 腾讯失败(可能WAF拦截) → 新浪API（不复权但价格准确）
-        klines = _fetch_kline_sina(symbol, count, period)
+        # 2. 腾讯失败(可能WAF拦截) → 东财API（前复权，与腾讯基准一致）
+        #    注意：不能先落新浪——新浪不复权，与腾讯前复权基准不同，缓存过期后
+        #    换源会导致整段K线价格基准切换，前端表现为图表跳变/假大阳线闪烁。
+        klines = _fetch_kline_eastmoney(symbol, count, period)
         if klines:
-            log.debug(f"新浪K线成功 {symbol}: {len(klines)}条")
+            log.debug(f"东财K线成功 {symbol}: {len(klines)}条")
         else:
-            # 3. 最后fallback东财push2test
-            klines = _fetch_kline_eastmoney(symbol, count, period)
+            # 3. 最后fallback新浪API（不复权但价格准确）
+            klines = _fetch_kline_sina(symbol, count, period)
             if klines:
-                log.debug(f"东财K线成功 {symbol}: {len(klines)}条")
+                log.debug(f"新浪K线成功 {symbol}: {len(klines)}条")
 
     if not klines or len(klines) < 10:
         log.error(f"所有K线源均失败 {symbol}, 获取{len(klines)}条")

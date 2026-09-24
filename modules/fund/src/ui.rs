@@ -14,11 +14,15 @@
 const INDEX_HTML: &str = include_str!("../ui/dist/index.html");
 const ECHARTS_JS: &str = include_str!("../ui/dist/echarts.min.js");
 
-/// bundle 拼接顺序 = 依赖顺序：core 基座 → 领域模块（注册 actions）→ app controller。
+/// bundle 拼接顺序 = 依赖顺序：core 基座 → 调度基座 → 领域模块（注册 actions）→ app controller。
 const BUNDLE_JS: &str = concat!(
     include_str!("../ui/dist/core.js"),
     "\n",
+    include_str!("../ui/dist/market-session.js"),
+    "\n",
     include_str!("../ui/dist/dashboard.js"),
+    "\n",
+    include_str!("../ui/dist/watchlist-table.js"),
     "\n",
     include_str!("../ui/dist/market-table.js"),
     "\n",
