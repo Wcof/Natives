@@ -24,26 +24,37 @@ const MOVE_TO_RIGHT = [
   ".quote-summary-card", ".depth-card", ".metrics-card", ".alert-card", ".side-header", ".alert-box", ".depth-section", ".metrics-grid",
 ];
 
+function openStockDetail(symbol, name) {
+  if (!symbol) return;
+  const cleanCode = symbol.replace(/^(sh|sz|bj)/i, "");
+  // 1. 选中该标的
+  actions.selectSymbol(symbol, name || symbol, true);
+  // 2. 如果之前在专注模式，先安全退出
+  if (focusActive) {
+    exitFocus();
+  }
+  // 3. 切换至「趋势分析」个股全盘详情视口（K线、分时、指标、资金流与AI决策全屏呈现）
+  const trendsTab = document.getElementById("tab-trends");
+  if (trendsTab) {
+    trendsTab.click();
+  }
+  // 4. 立即触发深度分析流水线
+  if (window.analyze) {
+    window.analyze(cleanCode);
+  } else if (actions.loadTrendsStock) {
+    actions.loadTrendsStock(cleanCode);
+  }
+  // 5. 确保右侧决策看板完全展开（AI 结论/操作计划/买卖信号等卡片在此）
+  if (typeof expandSidePanel === "function") {
+    expandSidePanel();
+  } else if (actions.expandSidePanel) {
+    actions.expandSidePanel();
+  }
+}
+actions.openStockDetail = openStockDetail;
+
 function enterFocus() {
-  if (focusActive) return;
-  focusActive = true;
-  const ws = document.getElementById("focus-workspace");
-  const center = document.getElementById("focus-center");
-  const right = document.getElementById("focus-right");
-  if (!ws || !center || !right) return;
-  ws.hidden = false;
-  document.body.classList.add("focus-mode");
-  MOVE_TO_CENTER.forEach((sel) => {
-    const node = document.querySelector(sel);
-    if (node) center.appendChild(node);
-  });
-  MOVE_TO_RIGHT.forEach((sel) => {
-    const node = document.querySelector(sel);
-    if (node) right.appendChild(node);
-  });
-  document.getElementById("focus-badge").textContent = "专注模式 · " + state.currentName;
-  renderFocusList();
-  actions.redrawChart();
+  openStockDetail(state.currentSymbol || "600519", state.currentName || "贵州茅台");
 }
 
 function exitFocus() {
@@ -354,18 +365,23 @@ searchInput.addEventListener("keydown", function(e) {
 document.getElementById("focus-exit-btn").addEventListener("click", exitFocus);
 // selectSymbol 编排后同步专注模式状态（badge/列表高亮/激活 Sparkline）
 const origSelect = actions.selectSymbol;
-actions.selectSymbol = function(symbol, name) {
-  origSelect(symbol, name);
+actions.selectSymbol = function(symbol, name, userTriggered) {
+  origSelect(symbol, name, userTriggered);
   if (focusActive) {
     document.getElementById("focus-badge").textContent = "专注模式 · " + (name || symbol);
     renderFocusList();
     refreshActiveSpark();
   }
 };
-// 双击自选表行 = 进入专注模式（market-table.js 已有点击选中，这里补 dblclick）
+// 双击自选表行/成分股行 = 进入该标的的个股详情视口（趋势分析全盘呈现）
 document.addEventListener("dblclick", function(e) {
-  const row = e.target.closest && e.target.closest("#watchlist-table tbody tr, #market-table tbody tr");
-  if (row && row.dataset.symbol) enterFocus();
+  const row = e.target.closest && e.target.closest("#watchlist-table tbody tr, #sector-stocks-table tbody tr, .focus-asset-row");
+  if (!row) return;
+  const symbol = row.dataset.symbol || row.dataset.code || (row.querySelector("td:nth-child(2)")?.textContent?.trim());
+  const name = row.dataset.name || (row.querySelector("td:nth-child(3)")?.textContent?.trim()) || (row.querySelector("td:nth-child(2)")?.textContent?.trim());
+  if (symbol) {
+    openStockDetail(symbol, name);
+  }
 });
 
 })();

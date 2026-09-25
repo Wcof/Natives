@@ -1,0 +1,361 @@
+
+    <!-- 拖拽调宽分隔条：拖动调整右侧看板宽度 -->
+    <div class="side-resizer" id="side-resizer" role="separator" aria-orientation="vertical" tabindex="0" title="拖动调整看板宽度"></div>
+
+    <!-- 右栏：专业决策与盘口看板（对齐源项目卡片流架构） -->
+    <div class="side-column" id="side-dashboard">
+      <!-- 1. 自选模块：传统基金/股票盘口内容 -->
+      <div id="side-fund-content" class="side-tab-pane active" data-tab="watchlist">
+        <!-- 1. 标的报价卡 -->
+        <div class="side-card quote-summary-card">
+          <div class="symbol-title-row">
+            <div>
+              <span class="symbol-name" id="dash-name">–</span>
+              <span class="symbol-code" id="dash-code">–</span>
+            </div>
+            <div>
+              <button class="btn" id="btn-toggle-fav"><svg class="svg-icon" aria-hidden="true"><use href="#i-star" /></svg> 自选</button>
+            </div>
+          </div>
+          <div class="price-large-row">
+            <span class="price-large up" id="dash-price">–</span>
+            <span class="up" id="dash-change">–</span>
+          </div>
+        </div>
+
+        <!-- 2. 五档盘口 & 深度力量卡片 -->
+        <div class="side-card depth-card">
+          <div class="side-card-header">五档盘口与深度力量<span class="sc-arrow">▼</span></div>
+          <div class="depth-grid">
+            <div class="depth-side" id="depth-asks">
+              <div class="depth-row"><span class="depth-label">卖五</span><span class="num down">-</span><span class="num">-</span></div>
+              <div class="depth-row"><span class="depth-label">卖四</span><span class="num down">-</span><span class="num">-</span></div>
+              <div class="depth-row"><span class="depth-label">卖三</span><span class="num down">-</span><span class="num">-</span></div>
+              <div class="depth-row"><span class="depth-label">卖二</span><span class="num down">-</span><span class="num">-</span></div>
+              <div class="depth-row"><span class="depth-label">卖一</span><span class="num down">-</span><span class="num">-</span></div>
+            </div>
+            <div class="depth-side" id="depth-bids">
+              <div class="depth-row"><span class="depth-label">买一</span><span class="num up">-</span><span class="num">-</span></div>
+              <div class="depth-row"><span class="depth-label">买二</span><span class="num up">-</span><span class="num">-</span></div>
+              <div class="depth-row"><span class="depth-label">买三</span><span class="num up">-</span><span class="num">-</span></div>
+              <div class="depth-row"><span class="depth-label">买四</span><span class="num up">-</span><span class="num">-</span></div>
+              <div class="depth-row"><span class="depth-label">买五</span><span class="num up">-</span><span class="num">-</span></div>
+            </div>
+          </div>
+          <div class="power-bar-wrap">
+            <div class="power-bar-title">
+              <span>买盘: <b id="bid-vol-text">0</b></span>
+              <span>力量比: <b id="bid-ratio-text">50%</b></span>
+              <span>卖盘: <b id="ask-vol-text">0</b></span>
+            </div>
+            <div class="power-bar">
+              <div class="power-bar-fill" id="power-bar-fill" style="width: 50%;"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 3. 核心指标简况网格卡片 -->
+        <div class="side-card metrics-card">
+          <div class="side-card-header">盘口关键指标<span class="sc-arrow">▼</span></div>
+          <div class="metrics-grid">
+            <div class="metric-box"><span class="metric-label">最高</span><span class="metric-val" id="m-high">-</span></div>
+            <div class="metric-box"><span class="metric-label">最低</span><span class="metric-val" id="m-low">-</span></div>
+            <div class="metric-box"><span class="metric-label">今开</span><span class="metric-val" id="m-open">-</span></div>
+            <div class="metric-box"><span class="metric-label">昨收</span><span class="metric-val" id="m-prev">-</span></div>
+            <div class="metric-box"><span class="metric-label">成交额(万)</span><span class="metric-val" id="m-amount">-</span></div>
+            <div class="metric-box"><span class="metric-label">换手%</span><span class="metric-val" id="m-turnover">-</span></div>
+            <div class="metric-box"><span class="metric-label">量比</span><span class="metric-val" id="m-vol-ratio">-</span></div>
+            <div class="metric-box"><span class="metric-label">振幅%</span><span class="metric-val" id="m-amplitude">-</span></div>
+            <div class="metric-box"><span class="metric-label">委比%</span><span class="metric-val" id="m-weibi">-</span></div>
+            <div class="metric-box"><span class="metric-label">委差(手)</span><span class="metric-val" id="m-weicha">-</span></div>
+          </div>
+        </div>
+
+        <!-- 4. 预警规则轻量卡片 -->
+        <div class="side-card alert-card">
+          <div class="side-card-header">标的异动预警 (Alerts)<span class="sc-arrow">▼</span></div>
+          <div class="alert-body">
+            <div class="alert-controls">
+              <span>涨跌幅突破 ±</span>
+              <input type="number" id="alert-threshold-input" step="0.5" value="3.0">
+              <span>%</span>
+              <button class="btn btn-accent" id="btn-set-alert">设预警</button>
+            </div>
+            <div style="font-size: 11px; color: var(--natives-text-muted); margin-top: 6px;">
+              状态: <span id="alert-status-text" class="up">已就绪</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 2. 热门板块模块右侧看板 -->
+      <div id="side-pane-market" class="side-tab-pane" data-tab="market">
+        <!-- 1. 板块概览卡 -->
+        <div class="side-card">
+          <div class="symbol-title-row">
+            <div>
+              <span class="symbol-name" id="side-sector-name">请选择板块</span>
+              <span class="symbol-code" id="side-sector-code">–</span>
+            </div>
+            <div>
+              <span class="badge" id="side-sector-type-badge">板块</span>
+            </div>
+          </div>
+          <div class="price-large-row">
+            <span class="price-large" id="side-sector-pct">–</span>
+            <span id="side-sector-speed-wrap" style="font-size:13px; color:var(--natives-text-muted);">涨速: <b id="side-sector-speed" class="num">–</b></span>
+          </div>
+          <div class="sector-period-row" style="display:flex; justify-content:space-between; margin-top:8px; font-size:12px; color:var(--natives-text-muted); border-top:1px solid var(--natives-border); padding-top:6px;">
+            <span>5日涨幅: <b id="side-sector-pct5" class="num">–</b></span>
+            <span>20日涨幅: <b id="side-sector-pct20" class="num">–</b></span>
+          </div>
+        </div>
+
+        <!-- 2. 板块多空动向与家数分布 -->
+        <div class="side-card">
+          <div class="side-card-header">板块多空力量分布<span class="sc-arrow">▼</span></div>
+          <div class="power-bar-wrap" style="padding:10px 12px;">
+            <div class="power-bar-title">
+              <span class="up">上涨: <b id="side-sector-up-count">0</b></span>
+              <span>多头占比: <b id="side-sector-bull-ratio">50%</b></span>
+              <span class="down">下跌: <b id="side-sector-down-count">0</b></span>
+            </div>
+            <div class="power-bar" style="margin:6px 0;">
+              <div class="power-bar-fill" id="side-sector-power-fill" style="width: 50%;"></div>
+            </div>
+            <div style="font-size:11px; color:var(--natives-text-muted); display:flex; justify-content:space-between;">
+              <span>平盘: <b id="side-sector-flat-count">0</b> 家</span>
+              <span>成分股总数: <b id="side-sector-total-stocks">0</b> 只</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 3. 板块领涨龙头 -->
+        <div class="side-card">
+          <div class="side-card-header">板块领涨龙头<span class="sc-arrow">▼</span></div>
+          <div style="padding:10px 12px; display:flex; align-items:center; justify-content:space-between;">
+            <div>
+              <div style="font-size:14px; font-weight:600;" id="side-sector-leader-name">–</div>
+              <div style="font-size:11px; color:var(--natives-text-muted);" id="side-sector-leader-code">–</div>
+            </div>
+            <div style="text-align:right;">
+              <div class="num price-large up" style="font-size:16px;" id="side-sector-leader-price">–</div>
+              <div class="num up" style="font-size:12px;" id="side-sector-leader-pct">–</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 4. 选中成分股实时盘口速览 -->
+        <div class="side-card" id="side-sector-stock-panel">
+          <div class="side-card-header">成分股盘口速览<span class="sc-arrow">▼</span></div>
+          <div id="side-sector-stock-content" style="padding:10px 12px;">
+            <div style="color:var(--natives-text-muted); font-size:12px; text-align:center; padding:12px 0;">
+              点击下方成分股列表<br>在此联动查看个股五档盘口与行情
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 3. 趋势分析页签：AI 决策信号卡片（随顶部导航切换联动显示） -->
+      <div id="side-pane-trends" class="side-tab-pane right-panel" data-tab="trends">
+        <!-- 一句话总结（小白第一眼看的） -->
+        <div class="summary-card" id="summary-card">
+          <div class="sc-header" onclick="toggleCard(this)">AI 分析结论<span class="sc-arrow">▼</span></div>
+          <div class="sum-body" id="sum-body">
+            <div class="sum-action-row">
+              <span class="sum-badge sum-badge-watch">等待分析</span>
+              <span class="sum-strength">--</span>
+              <span class="sum-score-big flat">--</span>
+            </div>
+            <div class="sum-text" style="color:var(--natives-text-muted)">输入股票代码或点击上方热门股票开始分析</div>
+          </div>
+        </div>
+
+        <!-- 操作计划（具体怎么操作） -->
+        <div class="plan-card" id="plan-card" style="display:none">
+          <div class="sc-header" style="color:var(--natives-accent)" onclick="toggleCard(this)">操作计划<span class="sc-arrow">▼</span></div>
+          <div class="plan-body" id="plan-body"></div>
+        </div>
+
+        <!-- 大盘环境 -->
+        <div class="signal-card" id="market-card" style="display:none">
+          <div class="sc-header" style="color:#4fc3f7" onclick="toggleCard(this)">大盘环境<span class="sc-arrow">▼</span></div>
+          <div id="market-body" style="padding:8px 12px;font-size:12px;line-height:1.6"></div>
+        </div>
+
+        <!-- 模块评分 -->
+        <div class="signal-card" data-card="module">
+          <div class="sc-header" onclick="toggleCard(this)">模块评分<span class="sc-arrow">▼</span></div>
+          <div class="module-list" id="module-list">
+            <div class="panel-empty-hint">分析标的后展示5大模块量化评分</div>
+          </div>
+        </div>
+
+        <!-- 买卖信号 -->
+        <div class="signal-card" data-card="signals">
+          <div class="sc-header" onclick="toggleCard(this)">买卖信号<span class="sc-arrow">▼</span></div>
+          <div class="sig-list" id="sig-list">
+            <div class="panel-empty-hint">分析标的后展示核心买卖点与提示</div>
+          </div>
+        </div>
+
+        <!-- CANSLIM -->
+        <div class="signal-card" data-card="canslim">
+          <div class="sc-header" onclick="toggleCard(this)">CAN SLIM 基本面<span class="sc-arrow">▼</span></div>
+          <div class="cs-grid" id="cs-grid"></div>
+          <div id="cs-simple"></div>
+          <div class="panel-empty-hint" id="cs-empty-hint">分析标的后展示7维度基本面打分</div>
+        </div>
+
+        <!-- 关键价位 -->
+        <div class="signal-card" data-card="levels">
+          <div class="sc-header" onclick="toggleCard(this)">关键阻力与支撑价位<span class="sc-arrow">▼</span></div>
+          <div class="kl-grid" id="kl-grid"></div>
+          <div class="panel-empty-hint" id="kl-empty-hint">分析标的后计算关键阻力支撑位</div>
+        </div>
+
+        <!-- 缠论日线/周线分析 -->
+        <div class="chanlun-card" id="chanlun-daily-card" data-card="chanlun-daily" style="display:none">
+          <div class="sc-header" style="color:#7F77DD" id="chanlun-daily-title" onclick="toggleCard(this)"><span id="chanlun-daily-label">缠论日线分析</span><span class="sc-arrow">▼</span></div>
+          <div class="cl-body" id="chanlun-daily-body"></div>
+        </div>
+
+        <!-- 缠论分时分析 -->
+        <div class="chanlun-card" id="chanlun-card" data-card="chanlun-minute" style="display:none">
+          <div class="sc-header" style="color:var(--natives-accent)" onclick="toggleCard(this)">缠论分时分析<span class="sc-arrow">▼</span></div>
+          <div class="cl-body" id="chanlun-body"></div>
+        </div>
+
+        <!-- 信号准确率 -->
+        <div class="signal-card signal-accuracy-card" id="accuracy-card" data-card="accuracy" style="display:none">
+          <div class="sc-header" onclick="toggleCard(this)">信号准确率<span class="sc-arrow">▼</span></div>
+          <div class="sa-stats" id="sa-stats"></div>
+          <div class="sa-detail" id="sa-detail"></div>
+        </div>
+
+        <!-- 风险提示 -->
+        <div class="signal-card" id="risk-card" data-card="risk" style="display:none">
+          <div class="sc-header" style="color:#ffc107" onclick="toggleCard(this)">风险提示<span class="sc-arrow">▼</span></div>
+          <div class="sig-list" id="risk-list"></div>
+        </div>
+      </div>
+
+      <!-- 4. 持仓记账右侧看板 -->
+      <div id="side-pane-positions" class="side-tab-pane" data-tab="positions">
+        <div class="side-card">
+          <div class="side-card-header">持仓资产概况<span class="sc-arrow">▼</span></div>
+          <div style="padding:12px;">
+            <div style="display:flex; justify-content:space-between; margin-bottom:10px;">
+              <span style="color:var(--natives-text-muted); font-size:12px;">总持仓成本</span>
+              <span class="num" style="font-size:16px; font-weight:600;" id="side-pos-cost-val">0.00</span>
+            </div>
+            <div style="display:flex; justify-content:space-between; margin-bottom:10px;">
+              <span style="color:var(--natives-text-muted); font-size:12px;">累计已实现盈亏</span>
+              <span class="num" style="font-size:16px; font-weight:600;" id="side-pos-realized-val">0.00</span>
+            </div>
+            <div style="display:flex; justify-content:space-between;">
+              <span style="color:var(--natives-text-muted); font-size:12px;">持仓标的数量</span>
+              <span class="num" style="font-size:14px; font-weight:600;" id="side-pos-count-val">0 只</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="side-card">
+          <div class="side-card-header">持仓分布与权重<span class="sc-arrow">▼</span></div>
+          <div id="side-pos-dist-list" style="padding:10px 12px; font-size:12px;">
+            <div style="color:var(--natives-text-muted); text-align:center; padding:10px 0;">暂无持仓记录</div>
+          </div>
+        </div>
+
+        <div class="side-card">
+          <div class="side-card-header">记账助手<span class="sc-arrow">▼</span></div>
+          <div style="padding:10px 12px; font-size:12px; color:var(--natives-text-muted); line-height:1.6;">
+            <div>• 切换至「交易流水」录入每笔买入/卖出</div>
+            <div>• 系统自动按先进先出法则结转成本与收益</div>
+            <div>• 支持在「批量导入」中一键导入券商交割单</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 5. 交易流水右侧看板 -->
+      <div id="side-pane-tx" class="side-tab-pane" data-tab="tx">
+        <div class="side-card">
+          <div class="side-card-header">交易流水统计<span class="sc-arrow">▼</span></div>
+          <div style="padding:12px;">
+            <div style="display:flex; justify-content:space-between; margin-bottom:8px;">
+              <span style="color:var(--natives-text-muted); font-size:12px;">总交易笔数</span>
+              <span class="num" style="font-size:14px; font-weight:600;" id="side-tx-total-count">0 笔</span>
+            </div>
+            <div style="display:flex; justify-content:space-between; margin-bottom:8px;">
+              <span style="color:var(--natives-text-muted); font-size:12px;">买入总金额</span>
+              <span class="num up" style="font-size:14px; font-weight:600;" id="side-tx-buy-amount">0.00</span>
+            </div>
+            <div style="display:flex; justify-content:space-between; margin-bottom:8px;">
+              <span style="color:var(--natives-text-muted); font-size:12px;">卖出总金额</span>
+              <span class="num down" style="font-size:14px; font-weight:600;" id="side-tx-sell-amount">0.00</span>
+            </div>
+            <div style="display:flex; justify-content:space-between;">
+              <span style="color:var(--natives-text-muted); font-size:12px;">累计手续费支出</span>
+              <span class="num" style="font-size:14px; font-weight:600;" id="side-tx-fee-amount">0.00</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="side-card">
+          <div class="side-card-header">交易行为分析<span class="sc-arrow">▼</span></div>
+          <div id="side-tx-analysis-body" style="padding:10px 12px; font-size:12px; color:var(--natives-text-muted); line-height:1.6;">
+            <div>• 买卖频次：<span id="side-tx-ratio">0 买 / 0 卖</span></div>
+            <div>• 规范记账可帮助复盘真实收益曲线</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 6. 批量导入右侧看板 -->
+      <div id="side-pane-import" class="side-tab-pane" data-tab="import">
+        <div class="side-card">
+          <div class="side-card-header">导入指引与模板规范<span class="sc-arrow">▼</span></div>
+          <div style="padding:12px; font-size:12px; color:var(--natives-text-muted); line-height:1.7;">
+            <div style="font-weight:600; color:var(--natives-text-primary); margin-bottom:4px;">支持的数据源格式：</div>
+            <div>1. <b>同花顺导出</b>：支持对账单、历史成交明细 CSV/XLS</div>
+            <div>2. <b>东方财富导出</b>：支持交割单与证券交易流水</div>
+            <div>3. <b>标准 JSON/CSV</b>：包含 tradeDate, fundCode, type, quantity, price 等字段</div>
+          </div>
+        </div>
+        <div class="side-card">
+          <div class="side-card-header">数据安全与去重保障<span class="sc-arrow">▼</span></div>
+          <div style="padding:12px; font-size:12px; color:var(--natives-text-muted); line-height:1.6;">
+            <div>• <b>本地隔离存储</b>：所有财务记账流水仅存储于本机 SQLite 数据库，不上传任何外部服务器。</div>
+            <div>• <b>唯一性校验</b>：导入引擎根据交易流水哈希自动排重，重复导入不产生脏数据。</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 7. 公募净值右侧看板 -->
+      <div id="side-pane-nav" class="side-tab-pane" data-tab="nav">
+        <div class="side-card">
+          <div class="side-card-header">公募净值追踪概览<span class="sc-arrow">▼</span></div>
+          <div style="padding:12px; font-size:12px; line-height:1.7;">
+            <div style="display:flex; justify-content:space-between; margin-bottom:6px;">
+              <span style="color:var(--natives-text-muted);">已收录基金数</span>
+              <span class="num" style="font-weight:600;" id="side-nav-total-funds">0 只</span>
+            </div>
+            <div style="display:flex; justify-content:space-between; margin-bottom:6px;">
+              <span style="color:var(--natives-text-muted);">净值历史总记录</span>
+              <span class="num" style="font-weight:600;" id="side-nav-total-records">0 条</span>
+            </div>
+            <div style="display:flex; justify-content:space-between;">
+              <span style="color:var(--natives-text-muted);">数据同步源</span>
+              <span class="up" style="font-weight:600;">天天基金网公开接口</span>
+            </div>
+          </div>
+        </div>
+        <div class="side-card">
+          <div class="side-card-header">同步说明<span class="sc-arrow">▼</span></div>
+          <div style="padding:12px; font-size:12px; color:var(--natives-text-muted); line-height:1.6;">
+            <div>• 点击主界面的「一键同步历史净值」拉取最新官方净值</div>
+            <div>• 净值通常在交易日 19:00 - 22:00 之间逐步更新披露</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    </div>

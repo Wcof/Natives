@@ -2917,5 +2917,86 @@
   },
   "appsViewGuide": {
     "message": "查看安装说明"
+  },
+  "appBootTag": {
+    "message": "沙箱就绪中"
+  },
+  "appBootEnv": {
+    "message": "正在连接端侧安全运行环境…"
+  },
+  "appBootVerify": {
+    "message": "验证应用权限与会话安全凭据…"
+  },
+  "appBootAlloc": {
+    "message": "分配隔离沙箱与本地回环通道…"
+  },
+  "appBootMount": {
+    "message": "初始化界面沙箱与事件管道…"
+  },
+  "appBootStepEnv": {
+    "message": "运行环境"
+  },
+  "appBootStepAuth": {
+    "message": "凭证握手"
+  },
+  "appBootStepPort": {
+    "message": "端口就绪"
+  },
+  "appBootStepReady": {
+    "message": "界面呈现"
+  },
+  "appBootChipLoopback": {
+    "message": "127.0.0.1 隔离沙箱"
+  },
+  "appBootChipNativeHost": {
+    "message": "Native Host 驱动"
+  },
+  "appBootChipLocalOnly": {
+    "message": "端侧零外部传输"
+  },
+  "modelKernelPhaseQueued": {
+    "message": "等待开始…"
+  },
+  "modelKernelPhaseSource": {
+    "message": "正在同步上游源码…"
+  },
+  "modelKernelPhasePatches": {
+    "message": "正在应用本地补丁…"
+  },
+  "modelKernelPhaseBuild": {
+    "message": "正在构建新内核（约 1 分钟）…"
+  },
+  "modelKernelPhaseSwap": {
+    "message": "正在换装内核…"
+  },
+  "modelKernelPhaseRestart": {
+    "message": "正在重启内核…"
+  },
+  "modelKernelUpdateFailed": {
+    "message": "内核更新失败"
+  },
+  "modelKernelUpdateTimeout": {
+    "message": "内核更新超时，请稍后重试"
+  },
+  "quotaQueryFailed": {
+    "message": "额度查询失败"
+  },
+  "quotaWindowWeekly": {
+    "message": "周额度"
+  },
+  "quotaWindowFiveHour": {
+    "message": "5小时额度"
+  },
+  "quotaWindowDaily": {
+    "message": "日额度"
+  },
+  "quotaWindowMonthly": {
+    "message": "月额度"
+  },
+  "quotaGroupGemini": {
+    "message": "Gemini 模型"
+  },
+  "quotaGroupClaudeGPT": {
+    "message": "Claude 与 GPT 模型"
   }
 }

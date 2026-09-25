@@ -23,4 +23,8 @@ typedef NS_ENUM(NSInteger, NativesStatusBarDisplayMode) {
 - (void)fetchAndUpdateState;
 - (void)openTargetApp:(NSString *)appId;
 
+// 清理同二进制的其它实例（SIGTERM → 宽限 → SIGKILL）。
+// 启动时调用 = 干掉旧实例再拉起；退出时调用（atexit）= 兜底防僵尸。
+void NativesStatusBarSweepProjectProcesses(void);
+
 @end

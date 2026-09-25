@@ -2917,5 +2917,86 @@
   },
   "appsViewGuide": {
     "message": "View setup guide"
+  },
+  "appBootTag": {
+    "message": "Booting Sandbox"
+  },
+  "appBootEnv": {
+    "message": "Connecting to local secure runtime…"
+  },
+  "appBootVerify": {
+    "message": "Verifying permissions & session credentials…"
+  },
+  "appBootAlloc": {
+    "message": "Allocating sandbox & loopback channel…"
+  },
+  "appBootMount": {
+    "message": "Mounting UI surface & event pipeline…"
+  },
+  "appBootStepEnv": {
+    "message": "Environment"
+  },
+  "appBootStepAuth": {
+    "message": "Handshake"
+  },
+  "appBootStepPort": {
+    "message": "Port Ready"
+  },
+  "appBootStepReady": {
+    "message": "Mounting"
+  },
+  "appBootChipLoopback": {
+    "message": "127.0.0.1 Loopback"
+  },
+  "appBootChipNativeHost": {
+    "message": "Native Host Powered"
+  },
+  "appBootChipLocalOnly": {
+    "message": "Zero External Transit"
+  },
+  "modelKernelPhaseQueued": {
+    "message": "Queued…"
+  },
+  "modelKernelPhaseSource": {
+    "message": "Syncing upstream source…"
+  },
+  "modelKernelPhasePatches": {
+    "message": "Applying local patches…"
+  },
+  "modelKernelPhaseBuild": {
+    "message": "Building new kernel (~1 min)…"
+  },
+  "modelKernelPhaseSwap": {
+    "message": "Swapping kernel binary…"
+  },
+  "modelKernelPhaseRestart": {
+    "message": "Restarting kernel…"
+  },
+  "modelKernelUpdateFailed": {
+    "message": "Kernel update failed"
+  },
+  "modelKernelUpdateTimeout": {
+    "message": "Kernel update timed out, please retry"
+  },
+  "quotaQueryFailed": {
+    "message": "Quota query failed"
+  },
+  "quotaWindowWeekly": {
+    "message": "Weekly quota"
+  },
+  "quotaWindowFiveHour": {
+    "message": "Five-hour quota"
+  },
+  "quotaWindowDaily": {
+    "message": "Daily quota"
+  },
+  "quotaWindowMonthly": {
+    "message": "Monthly quota"
+  },
+  "quotaGroupGemini": {
+    "message": "Gemini models"
+  },
+  "quotaGroupClaudeGPT": {
+    "message": "Claude and GPT models"
   }
 }

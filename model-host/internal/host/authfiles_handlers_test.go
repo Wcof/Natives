@@ -63,12 +63,15 @@ func TestOAuthAccountAppearsInCredentialListAndProvidesQuotaMetadata(t *testing.
 		t.Fatalf("matched account must not emit a duplicate keychain row: %#v", items)
 	}
 
-	token, metadata := oauthQuotaCredential([]*coreauth.Auth{{
-		ID: "antigravity-user.json", Provider: "antigravity",
+	token, metadata, accountLabel := oauthQuotaCredential([]*coreauth.Auth{{
+		ID: "antigravity-user.json", Provider: "antigravity", Label: "tester@example.com",
 		Metadata: map[string]any{"access_token": "secret-token", "project_id": "project-123"},
 	}}, "antigravity", "antigravity-user.json")
 	if token != "secret-token" || metadata != `{"project_id":"project-123"}` {
 		t.Fatalf("quota credential was not extracted: token=%q metadata=%q", token, metadata)
+	}
+	if accountLabel != "tester@example.com" {
+		t.Fatalf("expected credential label as account, got %q", accountLabel)
 	}
 }
 

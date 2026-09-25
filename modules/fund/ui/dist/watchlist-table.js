@@ -221,7 +221,12 @@ function buildRow(item) {
       });
       return;
     }
-    actions.selectSymbol(tr.dataset.symbol, tr.dataset.name);
+    actions.selectSymbol(tr.dataset.symbol, tr.dataset.name, true);
+  });
+  tr.addEventListener("dblclick", function() {
+    if (actions.openStockDetail) {
+      actions.openStockDetail(tr.dataset.symbol, tr.dataset.name);
+    }
   });
   return tr;
 }

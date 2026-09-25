@@ -5,19 +5,26 @@ const { state, actions, api, themeColor, themeRgba } = globalThis.Fund;
 // 领域能力（行情表、图表、盘口、记账）经 actions 注册表协作，不直接互相 import。
 
 // ---------- 配色模式切换（红涨绿跌 vs 绿涨红跌） ----------
+// 按钮为纯图标（红/绿双色箭头），颜色绑定 --color-up/--color-down 变量，
+// 模式切换时变量自动互换、图标颜色随之反转，无需重渲染；仅更新语义属性。
 const colorBtn = document.getElementById("btn-color-mode");
+function applyColorModeLabel() {
+  const cn = state.colorMode === "cn";
+  colorBtn.title = cn ? "当前：红涨绿跌，点击切换为绿涨红跌" : "当前：绿涨红跌，点击切换为红涨绿跌";
+  colorBtn.setAttribute("aria-label", cn ? "切换涨跌配色（当前：红涨绿跌）" : "切换涨跌配色（当前：绿涨红跌）");
+}
 colorBtn.addEventListener("click", function() {
   if (state.colorMode === "cn") {
     state.colorMode = "intl";
     document.documentElement.setAttribute("data-color-mode", "intl");
-    colorBtn.innerHTML = '<svg class="svg-icon" aria-hidden="true"><use href="#i-palette" /></svg> 绿涨红跌';
   } else {
     state.colorMode = "cn";
     document.documentElement.removeAttribute("data-color-mode");
-    colorBtn.innerHTML = '<svg class="svg-icon" aria-hidden="true"><use href="#i-palette" /></svg> 红涨绿跌';
   }
+  applyColorModeLabel();
   actions.redrawChart();
 });
+applyColorModeLabel();
 
 // ---------- 双侧栏折叠联动（左侧边栏与右侧看板各自拥有独立的 collapse-btn） ----------
 
@@ -27,7 +34,7 @@ const leftSidebarBtn = document.getElementById("btn-toggle-left-sidebar");
 function applyLeftSidebarCollapsed(notify = true) {
   if (leftSidebarBtn) {
     leftSidebarBtn.setAttribute("aria-pressed", String(leftSidebarCollapsed));
-    leftSidebarBtn.innerHTML = '<svg class="svg-icon" aria-hidden="true"><use href="#i-panel" /></svg>' + (leftSidebarCollapsed ? "" : '<span class="btn-text"> 折叠侧栏</span>');
+    leftSidebarBtn.innerHTML = '<svg class="svg-icon" aria-hidden="true"><use href="#i-panel" /></svg>';
     leftSidebarBtn.title = leftSidebarCollapsed ? "展开左侧栏" : "折叠左侧栏";
     leftSidebarBtn.classList.toggle("active", leftSidebarCollapsed);
   }
@@ -65,11 +72,20 @@ const sideBtn = document.getElementById("btn-toggle-side");
 function applySideCollapsed() {
   sideBody.classList.toggle("side-collapsed", sideCollapsed);
   sideBtn.setAttribute("aria-pressed", String(sideCollapsed));
-  sideBtn.innerHTML = '<svg class="svg-icon" aria-hidden="true"><use href="#i-panel-right" /></svg>' + (sideCollapsed ? "" : '<span class="btn-text"> 折叠看板</span>');
+  sideBtn.innerHTML = '<svg class="svg-icon" aria-hidden="true"><use href="#i-panel-right" /></svg>';
   sideBtn.title = (sideCollapsed ? "展开看板" : "折叠看板") + " (⌘B)";
   sideBtn.classList.toggle("active", sideCollapsed);
   try { localStorage.setItem("natives-fund-side-collapsed", sideCollapsed ? "1" : "0"); } catch (e) {}
-  actions.redrawChart();
+  if (actions.redrawChart) actions.redrawChart();
+  window.dispatchEvent(new Event("resize"));
+  const tc = (globalThis.Fund && globalThis.Fund.trends && globalThis.Fund.trends.charts) || (globalThis.Fund && globalThis.Fund.trendsCharts);
+  if (tc) {
+    try {
+      Object.values(tc).forEach(function(c) {
+        if (c && typeof c.resize === "function") c.resize();
+      });
+    } catch (e) {}
+  }
 }
 sideBtn.addEventListener("click", function() { sideCollapsed = !sideCollapsed; applySideCollapsed(); });
 // 供标的切换流程调用：展开看板并记忆用户展开偏好
@@ -128,6 +144,38 @@ applySideWidth(sideWidth, false);
 
 // ---------- 标签页切换与数字键 1-6 直达 ----------
 const tabs = ["watchlist", "market", "trends", "positions", "tx", "import", "nav"];
+
+// ---------- 右侧看板随 Tab 切换联动（自选/行情/趋势/持仓/流水/导入/净值） ----------
+function switchSidePane(tabName) {
+  const panes = document.querySelectorAll("#side-dashboard .side-tab-pane");
+  panes.forEach(function(p) {
+    const isTarget = p.dataset.tab === tabName;
+    p.classList.toggle("active", isTarget);
+    p.style.display = isTarget ? "flex" : "none";
+  });
+  // 触发对应子模块的侧栏数据同步
+  if (tabName === "market" && actions.updateSectorSidebar) {
+    actions.updateSectorSidebar();
+  } else if (tabName === "positions" && actions.updatePositionsSidebar) {
+    actions.updatePositionsSidebar();
+  } else if (tabName === "tx" && actions.updateTxSidebar) {
+    actions.updateTxSidebar();
+  } else if (tabName === "nav" && actions.updateNavSidebar) {
+    actions.updateNavSidebar();
+  }
+  // 切换页签可能导致主区域尺寸变化，重绘图表
+  window.dispatchEvent(new Event("resize"));
+  const tc = (globalThis.Fund && globalThis.Fund.trends && globalThis.Fund.trends.charts) || (globalThis.Fund && globalThis.Fund.trendsCharts);
+  if (tc) {
+    try {
+      Object.values(tc).forEach(function(c) {
+        if (c && typeof c.resize === "function") c.resize();
+      });
+    } catch (e) {}
+  }
+}
+actions.switchSidePane = switchSidePane;
+
 tabs.forEach(function(t) {
   const btn = document.getElementById("tab-" + t);
   if (btn) {
@@ -143,6 +191,7 @@ tabs.forEach(function(t) {
       } else {
         sideBody.classList.remove("trends-active");
       }
+      switchSidePane(t);
       if (t === "watchlist") actions.refreshWatchlist();
       if (t === "market") actions.refreshMarket();
       if (t === "positions") actions.loadPositions();
@@ -163,11 +212,13 @@ document.addEventListener("keydown", function(e) {
 });
 
 // ---------- 深度看板联动：标的切换编排 ----------
-function selectSymbol(symbol, name) {
+function selectSymbol(symbol, name, userTriggered = false) {
   state.currentSymbol = symbol;
   state.currentName = name || symbol;
-  // 点击基金/股票后才展示右栏看板（默认折叠，见上方折叠逻辑）
-  expandSidePanel();
+  // 用户主动点击行时才根据需要展开侧栏
+  if (userTriggered) {
+    expandSidePanel();
+  }
   document.getElementById("dash-name").textContent = state.currentName;
   document.getElementById("dash-code").textContent = state.currentSymbol;
 
@@ -185,6 +236,9 @@ function selectSymbol(symbol, name) {
   if (actions.loadTrendsStock) {
     const clean = symbol.replace(/^(sh|sz|bj)/i, "");
     actions.loadTrendsStock(clean);
+  }
+  if (actions.updateSectorStockDetail) {
+    actions.updateSectorStockDetail(symbol, name);
   }
 }
 actions.selectSymbol = selectSymbol;
@@ -236,6 +290,7 @@ window.addEventListener("message", function(e) {
 });
 
 function initApp() {
+  switchSidePane("watchlist");
   actions.initWebSocket();
   actions.refreshTickers();
   actions.refreshWatchlist();

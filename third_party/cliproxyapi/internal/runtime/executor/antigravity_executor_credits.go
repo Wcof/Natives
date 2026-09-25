@@ -334,6 +334,7 @@ func antigravityHasExplicitCreditsBalanceExhaustedReason(body []byte) bool {
 }
 
 func newAntigravityStatusErr(statusCode int, body []byte) error {
+	// Natives: "user location is not supported" 属临时性区域限制，按可重试错误上报而非永久失败
 	if statusCode == http.StatusBadRequest && bytes.Contains(bytes.ToLower(body), []byte("user location is not supported")) {
 		return &cliproxyauth.Error{Message: string(body), Retryable: true, HTTPStatus: http.StatusServiceUnavailable}
 	}

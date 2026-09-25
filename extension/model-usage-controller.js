@@ -1,4 +1,5 @@
 import { UsageImporterWizard } from './model-usage-importer.js';
+import { invalidateQueries } from './tokenusage/index.js';
 
 export async function handleUsageAction(controller, action, target) {
   if (action === 'select-usage-tab') {
@@ -24,11 +25,13 @@ export async function handleUsageAction(controller, action, target) {
   } else if (action === 'sync-pricing') {
     await busy(controller, async () => {
       controller.pricingData = await controller.api.syncUsagePrice();
+      invalidateQueries(); // 价格写入成功，失效 tokenusage 共享缓存
       controller.view.showNotice(controller.t('modelSyncPricingSuccess', '价格表已成功从远端同步更新'));
     });
   } else if (action === 'delete-custom-price') {
     await busy(controller, async () => {
       controller.pricingData = await controller.api.deleteUsagePrice({ providerId: target.dataset.provider, modelId: target.dataset.model });
+      invalidateQueries(); // 价格删除成功，失效 tokenusage 共享缓存
     });
   } else if (action === 'pick-import-file') {
     const input = controller.view.dialog.querySelector('[data-role="importer-file-input"]');
@@ -50,6 +53,7 @@ export async function handleUsageSubmit(controller, form) {
         inputPriceMicro: micro(data.inputPrice), outputPriceMicro: micro(data.outputPrice),
         cacheReadPriceMicro: micro(data.cacheReadPrice), cacheWritePriceMicro: micro(data.cacheWritePrice),
       });
+      invalidateQueries(); // 价格写入成功，失效 tokenusage 共享缓存
       form.reset();
     });
     return true;
@@ -102,6 +106,7 @@ async function importFile(controller, file) {
       <div class="model-form-actions"><button type="button" class="primary" data-role="confirm-import">${escapeText(controller.t('modelConfirmImport', '确认合并导入'))}</button><button type="button" data-role="cancel-import">${escapeText(controller.t('cancel', '取消'))}</button></div></div>`;
     previewNode.querySelector('[data-role="confirm-import"]').onclick = () => busy(controller, async () => {
       const result = await controller.importerWizard.commit();
+      invalidateQueries(); // 导入合并成功，失效 tokenusage 共享缓存
       controller.view.showNotice(controller.t('modelImportSuccess', '成功导入 $1 条记录').replace('$1', result.importedCount));
       await controller.loadUsageData();
     });

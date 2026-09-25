@@ -1,0 +1,123 @@
+      <!-- 3. 趋势分析与实时买卖点模块（1:1 原样复刻） -->
+      <section id="view-trends" hidden>
+        <div class="trends-workspace">
+          <!-- 顶部搜索与快捷操作 -->
+          <div class="topbar">
+            <div class="topbar-left">
+              <div class="logo"><svg class="svg-icon" aria-hidden="true" style="width:14px;height:14px;margin-right:2px"><use href="#i-bolt" /></svg>趋势分析</div>
+              <div class="search-wrap">
+                <input type="text" id="search-input" placeholder="代码/名称 如 600519" autocomplete="off">
+                <div class="search-results" id="search-results"></div>
+              </div>
+              <div class="hot-stocks">
+                <button class="hs-btn" onclick="analyze('600519')">茅台</button>
+                <button class="hs-btn" onclick="analyze('601899')">紫金矿业</button>
+                <button class="hs-btn" onclick="analyze('600276')">恒瑞医药</button>
+                <button class="hs-btn" onclick="analyze('588170')">科创半导体</button>
+                <button class="hs-btn" onclick="analyze('000001')">平安银行</button>
+              </div>
+              <button class="scan-btn" id="scan-btn" onclick="openScan()">扫描买入</button>
+            </div>
+            <div class="topbar-right">
+              <div class="mode-toggle">
+                <button class="mt-btn active" id="mt-pro" onclick="setMode('pro')">专业</button>
+                <button class="mt-btn" id="mt-simple" onclick="setMode('simple')">小白</button>
+              </div>
+              <div class="watch-wrap">
+                <button class="wc-btn wc-star" id="star-btn" title="加入/移除自选" onclick="toggleStar()">☆</button>
+                <button class="wc-btn" id="watch-btn" style="position:relative" onclick="togglePanel('watch')">自选<span class="wc-badge" id="watch-count" style="display:none">0</span><span class="wc-change-badge" id="watch-change" style="display:none">0</span></button>
+                <button class="wc-btn" id="history-btn" onclick="togglePanel('history')">历史<span class="wc-badge" id="history-count" style="display:none">0</span></button>
+                <div class="wp-panel" id="wp-panel">
+                  <div class="wp-tabs">
+                    <button class="wp-tab active" data-tab="watch" onclick="switchTab('watch')">自选股<span class="wp-tab-count" id="wt-count"></span></button>
+                    <button class="wp-tab" data-tab="history" onclick="switchTab('history')">历史记录<span class="wp-tab-count" id="ht-count"></span></button>
+                    <button class="wp-tab" data-tab="overview" onclick="switchTab('overview')">多股一览<span class="wp-tab-count" id="ov-count"></span></button>
+                  </div>
+                  <div class="wp-list" id="wp-content-watch"></div>
+                  <div class="wp-list" id="wp-content-history" style="display:none"></div>
+                  <div class="wp-list" id="wp-content-overview" style="display:none"></div>
+                  <div class="wp-footer" id="wp-footer" style="display:none">
+                    <span class="wp-footer-info" id="wp-footer-info"></span>
+                    <button class="wp-clear" id="wp-clear-btn" onclick="clearCurrentTab()">清空</button>
+                  </div>
+                </div>
+              </div>
+              <div class="quote-bar" id="quote-bar">
+                <span class="qb-name flat">输入代码开始分析</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- 双栏主体：左侧 ECharts 大图区 + 右侧 AI 决策卡片面板（1:1 复刻原始 dashboard） -->
+          <div class="main">
+            <!-- ===== 左侧：图表 ===== -->
+            <div class="left-panel">
+              <div class="chart-toolbar">
+                <button class="tb-btn active" id="view-dayk">日K</button>
+                <button class="tb-btn" id="view-week">周K</button>
+                <button class="tb-btn" id="view-month">月K</button>
+                <button class="tb-btn" id="view-minute">分时</button>
+                <div class="tb-sep" id="sep-range"></div>
+                <button class="tb-btn" data-range="20">1月</button>
+                <button class="tb-btn active" data-range="60">3月</button>
+                <button class="tb-btn" data-range="120">半年</button>
+                <button class="tb-btn" data-range="250">1年</button>
+                <button class="tb-btn" data-range="0">全部</button>
+                <div class="tb-sep"></div>
+                <!-- 划线工具：复用 tb-btn 样式；trendline=趋势线 horizontal=水平线(止损价) rectangle=矩形 channel=通道 -->
+                <button class="tb-btn td-btn" data-tool="cursor" title="光标（选中/拖拽已画线条，Delete 删除选中）">光标</button>
+                <button class="tb-btn td-btn" data-tool="trendline" title="趋势线：按下拖动绘制">趋势线</button>
+                <button class="tb-btn td-btn" data-tool="horizontal" title="水平线（止损/支撑/压力价）：单击放置">水平线</button>
+                <button class="tb-btn td-btn" data-tool="rectangle" title="矩形区域：按下拖动绘制">矩形</button>
+                <button class="tb-btn td-btn" data-tool="channel" title="通道：先拖出基线，再拖动定平行线宽度">通道</button>
+                <button class="tb-btn td-btn" id="btn-draw-clear" title="删除当前选中的划线">删除</button>
+                <div class="tb-sep"></div>
+                <span class="tb-label" id="zoom-info"></span>
+              </div>
+
+              <div class="chart-container">
+                <div id="kline-chart"></div>
+                <div id="volume-chart"></div>
+                <div class="indicator-toolbar" id="indicator-toolbar" style="display:none">
+                  <button class="it-btn active" data-ind="none" onclick="switchIndicator('none')">副图</button>
+                  <button class="it-btn" data-ind="macd" onclick="switchIndicator('macd')">MACD</button>
+                  <button class="it-btn" data-ind="rsi" onclick="switchIndicator('rsi')">RSI</button>
+                  <button class="it-btn" data-ind="kdj" onclick="switchIndicator('kdj')">KDJ</button>
+                  <button class="it-btn" data-ind="boll" onclick="switchIndicator('boll')">BOLL</button>
+                  <button class="it-btn" data-ind="wr" onclick="switchIndicator('wr')">WR</button>
+                </div>
+                <div id="indicator-chart"></div>
+                <div id="minute-chart"></div>
+                <div id="minute-vol"></div>
+                <div class="flow-section">
+                  <div class="fs-title">
+                    <span style="color:var(--natives-accent)">资金流向</span>
+                    <span id="flow-summary"></span>
+                    <span class="flow-toggle">
+                      <button class="ft-btn ft-active" id="ft-rt" onclick="switchFlowMode('realtime')">今日实时</button>
+                      <button class="ft-btn" id="ft-daily" onclick="switchFlowMode('daily')">近30日</button>
+                    </span>
+                  </div>
+                  <div id="flow-chart"></div>
+                </div>
+                <div class="loading-overlay" id="loading"><div class="spinner"></div></div>
+                <div id="signal-tooltip"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 全市场扫描买入弹窗 -->
+        <div class="scan-overlay" id="scan-overlay" onclick="closeScan(event)">
+          <div class="scan-modal" onclick="event.stopPropagation()">
+            <div class="scan-header">
+              <span class="scan-title">全A股双周期扫描</span>
+              <button class="scan-close" onclick="closeScan()">&times;</button>
+            </div>
+            <div class="scan-body" id="scan-body">
+              <div id="scan-content"></div>
+            </div>
+          </div>
+        </div>
+      </section>
+

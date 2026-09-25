@@ -3,7 +3,7 @@ import { createModelSettingsView, renderNewProvider } from './model-settings-vie
 import { handleAdvancedAction, handleAdvancedSubmit } from './model-advanced-controller.js';
 import { localizedModelError } from './model-settings-errors.js';
 import { handleUsageAction, handleUsageSubmit } from './model-usage-controller.js';
-import { userTimezone } from './tokenusage/index.js';
+import { userTimezone, acquireModelApi, releaseModelApi, sharedCall } from './tokenusage/index.js';
 import { handleAgentAction, loadAgentClients } from './model-agent-controller.js';
 import { openAccountModelsDialog } from './model-account-models-dialog.js';
 
@@ -151,8 +151,13 @@ class ModelSettings {
   }
 
   async loadUsageData() {
+    // 用量读查询统一走 tokenusage 共享数据层（ADR-0028）：与 AI 效能卡片
+    // 共用同一 Native Port（引用计数）与 sharedCall 缓存（同参合并 +
+    // revision 失效），避免双端口双拉取。写操作（价格/导入）仍走本实例
+    // 的 this.api，写成功后由 controller 调 invalidateQueries 失效共享缓存。
+    const usageApi = acquireModelApi();
     try {
-      if (!this.usageFilterOptions) this.usageFilterOptions = await this.api.getUsageAnalysis({ range: 'all' });
+      if (!this.usageFilterOptions) this.usageFilterOptions = await sharedCall(usageApi, 'getUsageAnalysis', { range: 'all' });
       const tab = this.view.activeUsageTab;
       const query = {
         range: this.usageFilter.range,
@@ -167,22 +172,24 @@ class ModelSettings {
         timezone: userTimezone(),
       };
       if (tab === 'overview') {
-        this.overviewData = await this.api.getUsageOverview(query);
+        this.overviewData = await sharedCall(usageApi, 'getUsageOverview', query);
       } else if (tab === 'analytics') {
-        this.analyticsData = await this.api.getUsageAnalysis(query);
+        this.analyticsData = await sharedCall(usageApi, 'getUsageAnalysis', query);
       } else if (tab === 'events') {
-        this.eventsData = await this.api.getUsageEvents({
+        this.eventsData = await sharedCall(usageApi, 'getUsageEvents', {
           ...query,
           offset: (this.usageFilter.page - 1) * this.usageFilter.limit,
           limit: this.usageFilter.limit,
         });
       } else if (tab === 'pricing') {
-        this.pricingData = await this.api.getUsagePricing();
+        this.pricingData = await sharedCall(usageApi, 'getUsagePricing');
       } else if (tab === 'billing') {
-        this.billingData = await this.api.getUsageBilling({ includeEntries: true });
+        this.billingData = await sharedCall(usageApi, 'getUsageBilling', { includeEntries: true });
       }
     } catch (err) {
       this.showError(err);
+    } finally {
+      releaseModelApi();
     }
   }
 
@@ -228,6 +235,41 @@ class ModelSettings {
   showError(error) {
     if (!error) { this.view.showError(''); return; }
     this.view.showError(localizedModelError(error, this.t));
+  }
+
+  async pollKernelUpdate(target) {
+    const phaseText = (phase) => ({
+      queued: this.t('modelKernelPhaseQueued', '等待开始…'),
+      source: this.t('modelKernelPhaseSource', '正在同步上游源码…'),
+      patches: this.t('modelKernelPhasePatches', '正在应用本地补丁…'),
+      build: this.t('modelKernelPhaseBuild', '正在构建新内核（约 1 分钟）…'),
+      swap: this.t('modelKernelPhaseSwap', '正在换装内核…'),
+      restarting: this.t('modelKernelPhaseRestart', '正在重启内核…'),
+    })[phase] || this.t('modelKernelUpdating', '正在更新内核…');
+    // worker 换装后以退出码 75 请求桥接重建自己，轮询会短暂断连——按重试处理
+    for (let attempt = 0; attempt < 240; attempt += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 2000));
+      try {
+        const status = await this.api.updateKernelStatus();
+        const phase = status?.job?.phase || 'idle';
+        if (phase === 'done') return status.job;
+        if (phase === 'failed') return status.job;
+        if (phase === 'idle') {
+          // 新 worker 尚无任务记录：内核版本已等于目标版本即视为完成
+          if (target) {
+            const snap = await this.api.snapshot();
+            if (snap?.gateway?.kernelVersion === target) {
+              return { phase: 'done', message: this.t('modelKernelUpdated', '内核已成功更新') };
+            }
+          }
+          continue;
+        }
+        this.view.showToast(phaseText(phase));
+      } catch (err) {
+        // worker 重启间隙：忽略并继续轮询
+      }
+    }
+    return { phase: 'failed', message: this.t('modelKernelUpdateTimeout', '内核更新超时，请稍后重试') };
   }
 
   async mutate(work, { select } = {}) {
@@ -334,12 +376,22 @@ class ModelSettings {
       return;
     }
     if (action === 'update-kernel') {
-      this.view.showToast(this.t('modelKernelUpdating', '正在更新内核…'));
+      this.view.showError('');
       try {
-        const res = await this.api.updateKernel();
+        const target = this.snapshot?.gateway?.latestKernelVersion || '';
+        const started = await this.api.updateKernel();
+        if (started?.status === 'up_to_date') {
+          this.view.showToast(this.t('modelKernelUpToDate', '已是最新'));
+          return;
+        }
+        const final = await this.pollKernelUpdate(target);
         this.snapshot = await this.api.snapshot();
         this.render();
-        this.view.showNotice(res?.message || this.t('modelKernelUpdated', '内核已成功更新'));
+        if (final?.phase === 'done') {
+          this.view.showNotice(final.message || this.t('modelKernelUpdated', '内核已成功更新'));
+        } else {
+          this.showError(new Error(final?.message || this.t('modelKernelUpdateFailed', '内核更新失败')));
+        }
       } catch (err) {
         this.showError(err);
       }

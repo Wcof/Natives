@@ -29,9 +29,54 @@ function loadPositions() {
     document.getElementById("pos-total-cost").textContent = totCost.toFixed(2);
     document.getElementById("pos-total-realized").textContent = totRealized.toFixed(2);
     document.getElementById("pos-total-realized").className = "num " + (totRealized > 0 ? "up" : totRealized < 0 ? "down" : "");
+    state.lastPositionsList = list;
+    updatePositionsSidebar(list);
   }).catch(function(e) {});
 }
 actions.loadPositions = loadPositions;
+
+function updatePositionsSidebar(posList) {
+  const list = posList || state.lastPositionsList || [];
+  let totCost = 0, totRealized = 0;
+  list.forEach(function(p) {
+    totCost += Number(p.cost || 0);
+    totRealized += Number(p.realized || 0);
+  });
+  const costEl = document.getElementById("side-pos-cost-val");
+  const realizedEl = document.getElementById("side-pos-realized-val");
+  const countEl = document.getElementById("side-pos-count-val");
+  const distEl = document.getElementById("side-pos-dist-list");
+
+  if (costEl) costEl.textContent = totCost.toFixed(2);
+  if (realizedEl) {
+    realizedEl.textContent = (totRealized > 0 ? "+" : "") + totRealized.toFixed(2);
+    realizedEl.className = "num " + (totRealized > 0 ? "up" : totRealized < 0 ? "down" : "");
+  }
+  if (countEl) countEl.textContent = list.length + " 只";
+
+  if (distEl) {
+    if (list.length === 0) {
+      distEl.innerHTML = "<div style='color:var(--natives-text-muted); text-align:center; padding:10px 0;'>暂无持仓记录</div>";
+    } else {
+      let html = "";
+      list.slice(0, 5).forEach(function(p) {
+        const cost = Number(p.cost || 0);
+        const weight = totCost > 0 ? Math.round((cost / totCost) * 100) : 0;
+        html += "<div style='margin-bottom:8px;'>" +
+          "<div style='display:flex; justify-content:space-between; margin-bottom:2px;'>" +
+            "<span><b>" + (p.fundName || p.fundCode) + "</b> <span style='font-size:10px; color:var(--natives-text-muted);'>" + p.fundCode + "</span></span>" +
+            "<span class='num'>" + weight + "% (" + cost.toFixed(0) + "元)</span>" +
+          "</div>" +
+          "<div style='height:4px; background:var(--natives-surface-3); border-radius:2px; overflow:hidden;'>" +
+            "<div style='height:100%; width:" + weight + "%; background:var(--natives-accent); border-radius:2px;'></div>" +
+          "</div>" +
+        "</div>";
+      });
+      distEl.innerHTML = html;
+    }
+  }
+}
+actions.updatePositionsSidebar = updatePositionsSidebar;
 
 // ---------- 交易流水模块 ----------
 function loadTx() {
@@ -51,9 +96,55 @@ function loadTx() {
                      "<td class='num'>" + (t.fee || "0.00") + "</td>";
       tbody.appendChild(tr);
     });
+    state.lastTxList = txs;
+    updateTxSidebar(txs);
   }).catch(function(e) {});
 }
 actions.loadTx = loadTx;
+
+function updateTxSidebar(txList) {
+  const list = txList || state.lastTxList || [];
+  let buyCount = 0, sellCount = 0, buyAmount = 0, sellAmount = 0, totFee = 0;
+  list.forEach(function(t) {
+    const amt = Number(t.amount || (t.quantity * t.price) || 0);
+    const fee = Number(t.fee || 0);
+    totFee += fee;
+    if (t.type === "BUY") {
+      buyCount++;
+      buyAmount += amt;
+    } else {
+      sellCount++;
+      sellAmount += amt;
+    }
+  });
+
+  const totalEl = document.getElementById("side-tx-total-count");
+  const buyEl = document.getElementById("side-tx-buy-amount");
+  const sellEl = document.getElementById("side-tx-sell-amount");
+  const feeEl = document.getElementById("side-tx-fee-amount");
+  const ratioEl = document.getElementById("side-tx-ratio");
+
+  if (totalEl) totalEl.textContent = list.length + " 笔";
+  if (buyEl) buyEl.textContent = buyAmount.toFixed(2);
+  if (sellEl) sellEl.textContent = sellAmount.toFixed(2);
+  if (feeEl) feeEl.textContent = totFee.toFixed(2);
+  if (ratioEl) ratioEl.textContent = buyCount + " 买 / " + sellCount + " 卖";
+}
+actions.updateTxSidebar = updateTxSidebar;
+
+function updateNavSidebar() {
+  api("GET", "/api/nav").then(function(res) {
+    const list = res.navs || res.items || [];
+    const fundsMap = {};
+    list.forEach(function(n) { if (n.fundCode) fundsMap[n.fundCode] = true; });
+    const totalFunds = Object.keys(fundsMap).length;
+    const fundsEl = document.getElementById("side-nav-total-funds");
+    const recordsEl = document.getElementById("side-nav-total-records");
+    if (fundsEl) fundsEl.textContent = totalFunds + " 只";
+    if (recordsEl) recordsEl.textContent = list.length + " 条";
+  }).catch(function() {});
+}
+actions.updateNavSidebar = updateNavSidebar;
 
 document.getElementById("tx-form").addEventListener("submit", function(e) {
   e.preventDefault();

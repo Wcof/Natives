@@ -35,6 +35,11 @@ body.sidebar-collapsed #app-sidebar { padding:16px 8px 10px; background:var(--su
 body.sidebar-collapsed #app-sidebar > :not(.brand) { display:none; }
 body.sidebar-collapsed:has(#app-stage:not([hidden])) { grid-template-columns:minmax(0,1fr); }
 body.sidebar-collapsed:has(#app-stage:not([hidden])) #app-sidebar { display:none !important; }
+/* 折叠 + 内嵌应用视图：.layout 默认 grid-column:2，单列模板下会被挤进
+   隐式第 2 列（auto 宽），第 1 列整列空白——表现为"折叠后左边全黑、
+   内容区被压扁"。此处让它跨满唯一显式列（与 space.css 的 .space-shell
+   补偿规则同构）。 */
+body.sidebar-collapsed:has(#app-stage:not([hidden])) .layout { grid-column:1 / -1; }
 body.sidebar-collapsed .brand { justify-content:center; padding:0; }
 body.sidebar-collapsed .brand > :not(#toggle-sidebar) { display:none; }
 body.sidebar-collapsed #toggle-sidebar { margin:0; }

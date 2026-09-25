@@ -206,7 +206,7 @@ func DeleteCodexSessions(home string, paths []string) ([]string, error) {
 
 // PiProviderStatus reports whether the cliproxyapi provider plugin is present.
 type PiProviderStatus struct {
-	Installed       bool   `json:"installed"`
+	Installed        bool   `json:"installed"`
 	InstalledVersion string `json:"installedVersion,omitempty"`
 }
 

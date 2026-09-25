@@ -62,7 +62,223 @@ export function createAppShell({
     toast.className = error ? 'app-toast error' : 'app-toast';
     toast.hidden = !message;
   }
+  // 应用启动加载器样式：由本模块注入而非依赖宿主页面样式表——加载器会
+  // 渲染在 app/apps/files/space 四种宿主中，只有 app.html 加载 app.css，
+  // 其余宿主下曾表现为无样式裸文本。令牌全部带回退值，任意宿主都成立。
+  const ABL_CSS = `
+.abl-scope {
+  --_accent: var(--accent, #cdf24b);
+  --_text: var(--text, #f2f2ea);
+  --_muted: var(--muted, #9b9d8c);
+  --_surface: var(--surface, #0b0c0a);
+  --_surface2: var(--surface-2, #131410);
+  --_line: var(--line, #2a2b24);
+  --_radius: var(--radius, 10px);
+}
+.app-boot-loader {
+  display:flex; align-items:center; justify-content:center;
+  min-height:440px; width:100%; padding:40px 16px; box-sizing:border-box;
+  animation: abl-fade-in .28s cubic-bezier(.16,1,.3,1);
+}
+@keyframes abl-fade-in { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:none; } }
+.abl-card {
+  position:relative; width:100%; max-width:380px; padding:30px 28px 22px;
+  background:var(--_surface2); border:1px solid var(--_line);
+  border-radius:var(--_radius); box-shadow:0 12px 40px #0008;
+  display:flex; flex-direction:column; align-items:center; text-align:center;
+  box-sizing:border-box; overflow:hidden;
+}
+.abl-card::before {
+  content:""; position:absolute; top:-80px; left:50%; transform:translateX(-50%);
+  width:240px; height:160px; border-radius:50%;
+  background:radial-gradient(circle, var(--_accent) 0%, transparent 70%);
+  opacity:.10; filter:blur(30px); pointer-events:none;
+}
+/* 徽标：单环旋转 + 中心图标，克制不抢戏 */
+.abl-emblem { position:relative; width:60px; height:60px; margin-bottom:18px; }
+.abl-ring {
+  position:absolute; inset:0; border-radius:50%;
+  border:2px solid var(--_line); border-top-color:var(--_accent);
+  animation: abl-spin 1.1s linear infinite;
+}
+.abl-core {
+  position:absolute; inset:7px; border-radius:50%;
+  background:var(--_surface); border:1px solid var(--_line);
+  display:flex; align-items:center; justify-content:center;
+}
+.abl-core .icon { width:22px; height:22px; color:var(--_accent); }
+@keyframes abl-spin { to { transform:rotate(360deg); } }
+/* 标题区 */
+.abl-name { font-size:15px; font-weight:600; color:var(--_text); letter-spacing:.2px; margin-bottom:4px; }
+.abl-status { font-size:12.5px; color:var(--_muted); line-height:1.5; min-height:19px; margin-bottom:18px; }
+/* 进度条 */
+.abl-track { width:100%; height:3px; background:var(--_line); border-radius:2px; overflow:hidden; margin-bottom:18px; }
+.abl-bar {
+  height:100%; background:var(--_accent); border-radius:2px;
+  transition:width .4s cubic-bezier(.2,.8,.2,1);
+}
+/* 步骤指示器：圆点 + 连接线，完成打勾 / 当前高亮 / 待办置灰 */
+.abl-steps { display:flex; align-items:flex-start; width:100%; margin-bottom:18px; }
+.abl-step { display:flex; flex-direction:column; align-items:center; gap:5px; flex:1; min-width:0; }
+.abl-dot {
+  width:20px; height:20px; border-radius:50%; flex:none;
+  display:flex; align-items:center; justify-content:center;
+  font-size:10px; font-style:normal; font-family:inherit;
+  border:1.5px solid var(--_line); color:var(--_muted);
+  background:var(--_surface); transition:all .25s ease;
+}
+.abl-label { font-size:10.5px; color:var(--_muted); opacity:.55; transition:all .25s ease; white-space:nowrap; }
+.abl-line { flex:none; width:14px; height:1.5px; background:var(--_line); margin-top:9.5px; transition:background .25s ease; }
+.abl-step.done .abl-dot { border-color:var(--_accent); background:var(--_accent); color:var(--_surface); }
+.abl-step.done .abl-label { opacity:.8; color:var(--_text); }
+.abl-step.done + .abl-line { background:var(--_accent); opacity:.6; }
+.abl-step.current .abl-dot {
+  border-color:var(--_accent); color:var(--_accent); font-weight:600;
+  box-shadow:0 0 0 3px color-mix(in srgb, var(--_accent) 18%, transparent);
+  animation: abl-breathe 1.6s ease-in-out infinite;
+}
+.abl-step.current .abl-label { opacity:1; color:var(--_accent); font-weight:500; }
+@keyframes abl-breathe {
+  0%,100% { box-shadow:0 0 0 3px color-mix(in srgb, var(--_accent) 18%, transparent); }
+  50% { box-shadow:0 0 0 6px color-mix(in srgb, var(--_accent) 8%, transparent); }
+}
+/* 底部安全说明芯片 */
+.abl-chips { display:flex; gap:6px; justify-content:center; flex-wrap:wrap; border-top:1px solid var(--_line); padding-top:12px; width:100%; }
+.abl-chip {
+  font-size:10px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+  padding:2px 8px; border-radius:4px; background:transparent;
+  color:var(--_muted); border:1px solid var(--_line); user-select:none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .app-boot-loader, .abl-ring, .abl-step.current .abl-dot { animation:none; }
+  .abl-bar { transition:none; }
+}`;
+  function ensureLoaderStyle() {
+    if (document.getElementById('abl-style')) return;
+    // 测试环境（Node DOM shim）可能没有 head；挂到 documentElement 同样生效
+    const parent = document.head || document.documentElement;
+    if (!parent) return;
+    const style = document.createElement('style');
+    style.id = 'abl-style';
+    style.textContent = ABL_CSS;
+    parent.append(style);
+  }
+  function renderAppLoading({ name = '', phase = 1, status = '' } = {}) {
+    ensureLoaderStyle();
+    const existing = stage?.querySelector?.('.app-boot-loader');
+    const phaseTexts = [
+      t('appBootEnv', '正在连接端侧安全运行环境…'),
+      t('appBootVerify', '验证应用权限与会话安全凭据…'),
+      t('appBootAlloc', '分配隔离沙箱与本地回环通道…'),
+      t('appBootMount', '初始化界面沙箱与事件管道…'),
+    ];
+    const currentText = status || phaseTexts[Math.min(phase - 1, phaseTexts.length - 1)] || phaseTexts[0];
+    const displayName = name || title?.textContent || appId || 'Natives';
+    const stepNames = [
+      t('appBootStepEnv', '运行环境'),
+      t('appBootStepAuth', '凭证握手'),
+      t('appBootStepPort', '端口就绪'),
+      t('appBootStepReady', '界面呈现'),
+    ];
+
+    if (existing) {
+      const nameEl = existing.querySelector('.abl-name');
+      if (nameEl && name && nameEl.textContent !== name) nameEl.textContent = name;
+      const statusEl = existing.querySelector('.abl-status');
+      if (statusEl) statusEl.textContent = currentText;
+      const barEl = existing.querySelector('.abl-bar');
+      if (barEl) barEl.style.width = `${Math.min(100, Math.max(16, phase * 25))}%`;
+      existing.querySelectorAll('.abl-step').forEach((el, idx) => {
+        el.classList.toggle('done', idx < phase - 1);
+        el.classList.toggle('current', idx === phase - 1);
+      });
+      return;
+    }
+
+    if (!stage) return;
+    stage.replaceChildren();
+    const wrap = document.createElement('div');
+    wrap.className = 'app-boot-loader abl-scope';
+    wrap.setAttribute('role', 'status');
+    wrap.setAttribute('aria-live', 'polite');
+
+    const card = document.createElement('div');
+    card.className = 'abl-card';
+
+    // 徽标：旋转环 + 中心应用图标
+    const emblem = document.createElement('div');
+    emblem.className = 'abl-emblem';
+    emblem.setAttribute('aria-hidden', 'true');
+    const ring = document.createElement('div');
+    ring.className = 'abl-ring';
+    const core = document.createElement('div');
+    core.className = 'abl-core';
+    core.innerHTML = '<svg class="icon" aria-hidden="true"><use href="#i-bolt" /></svg>';
+    emblem.append(ring, core);
+
+    // 标题与当前阶段文案
+    const nameEl = document.createElement('div');
+    nameEl.className = 'abl-name';
+    nameEl.textContent = displayName;
+    const statusEl = document.createElement('div');
+    statusEl.className = 'abl-status';
+    statusEl.textContent = currentText;
+
+    // 进度条
+    const track = document.createElement('div');
+    track.className = 'abl-track';
+    const bar = document.createElement('div');
+    bar.className = 'abl-bar';
+    bar.style.width = `${Math.min(100, Math.max(16, phase * 25))}%`;
+    track.append(bar);
+
+    // 步骤指示器：完成打勾，当前呼吸高亮，节点间连接线
+    const stepsRow = document.createElement('div');
+    stepsRow.className = 'abl-steps';
+    stepNames.forEach((sName, idx) => {
+      if (idx > 0) {
+        const line = document.createElement('div');
+        line.className = 'abl-line';
+        line.setAttribute('aria-hidden', 'true');
+        stepsRow.append(line);
+      }
+      const step = document.createElement('div');
+      step.className = 'abl-step' + (idx < phase - 1 ? ' done' : '') + (idx === phase - 1 ? ' current' : '');
+      const dot = document.createElement('i');
+      dot.className = 'abl-dot';
+      dot.textContent = idx < phase - 1 ? '✓' : String(idx + 1);
+      const label = document.createElement('span');
+      label.className = 'abl-label';
+      label.textContent = sName;
+      step.append(dot, label);
+      stepsRow.append(step);
+    });
+
+    // 底部安全说明：本地回环沙箱，数据不出端
+    const chipsRow = document.createElement('div');
+    chipsRow.className = 'abl-chips';
+    const chips = [
+      t('appBootChipLoopback', '127.0.0.1 隔离沙箱'),
+      t('appBootChipNativeHost', 'Native Host 驱动'),
+      t('appBootChipLocalOnly', '端侧零外部传输'),
+    ];
+    chips.forEach((cText) => {
+      const chip = document.createElement('span');
+      chip.className = 'abl-chip';
+      chip.textContent = cText;
+      chipsRow.append(chip);
+    });
+
+    card.append(emblem, nameEl, statusEl, track, stepsRow, chipsRow);
+    wrap.append(card);
+    stage.append(wrap);
+  }
+
   function renderStatus({ heading, body = '', actionLabel, onAction, error = false }) {
+    if (!error && !body && !actionLabel && (heading === t('appsStarting', '正在启动…') || heading.includes('启动') || heading.includes('加载'))) {
+      renderAppLoading({ status: heading });
+      return;
+    }
     stage.replaceChildren();
     const box = document.createElement('div'); box.className = `app-status${error ? ' error' : ''}`;
     const h2 = document.createElement('h2'); h2.textContent = heading; box.append(h2);
@@ -214,7 +430,7 @@ export function createAppShell({
     await stop('maintenance', false);
     const current = run;
     setToast('');
-    renderStatus({ heading: t('appsStarting', '正在启动…') });
+    renderAppLoading({ phase: 1, status: t('appBootEnv', '正在连接端侧安全运行环境…') });
     const core = getNativeClient();
     try {
       await openOnce(core, current);
@@ -233,6 +449,7 @@ export function createAppShell({
     }
   }
   async function openOnce(core, current) {
+      renderAppLoading({ phase: 1, status: t('appBootEnv', '正在连接端侧安全运行环境…') });
       let detail = await core.call('apps:get', { appId });
       let app = detail?.app;
       if (!app) {
@@ -256,6 +473,7 @@ export function createAppShell({
         renderStatus({ heading: t('appSurfaceOpenFailed', '应用无法打开'), body: t('appsNeedsUpdate', '请更新 Natives 后重试。'), error: true });
         return;
       }
+      renderAppLoading({ name: app.name, phase: 2, status: t('appBootVerify', '验证应用权限与会话安全凭据…') });
       host = createHostClient(app, { onDisconnect: (_error, intentional) => {
         if (!intentional && current === run) renderStatus({ heading: t('appSurfaceHostOffline', '应用已退出'), actionLabel: t('retry', '重试'), onAction: open, error: true });
       }});
@@ -303,11 +521,13 @@ export function createAppShell({
       if (handshake.protocolVersion !== 2 || handshakeAppId !== app.app_id) {
         throw Object.assign(new Error('app protocol mismatch'), { code: 'APP_PROTOCOL_MISMATCH' });
       }
+      renderAppLoading({ name: app.name, phase: 3, status: t('appBootAlloc', '分配隔离沙箱与本地回环通道…') });
       const started = await host.call('app:start', { requestId: randomId(), expectedActivationGeneration });
       if (started.state !== 'ready' || !validLoopbackPort(started.port) || typeof started.instanceId !== 'string' || typeof started.generation !== 'string') {
         throw Object.assign(new Error('invalid start result'), { code: 'APP_START_FAILED' });
       }
       instanceId = started.instanceId; generation = started.generation; loadCount = 0;
+      renderAppLoading({ name: app.name, phase: 4, status: t('appBootMount', '初始化界面沙箱与事件管道…') });
       await createSandbox(started.port, current);
       scheduleIdle();
   }
@@ -329,7 +549,7 @@ export function createAppShell({
   globalThis.window?.addEventListener('pageshow', pageshow);
   document.addEventListener?.('visibilitychange', onVisibilityChange);
   if (back) back.onclick = () => { void stop('page_closing', false); globalThis.open?.(globalThis.chrome?.runtime?.getURL?.('apps.html') || 'apps.html', '_blank'); };
-  return { open, stop, setToast, renderStatus,
+  return { open, stop, setToast, renderStatus, renderAppLoading,
     get busy() { return busy; },
     get hasSession() { return Boolean(frame && host); },
     dispose: () => {

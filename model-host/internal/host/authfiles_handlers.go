@@ -197,20 +197,30 @@ func (e *Engine) queryQuota(ctx context.Context, raw json.RawMessage) (any, erro
 	}
 
 	// OAuth credentials are stored as one JSON payload in Keychain.
+	accountLabel := ""
 	if token == "" {
 		credentials, err := e.authStore.List(ctx)
 		if err != nil {
 			return nil, err
 		}
-		token, extraJSON = oauthQuotaCredential(credentials, p.Provider, p.AccountID)
+		token, extraJSON, accountLabel = oauthQuotaCredential(credentials, p.Provider, p.AccountID)
 	}
 	if strings.TrimSpace(token) == "" {
 		return nil, &SafeError{Code: "secret_not_configured", Message: "账户凭证不存在，请重新授权"}
 	}
-	return e.quotaClient.Query(ctx, p.Provider, p.Name, token, extraJSON)
+	result, queryErr := e.quotaClient.Query(ctx, p.Provider, p.Name, token, extraJSON)
+	if queryErr == nil && result != nil {
+		if result.Account == "" {
+			result.Account = accountLabel
+		}
+		// 真实结果写入额度缓存：顶栏面板读取展示最近一次真实余额
+		saveQuotaCacheEntry(result)
+	}
+	return result, queryErr
 }
 
-func oauthQuotaCredential(credentials []*coreauth.Auth, provider, accountID string) (string, string) {
+func oauthQuotaCredential(credentials []*coreauth.Auth, provider, accountID string) (string, string, string) {
+	accountLabel := ""
 	for _, credential := range credentials {
 		if accountID != "" && credential.ID != accountID {
 			continue
@@ -220,14 +230,15 @@ func oauthQuotaCredential(credentials []*coreauth.Auth, provider, accountID stri
 		}
 		token, _ := credential.Metadata["access_token"].(string)
 		projectID, _ := credential.Metadata["project_id"].(string)
+		accountLabel = credential.Label
 		if projectID == "" {
-			return token, ""
+			return token, "", accountLabel
 		}
 		project, err := json.Marshal(map[string]string{"project_id": projectID})
 		if err != nil {
-			return token, ""
+			return token, "", accountLabel
 		}
-		return token, string(project)
+		return token, string(project), accountLabel
 	}
-	return "", ""
+	return "", "", accountLabel
 }

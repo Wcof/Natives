@@ -66,7 +66,10 @@ end tell`, cdPrefix, strings.ReplaceAll(exe, "'", "'\\''"))
 		}
 		return cmd.Start()
 	default:
-		for _, terminal := range []struct{ name string; args []string }{
+		for _, terminal := range []struct {
+			name string
+			args []string
+		}{
 			{"gnome-terminal", []string{"--"}},
 			{"konsole", []string{"-e"}},
 			{"xfce4-terminal", []string{"-e"}},

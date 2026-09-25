@@ -1,0 +1,37 @@
+<div class="app-container">
+  <!-- 顶部大盘跑马灯 -->
+  <div class="market-ticker-bar" id="market-tickers">
+    <div class="ticker-item" data-code="sh000001"><b>上证</b><span class="ticker-val">–</span></div>
+    <div class="ticker-item" data-code="sz399001"><b>深成</b><span class="ticker-val">–</span></div>
+    <div class="ticker-item" data-code="sz399006"><b>创指</b><span class="ticker-val">–</span></div>
+    <div class="ticker-item" data-code="sh000688"><b>科创50</b><span class="ticker-val">–</span></div>
+    <div class="ticker-item" data-code="sh000300"><b>沪深300</b><span class="ticker-val">–</span></div>
+  </div>
+
+  <!-- 顶部主导航 -->
+  <header class="top-header">
+    <div class="header-left">
+      <button class="collapse-btn icon-btn" id="btn-toggle-left-sidebar" title="折叠左侧栏" aria-pressed="false" aria-label="折叠左侧栏"><svg class="svg-icon" aria-hidden="true"><use href="#i-panel" /></svg></button>
+      <div class="brand-title"><svg class="svg-icon" aria-hidden="true"><use href="#i-bolt" /></svg> 投资终端</div>
+      <nav class="main-nav" role="tablist">
+        <button role="tab" id="tab-watchlist" aria-selected="true">自选总览</button>
+        <button role="tab" id="tab-market">热门板块</button>
+        <button role="tab" id="tab-trends">趋势分析</button>
+        <button role="tab" id="tab-positions">持仓记账</button>
+        <button role="tab" id="tab-tx">交易流水</button>
+        <button role="tab" id="tab-import">批量导入</button>
+        <button role="tab" id="tab-nav">公募净值</button>
+      </nav>
+    </div>
+    <div class="header-right">
+      <button class="collapse-btn icon-btn" id="btn-manual-refresh" title="立即刷新行情（休市时也可手动拉取）" aria-label="立即刷新行情"><svg class="svg-icon" aria-hidden="true"><use href="#i-refresh" /></svg></button>
+      <button class="collapse-btn icon-btn" id="btn-toggle-side" title="折叠看板 (⌘B)" aria-pressed="false" aria-label="折叠看板"><svg class="svg-icon" aria-hidden="true"><use href="#i-panel-right" /></svg></button>
+      <span class="ws-badge offline" id="ws-status" title="Host WebSocket 连接状态">WS 离线</span>
+      <button class="btn icon-btn" id="btn-color-mode" title="红涨绿跌 / 绿涨红跌 切换" aria-label="切换涨跌配色（当前：红涨绿跌）"><svg class="svg-icon" aria-hidden="true"><path class="cm-up" d="M12 4v9m0-9-4 4m4-4 4 4" /><path class="cm-down" d="M12 20v-9m0 9-4-4m4 4 4-4" /></svg></button>
+    </div>
+  </header>
+
+  <!-- 工作区 -->
+  <div class="workspace-body">
+    <!-- 左栏主体 -->
+    <div class="main-column">

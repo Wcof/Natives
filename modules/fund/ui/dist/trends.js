@@ -115,6 +115,9 @@ async function analyze(symbol) {
   clearInterval(_refreshTimer);
   const seq = ++_analyzeSeq;
 
+  const loadingEl = document.getElementById('loading');
+  if (loadingEl) loadingEl.style.display = 'flex';
+
   const qb = document.getElementById('quote-bar');
   if (qb) qb.innerHTML = '<span class="qb-name flat">正在分析中...</span>';
   const sb = document.getElementById('sum-body');
@@ -122,8 +125,10 @@ async function analyze(symbol) {
 
   try {
     const isWeek = tState.currentView === 'week';
-    const analyzeUrl = `/api/trends/analyze?symbol=${symbol}${isWeek ? '&period=week' : ''}`;
-    const chanlunUrl = `/api/trends/chanlun_daily?symbol=${symbol}${isWeek ? '&period=week' : ''}`;
+    const isMonth = tState.currentView === 'month';
+    const periodParam = isWeek ? '&period=week' : (isMonth ? '&period=month' : '');
+    const analyzeUrl = `/api/trends/analyze?symbol=${symbol}${periodParam}`;
+    const chanlunUrl = `/api/trends/chanlun_daily?symbol=${symbol}${periodParam}`;
 
     const [analyzeRes, chanlunRes] = await Promise.all([
       authFetch(analyzeUrl),
@@ -148,21 +153,40 @@ async function analyze(symbol) {
       trends.panel.renderSignal(data.signal);
     }
     if (trends.panel?.renderCanslim) {
-      trends.panel.renderCanslim(data.canslim);
+      trends.panel.renderCanslim(data.signal?.canslim || data.canslim);
     }
     if (trends.panel?.renderKeyLevels) {
-      trends.panel.renderKeyLevels(data.key_levels);
+      trends.panel.renderKeyLevels(data.signal?.key_levels || data.key_levels);
     }
     if (trends.panel?.renderMarket) {
-      trends.panel.renderMarket(data.signal, data.market_breadth);
+      trends.panel.renderMarket(data.signal, data.breadth || data.market_breadth);
     }
 
     if (trends.watch) {
-      trends.watch.addHistory(data.symbol, data.name, data.signal.action, data.signal.score);
+      const _sAction = data.signal ? data.signal.action : '';
+      const _sScore = data.signal ? data.signal.score : 0;
+      const _sPrice = data.quote ? data.quote.price : 0;
+      trends.watch.addHistory(data.symbol, data.name, _sAction, _sScore);
       trends.watch.updateStarButton(symbol);
-      trends.watch.checkSignalChange(data.symbol, data.name, data.signal.action, data.signal.score, data.quote.price);
-      trends.watch.recordSignal(data.symbol, data.name, data.signal.action, data.signal.score, data.quote.price);
+      if (_sAction && _sPrice > 0) {
+        trends.watch.checkSignalChange(data.symbol, data.name, _sAction, _sScore, _sPrice);
+        trends.watch.recordSignal(data.symbol, data.name, _sAction, _sScore, _sPrice);
+      }
       trends.watch.renderSignalAccuracy(data.symbol);
+      // 同步更新自选股中的最新评级与得分，保证多股一览实时准确
+      const _wl = trends.watch.getWatchlist ? trends.watch.getWatchlist() : [];
+      const _wi = _wl.findIndex(s => s.code === symbol);
+      if (_wi >= 0) {
+        _wl[_wi].action = _sAction;
+        _wl[_wi].score = _sScore;
+        _wl[_wi].name = data.name;
+        if (trends.watch.saveWatchlist) trends.watch.saveWatchlist(_wl);
+      }
+    }
+
+    const clDailyLabel = document.getElementById('chanlun-daily-label');
+    if (clDailyLabel) {
+      clDailyLabel.textContent = isMonth ? '缠论月线分析' : (isWeek ? '缠论周线分析' : '缠论日线分析');
     }
 
     let chanlunData = null;
@@ -187,6 +211,8 @@ async function analyze(symbol) {
     _refreshTimer = setInterval(() => refreshQuote(symbol), 2000);
   } catch(e) {
     if (qb) qb.innerHTML = `<span class="qb-name" style="color:#ff2d2d">分析失败: ${e.message}</span>`;
+  } finally {
+    if (loadingEl) loadingEl.style.display = 'none';
   }
 }
 

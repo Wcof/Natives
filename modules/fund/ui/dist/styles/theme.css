@@ -1,0 +1,53 @@
+  :root {
+    color-scheme: dark;
+    --natives-bg: #000000;
+    --natives-surface: #0a0a0a;
+    --natives-surface-2: #121212;
+    --natives-surface-3: #181818;
+    --natives-text-primary: #f2f2ea;
+    --natives-text-muted: #888888;
+    --natives-border: #222222;
+    --natives-accent: #cdf24b;
+    --natives-accent-strong: #ddff69;
+    --natives-on-accent: #0b0c0a;
+    --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    /* 源项目专业金融配色：红涨绿跌 */
+    --color-up: #ff2d2d;
+    --color-down: #00b35c;
+    --natives-danger: #ff2d2d;
+    --natives-warning: #ff9800;
+    --natives-ok: #00b35c;
+    --natives-radius: 6px;
+    --natives-glass: rgba(18, 18, 18, 0.85);
+    --natives-glass-hover: rgba(26, 26, 26, 0.95);
+  }
+  :root[data-color-mode="intl"] {
+    /* 国际配色反转：绿涨红跌 */
+    --color-up: #00b35c;
+    --color-down: #ff2d2d;
+  }
+  :root[data-theme="archive"] {
+    color-scheme: light;
+    --natives-bg: #f5f0e8;
+    --natives-surface: #f5f0e8;
+    --natives-surface-2: #faf6ef;
+    --natives-surface-3: #ece2d2;
+    --natives-text-primary: #1a1a18;
+    --natives-text-muted: #6b6355;
+    --natives-border: #e3d9c8;
+    --natives-accent: #cc785c;
+    --natives-accent-strong: #b8664d;
+    --natives-on-accent: #fffaf3;
+    --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    --natives-radius: 6px;
+    --natives-glass: rgba(250, 246, 239, 0.85);
+    --natives-glass-hover: rgba(250, 246, 239, 0.95);
+  }
+  * { box-sizing: border-box; }
+  body {
+    font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", sans-serif;
+    margin: 0; padding: 0; background: var(--natives-bg); color: var(--natives-text-primary);
+    overflow-x: hidden;
+  }
+  .app-container { display: flex; flex-direction: column; height: 100vh; }
+  

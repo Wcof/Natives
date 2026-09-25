@@ -180,13 +180,21 @@ export function renderAuthFilesView(container, { files = [], quotaMap = {}, filt
 }
 
 function renderQuotaPills(quota, t) {
+  if (quota && quota.status === 'error') {
+    // 上游错误必须可见（如 Google 的 VALIDATION_REQUIRED 带验证链接），静默吞掉会让用户误以为没有额度
+    const message = quota.error || t('quotaQueryFailed', '额度查询失败');
+    return `<div class="model-af-quota-pill model-af-quota-error" style="max-width:100%;white-space:normal;line-height:1.5;color:#f8a5a5;border-color:rgba(248,113,113,0.4)">${linkifyUrls(escapeHtml(message))}</div>`;
+  }
   if (!quota || !quota.windows || !quota.windows.length) return '';
-  const pills = quota.windows.slice(0, 3).map((w) => {
-    const pct = w.remainingPercent != null ? `${Math.round(w.remainingPercent)}%` : '--';
-    const name = w.name.split('·')[0].trim();
+  const pills = dedupeQuotaWindows(quota.windows, t).slice(0, 3).map((w) => {
+    const pct = w.remainingPercent == null ? '—' : `${Math.round(w.remainingPercent)}%`;
     const reset = w.resetTime ? ` · ${formatResetLabel(w.resetTime, t)}` : '';
-    return `<span class="model-af-quota-pill">${escapeHtml(name)} · ${escapeHtml(pct + reset)}</span>`;
+    return `<span class="model-af-quota-pill">${escapeHtml(w.name)} · ${escapeHtml(pct + reset)}</span>`;
   });
   return `<div class="model-af-quota-pills">${pills.join('')}</div>`;
 }
-import { formatResetLabel } from './model-quota-view.js';
+
+function linkifyUrls(escapedText) {
+  return escapedText.replace(/(https?:\/\/[^\s（()<>]+)/g, (url) => `<a href="${url}" target="_blank" rel="noreferrer" style="color:#7dd3fc;text-decoration:underline">${url}</a>`);
+}
+import { formatResetLabel, dedupeQuotaWindows } from './model-quota-view.js';

@@ -522,13 +522,24 @@ func TestCheckAndPerformKernelUpdate(t *testing.T) {
 	}
 	t.Cleanup(engine.Close)
 
+	// 单元测试不拉网、不真实构建：固定上游版本并用桩替换升级管线
+	engine.kernelFetchLatest = func(ctx context.Context) (string, error) { return "v9.9.9", nil }
+	updated := make(chan string, 1)
+	engine.kernelRunUpdate = func(job *kernelUpdateJob, target string) {
+		job.set("done", "stub updated")
+		updated <- target
+	}
+
 	checkRes, err := engine.dispatch(context.Background(), "model_kernel_check_update", nil)
 	if err != nil {
 		t.Fatalf("model_kernel_check_update failed: %v", err)
 	}
 	checkMap := checkRes.(map[string]any)
-	if checkMap["latestVersion"] == "" {
-		t.Fatalf("expected latestVersion, got: %#v", checkMap)
+	if checkMap["latestVersion"] != "v9.9.9" {
+		t.Fatalf("expected fixed latestVersion, got: %#v", checkMap)
+	}
+	if checkMap["hasUpdate"] != true {
+		t.Fatalf("expected hasUpdate for %s -> v9.9.9, got: %#v", checkMap["currentVersion"], checkMap)
 	}
 
 	updateRes, err := engine.dispatch(context.Background(), "model_kernel_update", nil)
@@ -536,15 +547,64 @@ func TestCheckAndPerformKernelUpdate(t *testing.T) {
 		t.Fatalf("model_kernel_update failed: %v", err)
 	}
 	updateMap := updateRes.(map[string]any)
-	if updateMap["ok"] != true || updateMap["version"] == "" {
-		t.Fatalf("expected update ok with version, got: %#v", updateMap)
+	if updateMap["status"] != "started" {
+		t.Fatalf("expected update to start, got: %#v", updateMap)
+	}
+
+	select {
+	case target := <-updated:
+		if target != "v9.9.9" {
+			t.Fatalf("expected pipeline target v9.9.9, got %s", target)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("kernel update pipeline did not run")
+	}
+
+	statusRes, err := engine.dispatch(context.Background(), "model_kernel_update_status", nil)
+	if err != nil {
+		t.Fatalf("model_kernel_update_status failed: %v", err)
+	}
+	statusMap := statusRes.(map[string]any)
+	job := statusMap["job"].(map[string]any)
+	if job["phase"] != "done" {
+		t.Fatalf("expected job phase done, got: %#v", job)
+	}
+	if statusMap["kernelVersion"] == "" {
+		t.Fatalf("expected non-empty kernelVersion, got: %#v", statusMap)
 	}
 
 	snap, err := repo.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if snap.Gateway.KernelVersion == "" || snap.Gateway.LatestKernelVersion == "" {
-		t.Fatalf("expected KernelVersion and LatestKernelVersion in snapshot: %#v", snap.Gateway)
+	if snap.Gateway.LatestKernelVersion == "" {
+		t.Fatalf("expected LatestKernelVersion in snapshot: %#v", snap.Gateway)
+	}
+}
+
+func TestKernelUpdateSkipsWhenUpToDate(t *testing.T) {
+	repo := domain.NewRepository(filepath.Join(t.TempDir(), "state.json"))
+	engine, err := NewEngine(repo, secrets.NewMemoryStore(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(engine.Close)
+
+	current := getLocalKernelVersion()
+	if current == "" {
+		t.Skip("kernel version.txt unavailable in test environment")
+	}
+	engine.kernelFetchLatest = func(ctx context.Context) (string, error) { return current, nil }
+	engine.kernelRunUpdate = func(job *kernelUpdateJob, target string) {
+		t.Fatal("pipeline must not run when already up to date")
+	}
+
+	updateRes, err := engine.dispatch(context.Background(), "model_kernel_update", nil)
+	if err != nil {
+		t.Fatalf("model_kernel_update failed: %v", err)
+	}
+	updateMap := updateRes.(map[string]any)
+	if updateMap["status"] != "up_to_date" {
+		t.Fatalf("expected up_to_date, got: %#v", updateMap)
 	}
 }

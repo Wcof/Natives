@@ -52,6 +52,293 @@ body {
 .app-status h2 { font-size:15px; margin:0 0 6px; color:var(--text); }
 .app-status p { margin:0 0 16px; font-size:13px; }
 .app-status button.action { margin:0 auto; }
+
+/* ===== 高端通用应用加载组件 (App Boot Loader) ===== */
+.app-boot-loader {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 440px;
+  width: 100%;
+  padding: 40px 16px;
+  box-sizing: border-box;
+  animation: abl-fade-in 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes abl-fade-in {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.abl-card {
+  position: relative;
+  width: 100%;
+  max-width: 440px;
+  padding: 36px 30px 26px;
+  background: var(--surface-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+/* 环境光微光晕 */
+.abl-card::before {
+  content: "";
+  position: absolute;
+  top: -70px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 220px;
+  height: 180px;
+  background: radial-gradient(circle, var(--accent) 0%, transparent 70%);
+  opacity: 0.14;
+  pointer-events: none;
+  filter: blur(28px);
+}
+
+/* 核心徽标与双层旋转光轨 */
+.abl-emblem-wrap {
+  position: relative;
+  width: 76px;
+  height: 76px;
+  margin-bottom: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.abl-glow-ring {
+  position: absolute;
+  inset: -3px;
+  border-radius: 50%;
+  border: 2px solid transparent;
+  border-top-color: var(--accent);
+  border-right-color: var(--accent);
+  opacity: 0.95;
+  filter: drop-shadow(0 0 8px var(--accent));
+  animation: abl-spin 1.8s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+
+.abl-orbital-track {
+  position: absolute;
+  inset: 3px;
+  border-radius: 50%;
+  border: 1px dashed var(--line);
+  animation: abl-spin-reverse 16s linear infinite;
+}
+
+.abl-orbital-particle {
+  position: absolute;
+  top: -3px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 6px;
+  height: 6px;
+  background: var(--accent);
+  border-radius: 50%;
+  box-shadow: 0 0 6px var(--accent);
+}
+
+.abl-core {
+  position: relative;
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: inset 0 2px 8px rgba(0,0,0,0.25);
+}
+
+.abl-bolt {
+  width: 24px;
+  height: 24px;
+  color: var(--accent);
+  animation: abl-pulse 2s ease-in-out infinite;
+}
+
+@keyframes abl-spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+@keyframes abl-spin-reverse {
+  0% { transform: rotate(360deg); }
+  100% { transform: rotate(0deg); }
+}
+
+@keyframes abl-pulse {
+  0%, 100% { transform: scale(0.94); opacity: 0.85; filter: drop-shadow(0 0 2px var(--accent)); }
+  50% { transform: scale(1.08); opacity: 1; filter: drop-shadow(0 0 10px var(--accent)); }
+}
+
+/* 标题与阶段文案 */
+.abl-info {
+  width: 100%;
+  margin-bottom: 20px;
+}
+
+.abl-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.abl-app-name {
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--text);
+  letter-spacing: 0.3px;
+}
+
+.abl-badge-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  background: var(--hover);
+  color: var(--accent);
+  border: 1px solid var(--line);
+  font-weight: 500;
+}
+
+.abl-pulse-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 6px var(--accent);
+  animation: abl-dot-blink 1.4s ease-in-out infinite;
+}
+
+@keyframes abl-dot-blink {
+  0%, 100% { opacity: 0.35; transform: scale(0.85); }
+  50% { opacity: 1; transform: scale(1.2); }
+}
+
+.abl-status-text {
+  font-size: 13px;
+  color: var(--muted);
+  min-height: 20px;
+  line-height: 1.5;
+  transition: color 0.2s ease;
+}
+
+/* 进度条与流光 */
+.abl-progress-track {
+  width: 100%;
+  height: 3px;
+  background: var(--line);
+  border-radius: 3px;
+  position: relative;
+  overflow: hidden;
+  margin-bottom: 18px;
+}
+
+.abl-progress-bar {
+  height: 100%;
+  background: var(--accent);
+  border-radius: 3px;
+  transition: width 0.35s cubic-bezier(0.2, 0.8, 0.2, 1);
+  box-shadow: 0 0 8px var(--accent);
+}
+
+.abl-progress-shimmer {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.45) 50%, transparent 100%);
+  animation: abl-shimmer 2.2s linear infinite;
+  pointer-events: none;
+}
+
+@keyframes abl-shimmer {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+/* 四阶段步骤指示器 */
+.abl-steps-row {
+  display: flex;
+  justify-content: space-between;
+  width: 100%;
+  margin-bottom: 22px;
+  padding: 0 4px;
+  box-sizing: border-box;
+}
+
+.abl-step {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--muted);
+  opacity: 0.45;
+  transition: all 0.25s ease;
+}
+
+.abl-step.active {
+  opacity: 0.85;
+  color: var(--text);
+}
+
+.abl-step.current {
+  opacity: 1;
+  color: var(--accent);
+  font-weight: 500;
+}
+
+.abl-step i {
+  display: inline-flex;
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  border: 1px solid currentColor;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  font-style: normal;
+  font-family: var(--font);
+}
+
+.abl-step.current i {
+  background: var(--accent);
+  color: var(--on-accent);
+  border-color: var(--accent);
+}
+
+/* 底部极客规格芯片标签 */
+.abl-chips-row {
+  display: flex;
+  gap: 6px;
+  justify-content: center;
+  flex-wrap: wrap;
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+  width: 100%;
+}
+
+.abl-chip {
+  font-size: 10.5px;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: var(--hover);
+  color: var(--muted);
+  border: 1px solid var(--line);
+  user-select: none;
+}
 button.action {
   display:inline-flex; align-items:center; gap:6px; padding:6px 14px; border-radius:var(--radius);
   border:1px solid var(--line); background:transparent; color:var(--text);

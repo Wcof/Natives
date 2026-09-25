@@ -1,0 +1,63 @@
+      <!-- 1. 自选模块 (Overview) -->
+      <section id="view-watchlist">
+        <!-- 核心 KPI 4 宫格卡片 (token-monitor 1:1 复刻) -->
+        <div class="kpi-cards-grid" id="kpi-cards">
+          <div class="kpi-card">
+            <div class="kpi-card-title"><span>监控标的数</span><span id="kpi-up-down">0涨 / 0跌</span></div>
+            <div class="kpi-card-value" id="kpi-total-count">0</div>
+            <div class="kpi-sub" id="kpi-bull-bear-ratio">多空比: 50%</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-card-title"><span>领涨龙头</span><span class="up" id="kpi-top-gainer-pct">+0.00%</span></div>
+            <div class="kpi-card-value up" id="kpi-top-gainer-name">–</div>
+            <div class="kpi-sub" id="kpi-top-gainer-price">现价: –</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-card-title"><span>领跌标的</span><span class="down" id="kpi-top-loser-pct">-0.00%</span></div>
+            <div class="kpi-card-value down" id="kpi-top-loser-name">–</div>
+            <div class="kpi-sub" id="kpi-top-loser-price">现价: –</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-card-title"><span>异动预警总数</span><span class="up" id="kpi-alerts-count">0 次</span></div>
+            <div class="kpi-card-value" id="kpi-active-alerts">0</div>
+            <div class="kpi-sub">阈值突破监听生效中</div>
+          </div>
+        </div>
+
+        <div class="watchlist-main">
+        <div class="toolbar-bar">
+          <div class="group-tabs" id="watchlist-groups">
+            <div class="group-tab active" data-id="default">默认自选</div>
+            <div class="group-tab" data-id="core">重仓核心</div>
+            <div class="group-tab" data-id="etf">ETF轮动</div>
+            <div class="group-tab" data-id="gold">黄金债券</div>
+          </div>
+          <div class="search-box">
+            <input type="text" id="add-symbol-input" placeholder="输入代码/名称/拼音加自选...">
+            <button class="btn btn-accent" id="add-symbol-btn">+</button>
+          </div>
+        </div>
+        <div id="add-symbol-msg" style="font-size:11px; min-height:14px; margin-bottom:4px;"></div>
+        <table class="data-table" id="watchlist-table">
+          <thead>
+            <tr>
+              <th class="sortable" data-key="symbol">代码</th>
+              <th class="sortable" data-key="name">标的名称</th>
+              <th class="num sortable" data-key="price">最新价</th>
+              <th class="num sortable" data-key="changePct">涨跌幅</th>
+              <th class="num sortable" data-key="change">涨跌额</th>
+              <th class="num sortable" data-key="speed">涨速</th>
+              <th>微缩走势</th>
+              <th class="num sortable" data-key="volume">成交量(手)</th>
+              <th class="num sortable" data-key="turnover">换手%</th>
+              <th class="num sortable" data-key="amplitude">振幅%</th>
+              <th class="num sortable" data-key="volumeRatio">量比</th>
+              <th>预警</th>
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+          </div><!-- /watchlist-main -->
+      </section>
+

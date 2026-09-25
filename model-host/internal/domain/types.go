@@ -81,15 +81,15 @@ type GatewaySettings struct {
 }
 
 type Gateway struct {
-	State         string             `json:"state"`
-	Resident      bool               `json:"resident"`
-	PreferredPort int                `json:"preferredPort,omitempty"`
-	Port          int                `json:"port,omitempty"`
-	BaseURL       string             `json:"baseUrl,omitempty"`
-	ErrorCode     string             `json:"errorCode,omitempty"`
-	AccessKeyMask string             `json:"accessKeyMask,omitempty"`
-	AccessKeys    []GatewayAccessKey `json:"accessKeys,omitempty"`
-	Settings      GatewaySettings    `json:"settings"`
+	State               string             `json:"state"`
+	Resident            bool               `json:"resident"`
+	PreferredPort       int                `json:"preferredPort,omitempty"`
+	Port                int                `json:"port,omitempty"`
+	BaseURL             string             `json:"baseUrl,omitempty"`
+	ErrorCode           string             `json:"errorCode,omitempty"`
+	AccessKeyMask       string             `json:"accessKeyMask,omitempty"`
+	AccessKeys          []GatewayAccessKey `json:"accessKeys,omitempty"`
+	Settings            GatewaySettings    `json:"settings"`
 	PID                 int                `json:"pid,omitempty"`
 	KernelVersion       string             `json:"kernelVersion,omitempty"`
 	LatestKernelVersion string             `json:"latestKernelVersion,omitempty"`

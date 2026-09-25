@@ -1,0 +1,61 @@
+      <!-- 2. 热门板块模块（上下联动布局：上面是板块，下面是该板块所在股票，去除分钟K线） -->
+      <section id="view-market" hidden>
+        <div class="sectors-layout">
+          <!-- 上半部分：热门板块列表 -->
+          <div class="toolbar-bar">
+            <div class="group-tabs" id="sector-category-tabs">
+              <div class="group-tab active" data-type="all">全部板块</div>
+              <div class="group-tab" data-type="concept">概念板块</div>
+              <div class="group-tab" data-type="industry">行业板块</div>
+              <div class="group-tab" data-type="region">地域板块</div>
+            </div>
+            <div style="font-size: 12px; color: var(--natives-text-muted);">
+              实时板块轮动监控 · 点击板块查看对应股票
+            </div>
+          </div>
+          <div class="sector-table-wrap">
+            <table class="data-table" id="sectors-table">
+              <thead>
+                <tr>
+                  <th style="width: 44px;">序号</th>
+                  <th class="sortable" data-key="name">板块名称</th>
+                  <th class="num sortable" data-key="changePct">涨幅%</th>
+                  <th class="num sortable" data-key="speed">涨速%</th>
+                  <th class="sortable" data-key="topStockName">领涨股</th>
+                  <th class="num sortable" data-key="topStockPrice">领涨股现价</th>
+                  <th class="num sortable" data-key="topStockChangePct">领涨股涨幅</th>
+                  <th class="num sortable" data-key="changePct5">5日涨幅%</th>
+                  <th class="num sortable" data-key="changePct20">20日涨幅%</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+
+          <!-- 中间提示栏与下半部分：该板块所在股票列表 -->
+          <div class="sector-stocks-header">
+            <span id="sector-stocks-title"><b>文化传媒</b> 板块个股</span>
+            <span class="sector-stocks-hint">点击个股行切换右侧盘口看板</span>
+          </div>
+          <div class="sector-stocks-table-wrap">
+            <table class="data-table" id="sector-stocks-table">
+              <thead>
+                <tr>
+                  <th style="width: 44px;">序号</th>
+                  <th class="sortable" data-key="code">代码</th>
+                  <th class="sortable" data-key="name">名称</th>
+                  <th class="num sortable" data-key="price">现价</th>
+                  <th class="num sortable" data-key="changePct">涨幅%</th>
+                  <th class="num sortable" data-key="change">涨跌</th>
+                  <th class="num sortable" data-key="volume">总量(手)</th>
+                  <th class="num sortable" data-key="turnover">换手%</th>
+                  <th class="num sortable" data-key="amplitude">振幅%</th>
+                  <th class="num sortable" data-key="volumeRatio">量比</th>
+                </tr>
+              </thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+

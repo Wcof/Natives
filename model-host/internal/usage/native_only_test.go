@@ -14,6 +14,8 @@ func TestNativeOnlyCollectionWithoutProxy(t *testing.T) {
 	s, _ := tempStore(t)
 	defer s.Close()
 
+	// fixture 自带 2026-09-11 的固定时间戳（now 参数仅兜底），事件日期不随日历推移，
+	// 因此这里用 all 范围验证「三列均可出现」，避免 7d 窗口随时间推移漏掉 fixture 事件
 	now := time.Date(2026, 9, 12, 10, 0, 0, 0, time.UTC)
 
 	// 成本在事件入库时按价格快照写入聚合字段：先插测试价格再导入
@@ -54,7 +56,7 @@ func TestNativeOnlyCollectionWithoutProxy(t *testing.T) {
 	}
 
 	// 三列均可出现：Token > 0、成本已计价、会话 distinct ≥1。
-	f := Filter{Range: "7d"}
+	f := Filter{Range: "all"}
 	overview, err := s.GetOverview(f)
 	if err != nil {
 		t.Fatalf("GetOverview: %v", err)

@@ -14,6 +14,54 @@ const PROVIDER_NAMES = {
   kimi: 'Kimi',
 };
 
+// Google 额度端点返回英文窗口名（Weekly Limit Remaining 等）；
+// 通过 i18n 组件按当前语言映射，未识别的名称保留原文
+const quotaLabelRules = [
+  { match: /weekly/i, key: 'quotaWindowWeekly', fallback: '周额度' },
+  { match: /(five hour|5-hour|5 hour)/i, key: 'quotaWindowFiveHour', fallback: '5小时额度' },
+  { match: /daily/i, key: 'quotaWindowDaily', fallback: '日额度' },
+  { match: /monthly/i, key: 'quotaWindowMonthly', fallback: '月额度' },
+];
+
+function localizedQuotaType(name, t) {
+  const raw = String(name || '');
+  for (const rule of quotaLabelRules) {
+    if (rule.match.test(raw)) return t(rule.key, rule.fallback);
+  }
+  return raw;
+}
+
+// Antigravity 的模型组名（Gemini Models / Claude and GPT models 各自独立额度）
+function localizedQuotaGroup(group, t) {
+  const raw = String(group || '').trim();
+  if (!raw) return '';
+  const lower = raw.toLowerCase();
+  if (lower === 'gemini models') return t('quotaGroupGemini', 'Gemini 模型');
+  if (lower.includes('claude') && lower.includes('gpt')) return t('quotaGroupClaudeGPT', 'Claude 与 GPT 模型');
+  return raw;
+}
+
+// 组装为「模型组 · 窗口类型」标签；两个模型组各自拥有独立的周/5小时窗口，
+// 严禁按窗口名去重折叠（那会把两个模型组并成一个额度）
+export function localizedQuotaLabel(w, t) {
+  const type = localizedQuotaType(w && w.name, t);
+  const group = localizedQuotaGroup(w && w.group, t);
+  return group ? `${group} · ${type}` : type;
+}
+
+// 去重键 = 模型组 + 窗口类型（仅折叠完全相同的行），保留约束最紧（剩余最少）的一行
+export function dedupeQuotaWindows(windows, t) {
+  const byKey = new Map();
+  for (const w of windows || []) {
+    const label = localizedQuotaLabel(w, t);
+    const prev = byKey.get(label);
+    if (!prev || (w.remainingPercent != null && (prev.remainingPercent == null || w.remainingPercent < prev.remainingPercent))) {
+      byKey.set(label, { ...w, name: label });
+    }
+  }
+  return [...byKey.values()];
+}
+
 export function renderQuotaView(container, { files = [], quotaMap = {}, t, onAction }) {
   container.replaceChildren();
 
@@ -126,7 +174,7 @@ function renderQuotaWindows(quota, file, t) {
     `;
   }
 
-  return quota.windows.map((w) => {
+  return dedupeQuotaWindows(quota.windows, t).map((w) => {
     const pct = w.remainingPercent != null ? Math.max(0, Math.min(100, Math.round(w.remainingPercent))) : null;
     const pctStr = pct != null ? `${t('remaining', '剩余')} ${pct}%` : '';
     const resetTime = w.resetTime ? formatResetLabel(w.resetTime, t) : '';

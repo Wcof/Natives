@@ -106,8 +106,10 @@ pub fn refresh_limits(store: &Store) -> Result<usize, String> {
                             let enabled =
                                 acc.get("enabled").and_then(|v| v.as_bool()).unwrap_or(true);
                             let status = if enabled { "ok" } else { "disabled" };
-                            let rem_pct = if enabled { Some(100.0) } else { None };
-                            let used_pct = if enabled { Some(0.0) } else { None };
+                            // 零假数据：启停状态是真实信息，额度未知时不写占位百分比，
+                            // 真实窗口余量由上游请求或 host 同步写入
+                            let rem_pct: Option<f64> = None;
+                            let used_pct: Option<f64> = None;
 
                             configured_providers.insert(provider.to_string());
 
@@ -138,7 +140,8 @@ pub fn refresh_limits(store: &Store) -> Result<usize, String> {
                             .unwrap_or("stopped");
                         let is_running = state_str == "running";
                         let status = if is_running { "ok" } else { "offline" };
-                        let rem_pct = if is_running { Some(100.0) } else { Some(0.0) };
+                        // 零假数据：网关运行状态真实，剩余额度未知时不写占位百分比
+                        let rem_pct: Option<f64> = None;
                         let port = gateway
                             .get("port")
                             .and_then(|v| v.as_u64())

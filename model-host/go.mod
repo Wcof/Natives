@@ -7,7 +7,7 @@ replace github.com/router-for-me/CLIProxyAPI/v7 => ../third_party/cliproxyapi
 require (
 	github.com/Microsoft/go-winio v0.6.2
 	github.com/pelletier/go-toml/v2 v2.2.2
-	github.com/router-for-me/CLIProxyAPI/v7 v7.2.146-0.20260828172046-f0de1d008fe8
+	github.com/router-for-me/CLIProxyAPI/v7 v7.3.17
 	github.com/sirupsen/logrus v1.9.3
 	github.com/zalando/go-keyring v0.2.8
 	gopkg.in/yaml.v3 v3.0.1
@@ -40,7 +40,9 @@ require (
 	github.com/klauspost/compress v1.17.4 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
 	github.com/leodido/go-urn v1.4.0 // indirect
+	github.com/libp2p/zeroconf/v2 v2.2.0 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
+	github.com/miekg/dns v1.1.43 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect
 	github.com/modern-go/reflect2 v1.0.2 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect

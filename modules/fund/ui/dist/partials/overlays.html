@@ -1,0 +1,39 @@
+  </div>
+
+  <!-- 专注模式三栏工作台：左=上下文资产列表，中=图表区（进入时由 focus.js 搬入
+       chart-control-bar/chart-container/compare 卡），右=盘口看板（搬入 side-header/
+       alert-box/depth-section/metrics-grid）。退出时搬回原位。 -->
+  <div class="focus-workspace" id="focus-workspace" hidden>
+    <aside class="focus-left" id="focus-left">
+      <div class="focus-left-head">
+        <select id="focus-source" title="数据源">
+          <option value="watchlist">自选股</option>
+          <option value="market">行情排行</option>
+        </select>
+        <button class="btn" id="focus-add-btn" title="添加标的">+</button>
+      </div>
+      <div class="focus-asset-list" id="focus-asset-list" role="listbox" aria-label="标的列表"></div>
+      <div class="focus-left-foot">
+        <button class="btn btn-accent" id="focus-add-row-btn">+ 添加股票</button>
+      </div>
+    </aside>
+    <div class="focus-resizer" id="focus-resizer" role="separator" aria-orientation="vertical" tabindex="0" title="拖动调整左栏宽度"></div>
+    <section class="focus-center" id="focus-center">
+      <div class="focus-exit-row">
+        <button class="btn" id="focus-exit-btn">退出专注模式</button>
+        <span class="focus-badge" id="focus-badge">专注模式</span>
+      </div>
+    </section>
+    <aside class="focus-right" id="focus-right"></aside>
+  </div>
+
+  <!-- 全局检索弹窗 -->
+  <div class="focus-search-backdrop" id="focus-search-backdrop" hidden>
+    <div class="focus-search" role="dialog" aria-label="搜索标的">
+      <input type="text" id="focus-search-input" placeholder="输入代码 / 名称 / 拼音搜索…" autocomplete="off" />
+      <div class="focus-search-results" id="focus-search-results"></div>
+    </div>
+  </div>
+  <!-- 信号变更提醒浮层 -->
+  <div class="toast-container" id="toast-container"></div>
+<!-- 源文件按能力域拆分于 ui/dist/*.js；此处单次加载由 Host 编译期拼接的 bundle -->

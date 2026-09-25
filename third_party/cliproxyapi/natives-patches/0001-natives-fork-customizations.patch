@@ -1,0 +1,172 @@
+diff --git a/internal/runtime/executor/antigravity_executor_credits.go b/internal/runtime/executor/antigravity_executor_credits.go
+index 8f699be..5508469 100644
+--- a/internal/runtime/executor/antigravity_executor_credits.go
++++ b/internal/runtime/executor/antigravity_executor_credits.go
+@@ -333,7 +333,11 @@ func antigravityHasExplicitCreditsBalanceExhaustedReason(body []byte) bool {
+ 	return false
+ }
+ 
+-func newAntigravityStatusErr(statusCode int, body []byte) statusErr {
++func newAntigravityStatusErr(statusCode int, body []byte) error {
++	// Natives: "user location is not supported" 属临时性区域限制，按可重试错误上报而非永久失败
++	if statusCode == http.StatusBadRequest && bytes.Contains(bytes.ToLower(body), []byte("user location is not supported")) {
++		return &cliproxyauth.Error{Message: string(body), Retryable: true, HTTPStatus: http.StatusServiceUnavailable}
++	}
+ 	err := statusErr{code: statusCode, msg: string(body)}
+ 	if statusCode == http.StatusTooManyRequests {
+ 		if retryAfter, parseErr := helps.ParseRetryDelay(body); parseErr == nil && retryAfter != nil {
+diff --git a/internal/runtime/executor/antigravity_executor_credits_test.go b/internal/runtime/executor/antigravity_executor_credits_test.go
+index bba63a6..628b082 100644
+--- a/internal/runtime/executor/antigravity_executor_credits_test.go
++++ b/internal/runtime/executor/antigravity_executor_credits_test.go
+@@ -734,3 +734,16 @@ func TestParseMetaFloat(t *testing.T) {
+ 		})
+ 	}
+ }
++
++func TestNewAntigravityStatusErrTreatsUnsupportedLocationAsTransient(t *testing.T) {
++	err := newAntigravityStatusErr(http.StatusBadRequest, []byte(`{"error":{"message":"User location is not supported for the API use."}}`))
++	var authErr *cliproxyauth.Error
++	if !errors.As(err, &authErr) || authErr.StatusCode() != http.StatusServiceUnavailable || !authErr.Retryable {
++		t.Fatalf("error = %#v, want retryable status %d", err, http.StatusServiceUnavailable)
++	}
++	ordinary := newAntigravityStatusErr(http.StatusBadRequest, []byte(`{"error":{"message":"invalid request"}}`))
++	status, ok := ordinary.(interface{ StatusCode() int })
++	if !ok || status.StatusCode() != http.StatusBadRequest {
++		t.Fatalf("ordinary error = %#v, want status %d", ordinary, http.StatusBadRequest)
++	}
++}
+diff --git a/internal/runtime/executor/helps/payload_mutations_test.go b/internal/runtime/executor/helps/payload_mutations_test.go
+index 58df159..65067bd 100644
+--- a/internal/runtime/executor/helps/payload_mutations_test.go
++++ b/internal/runtime/executor/helps/payload_mutations_test.go
+@@ -3,7 +3,6 @@ package helps
+ import (
+ 	"bytes"
+ 	"encoding/json"
+-	"os"
+ 	"strings"
+ 	"testing"
+ 
+@@ -282,17 +281,9 @@ func BenchmarkSetStringIfDifferentLargeCanonicalPayload(b *testing.B) {
+ 	}
+ }
+ 
+-func TestConfigExampleDocumentsCodexAdditionalToolsPayloadFilter(t *testing.T) {
+-	data, err := os.ReadFile("../../../../config.example.yaml")
+-	if err != nil {
+-		t.Fatalf("failed to read config.example.yaml: %v", err)
+-	}
+-	content := string(data)
+-	const expectedPath = `'input.#(type=="additional_tools")#.tools.#(name=="functions")#.tools.#(name=="apply_patch")#'`
+-	if !strings.Contains(content, expectedPath) {
+-		t.Fatalf("config.example.yaml does not contain expected additional_tools path: %s", expectedPath)
+-	}
+-}
++// TestConfigExampleDocumentsCodexAdditionalToolsPayloadFilter is intentionally
++// absent in the Natives fork: it reads the upstream repo-root config.example.yaml,
++// which the trimmed fork layout excludes. See NATIVES_FORK.md.
+ 
+ func TestApplyPayloadConfig_CodexAdditionalToolsFilter(t *testing.T) {
+ 	cfg := &config.Config{
+diff --git a/sdk/cliproxy/static_models.go b/sdk/cliproxy/static_models.go
+new file mode 100644
+index 0000000..2a2c35c
+--- /dev/null
++++ b/sdk/cliproxy/static_models.go
+@@ -0,0 +1,12 @@
++package cliproxy
++
++import (
++	"strings"
++
++	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
++)
++
++// StaticModelDefinitions returns static model definitions for a given channel/provider.
++func StaticModelDefinitions(provider string) []*ModelInfo {
++	return registry.GetStaticModelDefinitionsByChannel(strings.ToLower(strings.TrimSpace(provider)))
++}
+diff --git a/sdk/cliproxy/usage/manager.go b/sdk/cliproxy/usage/manager.go
+index 643a236..e357b24 100644
+--- a/sdk/cliproxy/usage/manager.go
++++ b/sdk/cliproxy/usage/manager.go
+@@ -299,14 +299,13 @@ type queueItem struct {
+ 
+ // Manager maintains a queue of usage records and delivers them to registered plugins.
+ type Manager struct {
+-	once     sync.Once
+-	stopOnce sync.Once
+-	cancel   context.CancelFunc
++	cancel context.CancelFunc
+ 
+-	mu     sync.Mutex
+-	cond   *sync.Cond
+-	queue  []queueItem
+-	closed bool
++	mu      sync.Mutex
++	cond    *sync.Cond
++	queue   []queueItem
++	running bool
++	closed  bool
+ 
+ 	pluginsMu sync.RWMutex
+ 	plugins   []Plugin
+@@ -325,14 +324,21 @@ func (m *Manager) Start(ctx context.Context) {
+ 	if m == nil {
+ 		return
+ 	}
+-	m.once.Do(func() {
+-		if ctx == nil {
+-			ctx = context.Background()
+-		}
+-		var workerCtx context.Context
+-		workerCtx, m.cancel = context.WithCancel(ctx)
+-		go m.run(workerCtx)
+-	})
++	m.mu.Lock()
++	if m.running {
++		m.mu.Unlock()
++		return
++	}
++	if ctx == nil {
++		ctx = context.Background()
++	}
++	var workerCtx context.Context
++	workerCtx, m.cancel = context.WithCancel(ctx)
++	m.running = true
++	m.closed = false
++	m.mu.Unlock()
++
++	go m.run(workerCtx)
+ }
+ 
+ // Stop stops the dispatcher and drains the queue.
+@@ -340,15 +346,19 @@ func (m *Manager) Stop() {
+ 	if m == nil {
+ 		return
+ 	}
+-	m.stopOnce.Do(func() {
+-		if m.cancel != nil {
+-			m.cancel()
+-		}
+-		m.mu.Lock()
+-		m.closed = true
++	m.mu.Lock()
++	if !m.running && m.closed {
+ 		m.mu.Unlock()
+-		m.cond.Broadcast()
+-	})
++		return
++	}
++	if m.cancel != nil {
++		m.cancel()
++		m.cancel = nil
++	}
++	m.closed = true
++	m.running = false
++	m.mu.Unlock()
++	m.cond.Broadcast()
+ }
+ 
+ // Register appends a plugin to the delivery list.

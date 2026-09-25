@@ -48,6 +48,10 @@ type Engine struct {
 	mu                sync.Mutex
 	gatewayMu         sync.Mutex
 	secretMu          sync.Mutex
+	kernelMu          sync.Mutex
+	kernelJob         *kernelUpdateJob
+	kernelFetchLatest func(ctx context.Context) (string, error)
+	kernelRunUpdate   func(job *kernelUpdateJob, target string)
 	sessions          map[string]context.CancelFunc
 	oauthTimeout      time.Duration
 }
@@ -243,6 +247,8 @@ func (e *Engine) dispatch(ctx context.Context, method string, raw json.RawMessag
 		return e.checkKernelUpdate()
 	case "model_kernel_update":
 		return e.updateKernel(ctx)
+	case "model_kernel_update_status":
+		return e.kernelUpdateStatus()
 	case "model_oauth_start", "model_account_reauth":
 		return e.startOAuth(ctx, raw)
 	case "model_oauth_cancel":

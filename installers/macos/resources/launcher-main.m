@@ -378,6 +378,10 @@ int main(int argc, char **argv) {
     }
 
     if (statusBarOnly) {
+        // 启动清场：干掉同二进制的旧实例再拉起，避免多托盘图标与僵尸面板；
+        // 注册退出清场：菜单退出/关窗/交接完成等正常退出路径兜底清扫
+        NativesStatusBarSweepProjectProcesses();
+        atexit(NativesStatusBarSweepProjectProcesses);
         // 作为无 Dock 图标的系统菜单栏常驻应用运行
         [app setActivationPolicy:NSApplicationActivationPolicyAccessory];
         [[NativesStatusBar sharedBar] setupStatusItem];

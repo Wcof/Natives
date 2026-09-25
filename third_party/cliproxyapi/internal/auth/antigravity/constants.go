@@ -3,8 +3,8 @@ package antigravity
 
 // OAuth client credentials and configuration
 const (
-	ClientID     = ""
-	ClientSecret = ""
+	ClientID     = "OAUTH_CLIENT_ID_PLACEHOLDER"
+	ClientSecret = "GOCSPX-LOCAL-ONLY-REDACTED"
 	CallbackPort = 51121
 )
 

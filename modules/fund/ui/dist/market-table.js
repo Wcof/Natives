@@ -106,8 +106,146 @@ function selectSector(s) {
     r.classList.remove("selected-sector");
   });
   renderSectorsTableSelection();
+  updateSectorSidebar(s);
   loadSectorStocks(s);
 }
+
+function updateSectorSidebar(sector) {
+  const s = sector || currentSelectedSector;
+  if (!s) return;
+  const nameEl = document.getElementById("side-sector-name");
+  const codeEl = document.getElementById("side-sector-code");
+  const badgeEl = document.getElementById("side-sector-type-badge");
+  const pctEl = document.getElementById("side-sector-pct");
+  const speedEl = document.getElementById("side-sector-speed");
+  const pct5El = document.getElementById("side-sector-pct5");
+  const pct20El = document.getElementById("side-sector-pct20");
+  const leaderNameEl = document.getElementById("side-sector-leader-name");
+  const leaderCodeEl = document.getElementById("side-sector-leader-code");
+  const leaderPriceEl = document.getElementById("side-sector-leader-price");
+  const leaderPctEl = document.getElementById("side-sector-leader-pct");
+
+  if (nameEl) nameEl.textContent = s.name || "–";
+  if (codeEl) codeEl.textContent = s.code || "–";
+  if (badgeEl) {
+    const typeMap = { concept: "概念板块", industry: "行业板块", region: "地域板块", all: "综合板块" };
+    badgeEl.textContent = typeMap[currentSectorType] || "板块";
+  }
+  if (pctEl) {
+    const chg = s.changePct != null ? (s.changePct > 0 ? "+" : "") + s.changePct.toFixed(2) + "%" : "–";
+    pctEl.textContent = chg;
+    pctEl.className = "price-large " + (s.changePct > 0 ? "up" : s.changePct < 0 ? "down" : "");
+  }
+  if (speedEl) {
+    speedEl.textContent = s.speed != null ? (s.speed > 0 ? "+" : "") + s.speed.toFixed(2) + "%" : "–";
+    speedEl.className = "num " + (s.speed > 0 ? "up" : s.speed < 0 ? "down" : "");
+  }
+  if (pct5El) {
+    pct5El.textContent = s.changePct5 != null ? (s.changePct5 > 0 ? "+" : "") + s.changePct5.toFixed(2) + "%" : "–";
+    pct5El.className = "num " + (s.changePct5 > 0 ? "up" : s.changePct5 < 0 ? "down" : "");
+  }
+  if (pct20El) {
+    pct20El.textContent = s.changePct20 != null ? (s.changePct20 > 0 ? "+" : "") + s.changePct20.toFixed(2) + "%" : "–";
+    pct20El.className = "num " + (s.changePct20 > 0 ? "up" : s.changePct20 < 0 ? "down" : "");
+  }
+  if (leaderNameEl) leaderNameEl.textContent = s.topStockName || "–";
+  if (leaderCodeEl) leaderCodeEl.textContent = s.topStockCode || "–";
+  if (leaderPriceEl) leaderPriceEl.textContent = s.topStockPrice != null ? s.topStockPrice.toFixed(2) : "–";
+  if (leaderPctEl) {
+    leaderPctEl.textContent = s.topStockChangePct != null ? (s.topStockChangePct > 0 ? "+" : "") + s.topStockChangePct.toFixed(2) + "%" : "–";
+    leaderPctEl.className = "num " + (s.topStockChangePct > 0 ? "up" : s.topStockChangePct < 0 ? "down" : "");
+  }
+
+  // 计算多空分布与力量比
+  if (lastStocksData && lastStocksData.length > 0) {
+    let up = 0, down = 0, flat = 0;
+    lastStocksData.forEach(function(st) {
+      if (st.changePct > 0) up++;
+      else if (st.changePct < 0) down++;
+      else flat++;
+    });
+    const total = lastStocksData.length;
+    const ratio = total > 0 ? Math.round((up / total) * 100) : 50;
+
+    const upEl = document.getElementById("side-sector-up-count");
+    const downEl = document.getElementById("side-sector-down-count");
+    const flatEl = document.getElementById("side-sector-flat-count");
+    const ratioEl = document.getElementById("side-sector-bull-ratio");
+    const fillEl = document.getElementById("side-sector-power-fill");
+    const totalEl = document.getElementById("side-sector-total-stocks");
+
+    if (upEl) upEl.textContent = up;
+    if (downEl) downEl.textContent = down;
+    if (flatEl) flatEl.textContent = flat;
+    if (ratioEl) ratioEl.textContent = ratio + "%";
+    if (fillEl) fillEl.style.width = ratio + "%";
+    if (totalEl) totalEl.textContent = total;
+  }
+}
+actions.updateSectorSidebar = updateSectorSidebar;
+
+function updateSectorStockDetail(symbol, name) {
+  const container = document.getElementById("side-sector-stock-content");
+  if (!container) return;
+  const st = (lastStocksData || []).find(function(it) { return it.code === symbol; });
+  const displayName = name || (st && st.name) || symbol;
+  const price = st && st.price != null ? st.price.toFixed(2) : "–";
+  const pct = st && st.changePct != null ? (st.changePct > 0 ? "+" : "") + st.changePct.toFixed(2) + "%" : "–";
+  const isUp = st && st.changePct >= 0;
+
+  const isFav = state.watchlistItems.some(function(i) { return i.symbol === symbol; });
+
+  container.innerHTML =
+    "<div style='display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:8px;'>" +
+      "<div>" +
+        "<div style='font-size:14px; font-weight:600;'>" + displayName + " <span style='font-size:11px; color:var(--natives-text-muted);'>" + symbol + "</span></div>" +
+        "<div style='font-size:18px; font-weight:bold; margin-top:2px;' class='" + (isUp ? "up" : "down") + "'>" + price + " <span style='font-size:12px;'>" + pct + "</span></div>" +
+      "</div>" +
+      "<button class='btn " + (!isFav ? "btn-accent" : "") + "' id='btn-sector-stock-fav' style='padding:3px 8px; font-size:11px;'>" +
+        (isFav ? "已自选" : "+ 加自选") +
+      "</button>" +
+    "</div>" +
+    "<div style='display:grid; grid-template-columns:1fr 1fr; gap:6px; font-size:11px; color:var(--natives-text-muted); padding:6px 0; border-top:1px solid var(--natives-border);'>" +
+      "<div>成交量: <span class='num' style='color:var(--natives-text-primary);'>" + (st && st.volume ? (st.volume > 10000 ? (st.volume / 10000).toFixed(1) + "万手" : st.volume + "手") : "–") + "</span></div>" +
+      "<div>换手率: <span class='num' style='color:var(--natives-text-primary);'>" + (st && st.turnover != null ? st.turnover.toFixed(2) + "%" : "–") + "</span></div>" +
+      "<div>振幅: <span class='num' style='color:var(--natives-text-primary);'>" + (st && st.amplitude != null ? st.amplitude.toFixed(2) + "%" : "–") + "</span></div>" +
+      "<div>量比: <span class='num' style='color:var(--natives-text-primary);'>" + (st && st.volumeRatio != null ? st.volumeRatio.toFixed(2) : "–") + "</span></div>" +
+    "</div>" +
+    "<div style='margin-top:8px; text-align:right;'>" +
+      "<button class='btn' id='btn-sector-stock-analyze' style='padding:3px 8px; font-size:11px;'>转到趋势分析 →</button>" +
+    "</div>";
+
+  const favBtn = document.getElementById("btn-sector-stock-fav");
+  if (favBtn) {
+    favBtn.addEventListener("click", function() {
+      const nowFav = state.watchlistItems.some(function(i) { return i.symbol === symbol; });
+      if (nowFav) {
+        api("DELETE", "/api/watchlists/items?watchlistId=" + state.activeGroup + "&symbol=" + symbol).then(function() {
+          actions.refreshWatchlist();
+          updateSectorStockDetail(symbol, name);
+        });
+      } else {
+        api("POST", "/api/watchlists/items", {
+          watchlistId: state.activeGroup,
+          symbol: symbol,
+          name: displayName
+        }).then(function() {
+          actions.refreshWatchlist();
+          updateSectorStockDetail(symbol, name);
+        });
+      }
+    });
+  }
+
+  const analyzeBtn = document.getElementById("btn-sector-stock-analyze");
+  if (analyzeBtn) {
+    analyzeBtn.addEventListener("click", function() {
+      const trendsTab = document.getElementById("tab-trends");
+      if (trendsTab) trendsTab.click();
+    });
+  }
+}
+actions.updateSectorStockDetail = updateSectorStockDetail;
 
 function renderSectorsTableSelection() {
   const rows = document.querySelectorAll("#sectors-table tbody tr");
@@ -138,6 +276,7 @@ function loadSectorStocks(sector) {
       titleEl.innerHTML = "<b>" + sector.name + "</b> 板块个股（共 " + lastStocksData.length + " 只）";
     }
     renderSectorStocksTable();
+    updateSectorSidebar(sector);
   }).catch(function(err) {
     tbody.innerHTML = "<tr><td colspan='10' class='err' style='text-align:center; padding: 20px;'>获取成分股失败：" + err.message + "</td></tr>";
   });
@@ -178,6 +317,8 @@ function renderSectorStocksTable() {
     const amp = st.amplitude != null ? st.amplitude.toFixed(2) : "–";
     const vratio = st.volumeRatio != null ? st.volumeRatio.toFixed(2) : "–";
 
+    tr.dataset.symbol = st.code;
+    tr.dataset.name = st.name;
     tr.innerHTML = "<td style='color:var(--natives-text-muted);'>" + (idx + 1) + "</td>" +
                    "<td><b>" + st.code + "</b></td>" +
                    "<td>" + st.name + "</td>" +
@@ -192,7 +333,13 @@ function renderSectorStocksTable() {
     tr.addEventListener("click", function() {
       document.querySelectorAll("#sector-stocks-table tbody tr").forEach(function(r) { r.classList.remove("selected"); });
       tr.classList.add("selected");
-      actions.selectSymbol(st.code, st.name);
+      actions.selectSymbol(st.code, st.name, true);
+    });
+
+    tr.addEventListener("dblclick", function() {
+      if (actions.openStockDetail) {
+        actions.openStockDetail(st.code, st.name);
+      }
     });
 
     tbody.appendChild(tr);

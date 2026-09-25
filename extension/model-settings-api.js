@@ -58,6 +58,7 @@ export function createModelSettingsAPI({ onEvent, onDisconnect } = {}) {
     revealAccessKey: () => client.call('model_gateway_reveal_access_key'),
     checkKernelUpdate: () => client.call('model_kernel_check_update'),
     updateKernel: () => client.call('model_kernel_update'),
+    updateKernelStatus: () => client.call('model_kernel_update_status'),
 
     
     getUsageStatus: () => client.call('model_usage_status'),
