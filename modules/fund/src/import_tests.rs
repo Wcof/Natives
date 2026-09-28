@@ -97,7 +97,8 @@ fn commit_snapshot_then_tx_conflict() {
         .unwrap();
     assert_eq!(positions.len(), 2);
     // 再用交易模板导入同账户/基金：快照不阻止交易（快照建账后可继续记账）。
-    let tx_csv = "account,fund_code,trade_date,type,quantity,price\n券商,000009,2026-02-01,BUY,10,1.00\n";
+    let tx_csv =
+        "account,fund_code,trade_date,type,quantity,price\n券商,000009,2026-02-01,BUY,10,1.00\n";
     let tp = preview(TEMPLATE_TX, tx_csv).unwrap();
     let receipt = commit(&store, "t2", TEMPLATE_TX, "h2", "p2", &tp).unwrap();
     assert_eq!(receipt.rows_imported, 1);

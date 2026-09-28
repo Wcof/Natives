@@ -25,7 +25,6 @@ function refreshWatchlist() {
     if (!state.currentSymbol && state.watchlistItems.length > 0) {
       actions.selectSymbol(state.watchlistItems[0].symbol, state.watchlistItems[0].name);
     }
-    actions.syncWSSubscriptions();
     renderWatchlistTable();
     actions.updateFavButtonState();
     actions.updateKPI();
@@ -252,7 +251,13 @@ function updateRow(tr, item) {
     tr.classList.add(q.price > lastPrice ? "flash-up" : "flash-down");
     setTimeout(function() { tr.classList.remove("flash-up", "flash-down"); }, 800);
   }
-  if (q.price != null) state.lastQuotesMap[item.symbol] = q.price;
+  if (q.price != null) {
+    state.lastQuotesMap[item.symbol] = q.price;
+    // 报价流统一入口：预警引擎（dashboard.checkAlerts）随轮询驱动（审计 C1/C2）
+    if (typeof actions.ingestQuoteTick === "function") {
+      actions.ingestQuoteTick({ symbol: item.symbol, name: item.name, price: q.price, changePercent: q.changePct });
+    }
+  }
   if (q.changePct != null) item._lastChangePct = q.changePct;
 
   setNum(tds[2], q.price != null ? q.price.toFixed(2) : "–", cls);

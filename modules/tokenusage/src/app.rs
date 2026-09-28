@@ -106,8 +106,8 @@ impl BuiltInAppModule for TokenUsageModule {
         let product_version = self.product_version.as_deref().unwrap_or("unknown");
         let store = Store::open(data_dir).map_err(|e| format!("open store: {e}"))?;
         store.set_writer_version(product_version);
-        let _ = crate::collector::scanner::seed_sources(&store);
-        // 启动时自动同步 Model Host usage.db 权威数据及本地扫描，保证开箱即有数据
+        let _ = crate::collector::seed_sources(&store);
+        // 启动时同步 Model Host usage.db 权威投影，保证开箱即有数据
         let _ = crate::collector::collect_all(&store, None, None);
         self.store = Some(Arc::new(store));
         Ok(())

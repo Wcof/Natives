@@ -1,6 +1,7 @@
 package usage
 
 import (
+	"database/sql"
 	"testing"
 )
 
@@ -65,5 +66,60 @@ func TestParseZCodeRolloutTotalOverride(t *testing.T) {
 	}
 	if events[0].InputTokens != 120 || events[0].CacheReadTokens != 20 {
 		t.Fatalf("桶原值必须保留: %+v", events[0])
+	}
+}
+
+func TestParseZCodeDB(t *testing.T) {
+	temp := t.TempDir()
+	dbPath := temp + "/db.sqlite"
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+
+	_, err = db.Exec(`
+		CREATE TABLE model_usage (
+			id TEXT PRIMARY KEY,
+			session_id TEXT NOT NULL,
+			provider_id TEXT NOT NULL,
+			model_id TEXT NOT NULL,
+			status TEXT NOT NULL,
+			started_at INTEGER NOT NULL,
+			input_tokens INTEGER NOT NULL,
+			output_tokens INTEGER NOT NULL,
+			reasoning_tokens INTEGER NOT NULL,
+			cache_creation_input_tokens INTEGER NOT NULL,
+			cache_read_input_tokens INTEGER NOT NULL,
+			computed_total_tokens INTEGER NOT NULL
+		);
+		INSERT INTO model_usage VALUES (
+			'req-1', 'sess-1', 'cpa-gui', 'gemini-3.7-flash', 'completed', 1788000000000,
+			1000, 200, 50, 10, 20, 1200
+		);
+		INSERT INTO model_usage VALUES (
+			'req-2', 'sess-1', 'cpa-gui', 'gemini-3.7-flash', 'completed', 1788000005000,
+			2000, 300, 0, 0, 0, 2300
+		);
+	`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	events, maxMS, err := ParseZCodeDB(dbPath, 0, 10)
+	if err != nil {
+		t.Fatalf("ParseZCodeDB error: %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("events count = %d, want 2", len(events))
+	}
+	if maxMS != 1788000005000 {
+		t.Fatalf("maxMS = %d, want 1788000005000", maxMS)
+	}
+	if events[0].BillingAtom != "zcode:req-1" {
+		t.Fatalf("BillingAtom = %q, want zcode:req-1", events[0].BillingAtom)
+	}
+	if events[0].ReasoningTokens != 50 || events[0].TotalTokens != 1200 {
+		t.Fatalf("tokens mismatch: %+v", events[0])
 	}
 }

@@ -16,6 +16,7 @@ const ALLOWED_EXCEED_REASONS = new Map([
   ['modules/fund/src/ledger.rs', 'Fund double-entry transaction and FIFO lot accounting engine with comprehensive unit tests'],
   ['modules/fund/src/portfolio.rs', 'Fund holding projection, cost calculation, and NAV replay with comprehensive unit tests'],
   ['extension/files.js', 'Workspace shell controller: files.html surface, section routing and app-menu wiring'],
+  ['extension/model-settings.js', 'Model settings dialog central controller: snapshot loop, action dispatch, OAuth/auth-file/quota flows over extracted per-domain controllers (usage/agent/advanced/oauth modules)'],
   ['scripts/apps/fixtures/sample-host/sample_host.rs', 'Built-in module Host fixture: activation verification, lock hierarchy, and runtime HTTP server'],
   ['extension/tests/space-seven-widgets-verify.test.mjs', 'AI seven-widget space visual acceptance harness: appearance/font/chart-switch scenarios with Shadow DOM assertions'],
 ]);

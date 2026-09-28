@@ -5,6 +5,7 @@ import { createNativeClient } from './native-client.js';
 import { classifyAppError } from './app-errors.js';
 import { appLifecycle } from './app-lifecycle.js';
 import { storageGet } from './files-preferences.js';
+import { mountAppMenu } from './app-navigation-projection.js';
 
 // AC-11: standalone owner page follows the product appearance preference.
 // 计划 §31.4：主题变化经 auth 级事件转发给模块 iframe，模块不维护第二份主题设置。
@@ -410,6 +411,24 @@ export function createAppShell({
       return;
     }
 
+    // 预警联动（审计 F-07/C1）：fund 模块的异动预警转发 Service Worker，
+    // 由 SW 更新 badge 并弹系统通知（sandbox iframe 内 Notification 不可用）。
+    if (event.data?.type === 'invest:alert') {
+      const { symbol, name, changePercent, badgeText, isUp } = event.data;
+      if (typeof symbol !== 'string' || typeof changePercent !== 'number') return;
+      try {
+        await chrome.runtime.sendMessage({
+          type: 'invest:alert',
+          symbol: String(symbol).slice(0, 16),
+          name: typeof name === 'string' ? name.slice(0, 32) : '',
+          changePercent,
+          badgeText: typeof badgeText === 'string' ? badgeText.slice(0, 16) : '',
+          isUp: isUp === true,
+        });
+      } catch { /* SW 未就绪时静默：预警计数在模块内仍自洽 */ }
+      return;
+    }
+
     if (event.data?.type !== 'hello') return;
     helloReceived = true;
     if (event.data.generation !== generation || event.data.challenge !== challenge) return;
@@ -421,12 +440,24 @@ export function createAppShell({
       // postMessage 会落在空 moduleFrame 上丢失。握手完成后补发当前外观，
       // 覆盖 iframe 启动晚于主题初始化的时序（init appearance 为兜底）。
       frame.contentWindow.postMessage({ type: 'theme', appearance: document.documentElement.dataset.theme === 'volt' ? 'dark' : 'light' }, '*');
+      // 语言同步（07 §5.2 / 审计 C3）：与主题同序补发当前语言；语言切换走
+      // storage 变更监听（下方），切换本身会 reload 页面重新握手。
+      try {
+        const lang = await chrome.storage?.local?.get('natives-language');
+        const language = lang?.['natives-language'] === 'en' ? 'en' : 'zh-CN';
+        frame.contentWindow?.postMessage({ type: 'language', language }, '*');
+      } catch { /* storage 不可用时模块保持默认 zh-CN */ }
       const isCollapsed = document.body.classList.contains('apps-sidebar-collapsed') ||
                           document.body.classList.contains('sidebar-collapsed');
       frame.contentWindow.postMessage({ type: 'sidebar-state', collapsed: isCollapsed }, '*');
     } catch (error) { setToast(t(classifyAppError(error)), true); }
   }
   async function open() {
+    // 若当前会话已经建立且正常存活，直接复用既有进程与视图，无需重新起机
+    if (frame && host && !busy) {
+      scheduleIdle();
+      return;
+    }
     await stop('maintenance', false);
     const current = run;
     setToast('');
@@ -438,9 +469,9 @@ export function createAppShell({
       core.disconnect(); disconnect();
       if (current !== run) return;
       // 残留会话窗口（APP_RUNNING_ELSEWHERE / APP_ALREADY_RUNNING）：旧
-      // runtime 在 stdin EOF 后 ≤2s 自退，属瞬态失败——等待后自动重试一次。
+      // runtime 在 stdin EOF 后 ≤2s 自退，属瞬态失败——快速退避重试，避免卡屏等待。
       if (['APP_RUNNING_ELSEWHERE', 'APP_ALREADY_RUNNING'].includes(error?.code || /APP_[A-Z_]+/.exec(error?.message || '')?.[0])) {
-        await new Promise((resolve) => setTimeout(resolve, 2_500));
+        await new Promise((resolve) => setTimeout(resolve, 300));
         if (current === run) await open();
         return;
       }
@@ -479,39 +510,57 @@ export function createAppShell({
       }});
       let expectedActivationGeneration = app.activation_generation ?? app.activationGeneration ?? app.revision;
       let handshake;
+      let attempts = 0;
       try {
-        // 只接受 App Runtime Protocol v2（ADR-0031）；不向 v1 回退。
-        handshake = await host.call('app:handshake', {
-          protocolVersion: 2,
-          appId: app.app_id,
-          productVersion: app.version,
-          activationGeneration: expectedActivationGeneration,
-        });
-      } catch (handshakeError) {
-        const errCode = handshakeError?.code || /APP_[A-Z_]+/.exec(handshakeError?.message || '')?.[0];
-        if (errCode === 'APP_PACKAGE_INVALID') {
-          // 本地开发或代码更新后 runtime 二进制变动未密封重配：向 Core 触发一次 apps:handshake 自动重配自愈
+        while (attempts < 6) {
           try {
-            const origin = globalThis.location?.origin || `chrome-extension://${globalThis.chrome?.runtime?.id}/`;
-            await core.call('apps:handshake', { origin });
-            detail = await core.call('apps:get', { appId });
-            if (detail?.app) {
-              app = detail.app;
-              expectedActivationGeneration = app.activation_generation ?? app.activationGeneration ?? app.revision;
-              handshake = await host.call('app:handshake', {
-                protocolVersion: 2,
-                appId: app.app_id,
-                productVersion: app.version,
-                activationGeneration: expectedActivationGeneration,
-              });
+            // 只接受 App Runtime Protocol v2（ADR-0031）；不向 v1 回退。
+            handshake = await host.call('app:handshake', {
+              protocolVersion: 2,
+              appId: app.app_id,
+              productVersion: app.version,
+              activationGeneration: expectedActivationGeneration,
+            });
+            break;
+          } catch (handshakeError) {
+            const errCode = handshakeError?.code || /APP_[A-Z_]+/.exec(handshakeError?.message || '')?.[0];
+            if (errCode === 'APP_PACKAGE_INVALID') {
+              // 本地开发或代码更新后 runtime 二进制变动未密封重配：向 Core 触发一次 apps:handshake 自动重配自愈
+              try {
+                const origin = globalThis.location?.origin || `chrome-extension://${globalThis.chrome?.runtime?.id}/`;
+                await core.call('apps:handshake', { origin });
+                detail = await core.call('apps:get', { appId });
+                if (detail?.app) {
+                  app = detail.app;
+                  expectedActivationGeneration = app.activation_generation ?? app.activationGeneration ?? app.revision;
+                  handshake = await host.call('app:handshake', {
+                    protocolVersion: 2,
+                    appId: app.app_id,
+                    productVersion: app.version,
+                    activationGeneration: expectedActivationGeneration,
+                  });
+                  break;
+                } else {
+                  throw handshakeError;
+                }
+              } catch {
+                throw handshakeError;
+              }
+            } else if (['APP_RUNNING_ELSEWHERE', 'APP_ALREADY_RUNNING'].includes(errCode)) {
+              attempts++;
+              if (attempts >= 6) throw handshakeError;
+              // 收到旧进程占用，先广播通知同一 profile 下的旧页面主动让出会话
+              if (attempts === 1) {
+                lifecycle?.notify?.('stop', appId);
+                try { globalThis.chrome?.runtime?.sendMessage?.({ type: 'natives-app-stop', appId }).catch?.(() => {}); } catch {}
+              }
+              // 宿主连接保持存活，原地等待旧实例释放锁（旧实例 ≤2s 自退），避免断开再建引发雪崩撞锁
+              await new Promise((resolve) => setTimeout(resolve, 300));
+              continue;
             } else {
               throw handshakeError;
             }
-          } catch {
-            throw handshakeError;
           }
-        } else {
-          throw handshakeError;
         }
       } finally {
         core.disconnect();
@@ -545,6 +594,13 @@ export function createAppShell({
     else scheduleIdle();
   };
   globalThis.window?.addEventListener('message', onWindowMessage);
+  // 语言变更监听（07 §5.2 / 审计 C3）：切换入口本身会 reload，这里兜底
+  // 其他入口改语言时把新值推给存活中的模块会话。
+  chrome.storage?.onChanged?.addListener((changes, area) => {
+    if (area !== 'local' || !changes['natives-language'] || !frame) return;
+    const language = changes['natives-language'].newValue === 'en' ? 'en' : 'zh-CN';
+    frame.contentWindow?.postMessage({ type: 'language', language }, '*');
+  });
   globalThis.window?.addEventListener('pagehide', pagehide);
   globalThis.window?.addEventListener('pageshow', pageshow);
   document.addEventListener?.('visibilitychange', onVisibilityChange);
@@ -600,5 +656,13 @@ export function createEmbeddedAppSurface({ appId, stage, onClosed, getNativeClie
 if (typeof document !== 'undefined' && globalThis.location?.pathname?.endsWith('app.html') && el('app-stage')) {
   const t = makeT();
   document.querySelectorAll('[data-i18n]').forEach((node) => { node.textContent = t(node.dataset.i18n, node.textContent); });
-  void createAppShell({ appId: parseAppId(globalThis.location.search) }).open();
+  const appId = parseAppId(globalThis.location.search);
+  const appMenu = document.getElementById('app-menu-apps');
+  if (appMenu) {
+    mountAppMenu(appMenu, { t }).then(() => {
+      const item = appMenu.querySelector(`[data-app-id="${appId}"]`);
+      item?.classList.add('active');
+    }).catch(() => {});
+  }
+  void createAppShell({ appId }).open();
 }

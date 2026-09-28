@@ -14,6 +14,7 @@ pub mod migration;
 pub mod nav;
 pub mod portfolio;
 pub mod storage;
+pub mod trends;
 pub mod ui;
 
 pub use app::FundModule;

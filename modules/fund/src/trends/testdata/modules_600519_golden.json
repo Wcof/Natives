@@ -1,0 +1,132 @@
+{
+  "trend": {
+    "direction": "下降",
+    "strength": 25,
+    "stage": "强势下降趋势",
+    "ma_arrangement": "纠缠",
+    "ma_scores": {
+      "ma20_dir": 0,
+      "ma60_dir": 25,
+      "price_vs_ma20": 0,
+      "price_vs_ma60": 0,
+      "resonance": 0
+    },
+    "trendline": null,
+    "signals": [
+      "MA20向下"
+    ]
+  },
+  "breakout": [
+    {
+      "system": "系统一(20日)",
+      "signal": "持仓",
+      "breakout_price": 1338.86,
+      "current_n": 18.0795,
+      "stop_loss": 1267.21,
+      "entry_price": 1231.05,
+      "position_units": 1,
+      "exit_price": null,
+      "channel_high": 1338.86,
+      "channel_low": 1231.05,
+      "next_add_price": null,
+      "signals": [
+        "持有空头0日，止损1267.21"
+      ],
+      "description": "系统一入场=空@1231.05，N=18.0795，持有0日"
+    },
+    {
+      "system": "系统二(55日)",
+      "signal": "卖出",
+      "breakout_price": 1363.35,
+      "current_n": 18.0795,
+      "stop_loss": 1325.84,
+      "entry_price": 1362.0,
+      "position_units": 1,
+      "exit_price": 1325.84,
+      "channel_high": 1363.35,
+      "channel_low": 1170.28,
+      "next_add_price": null,
+      "signals": [
+        "触及2N止损1325.84，卖出"
+      ],
+      "description": "系统二入场=多@1362.00，N=18.0795，持有39日"
+    }
+  ],
+  "volume_price": {
+    "pattern": "价平量平",
+    "direction": "中性",
+    "confidence": 22,
+    "volume_ratio": 1.0,
+    "turnover": 0.0,
+    "obv_trend": "下降",
+    "signals": [
+      "OBV下降"
+    ],
+    "description": "量价模式=价平量平，量比=1.0，换手=0.0%"
+  },
+  "pattern": [
+    {
+      "name": "头肩底",
+      "direction": "看涨",
+      "confidence": 60,
+      "status": "形成中",
+      "target_price": 1339.67,
+      "key_levels": {
+        "颈线": 1305.0,
+        "头部": 1270.33
+      },
+      "description": "底部深度34.67，突破颈线后目标1339.67"
+    },
+    {
+      "name": "双底",
+      "direction": "看涨",
+      "confidence": 55,
+      "status": "形成中",
+      "target_price": 1419.93,
+      "key_levels": {
+        "颈线": 1359.97,
+        "底部": 1300.01
+      },
+      "description": "双底可靠性约10%，需等待价格确认突破颈线"
+    },
+    {
+      "name": "箱体震荡",
+      "direction": "中性",
+      "confidence": 55,
+      "status": "形成中",
+      "target_price": null,
+      "key_levels": {
+        "箱体上沿": 1338.86,
+        "箱体下沿": 1228.1
+      },
+      "description": "箱体振幅9.0%，突破上沿目标1449.62，跌破下沿目标1117.34"
+    }
+  ],
+  "canslim": {
+    "c_score": 50,
+    "a_score": 35,
+    "n_score": 40,
+    "s_score": 40,
+    "l_score": 43,
+    "i_score": 50,
+    "m_score": 35,
+    "total": 42,
+    "grade": "C+",
+    "signals": [
+      "⚠️ 市场环境偏空，谨慎操作"
+    ],
+    "cup_handle": {
+      "pattern": "杯柄形态",
+      "cup_high": 1300.98,
+      "cup_low": 1151.01,
+      "handle_high": 1363.35,
+      "handle_low": 1228.1,
+      "cup_depth": 11.5,
+      "handle_depth": 9.9,
+      "breakout": false,
+      "buy_point": 1363.35,
+      "target": 1513.32
+    },
+    "description": "综合42分(C+) | C=50 A=35 N=40 S=40 L=43 I=50 M=35"
+  }
+}

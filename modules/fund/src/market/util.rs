@@ -42,7 +42,7 @@ pub(crate) fn query_param<'a>(path: &'a str, key: &str) -> Option<String> {
     let query = path.split_once('?')?.1;
     query.split('&').find_map(|pair| {
         let (k, v) = pair.split_once('=')?;
-        (k == key).then(|| v.to_string())
+        (k == key).then(|| url_decode(v))
     })
 }
 

@@ -1,7 +1,7 @@
 //! 标的搜索联想（smartbox）（拆分自 market.rs，仅移动，无逻辑变更）。
 
 use super::quotes::agent;
-use super::util::{json_string, query_param, urlencode, url_decode, upstream_err};
+use super::util::{json_string, query_param, upstream_err, url_decode, urlencode};
 use app_runtime_core::http::HttpRequest;
 
 /// 规范化股票/基金标的代码（补齐 sh/sz/bj 前缀）。

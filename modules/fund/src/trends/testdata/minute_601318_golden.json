@@ -1,0 +1,106 @@
+{
+ "kline_count": 31,
+ "fractal_count": 7,
+ "stroke_count": 2,
+ "current_state": "\u5904\u4e8e\u5411\u4e0a\u7b14\u4e2d\uff0c\u591a\u5934\u5ef6\u7eed",
+ "summary": "\u6682\u65e0\u4e70\u5356\u4fe1\u53f7",
+ "description": "\u51717\u4e2a\u5206\u578b\u30012\u7b14\u3002\u5904\u4e8e\u5411\u4e0a\u7b14\u4e2d\uff0c\u591a\u5934\u5ef6\u7eed",
+ "signals": [],
+ "fractals": [
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 53.39,
+   "time": "09:49"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 52.56,
+   "time": "10:39"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 52.84,
+   "time": "10:54"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 52.6,
+   "time": "10:59"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 52.78,
+   "time": "11:09"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 52.54,
+   "time": "11:29"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 52.69,
+   "time": "13:19"
+  }
+ ],
+ "strokes": [
+  {
+   "direction": "down",
+   "start_price": 53.39,
+   "end_price": 52.56,
+   "start_time": "09:49",
+   "end_time": "10:39",
+   "macd_area": 0.2174,
+   "has_divergence": false
+  },
+  {
+   "direction": "up",
+   "start_price": 52.56,
+   "end_price": 52.78,
+   "start_time": "10:39",
+   "end_time": "11:09",
+   "macd_area": 1.0105,
+   "has_divergence": false
+  }
+ ],
+ "macd_bar": [
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  -0.081231,
+  -0.13618,
+  -0.139648,
+  -0.150006,
+  -0.147479,
+  -0.170769,
+  -0.144357,
+  -0.122037,
+  -0.100711,
+  -0.127484,
+  -0.149069,
+  -0.161555,
+  -0.157652,
+  -0.142774,
+  -0.095763,
+  -0.059772,
+  -0.034991,
+  -0.023561,
+  -0.014663
+ ]
+}

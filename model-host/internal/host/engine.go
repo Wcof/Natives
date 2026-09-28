@@ -54,6 +54,10 @@ type Engine struct {
 	kernelRunUpdate   func(job *kernelUpdateJob, target string)
 	sessions          map[string]context.CancelFunc
 	oauthTimeout      time.Duration
+	collectMu         sync.Mutex
+	lastCollectAt     time.Time
+	isCollecting      bool
+	aiQuery           *aiQueryServer // ADR-0033 只读 AI 数据查询端口（绑定失败时为 nil）
 }
 
 func NewEngine(repo *domain.Repository, secretStore secrets.Store, emit func(nativeio.Response)) (*Engine, error) {
@@ -160,8 +164,11 @@ func NewEngine(repo *domain.Repository, secretStore secrets.Store, emit func(nat
 		oauthTimeout:      6 * time.Minute,
 	}
 	clipcore.SetGlobalModelRegistryHook(oauthCatalogHook{engine: engine})
-	// §7.5：不做启动隐式扫描。采集只由显式 model_usage_collect 触发；
-	// 隐式启动扫描既违反"授权采集与纯查询分离"，也会在空闲期占用 CPU。
+	// §7.5：不做启动隐式扫描、无常驻定时器（ADR-0030）。采集有两个事件驱动入口：
+	// 显式 model_usage_collect 方法，与 Native Messaging 连接建立时的
+	// TriggerCollectAsync（内置 10s 防抖），见收口方案 Phase 0.4。
+	// ADR-0033：启动只读 AI 数据查询端口（127.0.0.1:8766），随 Engine 生命周期启停。
+	engine.aiQuery = startAIQueryServer(engine)
 	return engine, nil
 }
 
@@ -175,6 +182,9 @@ func (e *Engine) Handle(ctx context.Context, request nativeio.Request) nativeio.
 }
 
 func (e *Engine) Close() {
+	if e.aiQuery != nil {
+		e.aiQuery.Close()
+	}
 	clipcore.SetGlobalModelRegistryHook(nil)
 	e.mu.Lock()
 	for id, cancel := range e.sessions {
@@ -426,3 +436,43 @@ func (e *Engine) emitSnapshot(event string, snapshot domain.Snapshot) {
 }
 
 var errSecretMissing = errors.New("secret is not configured")
+
+// TriggerCollectAsync 在后台异步触发一次本地多工具增量日志采集（事件驱动：
+// Native Messaging 连接建立、设置打开等时机）。
+// 内置防抖（进行中或距上次完成 <10s 跳过），不做常驻定时器（遵循 ADR-0030）。
+// 若有新事件导入，向所有客户端广播 model_usage_updated。
+func (e *Engine) TriggerCollectAsync() {
+	if e.usageStore == nil {
+		return
+	}
+	e.collectMu.Lock()
+	if e.isCollecting || time.Since(e.lastCollectAt) < 10*time.Second {
+		e.collectMu.Unlock()
+		return
+	}
+	e.isCollecting = true
+	e.collectMu.Unlock()
+
+	go func() {
+		defer func() {
+			e.collectMu.Lock()
+			e.isCollecting = false
+			e.lastCollectAt = time.Now()
+			e.collectMu.Unlock()
+		}()
+
+		summary, err := e.usageStore.CollectSources()
+		if err == nil && summary != nil && summary.EventsImported > 0 {
+			if e.emit != nil {
+				e.emit(nativeio.Response{
+					OK:    true,
+					Event: "model_usage_updated",
+					Result: map[string]interface{}{
+						"source":         "collector",
+						"eventsImported": summary.EventsImported,
+					},
+				})
+			}
+		}
+	}()
+}

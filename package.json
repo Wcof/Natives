@@ -32,9 +32,10 @@
     "apps:contract:check": "node scripts/apps/check-product-manifest.mjs && node scripts/apps/check-app-projection.mjs",
     "apps:registry:check": "node scripts/apps/check-registry-equality.mjs",
     "apps:security:check": "node scripts/apps/check-app-security.mjs",
-    "apps:check": "npm run standards:check && npm run apps:contract:check && node scripts/apps/check-registry-equality.mjs && node scripts/apps/check-architecture-death.mjs && npm run apps:security:check",
+    "apps:port:check": "node scripts/apps/check-port-registry.mjs",
+    "apps:check": "npm run standards:check && npm run apps:contract:check && node scripts/apps/check-registry-equality.mjs && node scripts/apps/check-architecture-death.mjs && npm run apps:port:check && npm run apps:security:check",
     "apps:integration": "node scripts/apps/check-app-integration.mjs",
-    "statusbar": "clang -O2 -framework AppKit -framework Foundation -framework WebKit -lsqlite3 -I installers/macos/resources installers/macos/resources/launcher-main.m installers/macos/resources/NativesStatusBar.m -o target/debug/natives-statusbar && ./target/debug/natives-statusbar --status-bar"
+    "statusbar": "clang -fobjc-arc -O2 -framework AppKit -framework Foundation -framework WebKit -lsqlite3 -I installers/macos/resources installers/macos/resources/launcher-main.m installers/macos/resources/NativesStatusBar.m -o target/debug/natives-statusbar && ./target/debug/natives-statusbar --status-bar"
   },
   "devDependencies": {
     "esbuild": "^0.28.2"

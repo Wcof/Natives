@@ -24,31 +24,27 @@ const MOVE_TO_RIGHT = [
   ".quote-summary-card", ".depth-card", ".metrics-card", ".alert-card", ".side-header", ".alert-box", ".depth-section", ".metrics-grid",
 ];
 
+function safeDecode(str) {
+  if (!str) return '';
+  try {
+    return decodeURIComponent(str);
+  } catch (e) {
+    return str;
+  }
+}
+
 function openStockDetail(symbol, name) {
   if (!symbol) return;
-  const cleanCode = symbol.replace(/^(sh|sz|bj)/i, "");
+  const decodedName = safeDecode(name || symbol);
   // 1. 选中该标的
-  actions.selectSymbol(symbol, name || symbol, true);
+  actions.selectSymbol(symbol, decodedName, true);
   // 2. 如果之前在专注模式，先安全退出
   if (focusActive) {
     exitFocus();
   }
-  // 3. 切换至「趋势分析」个股全盘详情视口（K线、分时、指标、资金流与AI决策全屏呈现）
-  const trendsTab = document.getElementById("tab-trends");
-  if (trendsTab) {
-    trendsTab.click();
-  }
-  // 4. 立即触发深度分析流水线
-  if (window.analyze) {
-    window.analyze(cleanCode);
-  } else if (actions.loadTrendsStock) {
-    actions.loadTrendsStock(cleanCode);
-  }
-  // 5. 确保右侧决策看板完全展开（AI 结论/操作计划/买卖信号等卡片在此）
-  if (typeof expandSidePanel === "function") {
-    expandSidePanel();
-  } else if (actions.expandSidePanel) {
-    actions.expandSidePanel();
+  // 3. 打开全新独立股票详情全宽双栏视口（左侧 ECharts 大图区 + 右侧原始 Dashboard 卡片，无 AI 功能）
+  if (actions.openStockDetailView) {
+    actions.openStockDetailView(symbol, decodedName);
   }
 }
 actions.openStockDetail = openStockDetail;
@@ -204,9 +200,8 @@ sourceSel.addEventListener("change", function() {
   loadFocusItems();
 });
 
-// ---------- WS 推流联动：刷新左栏报价 ----------
-const origHandleWSTick = actions.handleWSTick;
-// dashboard.js 已把报价写入 lastQuotesMap 并触发 renderWatchlistTable；
+// ---------- 报价联动：刷新左栏报价 ----------
+// 轮询层把报价写入 lastQuotesMap（watchlist-table 刷新时同步触发预警判定）；
 // 这里订阅同一数据源：专注模式激活时低频重绘左栏（节流 1s）。
 let lastListRender = 0;
 setInterval(function() {

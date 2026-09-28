@@ -1,8 +1,11 @@
-//! collector 模块：30+ AI 编程工具本地采集目录定义、模型计价与增量扫描引擎。
+//! collector 模块：AI 工具采集源注册表、模型计价与 Model Host 权威同步入口。
+//!
+//! 收口方案（docs/development/tokenusage-consolidation-plan.md）：本地文件采集
+//! 与上游额度探测唯一归属 model-host（ADR-0030 单一写入权威）；本模块只做
+//! usage.db → tokenusage.db 的只读投影同步，自建扫描器已退役。
 
 pub mod host_sync;
 pub mod pricing;
-pub mod scanner;
 
 #[derive(Debug, Clone)]
 pub struct UsageSourceDef {
@@ -237,30 +240,45 @@ pub struct UnifiedCollectSummary {
     pub host_events: usize,
     pub host_tokens: i64,
     pub host_cost_micros: i64,
-    pub local_sources: usize,
-    pub local_records: usize,
-    pub local_tokens: i64,
-    pub local_cost_micros: i64,
+}
+
+// KNOWN_SOURCES 的 relative_paths 仅作为各源归属目录的说明保留（权威采集
+// 实现在 model-host/internal/usage/collector_sources.go）。
+pub fn seed_sources(store: &crate::storage::Store) -> Result<(), String> {
+    let now = crate::api::stats::chrono_now();
+    store.with_write(|conn| {
+        let mut stmt = conn
+            .prepare(
+                "INSERT OR IGNORE INTO usage_sources (id, display_name, category, enabled, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+            )
+            .map_err(|e| e.to_string())?;
+
+        for src in KNOWN_SOURCES {
+            stmt.execute([
+                src.id,
+                src.display_name,
+                src.category,
+                if src.default_enabled { "1" } else { "0" },
+                &now,
+            ])
+            .map_err(|e| e.to_string())?;
+        }
+        Ok(())
+    })
 }
 
 pub fn collect_all(
     store: &crate::storage::Store,
     usage_db_override: Option<&std::path::Path>,
-    home_override: Option<&std::path::Path>,
+    _home_override: Option<&std::path::Path>,
 ) -> Result<UnifiedCollectSummary, String> {
-    // 1. 同步 Model Host usage.db 权威数据
+    // 只同步 Model Host usage.db 权威数据；本地文件扫描归 model-host 采集器。
     let host_res = host_sync::sync_from_host(store, usage_db_override).unwrap_or_default();
-
-    // 2. 扫描本地 30+ 工具日志目录（补漏/离线场景）
-    let local_res = scanner::scan_all_sources(store, home_override).unwrap_or_default();
 
     Ok(UnifiedCollectSummary {
         host_events: host_res.events_synced,
         host_tokens: host_res.total_tokens,
         host_cost_micros: host_res.total_cost_micros,
-        local_sources: local_res.scanned_sources,
-        local_records: local_res.new_records,
-        local_tokens: local_res.total_tokens,
-        local_cost_micros: local_res.total_cost_micros,
     })
 }

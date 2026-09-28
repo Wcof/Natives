@@ -1,0 +1,906 @@
+{
+ "kline_count": 196,
+ "fractal_count": 45,
+ "stroke_count": 40,
+ "current_state": "\u5904\u4e8e\u5411\u4e0a\u7b14\u4e2d\uff0c\u591a\u5934\u5ef6\u7eed\uff0c\u6700\u8fd1buy1\u4fe1\u53f7\u572813:45",
+ "summary": "\u6700\u65b0\u4fe1\u53f7\uff1a\u4e00\u7c7b\u4e70\u70b9@13.37",
+ "description": "\u517145\u4e2a\u5206\u578b\u300140\u7b14\u30018\u4e2a\u4fe1\u53f7\u3002\u5904\u4e8e\u5411\u4e0a\u7b14\u4e2d\uff0c\u591a\u5934\u5ef6\u7eed\uff0c\u6700\u8fd1buy1\u4fe1\u53f7\u572813:45",
+ "signals": [
+  {
+   "type": "sell1",
+   "type_name": "\u4e00\u7c7b\u5356\u70b9",
+   "price": 12.5,
+   "time": "14:15",
+   "description": "\u4e00\u7c7b\u5356\u70b9\uff1a\u9876\u80cc\u9a70\uff0cMACD\u9762\u79ef0.47\u8f83\u524d\u7b14\u8870\u51cf\uff0c\u591a\u5934\u529b\u5ea6\u8870\u7aed",
+   "confidence": 65
+  },
+  {
+   "type": "sell1",
+   "type_name": "\u4e00\u7c7b\u5356\u70b9",
+   "price": 13.94,
+   "time": "14:05",
+   "description": "\u4e00\u7c7b\u5356\u70b9\uff1a\u9876\u80cc\u9a70\uff0cMACD\u9762\u79ef0.48\u8f83\u524d\u7b14\u8870\u51cf\uff0c\u591a\u5934\u529b\u5ea6\u8870\u7aed",
+   "confidence": 76
+  },
+  {
+   "type": "sell1",
+   "type_name": "\u4e00\u7c7b\u5356\u70b9",
+   "price": 14.22,
+   "time": "14:50",
+   "description": "\u4e00\u7c7b\u5356\u70b9\uff1a\u9876\u80cc\u9a70\uff0cMACD\u9762\u79ef0.48\u8f83\u524d\u7b14\u8870\u51cf\uff0c\u591a\u5934\u529b\u5ea6\u8870\u7aed",
+   "confidence": 61
+  },
+  {
+   "type": "sell1",
+   "type_name": "\u4e00\u7c7b\u5356\u70b9",
+   "price": 14.52,
+   "time": "13:15",
+   "description": "\u4e00\u7c7b\u5356\u70b9\uff1a\u9876\u80cc\u9a70\uff0cMACD\u9762\u79ef0.78\u8f83\u524d\u7b14\u8870\u51cf\uff0c\u591a\u5934\u529b\u5ea6\u8870\u7aed",
+   "confidence": 62
+  },
+  {
+   "type": "sell1",
+   "type_name": "\u4e00\u7c7b\u5356\u70b9",
+   "price": 14.73,
+   "time": "14:00",
+   "description": "\u4e00\u7c7b\u5356\u70b9\uff1a\u9876\u80cc\u9a70\uff0cMACD\u9762\u79ef0.42\u8f83\u524d\u7b14\u8870\u51cf\uff0c\u591a\u5934\u529b\u5ea6\u8870\u7aed",
+   "confidence": 78
+  },
+  {
+   "type": "sell1",
+   "type_name": "\u4e00\u7c7b\u5356\u70b9",
+   "price": 14.93,
+   "time": "14:45",
+   "description": "\u4e00\u7c7b\u5356\u70b9\uff1a\u9876\u80cc\u9a70\uff0cMACD\u9762\u79ef0.42\u8f83\u524d\u7b14\u8870\u51cf\uff0c\u591a\u5934\u529b\u5ea6\u8870\u7aed",
+   "confidence": 61
+  },
+  {
+   "type": "buy1",
+   "type_name": "\u4e00\u7c7b\u4e70\u70b9",
+   "price": 13.74,
+   "time": "10:44",
+   "description": "\u4e00\u7c7b\u4e70\u70b9\uff1a\u5e95\u80cc\u9a70\uff0cMACD\u9762\u79ef0.40\u8f83\u524d\u7b14\u8870\u51cf\uff0c\u7a7a\u5934\u529b\u5ea6\u8870\u7aed",
+   "confidence": 74
+  },
+  {
+   "type": "buy1",
+   "type_name": "\u4e00\u7c7b\u4e70\u70b9",
+   "price": 13.37,
+   "time": "13:45",
+   "description": "\u4e00\u7c7b\u4e70\u70b9\uff1a\u5e95\u80cc\u9a70\uff0cMACD\u9762\u79ef0.37\u8f83\u524d\u7b14\u8870\u51cf\uff0c\u7a7a\u5934\u529b\u5ea6\u8870\u7aed",
+   "confidence": 73
+  }
+ ],
+ "fractals": [
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 11.0,
+   "time": "09:44"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 9.38,
+   "time": "10:04"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 11.37,
+   "time": "10:29"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 9.75,
+   "time": "10:49"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 11.75,
+   "time": "11:14"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 10.13,
+   "time": "13:05"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 12.12,
+   "time": "13:30"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 10.5,
+   "time": "13:50"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 12.5,
+   "time": "14:15"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 10.88,
+   "time": "14:35"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 12.87,
+   "time": "15:00"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 11.35,
+   "time": "09:54"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 13.09,
+   "time": "10:19"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 11.63,
+   "time": "10:39"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 13.37,
+   "time": "11:04"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 11.91,
+   "time": "11:24"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 13.66,
+   "time": "13:20"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 12.2,
+   "time": "13:40"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 13.94,
+   "time": "14:05"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 12.48,
+   "time": "14:25"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 14.22,
+   "time": "14:50"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 13.3,
+   "time": "15:00"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 13.86,
+   "time": "09:34"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 13.16,
+   "time": "09:49"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 14.11,
+   "time": "10:14"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 13.37,
+   "time": "10:34"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 14.32,
+   "time": "10:59"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 13.58,
+   "time": "11:19"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 14.52,
+   "time": "13:15"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 13.78,
+   "time": "13:35"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 14.73,
+   "time": "14:00"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 13.99,
+   "time": "14:20"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 14.93,
+   "time": "14:45"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 14.24,
+   "time": "15:00"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 15.12,
+   "time": "09:39"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 13.93,
+   "time": "10:04"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 14.94,
+   "time": "10:24"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 13.74,
+   "time": "10:44"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 14.75,
+   "time": "11:09"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 13.55,
+   "time": "11:30"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 14.56,
+   "time": "13:25"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 13.37,
+   "time": "13:45"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 14.37,
+   "time": "14:10"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 13.18,
+   "time": "14:30"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 14.19,
+   "time": "14:55"
+  }
+ ],
+ "strokes": [
+  {
+   "direction": "down",
+   "start_price": 11.0,
+   "end_price": 9.38,
+   "start_time": "09:44",
+   "end_time": "10:04",
+   "macd_area": 0.5569,
+   "has_divergence": false
+  },
+  {
+   "direction": "up",
+   "start_price": 9.38,
+   "end_price": 11.37,
+   "start_time": "10:04",
+   "end_time": "10:29",
+   "macd_area": 0.5169,
+   "has_divergence": false
+  },
+  {
+   "direction": "down",
+   "start_price": 11.37,
+   "end_price": 9.75,
+   "start_time": "10:29",
+   "end_time": "10:49",
+   "macd_area": 0.581,
+   "has_divergence": false
+  },
+  {
+   "direction": "up",
+   "start_price": 9.75,
+   "end_price": 11.75,
+   "start_time": "10:49",
+   "end_time": "11:14",
+   "macd_area": 0.5352,
+   "has_divergence": false
+  },
+  {
+   "direction": "down",
+   "start_price": 11.75,
+   "end_price": 10.13,
+   "start_time": "11:14",
+   "end_time": "13:05",
+   "macd_area": 0.6827,
+   "has_divergence": false
+  },
+  {
+   "direction": "up",
+   "start_price": 10.13,
+   "end_price": 12.12,
+   "start_time": "13:05",
+   "end_time": "13:30",
+   "macd_area": 0.5358,
+   "has_divergence": false
+  },
+  {
+   "direction": "down",
+   "start_price": 12.12,
+   "end_price": 10.5,
+   "start_time": "13:30",
+   "end_time": "13:50",
+   "macd_area": 0.4109,
+   "has_divergence": false
+  },
+  {
+   "direction": "up",
+   "start_price": 10.5,
+   "end_price": 12.5,
+   "start_time": "13:50",
+   "end_time": "14:15",
+   "macd_area": 0.4679,
+   "has_divergence": true
+  },
+  {
+   "direction": "down",
+   "start_price": 12.5,
+   "end_price": 10.88,
+   "start_time": "14:15",
+   "end_time": "14:35",
+   "macd_area": 0.413,
+   "has_divergence": false
+  },
+  {
+   "direction": "up",
+   "start_price": 10.88,
+   "end_price": 12.87,
+   "start_time": "14:35",
+   "end_time": "15:00",
+   "macd_area": 0.4752,
+   "has_divergence": false
+  },
+  {
+   "direction": "down",
+   "start_price": 12.87,
+   "end_price": 11.35,
+   "start_time": "15:00",
+   "end_time": "09:54",
+   "macd_area": 0,
+   "has_divergence": false
+  },
+  {
+   "direction": "up",
+   "start_price": 11.35,
+   "end_price": 13.09,
+   "start_time": "09:54",
+   "end_time": "10:19",
+   "macd_area": 0.7708,
+   "has_divergence": false
+  },
+  {
+   "direction": "down",
+   "start_price": 13.09,
+   "end_price": 11.63,
+   "start_time": "10:19",
+   "end_time": "10:39",
+   "macd_area": 0.2283,
+   "has_divergence": false
+  },
+  {
+   "direction": "up",
+   "start_price": 11.63,
+   "end_price": 13.37,
+   "start_time": "10:39",
+   "end_time": "11:04",
+   "macd_area": 0.7756,
+   "has_divergence": false
+  },
+  {
+   "direction": "down",
+   "start_price": 13.37,
+   "end_price": 11.91,
+   "start_time": "11:04",
+   "end_time": "11:24",
+   "macd_area": 0.2044,
+   "has_divergence": false
+  },
+  {
+   "direction": "up",
+   "start_price": 11.91,
+   "end_price": 13.66,
+   "start_time": "11:24",
+   "end_time": "13:20",
+   "macd_area": 0.8182,
+   "has_divergence": false
+  },
+  {
+   "direction": "down",
+   "start_price": 13.66,
+   "end_price": 12.2,
+   "start_time": "13:20",
+   "end_time": "13:40",
+   "macd_area": 0.3054,
+   "has_divergence": false
+  },
+  {
+   "direction": "up",
+   "start_price": 12.2,
+   "end_price": 13.94,
+   "start_time": "13:40",
+   "end_time": "14:05",
+   "macd_area": 0.4829,
+   "has_divergence": true
+  },
+  {
+   "direction": "down",
+   "start_price": 13.94,
+   "end_price": 12.48,
+   "start_time": "14:05",
+   "end_time": "14:25",
+   "macd_area": 0.3288,
+   "has_divergence": false
+  },
+  {
+   "direction": "up",
+   "start_price": 12.48,
+   "end_price": 14.22,
+   "start_time": "14:25",
+   "end_time": "14:50",
+   "macd_area": 0.4766,
+   "has_divergence": true
+  },
+  {
+   "direction": "down",
+   "start_price": 14.22,
+   "end_price": 13.16,
+   "start_time": "14:50",
+   "end_time": "09:49",
+   "macd_area": 0,
+   "has_divergence": false
+  },
+  {
+   "direction": "up",
+   "start_price": 13.16,
+   "end_price": 14.11,
+   "start_time": "09:49",
+   "end_time": "10:14",
+   "macd_area": 0.7717,
+   "has_divergence": false
+  },
+  {
+   "direction": "down",
+   "start_price": 14.11,
+   "end_price": 13.37,
+   "start_time": "10:14",
+   "end_time": "10:34",
+   "macd_area": 0.1957,
+   "has_divergence": false
+  },
+  {
+   "direction": "up",
+   "start_price": 13.37,
+   "end_price": 14.32,
+   "start_time": "10:34",
+   "end_time": "10:59",
+   "macd_area": 0.819,
+   "has_divergence": false
+  },
+  {
+   "direction": "down",
+   "start_price": 14.32,
+   "end_price": 13.58,
+   "start_time": "10:59",
+   "end_time": "11:19",
+   "macd_area": 0.1893,
+   "has_divergence": false
+  },
+  {
+   "direction": "up",
+   "start_price": 13.58,
+   "end_price": 14.52,
+   "start_time": "11:19",
+   "end_time": "13:15",
+   "macd_area": 0.784,
+   "has_divergence": true
+  },
+  {
+   "direction": "down",
+   "start_price": 14.52,
+   "end_price": 13.78,
+   "start_time": "13:15",
+   "end_time": "13:35",
+   "macd_area": 0.2593,
+   "has_divergence": false
+  },
+  {
+   "direction": "up",
+   "start_price": 13.78,
+   "end_price": 14.73,
+   "start_time": "13:35",
+   "end_time": "14:00",
+   "macd_area": 0.4245,
+   "has_divergence": true
+  },
+  {
+   "direction": "down",
+   "start_price": 14.73,
+   "end_price": 13.99,
+   "start_time": "14:00",
+   "end_time": "14:20",
+   "macd_area": 0.2659,
+   "has_divergence": false
+  },
+  {
+   "direction": "up",
+   "start_price": 13.99,
+   "end_price": 14.93,
+   "start_time": "14:20",
+   "end_time": "14:45",
+   "macd_area": 0.4171,
+   "has_divergence": true
+  },
+  {
+   "direction": "down",
+   "start_price": 15.12,
+   "end_price": 13.93,
+   "start_time": "09:39",
+   "end_time": "10:04",
+   "macd_area": 0.624,
+   "has_divergence": false
+  },
+  {
+   "direction": "up",
+   "start_price": 13.93,
+   "end_price": 14.94,
+   "start_time": "10:04",
+   "end_time": "10:24",
+   "macd_area": 0.5057,
+   "has_divergence": false
+  },
+  {
+   "direction": "down",
+   "start_price": 14.94,
+   "end_price": 13.74,
+   "start_time": "10:24",
+   "end_time": "10:44",
+   "macd_area": 0.3989,
+   "has_divergence": true
+  },
+  {
+   "direction": "up",
+   "start_price": 13.74,
+   "end_price": 14.75,
+   "start_time": "10:44",
+   "end_time": "11:09",
+   "macd_area": 0.6908,
+   "has_divergence": false
+  },
+  {
+   "direction": "down",
+   "start_price": 14.75,
+   "end_price": 13.55,
+   "start_time": "11:09",
+   "end_time": "11:30",
+   "macd_area": 0.5509,
+   "has_divergence": false
+  },
+  {
+   "direction": "up",
+   "start_price": 13.55,
+   "end_price": 14.56,
+   "start_time": "11:30",
+   "end_time": "13:25",
+   "macd_area": 0.6506,
+   "has_divergence": false
+  },
+  {
+   "direction": "down",
+   "start_price": 14.56,
+   "end_price": 13.37,
+   "start_time": "13:25",
+   "end_time": "13:45",
+   "macd_area": 0.3742,
+   "has_divergence": true
+  },
+  {
+   "direction": "up",
+   "start_price": 13.37,
+   "end_price": 14.37,
+   "start_time": "13:45",
+   "end_time": "14:10",
+   "macd_area": 0.5148,
+   "has_divergence": false
+  },
+  {
+   "direction": "down",
+   "start_price": 14.37,
+   "end_price": 13.18,
+   "start_time": "14:10",
+   "end_time": "14:30",
+   "macd_area": 0.3848,
+   "has_divergence": false
+  },
+  {
+   "direction": "up",
+   "start_price": 13.18,
+   "end_price": 14.19,
+   "start_time": "14:30",
+   "end_time": "14:55",
+   "macd_area": 0.5149,
+   "has_divergence": false
+  }
+ ],
+ "macd_bar": [
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.127179,
+  0.069049,
+  -0.090579,
+  -0.232771,
+  -0.2554,
+  -0.117629,
+  0.136789,
+  0.408186,
+  0.584265,
+  0.594402,
+  0.442667,
+  0.20818,
+  0.028276,
+  -0.109145,
+  -0.108827,
+  -0.025628,
+  0.106493,
+  0.225095,
+  0.277438,
+  0.237651,
+  0.123793,
+  -0.012936,
+  -0.110854,
+  -0.125454,
+  -0.052318,
+  0.072094,
+  0.187497,
+  0.237169,
+  0.19655,
+  0.08315,
+  -0.052244,
+  -0.14698,
+  -0.159879,
+  -0.084705,
+  0.043201,
+  0.160339,
+  0.213169,
+  0.231371,
+  0.188096,
+  0.081326,
+  -0.054725,
+  -0.167411,
+  -0.210661,
+  -0.169353,
+  -0.066614,
+  0.048974,
+  0.121771,
+  0.118983,
+  0.04189,
+  -0.072725,
+  -0.170221,
+  -0.202988,
+  -0.154713,
+  -0.047609,
+  0.07044,
+  0.144327,
+  0.14166,
+  0.064025,
+  -0.051571,
+  -0.15032,
+  -0.18449,
+  -0.190011,
+  -0.120693,
+  -0.001444,
+  0.113496,
+  0.174779,
+  0.155424,
+  0.065765,
+  -0.051921,
+  -0.142596,
+  -0.162762,
+  -0.102843,
+  0.008193,
+  0.118625,
+  0.175395,
+  0.153035,
+  0.061479,
+  -0.057301,
+  -0.148496,
+  -0.168782,
+  -0.108712,
+  0.002649,
+  0.113513,
+  0.172046,
+  0.149645,
+  0.058205,
+  0.045578,
+  -0.002608,
+  -0.065446,
+  -0.1136,
+  -0.125519,
+  -0.094669,
+  -0.035861,
+  0.024706,
+  0.058893,
+  0.051645,
+  0.007201,
+  -0.053137,
+  -0.101009,
+  -0.111523,
+  -0.081224,
+  -0.021643,
+  0.039179,
+  0.073249,
+  0.065625,
+  0.019354,
+  -0.042377,
+  -0.090043,
+  -0.101939,
+  -0.071414,
+  -0.043818,
+  0.009953,
+  0.061971,
+  0.084495,
+  0.065462,
+  0.013573,
+  -0.048564,
+  -0.09078,
+  -0.093841,
+  -0.056669,
+  0.003901,
+  0.060636,
+  0.086328,
+  0.069321,
+  0.01735,
+  -0.04364,
+  -0.086564,
+  -0.090191,
+  -0.053475,
+  0.008001,
+  0.063886,
+  0.088941,
+  0.072734,
+  0.021138,
+  -0.039772,
+  0.032058,
+  0.0671,
+  0.047737,
+  -0.020135,
+  -0.108426,
+  -0.179113,
+  -0.201467,
+  -0.167645,
+  -0.094898,
+  -0.019221,
+  0.022461,
+  0.011244,
+  -0.047884,
+  -0.127451,
+  -0.18984,
+  -0.204574,
+  -0.163949,
+  -0.085277,
+  -0.004556,
+  0.042595,
+  0.034228,
+  -0.022617,
+  -0.100433,
+  -0.161558,
+  -0.189504,
+  -0.174335,
+  -0.112119,
+  -0.02342,
+  0.056859,
+  0.094338,
+  0.074731,
+  0.00999,
+  -0.069457,
+  -0.12572,
+  -0.13103,
+  -0.083405,
+  -0.004908,
+  0.068414,
+  0.101307,
+  0.078825,
+  0.012424,
+  -0.067843,
+  -0.124357,
+  -0.129553,
+  -0.081594,
+  -0.00137,
+  0.071899,
+  0.106173,
+  0.08461
+ ]
+}

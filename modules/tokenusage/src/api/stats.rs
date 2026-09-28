@@ -434,7 +434,7 @@ pub(super) fn chrono_today() -> String {
     format!("{:04}-{:02}-{:02}", y, m, d)
 }
 
-pub(super) fn chrono_now() -> String {
+pub(crate) fn chrono_now() -> String {
     let dur = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()

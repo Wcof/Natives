@@ -156,7 +156,7 @@ let statusbarProcess = null;
 if (platform() === 'darwin') {
   const statusbarBin = join(root, 'target', 'debug', 'natives-statusbar');
   const buildStatusbar = spawnSync('clang', [
-    '-O2', '-framework', 'AppKit', '-framework', 'Foundation', '-framework', 'WebKit', '-lsqlite3',
+    '-fobjc-arc', '-O2', '-framework', 'AppKit', '-framework', 'Foundation', '-framework', 'WebKit', '-lsqlite3',
     '-I', join(root, 'installers/macos/resources'),
     join(root, 'installers/macos/resources/launcher-main.m'),
     join(root, 'installers/macos/resources/NativesStatusBar.m'),

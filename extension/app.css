@@ -30,11 +30,16 @@ body {
 .app-shell-nav-item {
   display:flex; align-items:center; gap:8px; padding:7px 10px; border:0;
   background:transparent; color:var(--text); font:inherit; text-align:left;
-  border-radius:var(--radius); cursor:pointer; width:100%;
+  border-radius:var(--radius); cursor:pointer; width:100%; text-decoration:none;
 }
 .app-shell-nav-item:hover { background:var(--hover); }
 .app-shell-nav-item .icon { color:var(--muted); }
 .app-shell-nav-item:hover .icon { color:var(--text); }
+.app-menu-apps-wrap { display:flex; flex-direction:column; gap:2px; margin-top:6px; }
+.app-menu-apps-wrap .app-menu-section > span { display:block; font-size:11px; color:var(--muted); padding:8px 10px 4px; }
+.app-menu-apps-wrap .app-menu-item { display:flex; align-items:center; gap:8px; padding:7px 10px; color:var(--text); text-decoration:none; border-radius:var(--radius); }
+.app-menu-apps-wrap .app-menu-item:hover { background:var(--hover); }
+.app-menu-apps-wrap .app-menu-item.active { background:var(--selected); color:var(--accent); font-weight:600; }
 
 .app-shell-content { flex:1; min-width:0; display:flex; flex-direction:column; }
 .app-shell-head {

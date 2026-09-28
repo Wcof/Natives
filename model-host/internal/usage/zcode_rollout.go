@@ -15,8 +15,11 @@ package usage
 
 import (
 	"bufio"
+	"database/sql"
 	"encoding/json"
+	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -134,4 +137,119 @@ func (s *Store) collectZCodeRollout(dir string) (int64, int64, error) {
 		totalBytes += info.Size()
 	}
 	return importedCount, totalBytes, nil
+}
+
+// ParseZCodeDB 只读打开 ZCode 本地 SQLite 库并投影 model_usage 表白名单字段。
+func ParseZCodeDB(dbPath string, afterMS int64, limit int) ([]NativeEvent, int64, error) {
+	db, err := sql.Open("sqlite", fmt.Sprintf("file:%s?mode=ro", dbPath))
+	if err != nil {
+		return nil, afterMS, err
+	}
+	defer db.Close()
+
+	var hasTable int
+	if err := db.QueryRow(
+		"SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='model_usage'",
+	).Scan(&hasTable); err != nil {
+		return nil, afterMS, fmt.Errorf("zcode: schema probe failed: %w", err)
+	}
+	if hasTable == 0 {
+		return nil, afterMS, fmt.Errorf("zcode: no model_usage table")
+	}
+
+	query := `SELECT id, session_id, provider_id, model_id, status, started_at,
+		input_tokens, output_tokens, reasoning_tokens,
+		cache_creation_input_tokens, cache_read_input_tokens, computed_total_tokens
+		FROM model_usage WHERE started_at > ? ORDER BY started_at ASC`
+	if limit > 0 {
+		query += fmt.Sprintf(" LIMIT %d", limit)
+	}
+
+	rows, err := db.Query(query, afterMS)
+	if err != nil {
+		return nil, afterMS, fmt.Errorf("zcode: model_usage query failed: %w", err)
+	}
+	defer rows.Close()
+
+	var events []NativeEvent
+	maxMS := afterMS
+	for rows.Next() {
+		var (
+			id, sessionID, providerID, modelID, status string
+			startedAtMS                                int64
+			inTokens, outTokens, reasoningTokens       int64
+			cacheWrite, cacheRead, totalTokens         int64
+		)
+		if err := rows.Scan(
+			&id, &sessionID, &providerID, &modelID, &status, &startedAtMS,
+			&inTokens, &outTokens, &reasoningTokens,
+			&cacheWrite, &cacheRead, &totalTokens,
+		); err != nil {
+			continue
+		}
+		if startedAtMS > maxMS {
+			maxMS = startedAtMS
+		}
+		if totalTokens == 0 && inTokens == 0 && outTokens == 0 {
+			continue
+		}
+		res := ResultSuccess
+		if status != "completed" && status != "success" && status != "" {
+			res = ResultFailed
+		}
+
+		events = append(events, NativeEvent{
+			BillingAtom:      "zcode:" + id,
+			SourceRecordID:   "zcode-usage:" + id,
+			RequestedAt:      time.UnixMilli(startedAtMS).UTC(),
+			Provider:         firstNonEmpty(providerID, "zcode"),
+			Model:            firstNonEmpty(modelID, "unknown"),
+			Source:           "ZCode",
+			Result:           res,
+			InputTokens:      inTokens,
+			OutputTokens:     outTokens,
+			CacheReadTokens:  cacheRead,
+			CacheWriteTokens: cacheWrite,
+			ReasoningTokens:  reasoningTokens,
+			TotalTokens:      totalTokens,
+			SessionID:        sessionID,
+			ParserVersion:    "zcode-sqlite/1",
+			RecordKind:       "request",
+		})
+	}
+	return events, maxMS, nil
+}
+
+// collectZCodeDB 增量采集 ZCode 本地 SQLite 库（幂等：zcode:<id>）。
+func (s *Store) collectZCodeDB(dbPath string) (int64, int64, error) {
+	info, err := os.Stat(dbPath)
+	if err != nil || info.Size() == 0 {
+		return 0, 0, nil
+	}
+	fpHash := fileFingerprint(dbPath)
+	lastMS := s.getCursorOffset("zcode", fpHash)
+
+	// 单批采集最多 20000 条，足额覆盖历史数据
+	events, newMaxMS, err := ParseZCodeDB(dbPath, lastMS, 20000)
+	if err != nil {
+		return 0, 0, err
+	}
+	if len(events) == 0 {
+		return 0, 0, nil
+	}
+
+	instance := deriveInstanceID("zcode", filepath.Dir(dbPath))
+	var importedCount int64
+	for _, ne := range events {
+		ev := withIdentity(nativeEventToEvent(ne), "zcode", instance)
+		ev.Source = "ZCode"
+		inserted, _ := s.InsertEventIfAbsent(ev)
+		if inserted {
+			importedCount++
+		}
+	}
+	if newMaxMS > lastMS {
+		s.saveCursorOffset("zcode", fpHash, newMaxMS, "zcode-sqlite/1")
+	}
+	return importedCount, info.Size(), nil
 }

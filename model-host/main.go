@@ -100,6 +100,8 @@ func (h *clientHub) serve(ctx context.Context, engine *host.Engine, input io.Rea
 	h.mu.Lock()
 	h.writers[writer] = true
 	h.mu.Unlock()
+	// 新客户端连入：异步触发一次增量日志采集（内置 10s 防抖，无定时器）
+	engine.TriggerCollectAsync()
 	go func() {
 		defer func() {
 			h.mu.Lock()

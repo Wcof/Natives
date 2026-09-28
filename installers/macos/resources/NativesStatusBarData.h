@@ -1,4 +1,4 @@
-// NativesStatusBarData.h: 本地数据库直读与多工具（含 ZCode）用量与账号额度聚合引擎
+// NativesStatusBarData.h: tokenusage.db 只读兜底与账号额度聚合（额度走 8766 查询面，ADR-0033）
 #import <Foundation/Foundation.h>
 #import <sqlite3.h>
 
@@ -54,6 +54,45 @@ static inline NSString *NativeQuotaLocalizedLabel(NSString *type, NSString *grou
     NSString *typeLabel = NativeQuotaWindowTypeLabel(type);
     NSString *groupLabel = NativeQuotaGroupLabel(group);
     return groupLabel.length > 0 ? [NSString stringWithFormat:@"%@ · %@", groupLabel, typeLabel] : typeLabel;
+}
+
+// 额度窗口展示排序：每个模型组内部，5小时排在上面，周额度排在下面，符合用户直觉习惯
+static inline NSInteger QuotaWindowSortPriority(NSString *label) {
+    if (![label isKindOfClass:[NSString class]]) return 99;
+    NSString *lower = label.lowercaseString;
+    if ([lower containsString:@"5小时"] || [lower containsString:@"5h"] || [lower containsString:@"hour"]) return 1;
+    if ([lower containsString:@"日"] || [lower containsString:@"day"]) return 2;
+    if ([lower containsString:@"周"] || [lower containsString:@"week"]) return 3;
+    if ([lower containsString:@"月"] || [lower containsString:@"month"]) return 4;
+    return 5;
+}
+
+static inline NSString *ExtractModelGroupFromLabel(NSString *label) {
+    if (![label isKindOfClass:[NSString class]]) return @"";
+    if ([label containsString:@"·"]) {
+        NSArray *parts = [label componentsSeparatedByString:@"·"];
+        if (parts.count > 1) {
+            return [parts[0] stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+        }
+    }
+    return @"";
+}
+
+static inline void SortQuotaWindows5HFirst(NSMutableArray *windows) {
+    if (![windows isKindOfClass:[NSMutableArray class]] || windows.count <= 1) return;
+    [windows sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
+        NSString *grpA = a[@"group"] ?: ExtractModelGroupFromLabel(a[@"label"]);
+        NSString *grpB = b[@"group"] ?: ExtractModelGroupFromLabel(b[@"label"]);
+        if (![grpA isEqualToString:grpB]) {
+            return [grpA compare:grpB];
+        }
+        NSInteger rA = QuotaWindowSortPriority(a[@"label"] ?: a[@"name"]);
+        NSInteger rB = QuotaWindowSortPriority(b[@"label"] ?: b[@"name"]);
+        if (rA != rB) {
+            return rA < rB ? NSOrderedAscending : NSOrderedDescending;
+        }
+        return NSOrderedSame;
+    }];
 }
 
 // model-host 额度缓存：扩展「刷新额度」成功时写入的真实结果（各 provider 的
@@ -115,7 +154,10 @@ static inline NSArray *FetchQuotaCacheAccounts(void) {
             }
             NSMutableArray *finalWindows = [NSMutableArray array];
             for (NSString *label in order) [finalWindows addObject:collapsed[label]];
+            SortQuotaWindows5HFirst(finalWindows);
             trayWindows = finalWindows;
+        } else {
+            SortQuotaWindows5HFirst(trayWindows);
         }
         if (trayWindows.count == 0) continue;
         [items addObject:@{
@@ -275,118 +317,121 @@ static inline NSArray *FetchLimitsFromLocalSqlite(void) {
     }
 
     // 零假数据：无任何真实账号时不构造默认账号，返回空列表由面板如实显示空态
+    for (NSMutableDictionary *it in [accMap allValues]) {
+        if ([it[@"windows"] isKindOfClass:[NSMutableArray class]]) {
+            SortQuotaWindows5HFirst(it[@"windows"]);
+        }
+    }
     [accounts addObjectsFromArray:[accMap allValues]];
     return accounts;
 }
 
-// 实时请求 Codex 真实额度（ChatGPT backend usage 端点，与 Codex CLI 同源）。
-// 本机无 access_token 时直接返回 nil 不发起请求；请求失败或结构缺失也返回 nil，
-// 由调用方保留本地真实缓存值，绝不回落到任何占位数字。仅限后台线程调用。
-static inline NSDictionary *FetchCodexUsageLive(void) {
-    NSString *authPath = [NSHomeDirectory() stringByAppendingPathComponent:@".codex/auth.json"];
-    if (![[NSFileManager defaultManager] fileExistsAtPath:authPath]) return nil;
-    NSData *authData = [NSData dataWithContentsOfFile:authPath];
-    if (!authData) return nil;
-    NSDictionary *auth = [NSJSONSerialization JSONObjectWithData:authData options:0 error:nil];
-    if (![auth isKindOfClass:[NSDictionary class]]) return nil;
-    NSDictionary *tokens = auth[@"tokens"];
-    if (![tokens isKindOfClass:[NSDictionary class]]) return nil;
-    NSString *token = tokens[@"access_token"];
-    if (![token isKindOfClass:[NSString class]] || token.length == 0) return nil;
-    NSString *accountId = [tokens[@"account_id"] isKindOfClass:[NSString class]] ? tokens[@"account_id"] : @"";
+// ===== AI 数据域查询客户端（ADR-0033 Phase 2 / 审计 B2）=====
+// 顶栏不再直连上游额度端点（Codex wham / Google cloudcode-pa）、不再直读
+// Keychain 续期、不再第二写方写 quota-cache.json（B2 退役）。额度数据路径：
+//   手动刷新 → POST 127.0.0.1:8766/ai/quota/refresh（唯一上游触发口，model-host 执行）
+//           → GET  127.0.0.1:8766/ai/quota（读 Go 侧最近探测结果）
+//   8766 不可达 → 读 quota-cache.json（同一 Go 写方的缓存文件，离线兜底，只读）
+//   两者皆空   → 空列表 + 面板显示"模型服务未运行"（零假数据）
 
-    NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:
-        [NSURL URLWithString:@"https://chatgpt.com/backend-api/wham/usage"]];
-    req.HTTPMethod = @"GET";
-    req.timeoutInterval = 6.0;
-    [req setValue:[NSString stringWithFormat:@"Bearer %@", token] forHTTPHeaderField:@"Authorization"];
-    if (accountId.length > 0) [req setValue:accountId forHTTPHeaderField:@"chatgpt-account-id"];
-    [req setValue:@"application/json" forHTTPHeaderField:@"Accept"];
+// 解析 /ai/quota 响应（QuotaResult 数组）为账号窗口行，形状与
+// FetchQuotaCacheAccounts 一致（provider/providerId/account/status/windows）。
+static inline NSArray *ParseAIQueryQuotaAccounts(NSData *data) {
+    id json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+    NSArray *results = [json isKindOfClass:[NSDictionary class]] ? json[@"results"] : nil;
+    if (![results isKindOfClass:[NSArray class]]) return @[];
 
-    __block NSData *respData = nil;
-    __block NSError *respError = nil;
-    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
-    NSURLSession *session = [NSURLSession sessionWithConfiguration:[NSURLSessionConfiguration ephemeralSessionConfiguration]];
-    [[session dataTaskWithRequest:req completionHandler:^(NSData *data, NSURLResponse *resp, NSError *error) {
-        respData = data;
-        respError = error;
-        dispatch_semaphore_signal(sem);
-    }] resume];
-    dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, (int64_t)(8 * NSEC_PER_SEC)));
-    [session finishTasksAndInvalidate];
-    if (respError || !respData) return nil;
+    NSISO8601DateFormatter *iso = [[NSISO8601DateFormatter alloc] init];
+    NSDateFormatter *shortFmt = [[NSDateFormatter alloc] init];
+    shortFmt.dateFormat = @"MM-dd HH:mm";
+    NSMutableArray *items = [NSMutableArray array];
+    for (NSDictionary *entry in results) {
+        if (![entry isKindOfClass:[NSDictionary class]]) continue;
+        NSString *provider = [entry[@"provider"] isKindOfClass:[NSString class]] ? entry[@"provider"] : @"";
+        NSString *account = [entry[@"account"] isKindOfClass:[NSString class]] ? entry[@"account"] : @"";
+        NSArray *windows = [entry[@"windows"] isKindOfClass:[NSArray class]] ? entry[@"windows"] : @[];
+        if (provider.length == 0 || windows.count == 0) continue;
 
-    NSDictionary *json = [NSJSONSerialization JSONObjectWithData:respData options:0 error:nil];
-    if (![json isKindOfClass:[NSDictionary class]]) return nil;
-    NSDictionary *rateLimit = json[@"rate_limit"];
-    if (![rateLimit isKindOfClass:[NSDictionary class]]) return nil;
-
-    NSMutableArray *windows = [NSMutableArray array];
-    for (NSString *key in @[@"primary_window", @"secondary_window"]) {
-        NSDictionary *w = rateLimit[key];
-        if (![w isKindOfClass:[NSDictionary class]]) continue;
-        id usedVal = w[@"used_percent"];
-        if (![usedVal isKindOfClass:[NSNumber class]]) continue;
-        double usedPct = MAX(0.0, MIN(100.0, [usedVal doubleValue]));
-
-        // 窗口名称按上游真实窗口长度标注，不假设 5 小时/周
-        NSInteger winSecs = [w[@"limit_window_seconds"] isKindOfClass:[NSNumber class]] ? [w[@"limit_window_seconds"] integerValue] : 0;
-        NSString *label = nil;
-        if (winSecs > 0 && winSecs <= 6 * 3600) label = @"5小时额度";
-        else if (winSecs > 6 * 3600 && winSecs <= 7 * 86400) label = @"周额度";
-        else if (winSecs > 7 * 86400) label = [NSString stringWithFormat:@"%ld天额度", (long)(winSecs + 43200) / 86400];
-        else label = @"账户额度";
-
-        NSString *reset = @"";
-        id resetAt = w[@"reset_at"];
-        if ([resetAt isKindOfClass:[NSNumber class]] && [resetAt doubleValue] > 0) {
-            NSDate *resetDate = [NSDate dateWithTimeIntervalSince1970:[resetAt doubleValue]];
-            NSDateFormatter *df = [[NSDateFormatter alloc] init];
-            [df setDateFormat:@"MM-dd HH:mm"];
-            [df setTimeZone:[NSTimeZone localTimeZone]];
-            reset = [NSString stringWithFormat:@"%@ 重置", [df stringFromDate:resetDate]];
+        NSMutableArray *trayWindows = [NSMutableArray array];
+        for (NSDictionary *w in windows) {
+            if (![w isKindOfClass:[NSDictionary class]]) continue;
+            NSNumber *pct = [w[@"remainingPercent"] isKindOfClass:[NSNumber class]] ? w[@"remainingPercent"] : nil;
+            if (!pct) continue;
+            NSMutableDictionary *row = [NSMutableDictionary dictionary];
+            NSString *typeName = [w[@"name"] isKindOfClass:[NSString class]] && [w[@"name"] length] > 0 ? w[@"name"] : @"额度";
+            NSString *group = [w[@"group"] isKindOfClass:[NSString class]] ? w[@"group"] : @"";
+            row[@"label"] = NativeQuotaLocalizedLabel(typeName, group);
+            row[@"pct"] = @(MAX(0.0, MIN(100.0, pct.doubleValue)));
+            if ([group containsString:@"Gemini"]) row[@"group"] = @"Gemini 模型";
+            else if ([group containsString:@"Claude"]) row[@"group"] = @"Claude 与 GPT 模型";
+            NSString *resetISO = [w[@"resetTime"] isKindOfClass:[NSString class]] ? w[@"resetTime"] : @"";
+            if (resetISO.length > 0) {
+                NSDate *resetDate = [iso dateFromString:resetISO];
+                if (resetDate) {
+                    row[@"reset"] = [NSString stringWithFormat:@"%@ 重置", [shortFmt stringFromDate:resetDate]];
+                    row[@"resetEpoch"] = @(resetDate.timeIntervalSince1970);
+                }
+            }
+            [trayWindows addObject:row];
         }
-        // resetEpoch 供顶栏轮播的倒计时逐秒计算
-        [windows addObject:@{@"label": label, @"pct": @(100.0 - usedPct), @"reset": reset,
-                             @"resetEpoch": ([resetAt isKindOfClass:[NSNumber class]] ? @([resetAt doubleValue]) : @0.0)}];
+        if (trayWindows.count == 0) continue;
+        SortQuotaWindows5HFirst(trayWindows);
+        [items addObject:@{
+            @"provider": [provider capitalizedString],
+            @"providerId": provider,
+            @"account": account,
+            @"status": @"活跃",
+            @"windows": trayWindows
+        }];
     }
-    if (windows.count == 0) return nil;
-
-    NSString *email = [json[@"email"] isKindOfClass:[NSString class]] ? json[@"email"] : @"";
-    BOOL limitReached = [rateLimit[@"limit_reached"] boolValue];
-    return @{
-        @"providerId": @"codex",
-        @"account": email,
-        @"status": limitReached ? @"限额中" : @"活跃",
-        @"windows": windows
-    };
+    return items;
 }
 
-// 将实时请求到的 Codex 窗口余量合并进账号列表（覆盖同账号或补建 Codex 条目）
-static inline NSArray *MergeCodexLiveUsage(NSArray *accounts, NSDictionary *live) {
-    if (!live.count) return accounts;
-    NSMutableArray *out = accounts ? [accounts mutableCopy] : [NSMutableArray array];
-    NSString *email = [live[@"account"] isKindOfClass:[NSString class]] ? live[@"account"] : @"";
-    NSMutableDictionary *target = nil;
-    for (NSMutableDictionary *it in out) {
-        if ([it[@"providerId"] isKindOfClass:[NSString class]] &&
-            [it[@"providerId"] isEqualToString:@"codex"]) {
-            target = it;
-            break;
+// 走 8766 只读查询面获取账号额度。refresh=YES 时先 POST /ai/quota/refresh
+// （model-host 对全部已启用凭据做一次上游探测并写缓存——上游请求仍只在用户
+// 手动刷新时发生，反封号口径不变）。quotaSource 回填 "8766"/"cache"/"none"。
+static inline NSArray *FetchQuotaAccountsViaAIQuery(BOOL refresh, NSString **quotaSource) {
+    NSString *base = @"http://127.0.0.1:8766";
+    if (refresh) {
+        NSMutableURLRequest *post = [NSMutableURLRequest requestWithURL:
+            [NSURL URLWithString:[base stringByAppendingString:@"/ai/quota/refresh"]]];
+        post.HTTPMethod = @"POST";
+        post.timeoutInterval = 30.0; // 上游逐凭据探测，给足超时
+        [post setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
+        post.HTTPBody = [@"{}" dataUsingEncoding:NSUTF8StringEncoding];
+        dispatch_semaphore_t psem = dispatch_semaphore_create(0);
+        NSURLSession *psess = [NSURLSession sessionWithConfiguration:[NSURLSessionConfiguration ephemeralSessionConfiguration]];
+        [[psess dataTaskWithRequest:post completionHandler:^(NSData *d, NSURLResponse *r, NSError *e) {
+            dispatch_semaphore_signal(psem);
+        }] resume];
+        dispatch_semaphore_wait(psem, dispatch_time(DISPATCH_TIME_NOW, 35 * NSEC_PER_SEC));
+        [psess finishTasksAndInvalidate];
+    }
+
+    NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:
+        [NSURL URLWithString:[base stringByAppendingString:@"/ai/quota"]]];
+    req.timeoutInterval = 3.0;
+    __block NSData *respData = nil;
+    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+    NSURLSession *sess = [NSURLSession sessionWithConfiguration:[NSURLSessionConfiguration ephemeralSessionConfiguration]];
+    [[sess dataTaskWithRequest:req completionHandler:^(NSData *d, NSURLResponse *r, NSError *e) {
+        respData = d;
+        dispatch_semaphore_signal(sem);
+    }] resume];
+    dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC));
+    [sess finishTasksAndInvalidate];
+
+    if (respData) {
+        NSArray *accounts = ParseAIQueryQuotaAccounts(respData);
+        if (accounts.count > 0) {
+            if (quotaSource) *quotaSource = @"8766";
+            return accounts;
         }
     }
-    if (!target) {
-        target = [NSMutableDictionary dictionary];
-        target[@"provider"] = @"Codex (OpenAI)";
-        target[@"providerId"] = @"codex";
-        target[@"account"] = email;
-        target[@"windows"] = [NSMutableArray array];
-        [out addObject:target];
-    }
-    target[@"status"] = live[@"status"];
-    target[@"windows"] = live[@"windows"];
-    if (email.length > 0) target[@"account"] = email;
-    return out;
+    // 8766 不可达（模型服务未运行）：缓存文件兜底（同一 Go 写方，只读）
+    NSArray *cached = FetchQuotaCacheAccounts();
+    if (quotaSource) *quotaSource = cached.count > 0 ? @"cache" : @"none";
+    return cached;
 }
 
 // 按日期过滤查询工具分解（dateFilter 传 nil/空表示全量），按 token 降序，最多 8 条；
@@ -425,13 +470,16 @@ static inline NSMutableArray *FetchToolDecomposition(sqlite3 *db, NSString *date
     return tools;
 }
 
-// 将指定工具用量合并进周期分解列表（已存在则覆盖，否则插入并保持降序）
+// 将指定工具用量合并进周期分解列表（已存在则累加，否则插入并保持降序）
 static inline void MergeToolEntry(NSMutableArray *tools, NSString *name, int64_t tokens, double costUsd) {
-    if (tokens <= 0) return;
+    if (tokens <= 0 || name.length == 0) return;
     for (NSMutableDictionary *it in tools) {
         if ([it[@"name"] isEqualToString:name]) {
-            it[@"tokens"] = @(tokens);
-            it[@"costUsd"] = @(costUsd);
+            it[@"tokens"] = @([it[@"tokens"] longLongValue] + tokens);
+            it[@"costUsd"] = @([it[@"costUsd"] doubleValue] + costUsd);
+            [tools sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
+                return [@([b[@"tokens"] longLongValue]) compare:@([a[@"tokens"] longLongValue])];
+            }];
             return;
         }
     }
@@ -441,184 +489,7 @@ static inline void MergeToolEntry(NSMutableArray *tools, NSString *name, int64_t
     }];
 }
 
-// ===== 直连 CLI 会话用量扫描（零假数据：只统计真实会话文件） =====
-// tokenusage.db 的聚合依赖采集器运行，长期为 0；顶栏使用情况必须直接读取
-// 各 CLI 的本地会话文件才能如实反映用量：
-//   Codex: ~/.codex/sessions/**/rollout-*.jsonl —— event_msg/token_count 的
-//          info.total_token_usage 为会话累计值，取文件内最后一条；缺失时累加
-//          token_usage_record 的 payload.usage。日期取自文件名 rollout-YYYY-MM-DD-…
-//   pi:    ~/.pi/agent/sessions/*/*.jsonl —— message.usage 为逐响应用量，逐条累加；
-//          日期取自文件名前缀 YYYY-MM-DD
-// 成本沿用 ZCode 合并的同一启发式口径（input*1.5 + output*6 计为 micros），
-// pi 优先采用其自带的真实 cost.total。
-// 返回：byDate[@"YYYY-MM-DD"][toolName] = @{@"tokens": n, @"micros": m}，30s 记忆缓存。
-static inline void NativeUsageAccumulate(NSMutableDictionary *byDate, NSString *date, NSString *tool, int64_t tokens, int64_t micros) {
-    if (date.length < 10 || tool.length == 0 || tokens <= 0) return;
-    NSString *key = [date substringToIndex:10];
-    // 写时复制：byDate 可能是记忆缓存的浅拷贝（内层字典与缓存共享），
-    // 必须拷贝内层后再写，严禁原地改写共享字典导致跨调用叠加
-    NSMutableDictionary *tools = [byDate[key] mutableCopy] ?: [NSMutableDictionary dictionary];
-    NSDictionary *cur = tools[tool] ?: @{ @"tokens": @0, @"micros": @0 };
-    tools[tool] = @{ @"tokens": @([cur[@"tokens"] longLongValue] + tokens),
-                     @"micros": @([cur[@"micros"] longLongValue] + micros) };
-    byDate[key] = tools;
-}
-
-// Codex 会话文件扫描（按 thread 去重，防 resume 续写文件重复计费）：
-// - event_msg/token_count 的 info.total_token_usage 为会话累计值，同一 thread 跨
-//   多个续写文件时取最大累计（而非按文件求和）；info 可能为 null，逐级判型
-// - 文件无累计值时回退 token_usage_record 的逐响应用量，按 response_id 全局去重
-//   （resume 重放的历史响应不会重复计入）
-static inline void ScanCodexSessionFile(NSString *path, NSMutableDictionary *threadAcc) {
-    NSString *name = path.lastPathComponent;
-    if (name.length < 18 || ![name hasPrefix:@"rollout-"]) return;
-    NSString *date = [name substringWithRange:NSMakeRange(8, 10)];
-
-    NSFileHandle *fh = [NSFileHandle fileHandleForReadingAtPath:path];
-    if (!fh) return;
-    unsigned long long size = [fh seekToEndOfFile];
-    unsigned long long offset = size > 262144 ? size - 262144 : 0; // 尾部 256KB 足够覆盖会话末尾的累计值
-    [fh seekToFileOffset:offset];
-    NSData *data = [fh readDataToEndOfFile];
-    [fh closeFile];
-    NSString *text = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-    if (!text) return;
-    NSArray *lines = [text componentsSeparatedByString:@"\n"];
-
-    NSString *threadId = nil;
-    int64_t cumTotal = 0, cumIn = 0, cumOut = 0;
-    int64_t recTokens = 0, recMicros = 0;
-    NSMutableSet *seenResponses = nil;
-    NSUInteger startIdx = offset > 0 ? 1 : 0; // 尾读时首行可能被截断
-    for (NSUInteger i = startIdx; i < lines.count; i++) {
-        NSData *lineData = [lines[i] dataUsingEncoding:NSUTF8StringEncoding];
-        if (!lineData) continue;
-        NSDictionary *obj = [NSJSONSerialization JSONObjectWithData:lineData options:0 error:nil];
-        if (![obj isKindOfClass:[NSDictionary class]]) continue;
-        NSDictionary *payload = [obj[@"payload"] isKindOfClass:[NSDictionary class]] ? obj[@"payload"] : nil;
-        NSString *recordThread = [payload[@"thread_id"] isKindOfClass:[NSString class]] ? payload[@"thread_id"] : nil;
-        if (recordThread.length > 0 && !threadId) threadId = recordThread;
-
-        if ([obj[@"type"] isEqualToString:@"event_msg"] && [payload[@"type"] isEqualToString:@"token_count"]) {
-            // info 可能为 null（无 token 统计的回合），逐级判型防止 NSNull 下标崩溃
-            NSDictionary *info = [payload[@"info"] isKindOfClass:[NSDictionary class]] ? payload[@"info"] : nil;
-            NSDictionary *ttu = [info[@"total_token_usage"] isKindOfClass:[NSDictionary class]] ? info[@"total_token_usage"] : nil;
-            int64_t total = [ttu[@"total_tokens"] longLongValue];
-            if (total > cumTotal) { // 累计值单调递增，取最大
-                cumTotal = total;
-                cumIn = [ttu[@"input_tokens"] longLongValue];
-                cumOut = [ttu[@"output_tokens"] longLongValue];
-            }
-        } else if ([obj[@"type"] isEqualToString:@"token_usage_record"] && [payload[@"usage"] isKindOfClass:[NSDictionary class]]) {
-            if (!seenResponses) seenResponses = [NSMutableSet set];
-            NSString *rid = [payload[@"response_id"] isKindOfClass:[NSString class]] ? payload[@"response_id"] : nil;
-            if (rid.length > 0 && [seenResponses containsObject:rid]) continue; // 重放去重
-            if (rid.length > 0) [seenResponses addObject:rid];
-            NSDictionary *u = payload[@"usage"];
-            int64_t in = [u[@"input_tokens"] longLongValue];
-            int64_t out = [u[@"output_tokens"] longLongValue];
-            recTokens += in + out;
-            recMicros += (int64_t)(in * 1.5 + out * 6.0);
-        }
-    }
-    if (!threadId) threadId = name; // 无 thread 信息的旧格式：按文件名兜底去重
-
-    NSMutableDictionary *acc = threadAcc[threadId] ?: [NSMutableDictionary dictionary];
-    if (cumTotal > [acc[@"cum"] longLongValue]) {
-        acc[@"cum"] = @(cumTotal);
-        acc[@"in"] = @(cumIn);
-        acc[@"out"] = @(cumOut);
-        acc[@"date"] = date;
-    }
-    if (recTokens > 0) {
-        acc[@"recT"] = @([acc[@"recT"] longLongValue] + recTokens);
-        acc[@"recM"] = @([acc[@"recM"] longLongValue] + recMicros);
-        acc[@"recDate"] = date;
-    }
-    threadAcc[threadId] = acc;
-}
-
-static inline void ScanPiSessionFile(NSString *path, NSMutableDictionary *byDate) {
-    NSString *name = path.lastPathComponent;
-    if (name.length < 10) return;
-    NSString *date = [name substringToIndex:10];
-    if ([date characterAtIndex:4] != '-') return;
-
-    NSString *text = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
-    if (!text) return;
-    int64_t tokens = 0;
-    double costUsd = 0;
-    for (NSString *line in [text componentsSeparatedByString:@"\n"]) {
-        NSData *lineData = [line dataUsingEncoding:NSUTF8StringEncoding];
-        if (!lineData) continue;
-        NSDictionary *obj = [NSJSONSerialization JSONObjectWithData:lineData options:0 error:nil];
-        if (![obj isKindOfClass:[NSDictionary class]] || ![obj[@"type"] isEqualToString:@"message"]) continue;
-        NSDictionary *usage = [obj[@"message"] isKindOfClass:[NSDictionary class]] ? obj[@"message"][@"usage"] : nil;
-        if (![usage isKindOfClass:[NSDictionary class]]) continue;
-        tokens += [usage[@"totalTokens"] longLongValue];
-        NSDictionary *cost = [usage[@"cost"] isKindOfClass:[NSDictionary class]] ? usage[@"cost"] : nil;
-        double costValue = [cost[@"total"] doubleValue];
-        if (costValue > 0) costUsd += costValue;
-    }
-    NativeUsageAccumulate(byDate, date, @"Pi", tokens, (int64_t)(costUsd * 1000000.0));
-}
-
-static inline NSDictionary *FetchNativeSessionUsageByDate(void) {
-    static NSDictionary *memo = nil;
-    static NSDate *memoAt = nil;
-    static NSObject *lock = nil;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{ lock = [NSObject new]; });
-    @synchronized (lock) {
-        if (memo && memoAt && -[memoAt timeIntervalSinceNow] < 30.0) return memo;
-
-        NSMutableDictionary *byDate = [NSMutableDictionary dictionary];
-        NSMutableDictionary *threadAcc = [NSMutableDictionary dictionary];
-        NSString *home = NSHomeDirectory();
-        NSArray *roots = @[
-            [home stringByAppendingPathComponent:@".codex/sessions"],
-            [home stringByAppendingPathComponent:@".pi/agent/sessions"],
-        ];
-        NSFileManager *fm = [NSFileManager defaultManager];
-        for (NSString *root in roots) {
-            NSDirectoryEnumerator *enumerator = [fm enumeratorAtURL:[NSURL fileURLWithPath:root]
-                                                 includingPropertiesForKeys:@[NSURLIsDirectoryKey]
-                                                                    options:0
-                                                               errorHandler:nil];
-            for (NSURL *url in enumerator) {
-                NSNumber *isDir = nil;
-                [url getResourceValue:&isDir forKey:NSURLIsDirectoryKey error:nil];
-                if (isDir.boolValue) continue;
-                NSString *name = url.lastPathComponent;
-                if ([name hasPrefix:@"rollout-"] && [name hasSuffix:@".jsonl"]) {
-                    ScanCodexSessionFile(url.path, threadAcc);
-                } else if (name.length >= 11 && [name characterAtIndex:4] == '-' && [name hasSuffix:@".jsonl"]) {
-                    ScanPiSessionFile(url.path, byDate);
-                }
-            }
-        }
-        // Codex 按 thread 折叠：有会话累计值取最大累计（续写文件不重复计费）；
-        // 无累计值的线程回退到 response_id 去重后的逐响应求和
-        for (NSString *threadId in threadAcc) {
-            NSDictionary *acc = threadAcc[threadId];
-            if ([acc[@"cum"] longLongValue] > 0) {
-                int64_t micros = (int64_t)([acc[@"in"] longLongValue] * 1.5 + [acc[@"out"] longLongValue] * 6.0);
-                NativeUsageAccumulate(byDate, acc[@"date"], @"Codex", [acc[@"cum"] longLongValue], micros);
-            } else if ([acc[@"recT"] longLongValue] > 0) {
-                NativeUsageAccumulate(byDate, acc[@"recDate"], @"Codex", [acc[@"recT"] longLongValue], [acc[@"recM"] longLongValue]);
-            }
-        }
-        // 内层以不可变快照入缓存：外部浅拷贝后写时复制，缓存永不被污染
-        NSMutableDictionary *frozen = [NSMutableDictionary dictionary];
-        for (NSString *dateKey in byDate) {
-            frozen[dateKey] = [byDate[dateKey] copy];
-        }
-        memo = [frozen copy];
-        memoAt = [NSDate date];
-        return memo;
-    }
-}
-
+// 兜底本地状态读取（纯 tokenusage.db 只读；与 Rust panel_json 同库同口径）：
 static inline NSDictionary *FetchStateFromLocalSqlite(void) {
     NSString *dbPath = LocateTokenUsageDbPath();
     if (!dbPath) return nil;
@@ -689,123 +560,13 @@ static inline NSDictionary *FetchStateFromLocalSqlite(void) {
         sqlite3_finalize(stmt);
     }
 
-    // 5) 查询并合并 ZCode 本地全量用量数据 (~/.zcode/cli/db/db.sqlite)
-    // ZCode 按日期用量：并入直连扫描通道，供周期分解与趋势图统一消费
-    NSMutableDictionary *zcodeByDate = [NSMutableDictionary dictionary];
-    NSMutableArray *zcodeSessions = [NSMutableArray array];
-
-    NSString *home = NSHomeDirectory();
-    NSString *zcodeDbPath = [home stringByAppendingPathComponent:@".zcode/cli/db/db.sqlite"];
-    if ([[NSFileManager defaultManager] fileExistsAtPath:zcodeDbPath]) {
-        sqlite3 *zdb = NULL;
-        if (sqlite3_open_v2([zcodeDbPath UTF8String], &zdb, SQLITE_OPEN_READONLY, NULL) == SQLITE_OK) {
-            sqlite3_stmt *zstmt = NULL;
-
-            const char *qZSess = "SELECT session_id, count(*), sum(computed_total_tokens), "
-                                 "sum(input_tokens * 1.5 + output_tokens * 6.0), max(started_at) "
-                                 "FROM model_usage GROUP BY session_id ORDER BY max(started_at) DESC LIMIT 5";
-            if (sqlite3_prepare_v2(zdb, qZSess, -1, &zstmt, NULL) == SQLITE_OK) {
-                while (sqlite3_step(zstmt) == SQLITE_ROW) {
-                    const unsigned char *sid = sqlite3_column_text(zstmt, 0);
-                    int64_t t = sqlite3_column_int64(zstmt, 2);
-                    double c = sqlite3_column_double(zstmt, 3);
-                    int64_t ts = sqlite3_column_int64(zstmt, 4);
-                    NSDate *d = [NSDate dateWithTimeIntervalSince1970:ts / 1000.0];
-                    NSString *actStr = [df stringFromDate:d];
-                    [zcodeSessions addObject:@{
-                        @"id": sid ? [NSString stringWithUTF8String:(const char *)sid] : @"",
-                        @"source": @"zcode",
-                        @"totalTokens": @(t),
-                        @"costUsd": @(c / 1000000.0),
-                        @"lastActive": actStr ?: @""
-                    }];
-                }
-                sqlite3_finalize(zstmt);
-            }
-
-            // 按日期聚合 ZCode 用量：与直连 CLI 扫描走同一合并通道，保证
-            // 周期分解与趋势图的口径一致
-            const char *qZByDate = "SELECT date(started_at / 1000, 'unixepoch', 'localtime'), "
-                                   "SUM(computed_total_tokens), SUM(input_tokens * 1.5 + output_tokens * 6.0) "
-                                   "FROM model_usage GROUP BY 1";
-            if (sqlite3_prepare_v2(zdb, qZByDate, -1, &zstmt, NULL) == SQLITE_OK) {
-                while (sqlite3_step(zstmt) == SQLITE_ROW) {
-                    const unsigned char *dateChars = sqlite3_column_text(zstmt, 0);
-                    NSString *date = dateChars ? [NSString stringWithUTF8String:(const char *)dateChars] : @"";
-                    NativeUsageAccumulate(zcodeByDate, date, @"ZCode",
-                                          sqlite3_column_int64(zstmt, 1), sqlite3_column_int64(zstmt, 2));
-                }
-                sqlite3_finalize(zstmt);
-            }
-            sqlite3_close(zdb);
-        }
-    }
-
-    // 直连 CLI 会话用量（Codex / pi 等）+ ZCode 按日期用量：补齐 tokenusage 库未覆盖的真实数据。
-    // 按日期聚合到四个周期：日期字符串比较与上方 SQL 的 date >= ? 口径一致
-    NSMutableDictionary *nativeByDate = [FetchNativeSessionUsageByDate() mutableCopy] ?: [NSMutableDictionary dictionary];
-    for (NSString *date in zcodeByDate) {
-        NSDictionary *tools = zcodeByDate[date];
-        for (NSString *tool in tools) {
-            NativeUsageAccumulate(nativeByDate, date, tool,
-                                  [tools[tool][@"tokens"] longLongValue], [tools[tool][@"micros"] longLongValue]);
-        }
-    }
-    NSMutableDictionary *nativeToday = [NSMutableDictionary dictionary];
-    NSMutableDictionary *nativeWeek = [NSMutableDictionary dictionary];
-    NSMutableDictionary *nativeMonth = [NSMutableDictionary dictionary];
-    NSMutableDictionary *nativeAll = [NSMutableDictionary dictionary];
-    for (NSString *date in nativeByDate) {
-        NSDictionary *toolsOnDate = nativeByDate[date];
-        for (NSString *tool in toolsOnDate) {
-            NSDictionary *v = toolsOnDate[tool];
-            int64_t t = [v[@"tokens"] longLongValue];
-            int64_t m = [v[@"micros"] longLongValue];
-            if (t <= 0) continue;
-            void (^accumulate)(NSMutableDictionary *) = ^(NSMutableDictionary *bucket) {
-                NSDictionary *cur = bucket[tool] ?: @{ @"tokens": @0, @"micros": @0 };
-                bucket[tool] = @{ @"tokens": @([cur[@"tokens"] longLongValue] + t),
-                                  @"micros": @([cur[@"micros"] longLongValue] + m) };
-            };
-            accumulate(nativeAll);
-            if ([date compare:todayStr] >= 0) accumulate(nativeToday);
-            if ([date compare:weekStr] >= 0) accumulate(nativeWeek);
-            if ([date compare:monthStr] >= 0) accumulate(nativeMonth);
-        }
-    }
-    void (^mergeNativeTotals)(NSDictionary *, int64_t *, int64_t *) = ^(NSDictionary *bucket, int64_t *tokensOut, int64_t *microsOut) {
-        for (NSString *tool in bucket) {
-            *tokensOut += [bucket[tool][@"tokens"] longLongValue];
-            *microsOut += [bucket[tool][@"micros"] longLongValue];
-        }
-    };
-    mergeNativeTotals(nativeToday, &todayTokens, &todayCostMicros);
-    mergeNativeTotals(nativeWeek, &weekTokens, &weekCostMicros);
-    mergeNativeTotals(nativeMonth, &monthTokens, &monthCostMicros);
-    mergeNativeTotals(nativeAll, &allTokens, &allCostMicros);
-
-    // 按周期的工具分解：today / thisWeek / thisMonth / allTime，各周期合并直连 CLI 与 DB 用量
+    // 5) 工具分解：与 modules/tokenusage/src/api/stats.rs tools_decomposed 口径 1:1 对齐
     NSMutableArray *toolsAll = FetchToolDecomposition(db, nil, nil);
     NSMutableArray *toolsToday = FetchToolDecomposition(db, @"d.date >=", todayStr);
     NSMutableArray *toolsWeek = FetchToolDecomposition(db, @"d.date >=", weekStr);
     NSMutableArray *toolsMonth = FetchToolDecomposition(db, @"d.date >=", monthStr);
-    for (NSString *tool in nativeToday) {
-        MergeToolEntry(toolsToday, tool, [nativeToday[tool][@"tokens"] longLongValue], [nativeToday[tool][@"micros"] longLongValue] / 1000000.0);
-    }
-    for (NSString *tool in nativeWeek) {
-        MergeToolEntry(toolsWeek, tool, [nativeWeek[tool][@"tokens"] longLongValue], [nativeWeek[tool][@"micros"] longLongValue] / 1000000.0);
-    }
-    for (NSString *tool in nativeMonth) {
-        MergeToolEntry(toolsMonth, tool, [nativeMonth[tool][@"tokens"] longLongValue], [nativeMonth[tool][@"micros"] longLongValue] / 1000000.0);
-    }
-    for (NSString *tool in nativeAll) {
-        MergeToolEntry(toolsAll, tool, [nativeAll[tool][@"tokens"] longLongValue], [nativeAll[tool][@"micros"] longLongValue] / 1000000.0);
-    }
-    NSMutableArray *tools = toolsAll; // 兼容旧字段：全量分解
-    NSDictionary *toolsByPeriod = @{@"today": toolsToday, @"thisWeek": toolsWeek,
-                                    @"thisMonth": toolsMonth, @"allTime": toolsAll};
 
-    // 6) sessions: 合并 ZCode 会话与日常会话，按最近活跃时间倒序
+    // 6) sessions: 最近会话 Top5（1:1 对齐 Rust panel_json）
     NSMutableArray *sessions = [NSMutableArray array];
     const char *qSess = "SELECT session_id, source_id, "
                         "total_input_tokens + total_output_tokens + total_cache_read_tokens + total_cache_write_tokens + total_reasoning_tokens, "
@@ -828,15 +589,8 @@ static inline NSDictionary *FetchStateFromLocalSqlite(void) {
         }
         sqlite3_finalize(stmt);
     }
-    [sessions addObjectsFromArray:zcodeSessions];
-    [sessions sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
-        return [b[@"lastActive"] compare:a[@"lastActive"]];
-    }];
-    if (sessions.count > 5) {
-        sessions = [[sessions subarrayWithRange:NSMakeRange(0, 5)] mutableCopy];
-    }
 
-    // 7) trends Top 7
+    // 7) trends Top 7（1:1 对齐 Rust panel_json）
     NSMutableArray *trends = [NSMutableArray array];
     const char *qTrends = "SELECT date, SUM(total_tokens), SUM(cost_micros) FROM daily_aggregates "
                           "GROUP BY date ORDER BY date DESC LIMIT 7";
@@ -854,42 +608,18 @@ static inline NSDictionary *FetchStateFromLocalSqlite(void) {
         sqlite3_finalize(stmt);
     }
 
-    // 趋势并入直连 CLI 会话用量：DB 行缺失或为 0 的日期以本地扫描为准，
-    // DB 已有真实行（采集器运行过）时以 DB 为准，避免双重计入
-    if (nativeByDate.count > 0) {
-        NSMutableDictionary *byDate = [NSMutableDictionary dictionary];
-        for (NSDictionary *row in trends) {
-            byDate[row[@"date"]] = row;
-        }
-        for (NSString *date in nativeByDate) {
-            int64_t tokens = 0;
-            int64_t micros = 0;
-            for (NSString *tool in nativeByDate[date]) {
-                tokens += [nativeByDate[date][tool][@"tokens"] longLongValue];
-                micros += [nativeByDate[date][tool][@"micros"] longLongValue];
-            }
-            NSDictionary *dbRow = byDate[date];
-            int64_t dbTokens = [dbRow[@"totalTokens"] longLongValue];
-            if (dbRow == nil || dbTokens < tokens) {
-                byDate[date] = @{@"date": date, @"totalTokens": @(tokens),
-                                 @"costUsd": @((double)micros / 1000000.0)};
-            }
-        }
-        trends = [[byDate allValues] mutableCopy];
-        [trends sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
-            return [b[@"date"] compare:a[@"date"]];
-        }];
-        if (trends.count > 7) {
-            trends = [[trends subarrayWithRange:NSMakeRange(0, 7)] mutableCopy];
-        }
-    }
+    // ZCode 直读兜底已退役（审计 B2）：tokenusage.db 经 host_sync 持续同步
+    // model-host 权威库（ZCode SQLite 采集器），统一库即唯一面板数据源。
+    NSDictionary *toolsByPeriod = @{@"today": toolsToday, @"thisWeek": toolsWeek,
+                                    @"thisMonth": toolsMonth, @"allTime": toolsAll};
 
     // 8) worstLimit: 从真实额度窗口中提取最紧张余量；无真实数据时保持 nil（不造假）
     NSDictionary *worstLimit = nil;
     NSArray *accountsList = FetchLimitsFromLocalSqlite();
     double lowestPct = 101.0;
     for (NSDictionary *acc in accountsList) {
-        NSArray *wins = [acc[@"windows"] isKindOfClass:[NSArray class]] ? acc[@"windows"] : @[];
+        NSArray *wins = acc[@"windows"];
+        if (![wins isKindOfClass:[NSArray class]]) continue;
         for (NSDictionary *w in wins) {
             id pctVal = w[@"pct"];
             if (![pctVal isKindOfClass:[NSNumber class]]) continue;
@@ -906,7 +636,7 @@ static inline NSDictionary *FetchStateFromLocalSqlite(void) {
         }
     }
 
-    // 9) 最近活跃日数据
+    // 9) 最近活跃日数据（与 Rust api_tray_state 口径一致：今日为 0 时回退最近活跃日）
     int64_t dispTokens = todayTokens;
     double dispCost = (double)todayCostMicros / 1000000.0;
     if (dispTokens == 0) {
@@ -947,7 +677,7 @@ static inline NSDictionary *FetchStateFromLocalSqlite(void) {
             @"totalTokens": @(allTokens),
             @"costUsd": @((double)allCostMicros / 1000000.0)
         },
-        @"tools": tools,
+        @"tools": toolsAll,
         @"toolsByPeriod": toolsByPeriod,
         @"sessions": sessions,
         @"trends": trends
@@ -961,3 +691,4 @@ static inline NSDictionary *FetchStateFromLocalSqlite(void) {
         @"panel": panel
     };
 }
+

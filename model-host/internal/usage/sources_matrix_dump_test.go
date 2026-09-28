@@ -80,11 +80,11 @@ var cellReasons = map[string][6]string{ // HIST, LIVE, BILL, QUOTA, ATTR, NOTIF
 		"无事件来源（产品限制）",
 	},
 	"grok-build": {
-		"2026-09-12 键名级审计（CLI 0.2.118）：chat_history/events.jsonl/summary.json 均无 usage/token/cost 字段；memtrace 仅心跳。无计量来源（产品限制，有审计证据）",
+		"", // IMPL：grok-session/1 updates.jsonl turn_completed 终态用量（2026-09-27 重新核验，CLI 更新后新增结构化 usage）
 		"events.jsonl 无结构化用量事件（产品限制）",
 		"Provider/账单回退无本机数据",
 		"无额度来源",
-		"无结构化 session 归因字段（产品限制）",
+		"sessionId/prompt_id/eventId 稳定归属可用；modelUsage 按模型拆分",
 		"无结束/等待事件（产品限制）",
 	},
 	"openclaw": {

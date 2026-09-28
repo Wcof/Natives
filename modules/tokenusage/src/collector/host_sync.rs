@@ -57,7 +57,7 @@ fn normalize_source_id(tool_id: &str, source: &str) -> &'static str {
         "grok" | "grok-build" => "grok",
         "copilot" => "copilot",
         "atomcode" => "atomcode",
-        "zcode" => "zcode",
+        "zcode" | "ZCode" => "zcode",
         "zed" => "zed",
         _ if s.is_empty() => "local-proxy",
         _ => "other",

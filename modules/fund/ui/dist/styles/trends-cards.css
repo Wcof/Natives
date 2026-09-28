@@ -81,8 +81,8 @@
 }
 .hs-btn {
   padding: 3px 8px; font-size: 11px;
-  background: #1a1a1a; border: 1px solid #2a2a2a;
-  color: #888; cursor: pointer; border-radius: 3px;
+  background: var(--natives-surface-2); border: 1px solid var(--natives-border);
+  color: var(--natives-text-muted); cursor: pointer; border-radius: 3px;
   transition: all 0.1s; white-space: nowrap;
 }
 .hs-btn:hover { color: var(--natives-accent); border-color: var(--natives-accent); background: rgba(205, 242, 75, 0.12); }
@@ -169,15 +169,15 @@
 
 /* ===== 右栏信号面板滚动条适配 ===== */
 .right-panel ::-webkit-scrollbar { width: 6px; }
-.right-panel ::-webkit-scrollbar-track { background: #0a0a0a; }
-.right-panel ::-webkit-scrollbar-thumb { background: #333; border-radius: 3px; }
+.right-panel ::-webkit-scrollbar-track { background: var(--natives-surface-2); }
+.right-panel ::-webkit-scrollbar-thumb { background: var(--natives-border); border-radius: 3px; }
 
 /* ===== 自选/历史功能 ===== */
 .watch-wrap { position: relative; display: flex; align-items: center; gap: 4px; }
 .wc-btn {
   padding: 3px 8px; font-size: 11px;
-  background: #1a1a1a; border: 1px solid #2a2a2a;
-  color: #888; cursor: pointer; border-radius: 3px;
+  background: var(--natives-surface-2); border: 1px solid var(--natives-border);
+  color: var(--natives-text-muted); cursor: pointer; border-radius: 3px;
   transition: all 0.1s; white-space: nowrap;
   display: flex; align-items: center; gap: 3px;
 }
@@ -195,14 +195,14 @@
 /* 下拉面板 */
 .wp-panel {
   position: absolute; top: 42px; right: 0; z-index: 300;
-  background: #1a1a1a; border: 1px solid #333;
+  background: var(--natives-surface); border: 1px solid var(--natives-border);
   border-radius: 0 0 8px 8px; width: 320px;
   max-height: 460px; display: none;
-  box-shadow: 0 6px 20px rgba(0,0,0,0.7);
+  box-shadow: 0 6px 20px rgba(0,0,0,0.18);
   flex-direction: column;
 }
 .wp-panel.show { display: flex; }
-.wp-tabs { display: flex; border-bottom: 1px solid #222; }
+.wp-tabs { display: flex; border-bottom: 1px solid var(--natives-border); }
 .wp-tab {
   flex: 1; padding: 8px 12px; font-size: 12px;
   background: transparent; border: none; color: #666;
@@ -316,14 +316,14 @@
 
 /* ===== 技术指标副图 ===== */
 #indicator-chart { width: 100%; height: 90px; flex-shrink: 0; display: none; }
-.indicator-toolbar { display: flex; align-items: center; gap: 2px; padding: 2px 12px; background: #0d0d0d; border-bottom: 1px solid #1a1a1a; flex-shrink: 0; }
+.indicator-toolbar { display: flex; align-items: center; gap: 2px; padding: 2px 12px; background: var(--natives-surface-3); border-bottom: 1px solid var(--natives-border); flex-shrink: 0; }
 .it-btn {
   padding: 2px 8px; font-size: 10px;
   background: transparent; border: 1px solid transparent;
-  color: #666; cursor: pointer; border-radius: 3px;
+  color: var(--natives-text-muted); cursor: pointer; border-radius: 3px;
   transition: all 0.1s;
 }
-.it-btn:hover { color: #aaa; background: #1a1a1a; }
+.it-btn:hover { color: var(--natives-text-primary); background: var(--natives-surface-2); }
 .it-btn.active { color: var(--natives-accent); border-color: var(--natives-accent); background: rgba(205, 242, 75, 0.12); }
 
 /* ===== 多股一览 ===== */

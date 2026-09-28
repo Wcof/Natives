@@ -1,0 +1,118 @@
+{
+ "kline_count": 43,
+ "fractal_count": 4,
+ "stroke_count": 3,
+ "current_state": "\u5411\u4e0b\u7b14\u5e95\u80cc\u9a70\uff0c\u6ce8\u610f\u4e00\u7c7b\u4e70\u70b9\u98ce\u9669\uff0c\u6700\u8fd1buy1\u4fe1\u53f7\u572814:20",
+ "summary": "\u6700\u65b0\u4fe1\u53f7\uff1a\u4e00\u7c7b\u4e70\u70b9@10.81",
+ "description": "\u51714\u4e2a\u5206\u578b\u30013\u7b14\u30011\u4e2a\u4fe1\u53f7\u3002\u5411\u4e0b\u7b14\u5e95\u80cc\u9a70\uff0c\u6ce8\u610f\u4e00\u7c7b\u4e70\u70b9\u98ce\u9669\uff0c\u6700\u8fd1buy1\u4fe1\u53f7\u572814:20",
+ "signals": [
+  {
+   "type": "buy1",
+   "type_name": "\u4e00\u7c7b\u4e70\u70b9",
+   "price": 10.81,
+   "time": "14:20",
+   "description": "\u4e00\u7c7b\u4e70\u70b9\uff1a\u5e95\u80cc\u9a70\uff0cMACD\u9762\u79ef1.12\u8f83\u524d\u7b14\u8870\u51cf\uff0c\u7a7a\u5934\u529b\u5ea6\u8870\u7aed",
+   "confidence": 84
+  }
+ ],
+ "fractals": [
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 12.86,
+   "time": "10:34"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 10.92,
+   "time": "11:19"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 12.65,
+   "time": "13:50"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 10.81,
+   "time": "14:20"
+  }
+ ],
+ "strokes": [
+  {
+   "direction": "down",
+   "start_price": 12.86,
+   "end_price": 10.92,
+   "start_time": "10:34",
+   "end_time": "11:19",
+   "macd_area": 2.8084,
+   "has_divergence": false
+  },
+  {
+   "direction": "up",
+   "start_price": 10.92,
+   "end_price": 12.65,
+   "start_time": "11:19",
+   "end_time": "13:50",
+   "macd_area": 2.9452,
+   "has_divergence": false
+  },
+  {
+   "direction": "down",
+   "start_price": 12.65,
+   "end_price": 10.81,
+   "start_time": "13:50",
+   "end_time": "14:20",
+   "macd_area": 1.1233,
+   "has_divergence": true
+  }
+ ],
+ "macd_bar": [
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.283077,
+  0.406911,
+  0.441294,
+  0.423913,
+  0.347412,
+  0.233245,
+  0.12417,
+  -0.02487,
+  -0.186532,
+  -0.336995,
+  -0.362016,
+  -0.348122,
+  -0.323082,
+  -0.291268,
+  -0.189386,
+  -0.110763,
+  -0.031443,
+  0.035294,
+  0.102052,
+  0.148498,
+  0.190928,
+  0.221798,
+  0.253511,
+  0.227351,
+  0.151732,
+  0.057665,
+  -0.043164,
+  -0.150507,
+  -0.239369,
+  -0.243798,
+  -0.211109
+ ]
+}

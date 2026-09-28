@@ -4,12 +4,46 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"os"
 	"strings"
+	"time"
 
 	"github.com/ldh/natives/model-host/internal/authfiles"
 	"github.com/ldh/natives/model-host/internal/domain"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 )
+
+// Google Antigravity 公共 OAuth client 标识：Google 公开发布、随上游
+// CLIProxyAPI（third_party/cliproxyapi，同值）开源分发的 client 凭据，
+// 不属于用户 Secret（refresh/access token 才是，始终只在 OS Keychain，R-S4）。
+// 豁免依据与轮换结论见 docs/adr/0034-google-public-oauth-client-exemption.md。
+// 仓库内只保留占位符；真实值通过环境变量 NATIVES_ANTIGRAVITY_OAUTH_CLIENT_ID /
+// NATIVES_ANTIGRAVITY_OAUTH_CLIENT_SECRET 在本机注入（不入库、不被 git 追踪）。
+const (
+	antigravityOAuthClientIDEnv     = "NATIVES_ANTIGRAVITY_OAUTH_CLIENT_ID"
+	antigravityOAuthClientSecretEnv = "NATIVES_ANTIGRAVITY_OAUTH_CLIENT_SECRET"
+	antigravityOAuthClientIDDefault = "OAUTH_CLIENT_ID_PLACEHOLDER"
+	antigravityOAuthClientSecretDef = "GOCSPX-LOCAL-ONLY-REDACTED"
+)
+
+func antigravityOAuthCredentials() (clientID string, clientSecret string, err error) {
+	clientID = strings.TrimSpace(os.Getenv(antigravityOAuthClientIDEnv))
+	clientSecret = strings.TrimSpace(os.Getenv(antigravityOAuthClientSecretEnv))
+	if clientID == "" {
+		clientID = antigravityOAuthClientIDDefault
+	}
+	if clientSecret == "" {
+		clientSecret = antigravityOAuthClientSecretDef
+	}
+	if strings.Contains(clientID, "PLACEHOLDER") || strings.Contains(clientSecret, "REDACTED") {
+		return "", "", errors.New("antigravity oauth client credentials not configured; set NATIVES_ANTIGRAVITY_OAUTH_CLIENT_ID / NATIVES_ANTIGRAVITY_OAUTH_CLIENT_SECRET")
+	}
+	return clientID, clientSecret, nil
+}
 
 type importAuthFileParams struct {
 	Name    string `json:"name"`
@@ -198,17 +232,26 @@ func (e *Engine) queryQuota(ctx context.Context, raw json.RawMessage) (any, erro
 
 	// OAuth credentials are stored as one JSON payload in Keychain.
 	accountLabel := ""
+	var matchedCred *coreauth.Auth
 	if token == "" {
 		credentials, err := e.authStore.List(ctx)
 		if err != nil {
 			return nil, err
 		}
-		token, extraJSON, accountLabel = oauthQuotaCredential(credentials, p.Provider, p.AccountID)
+		token, extraJSON, accountLabel, matchedCred = oauthQuotaCredential(credentials, p.Provider, p.AccountID)
 	}
 	if strings.TrimSpace(token) == "" {
 		return nil, &SafeError{Code: "secret_not_configured", Message: "账户凭证不存在，请重新授权"}
 	}
 	result, queryErr := e.quotaClient.Query(ctx, p.Provider, p.Name, token, extraJSON)
+	// 如果查询遇到 401（未认证/token过期），且为 antigravity 且有 refresh_token，自动换发新令牌重试并写回 Keychain
+	if (queryErr != nil || (result != nil && result.Status == "error" && strings.Contains(result.Error, "401"))) &&
+		strings.EqualFold(p.Provider, "antigravity") && matchedCred != nil {
+		if newTok, rErr := refreshAntigravityOAuthToken(ctx, matchedCred); rErr == nil && newTok != "" {
+			_, _ = e.authStore.Save(ctx, matchedCred)
+			result, queryErr = e.quotaClient.Query(ctx, p.Provider, p.Name, newTok, extraJSON)
+		}
+	}
 	if queryErr == nil && result != nil {
 		if result.Account == "" {
 			result.Account = accountLabel
@@ -219,7 +262,63 @@ func (e *Engine) queryQuota(ctx context.Context, raw json.RawMessage) (any, erro
 	return result, queryErr
 }
 
-func oauthQuotaCredential(credentials []*coreauth.Auth, provider, accountID string) (string, string, string) {
+func refreshAntigravityOAuthToken(ctx context.Context, cred *coreauth.Auth) (string, error) {
+	if cred == nil || cred.Metadata == nil {
+		return "", errors.New("missing credential metadata")
+	}
+	refreshToken, _ := cred.Metadata["refresh_token"].(string)
+	if strings.TrimSpace(refreshToken) == "" {
+		return "", errors.New("missing refresh token")
+	}
+
+	clientID, clientSecret, credErr := antigravityOAuthCredentials()
+	if credErr != nil {
+		return "", credErr
+	}
+
+	form := url.Values{}
+	form.Set("client_id", clientID)
+	form.Set("client_secret", clientSecret)
+	form.Set("grant_type", "refresh_token")
+	form.Set("refresh_token", refreshToken)
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://oauth2.googleapis.com/token", strings.NewReader(form.Encode()))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("User-Agent", "Go-http-client/2.0")
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 32*1024))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("token refresh HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(bodyBytes)))
+	}
+
+	var data struct {
+		AccessToken string `json:"access_token"`
+		ExpiresIn   int64  `json:"expires_in"`
+	}
+	if err := json.Unmarshal(bodyBytes, &data); err != nil || data.AccessToken == "" {
+		return "", errors.New("invalid token refresh response")
+	}
+
+	cred.Metadata["access_token"] = data.AccessToken
+	now := time.Now()
+	cred.Metadata["timestamp"] = now.UnixMilli()
+	if data.ExpiresIn > 0 {
+		cred.Metadata["expired"] = now.Add(time.Duration(data.ExpiresIn) * time.Second).Format(time.RFC3339)
+	}
+	return data.AccessToken, nil
+}
+
+func oauthQuotaCredential(credentials []*coreauth.Auth, provider, accountID string) (string, string, string, *coreauth.Auth) {
 	accountLabel := ""
 	for _, credential := range credentials {
 		if accountID != "" && credential.ID != accountID {
@@ -232,13 +331,13 @@ func oauthQuotaCredential(credentials []*coreauth.Auth, provider, accountID stri
 		projectID, _ := credential.Metadata["project_id"].(string)
 		accountLabel = credential.Label
 		if projectID == "" {
-			return token, "", accountLabel
+			return token, "", accountLabel, credential
 		}
 		project, err := json.Marshal(map[string]string{"project_id": projectID})
 		if err != nil {
-			return token, "", accountLabel
+			return token, "", accountLabel, credential
 		}
-		return token, string(project), accountLabel
+		return token, string(project), accountLabel, credential
 	}
-	return "", "", accountLabel
+	return "", "", accountLabel, nil
 }

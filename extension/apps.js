@@ -377,23 +377,36 @@ export function createAppCenter({
     const stage = document.getElementById('app-stage');
     if (!stage) return openAppExternal(entry);
     const head = document.querySelector('.apps-content-head');
-    if (embeddedShell && embeddedAppId === appId) {
+    // 若当前会话已经建立且正常存活，直接展示已有舞台，0ms 秒级恢复复用，无需重起进程
+    if (embeddedShell && embeddedAppId === appId && embeddedShell.hasSession) {
       list.hidden = true;
       if (head) head.hidden = true;
       stage.hidden = false;
       return;
     }
-    closeEmbedded();
+    // 切换到另一个不同的应用时，先关闭已有会话释放锁
+    if (embeddedShell && embeddedAppId !== appId) {
+      closeEmbedded();
+    }
     list.hidden = true;
     if (head) head.hidden = true;
     stage.hidden = false;
     embeddedAppId = appId;
-    embeddedShell = createAppShell({ appId, stage });
-    void embeddedShell.open();
+    if (!embeddedShell || !embeddedShell.hasSession) {
+      embeddedShell = createAppShell({ appId, stage });
+      void embeddedShell.open();
+    }
   }
   function parseEmbeddedAppId(entry) {
     const route = entry.entryRoute || '';
     return new URLSearchParams(route.split('?')[1] || '').get('app') || entry.appId || '';
+  }
+  function hideEmbedded() {
+    const stage = document.getElementById('app-stage');
+    if (stage) stage.hidden = true;
+    const head = document.querySelector('.apps-content-head');
+    if (head) head.hidden = false;
+    if (list) list.hidden = false;
   }
   function closeEmbedded() {
     embeddedShell?.dispose?.();
@@ -449,7 +462,7 @@ export function createAppCenter({
   const back = document.getElementById('nav-back');
   if (back) back.onclick = () => { dispose(); globalThis.location.assign('space.html'); };
   const navCenter = document.getElementById('nav-center');
-  if (navCenter) navCenter.onclick = () => { closeEmbedded(); };
+  if (navCenter) navCenter.onclick = () => { hideEmbedded(); };
 
   // 侧栏折叠：与空间模块同一交互（按钮 / ⌘B，状态持久化）。
   // 折叠后整个侧栏隐藏，左上角浮动 icon 按钮负责重新展开。

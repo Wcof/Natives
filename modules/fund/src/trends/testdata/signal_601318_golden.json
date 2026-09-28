@@ -1,0 +1,169 @@
+{
+  "action": "观望",
+  "score": 48,
+  "confidence": 22,
+  "risk_level": "中",
+  "signal_strength": "弱",
+  "plain_summary": "建议观望，处于下降趋势。建议耐心等待信号明确后再操作。",
+  "trade_plan": {
+    "action": "观望",
+    "entry_price": 52.58,
+    "stop_loss": 49.95,
+    "target_price": 57.81,
+    "position_size": "空仓等待",
+    "holding_period": "中线(1-3月)",
+    "risk_reward_ratio": 2.0,
+    "max_loss_pct": 5.0,
+    "notes": "系统一(20日)：持仓中(突破价52.88)，止损55.07"
+  },
+  "module_scores": {
+    "趋势": 25,
+    "形态": 62,
+    "量价": 50,
+    "突破": 60,
+    "CAN_SLIM": 56
+  },
+  "buy_signals": [
+    "头肩底(形成中)",
+    "系统一(20日)持仓(N=1.09，止损55.07)",
+    "N(新高/形态)75分"
+  ],
+  "sell_signals": [],
+  "risk_warnings": [
+    "处于下降趋势"
+  ],
+  "key_levels": {
+    "头肩底_颈线": 54.0,
+    "头肩底_头部": 50.19,
+    "系统一(20日)_止损": 55.07,
+    "系统二(55日)_止损": 55.41,
+    "杯柄买点": 58.01
+  },
+  "description": "综合48分 | 趋势=下降(25) | 量价=价平量平(50) | 突破=60 | CS=B(56) | 形态=62",
+  "trend": {
+    "direction": "下降",
+    "strength": 25,
+    "stage": "强势下降趋势",
+    "ma_arrangement": "纠缠",
+    "ma_scores": {
+      "ma20_dir": 0,
+      "ma60_dir": 25,
+      "price_vs_ma20": 0,
+      "price_vs_ma60": 0,
+      "resonance": 0
+    },
+    "trendline": null,
+    "signals": [
+      "MA20向下"
+    ]
+  },
+  "patterns": [
+    {
+      "name": "头肩底",
+      "direction": "看涨",
+      "confidence": 60,
+      "status": "形成中",
+      "target_price": 57.81,
+      "key_levels": {
+        "颈线": 54.0,
+        "头部": 50.19
+      },
+      "description": "底部深度3.81，突破颈线后目标57.81"
+    },
+    {
+      "name": "箱体震荡",
+      "direction": "中性",
+      "confidence": 55,
+      "status": "形成中",
+      "target_price": null,
+      "key_levels": {
+        "箱体上沿": 58.01,
+        "箱体下沿": 52.53
+      },
+      "description": "箱体振幅10.4%，突破上沿目标63.49，跌破下沿目标47.05"
+    }
+  ],
+  "volume_price": {
+    "pattern": "价平量平",
+    "direction": "中性",
+    "confidence": 22,
+    "volume_ratio": 1.0,
+    "turnover": 0.0,
+    "obv_trend": "下降",
+    "signals": [
+      "OBV下降"
+    ],
+    "description": "量价模式=价平量平，量比=1.0，换手=0.0%"
+  },
+  "breakouts": [
+    {
+      "system": "系统一(20日)",
+      "signal": "持仓",
+      "breakout_price": 58.01,
+      "current_n": 1.0945,
+      "stop_loss": 55.07,
+      "entry_price": 52.88,
+      "position_units": 1,
+      "exit_price": null,
+      "channel_high": 58.01,
+      "channel_low": 52.88,
+      "next_add_price": null,
+      "signals": [
+        "持有空头0日，止损55.07"
+      ],
+      "description": "系统一入场=空@52.88，N=1.0945，持有0日"
+    },
+    {
+      "system": "系统二(55日)",
+      "signal": "卖出",
+      "breakout_price": 58.01,
+      "current_n": 1.0945,
+      "stop_loss": 55.41,
+      "entry_price": 57.6,
+      "position_units": 1,
+      "exit_price": 55.41,
+      "channel_high": 58.01,
+      "channel_low": 47.52,
+      "next_add_price": null,
+      "signals": [
+        "触及2N止损55.41，卖出"
+      ],
+      "description": "系统二入场=多@57.60，N=1.0945，持有15日"
+    }
+  ],
+  "canslim": {
+    "c_score": 50,
+    "a_score": 35,
+    "n_score": 75,
+    "s_score": 40,
+    "l_score": 50,
+    "i_score": 50,
+    "m_score": 70,
+    "total": 56,
+    "grade": "B",
+    "signals": [
+      "N(新高/形态)75分",
+      "M(市场环境)70分"
+    ],
+    "cup_handle": {
+      "pattern": "杯柄形态",
+      "cup_high": 54.98,
+      "cup_low": 45.92,
+      "handle_high": 58.01,
+      "handle_low": 52.53,
+      "cup_depth": 16.5,
+      "handle_depth": 9.4,
+      "breakout": true,
+      "buy_point": 58.01,
+      "target": 67.07
+    },
+    "description": "综合56分(B) | C=50 A=35 N=75 S=40 L=50 I=50 M=70"
+  },
+  "optimized_action": "观望",
+  "original_action": "观望",
+  "position_advice": "空仓等待",
+  "risk_notes": [
+    "盈亏比2.0，风险收益比良好"
+  ],
+  "risk_reward": 2.0
+}

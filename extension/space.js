@@ -277,13 +277,13 @@ async function init() {
 
   const restoring = isSessionRestore();
   const storedUi = restoring ? readSpaceUi() : {};
-  if (!restoring) persistSpaceUi({ sidebarCollapsed: true, widgetsHidden: false });
+  if (!restoring) persistSpaceUi({ sidebarCollapsed: false, widgetsHidden: false });
 
   const sidebarController = createSidebarController({
     resizer: $('sidebar-resizer'),
     toggleButton: $('space-toggle-sidebar-btn'),
     initialWidth: sidebarWidth,
-    initialCollapsed: restoring ? storedUi.sidebarCollapsed !== false : true,
+    initialCollapsed: Boolean(storedUi.sidebarCollapsed),
     t,
     onWidthChange: (w) => setStored('natives-sidebar-width', w),
     onCollapsedChange: (collapsed) => persistSpaceUi({ sidebarCollapsed: Boolean(collapsed) }),

@@ -41,7 +41,11 @@ pub(crate) fn sector_json(sectors: &[SectorItem]) -> String {
             )
         })
         .collect();
-    format!("{{\"sectors\":[{}],\"quotes\":[{}]}}", items.join(","), items.join(","))
+    format!(
+        "{{\"sectors\":[{}],\"quotes\":[{}]}}",
+        items.join(","),
+        items.join(",")
+    )
 }
 
 /// 腾讯板块排行（mktHs/rank，JSON，UTF-8）：01 行业 / 02 概念 / 03 地域。
@@ -66,13 +70,21 @@ pub(crate) fn fetch_tencent_sectors_by_type(category: &str) -> Result<Vec<Sector
         .ok_or("tencent sectors: empty data")?;
     let mut sectors = Vec::new();
     for item in items {
-        let name = item.get("bd_name").and_then(serde_json::Value::as_str).unwrap_or("");
-        let code = item.get("bd_code").and_then(serde_json::Value::as_str).unwrap_or("");
+        let name = item
+            .get("bd_name")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
+        let code = item
+            .get("bd_code")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or("");
         if name.is_empty() {
             continue;
         }
         let parse_str = |k: &str| -> Option<f64> {
-            item.get(k).and_then(serde_json::Value::as_str).and_then(|v| v.parse::<f64>().ok())
+            item.get(k)
+                .and_then(serde_json::Value::as_str)
+                .and_then(|v| v.parse::<f64>().ok())
         };
         sectors.push(SectorItem {
             code: code.to_string(),
@@ -81,8 +93,14 @@ pub(crate) fn fetch_tencent_sectors_by_type(category: &str) -> Result<Vec<Sector
             change: parse_str("bd_zd"),
             change_pct: parse_str("bd_zdf"),
             speed: parse_str("bd_zs"),
-            top_stock_code: item.get("nzg_code").and_then(serde_json::Value::as_str).map(String::from),
-            top_stock_name: item.get("nzg_name").and_then(serde_json::Value::as_str).map(String::from),
+            top_stock_code: item
+                .get("nzg_code")
+                .and_then(serde_json::Value::as_str)
+                .map(String::from),
+            top_stock_name: item
+                .get("nzg_name")
+                .and_then(serde_json::Value::as_str)
+                .map(String::from),
             top_stock_price: parse_str("nzg_zxj"),
             top_stock_change: parse_str("nzg_zd"),
             top_stock_change_pct: parse_str("nzg_zdf"),
@@ -95,35 +113,76 @@ pub(crate) fn fetch_tencent_sectors_by_type(category: &str) -> Result<Vec<Sector
 
 /// 映射板块名称到新浪实时行业/概念板块节点（仅作协议节点映射，股票数据 100% 动态拉取，绝不硬编码任何个股）。
 pub(crate) fn sina_sector_node(name: &str) -> &'static str {
-    if name.contains("传媒") || name.contains("广告") || name.contains("出版") || name.contains("影视") || name.contains("游戏") {
+    if name.contains("传媒")
+        || name.contains("广告")
+        || name.contains("出版")
+        || name.contains("影视")
+        || name.contains("游戏")
+    {
         "new_cmyl"
-    } else if name.contains("电子") || name.contains("芯片") || name.contains("半导体") || name.contains("硬件") || name.contains("CPU") {
+    } else if name.contains("电子")
+        || name.contains("芯片")
+        || name.contains("半导体")
+        || name.contains("硬件")
+        || name.contains("CPU")
+    {
         "new_dzxx"
-    } else if name.contains("软件") || name.contains("计算机") || name.contains("IT") || name.contains("数字") || name.contains("信息") || name.contains("AI") || name.contains("算力") {
+    } else if name.contains("软件")
+        || name.contains("计算机")
+        || name.contains("IT")
+        || name.contains("数字")
+        || name.contains("信息")
+        || name.contains("AI")
+        || name.contains("算力")
+    {
         "new_dzqj"
     } else if name.contains("汽车") || name.contains("车") {
         "new_qczz"
-    } else if name.contains("医药") || name.contains("生物") || name.contains("疫苗") || name.contains("医疗") {
+    } else if name.contains("医药")
+        || name.contains("生物")
+        || name.contains("疫苗")
+        || name.contains("医疗")
+    {
         "new_ylqx"
     } else if name.contains("通信") || name.contains("电信") || name.contains("5G") {
         "new_dzxx"
-    } else if name.contains("电力") || name.contains("能源") || name.contains("光伏") || name.contains("绿电") {
+    } else if name.contains("电力")
+        || name.contains("能源")
+        || name.contains("光伏")
+        || name.contains("绿电")
+    {
         "new_dlhy"
     } else if name.contains("家电") || name.contains("白色家电") {
         "new_jdhy"
-    } else if name.contains("食品") || name.contains("白酒") || name.contains("饮料") || name.contains("消费") {
+    } else if name.contains("食品")
+        || name.contains("白酒")
+        || name.contains("饮料")
+        || name.contains("消费")
+    {
         "new_sphy"
-    } else if name.contains("银行") || name.contains("证券") || name.contains("保险") || name.contains("金融") {
+    } else if name.contains("银行")
+        || name.contains("证券")
+        || name.contains("保险")
+        || name.contains("金融")
+    {
         "new_jrhy"
     } else if name.contains("房地产") || name.contains("地产") || name.contains("物业") {
         "new_fdchy"
-    } else if name.contains("有色") || name.contains("金属") || name.contains("黄金") || name.contains("稀土") {
+    } else if name.contains("有色")
+        || name.contains("金属")
+        || name.contains("黄金")
+        || name.contains("稀土")
+    {
         "new_ysjs"
     } else if name.contains("化工") || name.contains("材料") {
         "new_hghy"
     } else if name.contains("机械") || name.contains("设备") || name.contains("高端装备") {
         "new_jxhy"
-    } else if name.contains("交通") || name.contains("运输") || name.contains("航空") || name.contains("港口") {
+    } else if name.contains("交通")
+        || name.contains("运输")
+        || name.contains("航空")
+        || name.contains("港口")
+    {
         "new_jtys"
     } else if name.contains("旅游") || name.contains("酒店") {
         "new_jdly"
@@ -189,7 +248,11 @@ pub(crate) fn fetch_live_sector_stocks(node: &str) -> Result<Vec<Quote>, String>
         };
 
         quotes.push(Quote {
-            code: if !symbol.is_empty() { symbol.to_string() } else { code.to_string() },
+            code: if !symbol.is_empty() {
+                symbol.to_string()
+            } else {
+                code.to_string()
+            },
             name: name.to_string(),
             price,
             change_pct,
@@ -203,4 +266,3 @@ pub(crate) fn fetch_live_sector_stocks(node: &str) -> Result<Vec<Quote>, String>
 
     Ok(quotes)
 }
-

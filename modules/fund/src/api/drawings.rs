@@ -4,7 +4,10 @@ use super::{api_error, json_str, query_param_from_path};
 use crate::storage::Store;
 use app_runtime_core::http::HttpRequest;
 
-pub(crate) fn api_drawings_list(store: &Store, request: &HttpRequest) -> Result<String, (u16, String)> {
+pub(crate) fn api_drawings_list(
+    store: &Store,
+    request: &HttpRequest,
+) -> Result<String, (u16, String)> {
     let raw_symbol = query_param_from_path(&request.path, "symbol")
         .ok_or_else(|| api_error(400, "APP_PARAM_INVALID", "symbol required"))?;
     let symbol = crate::market::normalize_symbol(&raw_symbol);
@@ -58,6 +61,7 @@ pub(crate) fn api_save_drawing(store: &Store, body: &str) -> Result<String, (u16
     let tool_type = val
         .get("toolType")
         .and_then(|v| v.as_str())
+        .or_else(|| val.get("tool").and_then(|v| v.as_str()))
         .unwrap_or("trendline");
     let points = val
         .get("points")
@@ -67,15 +71,23 @@ pub(crate) fn api_save_drawing(store: &Store, body: &str) -> Result<String, (u16
         .get("options")
         .map(|v| v.to_string())
         .unwrap_or_else(|| "{}".into());
-    let now = "2026-09-17T00:00:00Z";
+    // 与 migration.rs 相同口径：标准库时间戳，不引入 chrono 依赖
+    let now_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let now = format!("{now_secs}");
 
     store
         .with_write(|conn: &rusqlite::Connection| -> rusqlite::Result<()> {
+            // 只写 migration v2 schema 权威列（id, symbol, period, tool_type,
+            // points_json, options_json, created_at, updated_at）；颜色/线宽等
+            // 样式统一放 options_json，禁止引用旧遗留库才有的 tool/color 列。
             conn.execute(
                 "INSERT INTO chart_drawings(id, symbol, period, tool_type, points_json, options_json, created_at, updated_at)
-                 VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?7)
-                 ON CONFLICT(id) DO UPDATE SET points_json=?5, options_json=?6, updated_at=?7",
-                [id, &symbol, period, tool_type, &points, &options, now],
+                 VALUES(?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                 ON CONFLICT(id) DO UPDATE SET points_json=?5, options_json=?6, updated_at=?8",
+                rusqlite::params![id, &symbol, period, tool_type, &points, &options, &now, &now],
             )?;
             Ok(())
         })
@@ -84,7 +96,10 @@ pub(crate) fn api_save_drawing(store: &Store, body: &str) -> Result<String, (u16
     Ok("{\"success\":true}".into())
 }
 
-pub(crate) fn api_delete_drawing(store: &Store, request: &HttpRequest) -> Result<String, (u16, String)> {
+pub(crate) fn api_delete_drawing(
+    store: &Store,
+    request: &HttpRequest,
+) -> Result<String, (u16, String)> {
     let id = query_param_from_path(&request.path, "id")
         .ok_or_else(|| api_error(400, "APP_PARAM_INVALID", "id required"))?;
 

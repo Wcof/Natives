@@ -110,7 +110,7 @@ export async function buildInstaller({ mode = 'local', version, output, manifest
   const sourceName = mode === 'production' ? 'Natives' : 'Natives-Local';
   const setupScheme = mode === 'production' ? 'natives-setup' : 'natives-setup-local';
   const appExec = join(STAGING, 'Natives');
-  execFileSync('cc', ['-O2', '-framework', 'AppKit', '-framework', 'WebKit', '-lsqlite3',
+  execFileSync('cc', ['-fobjc-arc', '-O2', '-framework', 'AppKit', '-framework', 'WebKit', '-lsqlite3',
     '-DSOURCE_ROOT="' + `/Library/Application Support/${sourceName}` + '"',
     '-DEXTENSION_ID="' + extensionId + '"',
     '-DSETUP_SCHEME="' + setupScheme + '"',

@@ -4,6 +4,13 @@ const tState = trends.state;
 const charts = trends.charts;
 const C = trends.C;
 
+function fmtVol(n) {
+  if (n == null) return '--';
+  if (n >= 1e8) return (n / 1e8).toFixed(2) + '亿';
+  if (n >= 1e4) return (n / 1e4).toFixed(1) + '万';
+  return String(n);
+}
+
 // ===== MA计算 =====
 function calcMA(data, period) {
   const result = new Array(data.length).fill(null);
@@ -265,8 +272,16 @@ function renderKline(klines, signal) {
     ],
   }, true);
 
-  bindZoomSync();
-  updateZoomInfo(ds, de);
+  if (typeof bindZoomSync === 'function') {
+    bindZoomSync();
+  } else if (trends.chart?.bindZoomSync) {
+    trends.chart.bindZoomSync();
+  }
+  if (typeof updateZoomInfo === 'function') {
+    updateZoomInfo(ds, de);
+  } else if (trends.chart?.updateZoomInfo) {
+    trends.chart.updateZoomInfo(ds, de);
+  }
   // 划线层联动：标的/周期变化后重新加载该 symbol+period 的划线并重绘
   if (trends.drawings) {
     trends.drawings.reload();

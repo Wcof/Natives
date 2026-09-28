@@ -9,6 +9,7 @@
 //! 板块→ETF 的对应关系是客观标的映射（代码常量），行情值每次实时拉取；
 //! 上游请求失败 fail-closed：返回 APP_UPSTREAM 错误，绝不编造数值。
 
+mod cache;
 mod handlers;
 mod quotes;
 mod sectors;
@@ -20,8 +21,10 @@ pub use handlers::{
     api_market_quotes, api_market_sector_stocks, api_market_sectors, api_market_stocks,
     api_market_themes,
 };
+pub(crate) use handlers::{fetch_kline_bars, fetch_minute_points};
 pub use sectors::SectorItem;
 pub use smartbox::{api_market_suggest, normalize_symbol};
+pub(crate) use util::{query_param, url_decode};
 
 #[cfg(test)]
 mod tests;

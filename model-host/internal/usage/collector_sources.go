@@ -212,20 +212,34 @@ func collectOpenCodeSource(s *Store, root string, now time.Time) collectResult {
 
 func collectZCodeSource(s *Store, root string, now time.Time) collectResult {
 	var res collectResult
-	rolloutDir := filepath.Join(root, "cli", "rollout")
-	if info, err := os.Stat(rolloutDir); err != nil || !info.IsDir() {
-		return res
-	}
-	res.present = true
-	imported, bytes, err := s.collectZCodeRollout(rolloutDir)
-	if err != nil {
-		res.wholeErr = err
-		return res
-	}
-	if bytes > 0 {
+	dbPath := filepath.Join(root, "cli", "db", "db.sqlite")
+	if info, err := os.Stat(dbPath); err == nil && !info.IsDir() {
+		res.present = true
+		imported, bytes, err := s.collectZCodeDB(dbPath)
+		if err != nil {
+			res.wholeErr = err
+			return res
+		}
 		res.files = 1
 		res.imported = imported
 		res.bytesRead = bytes
+		return res
+	}
+
+	rolloutDir := filepath.Join(root, "cli", "rollout")
+	if info, err := os.Stat(rolloutDir); err == nil && info.IsDir() {
+		res.present = true
+		imported, bytes, err := s.collectZCodeRollout(rolloutDir)
+		if err != nil {
+			res.wholeErr = err
+			return res
+		}
+		if bytes > 0 {
+			res.files = 1
+			res.imported = imported
+			res.bytesRead = bytes
+		}
+		return res
 	}
 	return res
 }

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Natives 文件管理",
+  "name": "__MSG_extName__",
   "version": "0.1.0",
-  "description": "在 Chrome 中安全访问本机文件管理器",
+  "description": "__MSG_extDescription__",
   "default_locale": "zh_CN",
   "permissions": [
     "nativeMessaging",
@@ -54,7 +54,7 @@
     "newtab": "space.html"
   },
   "action": {
-    "default_title": "文件管理",
+    "default_title": "__MSG_extName__",
     "default_icon": {
       "16": "icons/folder-16.png",
       "32": "icons/folder-32.png"

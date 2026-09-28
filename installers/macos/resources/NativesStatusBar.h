@@ -16,12 +16,14 @@ typedef NS_ENUM(NSInteger, NativesStatusBarDisplayMode) {
 @property (nonatomic, strong) NSStatusItem *statusItem;
 @property (nonatomic, assign) NativesStatusBarDisplayMode displayMode;
 @property (nonatomic, copy) NSString *runtimeBaseUrl;
+@property (nonatomic, strong) id clickOutsideMonitor;
 
 + (instancetype)sharedBar;
 - (void)setupStatusItem;
 - (void)updateWithStateJson:(NSString *)jsonText;
 - (void)fetchAndUpdateState;
 - (void)openTargetApp:(NSString *)appId;
+- (void)closePanel;
 
 // 清理同二进制的其它实例（SIGTERM → 宽限 → SIGKILL）。
 // 启动时调用 = 干掉旧实例再拉起；退出时调用（atexit）= 兜底防僵尸。

@@ -4,6 +4,8 @@
 
 已从生产代码和活动规范移除：旧桌面工作台、通用 Agent/Daemon/Jobs/Plugin Runtime、模块发现目录、分块传输与模块安装事务、Seed/独立 Release 分发及其 GitHub Actions 工作流、独立卸载/回滚 API、扩展单独 ZIP/current 产物、Windows Web Store/IExpress 安装链、macOS 外部扩展模板，以及重复的扩展运行时。
 
+追加（2026-09-28，审计 F-01/F-02/A2）：`market-host/`（未登记端口 8734 的常驻 WebSocket 行情原型）与 `hosts/invest-pipeline/`（抢占 8765 的另一代行情原型，含 9.3MB 未跟踪编译产物）已整目录退役删除。二者无任何生产消费方（fund UI 行情实际全部走 `/api/market/*` HTTP 轮询，fund/market 已覆盖其在用能力），纯内存无用户数据；其 WebSocket 死路径与 background.js 死监听同步移除。未登记端口由 `scripts/apps/check-port-registry.mjs` 门禁拦截。
+
 当前生产入口只有：
 
 - `extension/`：Chrome Extension 页面、静态资源和 AI 用量界面；

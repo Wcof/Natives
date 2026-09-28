@@ -12,9 +12,9 @@ const { authFetch } = globalThis.Fund;
 // 渲染用 ECharts graphic 组件（replaceMerge 只替换 graphic 层，不触碰 K线/MA series），
 // 数据坐标 → 像素经 convertToPixel 换算，dataZoom/resize/换标的时整层重绘。
 
-const ACCENT = (C && C.avgLine) || '#cdf24b';
-const SEL = '#ddff69';
-const COLORS = { trendline: ACCENT, horizontal: '#4fc3f7', rectangle: '#ff9800', channel: '#e040fb' };
+const ACCENT = '#38bdf8';
+const SEL = '#f59e0b';
+const COLORS = { trendline: ACCENT, horizontal: '#0284c7', rectangle: '#38bdf8', channel: '#e040fb' };
 
 // d = { id, symbol, period, toolType, points:[{date, price}...], options:{color} }
 // points 约定：trendline 2 点；horizontal 1 点（y 轴价）；rectangle 2 点（对角）；
@@ -130,7 +130,7 @@ function buildGraphic(d, els) {
   if (isSel) {
     pts.forEach((p, i) => {
       els.push({ id: prefix + '_a' + i, type: 'circle', shape: { cx: p[0], cy: p[1], r: 4.5 },
-        style: { fill: '#0b0c0a', stroke: SEL, lineWidth: 2 }, silent: true, z: 61 });
+        style: { fill: '#ffffff', stroke: SEL, lineWidth: 2 }, silent: true, z: 61 });
     });
   }
 }

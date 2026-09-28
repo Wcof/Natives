@@ -4,8 +4,6 @@
   /* ===== 趋势分析与实时买卖点专属样式（源项目 1:1 复刻） ===== */
   body {
     font-family: 'Microsoft YaHei', 'Segoe UI', sans-serif;
-    background: #000;
-    color: #ccc;
   }
 
 /* ===== 顶部栏 ===== */
@@ -21,24 +19,25 @@
   margin-bottom: 8px;
   min-height: 48px;
   box-sizing: border-box;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   box-shadow: 0 2px 8px rgba(0,0,0,0.2);
 }
 .topbar-left {
   display: flex;
   align-items: center;
   gap: 8px;
-  flex-wrap: wrap;
-  flex: 1 1 auto;
-  min-width: 0;
+  flex-wrap: nowrap;
+  flex: 0 0 auto;
 }
 .topbar-right {
   display: flex;
   align-items: center;
   gap: 8px;
-  flex-wrap: wrap;
-  flex: 0 0 auto;
+  flex-wrap: nowrap;
+  flex: 1 1 auto;
+  min-width: 0;
   margin-left: auto;
+  justify-content: flex-end;
 }
 .logo { font-size: 14px; font-weight: 700; color: var(--natives-accent); white-space: nowrap; letter-spacing: 0.5px; display: inline-flex; align-items: center; gap: 4px; }
 .search-wrap { position: relative; flex: 0 1 180px; min-width: 140px; }
@@ -144,19 +143,65 @@
 .scan-empty { text-align: center; padding: 40px; color: #666; font-size: 14px; }
 
 /* ===== 主布局 ===== */
-.main {
-  display: grid; grid-template-columns: 1fr 340px;
-  gap: 1px; background: #1a1a1a; flex: 1; min-height: 0; overflow: hidden;
+#view-trends {
+  height: 100%;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
 }
-#view-trends { height: 100%; display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
-.trends-workspace { flex: 1; height: 100%; display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
+#view-trends[hidden] {
+  display: none !important;
+}
+
+.workspace-body.trends-active .main-column {
+  height: 100% !important;
+  overflow: hidden !important;
+  padding: 0 !important;
+  border-right: none !important;
+}
+
+.trends-workspace {
+  flex: 1;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
+}
 .trends-workspace .main {
-  flex: 1; min-height: 0; height: auto; display: grid; grid-template-columns: 1fr;
-  gap: 0; background: #1a1a1a; overflow: hidden;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  background: var(--natives-bg);
+  overflow: hidden;
 }
-.left-panel { flex: 1; background: #000; display: flex; flex-direction: column; overflow: hidden; min-height: 0; }
-.chart-container { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-height: 0; position: relative; }
-#kline-chart { flex: 1; width: 100%; min-height: 220px; }
+.left-panel {
+  flex: 1;
+  height: 100%;
+  background: var(--natives-bg);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
+}
+.chart-container {
+  flex: 1;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
+  position: relative;
+}
+#kline-chart {
+  flex: 1;
+  width: 100%;
+  min-height: 220px;
+}
 /* ===== 右侧侧边栏多 Tab 独立面板 ===== */
 .side-tab-pane {
   display: none;
@@ -186,18 +231,19 @@
 /* ===== 图表工具栏 ===== */
 .chart-toolbar {
   display: flex; align-items: center; gap: 2px;
-  padding: 4px 12px; background: #0d0d0d; border-bottom: 1px solid #1a1a1a;
+  padding: 4px 12px; background: var(--natives-surface-3); border-bottom: 1px solid var(--natives-border);
   flex-shrink: 0;
 }
 .tb-btn {
   padding: 4px 12px; font-size: 12px;
   background: transparent; border: 1px solid transparent;
-  color: #888; cursor: pointer; border-radius: 3px;
+  color: var(--natives-text-muted); cursor: pointer; border-radius: 3px;
   transition: all 0.1s;
 }
-.tb-btn:hover { color: #fff; background: #1a1a1a; }
+.tb-btn:hover { color: var(--natives-text-primary); background: var(--natives-surface-2); }
 .tb-btn.active { color: var(--natives-accent); border-color: var(--natives-accent); background: rgba(205, 242, 75, 0.12); }
-.tb-sep { width: 1px; height: 16px; background: #222; margin: 0 6px; }
+:root[data-theme="archive"] .tb-btn.active { background: rgba(204, 120, 92, 0.14); }
+.tb-sep { width: 1px; height: 16px; background: var(--natives-border); margin: 0 6px; }
 .tb-label { font-size: 11px; color: #555; }
 
 /* ===== 图表容器 ===== */

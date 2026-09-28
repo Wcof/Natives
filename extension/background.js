@@ -28,25 +28,25 @@ chrome.action.onClicked.addListener(async () => {
 });
 
 chrome.runtime.onMessage.addListener((message, sender) => {
+  // 预警联动（审计 F-07/C1 链路终点）：fund 模块经父页转发的异动预警。
+  // badge 变色 + 系统通知（通知文案走 _locales，R-I1/F-16）。
   if (message?.type === 'invest:alert') {
     if (chrome.action?.setBadgeText) {
       chrome.action.setBadgeText({ text: message.badgeText || '' });
       chrome.action.setBadgeBackgroundColor({ color: message.isUp ? '#e07b7b' : '#6cc29a' });
     }
-    return;
-  }
-  // market-host 预警联动（阶段二 §3）：badge 变色 + 系统通知
-  if (message?.type === 'natives-market-alert') {
-    if (chrome.action?.setBadgeText) {
-      chrome.action.setBadgeText({ text: '!' });
-      chrome.action.setBadgeBackgroundColor({ color: '#e05252' });
-    }
     if (chrome.notifications?.create) {
+      const title = chrome.i18n.getMessage('investAlertNotifyTitle') || 'Investment Alert';
+      const body = chrome.i18n.getMessage('investAlertNotifyBody', [
+        String(message.symbol || ''),
+        String(message.name || ''),
+        String(message.badgeText || ''),
+      ]) || `${message.symbol} ${message.badgeText}`;
       chrome.notifications.create({
         type: 'basic',
         iconUrl: 'icons/folder-32.png',
-        title: '行情预警',
-        message: String(message.text || '').slice(0, 200),
+        title,
+        message: body.slice(0, 200),
       }, () => void chrome.runtime.lastError);
     }
     return;

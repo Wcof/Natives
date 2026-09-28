@@ -85,6 +85,28 @@
 - 普通 Chrome 无法由本地应用静默安装开发者扩展时，Launcher 必须打开扩展管理页、随包扩展目录和本地指南。
 - 不得声称已自动安装、降低 Chrome 安全策略或使用未支持的启动参数。
 
+#### R-S12 · host_permissions 域登记
+
+- **等级**：MUST
+- `extension/manifest.json` 的 `host_permissions` 中每个外部域必须在下表登记用途；
+  新增域须同步登记，失效域应及时裁剪。全部为只读公开数据源（空间 Widget/背景），
+  禁止把凭据或业务数据发往这些域。
+
+| 域 | 用途 |
+|---|---|
+| `github.com` / `release-assets.githubusercontent.com` / `objects.githubusercontent.com` / `releases.githubusercontent.com` / `github-contributions-api.jogruber.de` | GitHub 贡献/发布信息 Widget |
+| `api.open-meteo.com` / `geocoding-api.open-meteo.com` | 天气 Widget 与地理编码 |
+| `www.bing.com` | 每日背景图源 |
+| `api.unsplash.com` / `images.unsplash.com` | 背景图库 |
+| `api.nasa.gov` / `apod.nasa.gov` | NASA APOD 背景源 |
+| `api.wikimedia.org` / `upload.wikimedia.org` / `en.wikipedia.org` | 词条/图片 Widget |
+| `api.giphy.com` | GIF Widget |
+| `open.er-api.com` | 汇率 Widget |
+| `api.ipify.org` | 出口 IP 展示 |
+| `i.pravatar.cc` | 头像占位图 |
+| `api.coingecko.com` | 行情 Widget |
+| `www.google.com` / `duckduckgo.com` | 搜索快捷入口（页面跳转） |
+
 ## 合规自检
 
 - [ ] origin、Host 名称、路径和方法均由可信边界决定。
@@ -93,3 +115,4 @@
 - [ ] 模块没有远程代码和独立下载链。
 - [ ] 开发与正式身份隔离。
 - [ ] 日志与错误无敏感明文。
+- [ ] host_permissions 与 R-S12 登记表一致。

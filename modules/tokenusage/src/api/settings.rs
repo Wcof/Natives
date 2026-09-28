@@ -96,11 +96,10 @@ pub(super) fn api_save_settings(store: &Store, body: &str) -> Result<String, (u1
 pub(super) fn api_collect(store: &Store, _body: &str) -> Result<String, (u16, String)> {
     match crate::collector::collect_all(store, None, None) {
         Ok(summary) => Ok(format!(
-            "{{\"ok\":true,\"scannedSources\":{},\"newRecords\":{},\"totalTokens\":{},\"totalCostMicros\":{},\"hostEvents\":{}}}",
-            summary.local_sources,
-            summary.local_records + summary.host_events,
-            summary.local_tokens + summary.host_tokens,
-            summary.local_cost_micros + summary.host_cost_micros,
+            "{{\"ok\":true,\"newRecords\":{},\"totalTokens\":{},\"totalCostMicros\":{},\"hostEvents\":{}}}",
+            summary.host_events,
+            summary.host_tokens,
+            summary.host_cost_micros,
             summary.host_events
         )),
         Err(e) => Err(api_error(500, "SCAN_FAILED", &e)),

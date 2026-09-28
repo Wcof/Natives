@@ -4,10 +4,7 @@ mod drawings;
 mod import_api;
 mod nav_api;
 mod positions;
-mod proxy;
 mod watchlists;
-
-pub(crate) use proxy::proxy_trends_engine;
 
 use crate::storage::Store;
 use app_runtime_core::http::HttpRequest;
@@ -19,7 +16,9 @@ use positions::{
     api_accounts, api_create_account, api_history, api_positions, api_record_transaction,
     api_transactions,
 };
-use watchlists::{api_add_watchlist_item, api_create_watchlist, api_remove_watchlist_item, api_watchlists};
+use watchlists::{
+    api_add_watchlist_item, api_create_watchlist, api_remove_watchlist_item, api_watchlists,
+};
 
 pub fn handle_api_request(
     store: &Store,
@@ -27,7 +26,7 @@ pub fn handle_api_request(
     route: &str,
 ) -> Result<String, (u16, String)> {
     if route.starts_with("/api/trends") {
-        return proxy_trends_engine(request, route);
+        return crate::trends::handle_trends_request(request, route);
     }
 
     let body_text = String::from_utf8_lossy(&request.body).to_string();
@@ -103,7 +102,7 @@ fn query_param<'a>(path: &'a str, key: &str) -> Option<String> {
     for pair in query.split('&') {
         let (k, v) = pair.split_once('=')?;
         if k == key {
-            return Some(v.to_string());
+            return Some(crate::market::url_decode(v));
         }
     }
     None
@@ -113,6 +112,6 @@ fn query_param_from_path<'a>(path: &'a str, key: &str) -> Option<String> {
     let query = path.split_once('?')?.1;
     query.split('&').find_map(|pair| {
         let (k, v) = pair.split_once('=')?;
-        (k == key).then(|| v.to_string())
+        (k == key).then(|| crate::market::url_decode(v))
     })
 }

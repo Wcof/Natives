@@ -1,5 +1,5 @@
 (() => {
-const { state, actions, api, themeColor, themeRgba } = globalThis.Fund;
+const { state, actions, api, themeColor, themeRgba, applyLanguage } = globalThis.Fund;
 // Fund 页面 controller：负责装配与生命周期（握手、页签、看板折叠、配色切换、
 // selectSymbol 编排、独立小窗）。R-E3 import 方向：controller → core / actions。
 // 领域能力（行情表、图表、盘口、记账）经 actions 注册表协作，不直接互相 import。
@@ -22,7 +22,11 @@ colorBtn.addEventListener("click", function() {
     document.documentElement.removeAttribute("data-color-mode");
   }
   applyColorModeLabel();
-  actions.redrawChart();
+  if (actions.redrawChart) actions.redrawChart();
+  if (actions.reloadStockDetailTheme) actions.reloadStockDetailTheme();
+  if (globalThis.Fund.trends && globalThis.Fund.trends.reloadTheme) {
+    globalThis.Fund.trends.reloadTheme();
+  }
 });
 applyColorModeLabel();
 
@@ -77,6 +81,7 @@ function applySideCollapsed() {
   sideBtn.classList.toggle("active", sideCollapsed);
   try { localStorage.setItem("natives-fund-side-collapsed", sideCollapsed ? "1" : "0"); } catch (e) {}
   if (actions.redrawChart) actions.redrawChart();
+  if (actions.resizeStockDetailCharts) actions.resizeStockDetailCharts();
   window.dispatchEvent(new Event("resize"));
   const tc = (globalThis.Fund && globalThis.Fund.trends && globalThis.Fund.trends.charts) || (globalThis.Fund && globalThis.Fund.trendsCharts);
   if (tc) {
@@ -87,7 +92,16 @@ function applySideCollapsed() {
     } catch (e) {}
   }
 }
-sideBtn.addEventListener("click", function() { sideCollapsed = !sideCollapsed; applySideCollapsed(); });
+// 顶栏唯一折叠入口：个股详情激活时托管右侧看板，其余场景折叠外层侧栏
+function toggleSidePanel() {
+  if (typeof actions.isStockDetailActive === "function" && actions.isStockDetailActive()) {
+    if (typeof actions.toggleStockDetailSide === "function") actions.toggleStockDetailSide();
+    return;
+  }
+  sideCollapsed = !sideCollapsed;
+  applySideCollapsed();
+}
+sideBtn.addEventListener("click", toggleSidePanel);
 // 供标的切换流程调用：展开看板并记忆用户展开偏好
 function expandSidePanel() {
   if (!sideCollapsed) return;
@@ -95,7 +109,7 @@ function expandSidePanel() {
   applySideCollapsed();
 }
 document.addEventListener("keydown", function(e) {
-  if ((e.metaKey || e.ctrlKey) && (e.key === "b" || e.key === "B")) { e.preventDefault(); sideCollapsed = !sideCollapsed; applySideCollapsed(); }
+  if ((e.metaKey || e.ctrlKey) && (e.key === "b" || e.key === "B")) { e.preventDefault(); toggleSidePanel(); }
 });
 if (sideCollapsed) applySideCollapsed();
 
@@ -142,7 +156,7 @@ sideResizer.addEventListener("keydown", function(e) {
 });
 applySideWidth(sideWidth, false);
 
-// ---------- 标签页切换与数字键 1-6 直达 ----------
+// ---------- 标签页切换与数字键 1-7 直达 ----------
 const tabs = ["watchlist", "market", "trends", "positions", "tx", "import", "nav"];
 
 // ---------- 右侧看板随 Tab 切换联动（自选/行情/趋势/持仓/流水/导入/净值） ----------
@@ -180,8 +194,15 @@ tabs.forEach(function(t) {
   const btn = document.getElementById("tab-" + t);
   if (btn) {
     btn.addEventListener("click", function() {
+      // 切换常规 Tab 时，关闭个股详情视口并暂停轮询
+      const sdView = document.getElementById("view-stock-detail");
+      if (sdView) sdView.hidden = true;
+      sideBody.classList.remove("stock-detail-active");
+      if (actions.pauseStockDetail) actions.pauseStockDetail();
+
       tabs.forEach(function(other) {
-        document.getElementById("tab-" + other).setAttribute("aria-selected", other === t ? "true" : "false");
+        const el = document.getElementById("tab-" + other);
+        if (el) el.setAttribute("aria-selected", other === t ? "true" : "false");
         const v = document.getElementById("view-" + other);
         if (v) v.hidden = (other !== t);
       });
@@ -211,10 +232,19 @@ document.addEventListener("keydown", function(e) {
   if (btn) btn.click();
 });
 
+function safeDecode(str) {
+  if (!str) return '';
+  try {
+    return decodeURIComponent(str);
+  } catch (e) {
+    return str;
+  }
+}
+
 // ---------- 深度看板联动：标的切换编排 ----------
 function selectSymbol(symbol, name, userTriggered = false) {
   state.currentSymbol = symbol;
-  state.currentName = name || symbol;
+  state.currentName = safeDecode(name || symbol);
   // 用户主动点击行时才根据需要展开侧栏
   if (userTriggered) {
     expandSidePanel();
@@ -232,7 +262,6 @@ function selectSymbol(symbol, name, userTriggered = false) {
   actions.loadChartData();
   actions.loadCompareIndex();
   actions.loadDrawings();
-  actions.syncWSSubscriptions();
   if (actions.loadTrendsStock) {
     const clean = symbol.replace(/^(sh|sz|bj)/i, "");
     actions.loadTrendsStock(clean);
@@ -268,6 +297,31 @@ document.getElementById("btn-toggle-fav").addEventListener("click", function() {
   }
 });
 
+function applyGlobalTheme(appearanceOrTheme) {
+  const isLight = appearanceOrTheme === "light" || appearanceOrTheme === "archive";
+  document.documentElement.dataset.theme = isLight ? "archive" : "volt";
+  try {
+    localStorage.setItem("natives-theme", isLight ? "archive" : "volt");
+  } catch (e) {}
+  if (actions.redrawChart) {
+    actions.redrawChart();
+  }
+  if (actions.reloadStockDetailTheme) {
+    actions.reloadStockDetailTheme();
+  }
+  if (globalThis.Fund.trends && globalThis.Fund.trends.reloadTheme) {
+    globalThis.Fund.trends.reloadTheme();
+  }
+}
+
+// 优先继承本地记忆的主题模式
+try {
+  const saved = localStorage.getItem("natives-theme");
+  if (saved === "archive" || saved === "light") {
+    document.documentElement.dataset.theme = "archive";
+  }
+} catch (e) {}
+
 // ---------- 握手与初始化自启 ----------
 window.addEventListener("message", function(e) {
   const msg = e.data;
@@ -275,7 +329,7 @@ window.addEventListener("message", function(e) {
   if (msg.type === "init") {
     // 计划 §31.3：init 上下文携带外观偏好（volt=dark / archive=light），
     // 首次启用即跟随主应用主题；此后以 theme 消息为准。
-    document.documentElement.dataset.theme = msg.appearance === "light" ? "archive" : "volt";
+    applyGlobalTheme(msg.appearance || msg.theme);
     window.parent.postMessage({ type: "hello", generation: msg.generation, challenge: msg.challenge }, "*");
   } else if (msg.type === "welcome") {
     // 首次 welcome 走完整初始化；续期（renew-session 换发）只更新 token，
@@ -284,14 +338,14 @@ window.addEventListener("message", function(e) {
     state.token = msg.token;
     if (firstInit) initApp();
   } else if (msg.type === "theme") {
-    document.documentElement.dataset.theme = msg.appearance === "light" ? "archive" : "volt";
-    actions.redrawChart();
+    applyGlobalTheme(msg.appearance || msg.theme);
+  } else if (msg.type === "language") {
+    applyLanguage(msg.language);
   }
 });
 
 function initApp() {
   switchSidePane("watchlist");
-  actions.initWebSocket();
   actions.refreshTickers();
   actions.refreshWatchlist();
   if (state.currentSymbol) {
@@ -318,15 +372,17 @@ function initApp() {
     const shouldWork = tick.open || tick.manual || tick.reason === "init" || switched;
     if (!shouldWork) return;
     if (document.visibilityState !== "visible" && tick.reason !== "init") return;
+    // 个股详情激活时由详情自带轮询（盘口 + 分时/K线）接管数据刷新：
+    // 停跑自选表/跑马灯/隐藏盘口的后台轮询，避免多路请求同时打上游，
+    // 造成详情首屏数据排队变慢。
+    if (typeof actions.isStockDetailActive === "function" && actions.isStockDetailActive()) return;
 
     actions.refreshTickers();
-    if (!state.wsConnected) {
-      actions.loadDetailQuote();
-      // 自选表开市期 6s 一刷（每两次轮询一次），与 tickers/详情的 3s 错开减负；
-      // 休市首刷/手动刷新时立即刷一次
-      if (tick.manual || switched || firstRun || (tick.open && watchlistPollCount++ % 2 === 0)) {
-        actions.refreshWatchlist();
-      }
+    actions.loadDetailQuote();
+    // 自选表开市期 6s 一刷（每两次轮询一次），与 tickers/详情的 3s 错开减负；
+    // 休市首刷/手动刷新时立即刷一次
+    if (tick.manual || switched || firstRun || (tick.open && watchlistPollCount++ % 2 === 0)) {
+      actions.refreshWatchlist();
     }
   });
   // 手动刷新入口（下拉刷新/快捷键可调用）：休市时也能立即拉一次最新数据

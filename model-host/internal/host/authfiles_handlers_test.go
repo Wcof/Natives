@@ -63,7 +63,7 @@ func TestOAuthAccountAppearsInCredentialListAndProvidesQuotaMetadata(t *testing.
 		t.Fatalf("matched account must not emit a duplicate keychain row: %#v", items)
 	}
 
-	token, metadata, accountLabel := oauthQuotaCredential([]*coreauth.Auth{{
+	token, metadata, accountLabel, matched := oauthQuotaCredential([]*coreauth.Auth{{
 		ID: "antigravity-user.json", Provider: "antigravity", Label: "tester@example.com",
 		Metadata: map[string]any{"access_token": "secret-token", "project_id": "project-123"},
 	}}, "antigravity", "antigravity-user.json")
@@ -72,6 +72,9 @@ func TestOAuthAccountAppearsInCredentialListAndProvidesQuotaMetadata(t *testing.
 	}
 	if accountLabel != "tester@example.com" {
 		t.Fatalf("expected credential label as account, got %q", accountLabel)
+	}
+	if matched == nil {
+		t.Fatal("expected matched credential object")
 	}
 }
 

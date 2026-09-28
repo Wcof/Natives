@@ -37,20 +37,23 @@ modules/<appId>/
 {
   "appId": "fund",
   "displayName": {
-    "zh_CN": "基金",
-    "en": "Fund"
+    "zh_CN": "投资",
+    "en": "Invest"
   },
   "description": {
-    "zh_CN": "本地基金持仓记账：账户、交易流水、净值与 CSV 导入。",
-    "en": "Local fund portfolio bookkeeping: accounts, transactions, NAV and CSV import."
+    "zh_CN": "本地投资终端：自选池、全景行情、五档盘口、VWAP 分时与多周期 K 线划线分析、持仓流水记账。",
+    "en": "Local investment terminal: watchlist, market quotes, Level-2 depth, VWAP minute & candlestick charts, and portfolio bookkeeping."
   },
   "entryRoute": "app.html?app=fund",
   "moduleApiVersion": 1,
-  "dataSchemaVersion": 1,
+  "dataSchemaVersion": 2,
   "capabilityVersion": 1,
   "permissions": ["local-data", "external-nav-source", "keychain"]
 }
 ```
+
+> 示例即 `modules/fund/module.json` 当前值（2026-09-28 同步；fund 定位已从
+> "基金记账"升级为"投资终端"）。新增字段以各模块真实 manifest 为准。
 
 ---
 

@@ -1,0 +1,457 @@
+      <!-- 8. 独立股票详情与专业看盘工作台（双栏：左侧 ECharts 大图区含图二画图工具 + 右侧原始 Dashboard 卡片） -->
+      <section id="view-stock-detail" hidden>
+        <div class="sd-workspace">
+          <!-- 顶部行情回退与快捷切换条 -->
+          <div class="sd-topbar">
+            <div class="sd-topbar-left">
+              <button class="sd-back-btn" id="sd-btn-back" title="返回上一页">
+                <svg class="svg-icon" aria-hidden="true" style="width:14px;height:14px;"><use href="#i-arrow-left" /></svg> 返回
+              </button>
+              <div class="sd-title-wrap">
+                <span class="sd-stock-name" id="sd-stock-name">--</span>
+                <span class="sd-stock-code" id="sd-stock-code">--</span>
+              </div>
+              <div class="sd-price-badge">
+                <span class="sd-price-num up" id="sd-stock-price">--</span>
+                <span class="sd-change-num up" id="sd-stock-change">--</span>
+              </div>
+              <div class="sd-tags" id="sd-tags">
+                <span class="sd-tag">一线蓝筹</span>
+                <span class="sd-tag">分红慷慨</span>
+                <span class="sd-tag">现金流充沛</span>
+                <span class="sd-tag">国资委控股</span>
+              </div>
+            </div>
+            <div class="sd-topbar-right">
+              <div class="sd-search-wrap">
+                <input type="text" id="sd-search-input" placeholder="输入代码 / 名称切换..." autocomplete="off">
+                <div class="sd-search-results" id="sd-search-results" style="display:none"></div>
+              </div>
+              <button class="btn btn-accent" id="sd-btn-star" title="加入/移除自选">
+                <svg class="svg-icon" aria-hidden="true"><use href="#i-star" /></svg> <span id="sd-star-text">自选</span>
+              </button>
+              <button class="btn icon-btn" id="sd-btn-refresh" title="立即刷新行情">
+                <svg class="svg-icon" aria-hidden="true"><use href="#i-refresh" /></svg>
+              </button>
+            </div>
+          </div>
+
+          <!-- 双栏主体：左侧 ECharts 大图区 + 右侧 1:1 复刻原始 dashboard（无 AI 功能） -->
+          <div class="sd-main">
+            <!-- ===== 左侧：ECharts 大图区与同花顺风格双排工具栏 ===== -->
+            <div class="sd-left-panel">
+              <!-- 工具栏容器：两排式专业看盘工具栏 -->
+              <div class="sd-chart-toolbar-wrap">
+                <!-- 第一排：行情与周期主控栏 (Period, Range, Indicators, Adjustment) -->
+                <div class="sd-toolbar-row sd-view-row">
+                  <!-- 1. 周期切换 -->
+                  <div class="sd-tb-group sd-period-group">
+                    <button class="tb-btn active" id="sd-view-minute">分时</button>
+                    <button class="tb-btn" id="sd-view-dayk">日K</button>
+                    <button class="tb-btn" id="sd-view-week">周K</button>
+                    <button class="tb-btn" id="sd-view-month">月K</button>
+                  </div>
+
+                  <div class="tb-sep" id="sd-sep-range" style="display:none"></div>
+
+                  <!-- 2. 缩放范围（K线模式展示） -->
+                  <div class="sd-tb-group" id="sd-range-group" style="display:none">
+                    <span class="sd-group-label">范围:</span>
+                    <button class="tb-btn" data-range="20">1月</button>
+                    <button class="tb-btn active" data-range="60">3月</button>
+                    <button class="tb-btn" data-range="120">半年</button>
+                    <button class="tb-btn" data-range="250">1年</button>
+                    <button class="tb-btn" data-range="0">全部</button>
+                  </div>
+
+                  <div class="tb-sep" id="sd-sep-ind" style="display:none"></div>
+
+                  <!-- 3. 副图技术指标（并入顶排） -->
+                  <div class="sd-tb-group sd-indicator-bar" id="sd-indicator-bar" style="display:none">
+                    <span class="sd-group-label">副图:</span>
+                    <button class="it-btn active" data-ind="none">关</button>
+                    <button class="it-btn" data-ind="macd">MACD</button>
+                    <button class="it-btn" data-ind="rsi">RSI</button>
+                    <button class="it-btn" data-ind="kdj">KDJ</button>
+                    <button class="it-btn" data-ind="boll">BOLL</button>
+                    <button class="it-btn" data-ind="wr">WR</button>
+                  </div>
+
+                  <!-- 弹性占位符 -->
+                  <div class="sd-toolbar-spacer"></div>
+
+                  <!-- 4. 右侧复权方式 -->
+                  <div class="sd-tb-group sd-fq-group" id="sd-fq-group" style="display:none">
+                    <span class="sd-group-label">复权:</span>
+                    <button class="tb-btn active" data-fq="qfq" title="前复权：保持当前最新价连续真实">前复权</button>
+                    <button class="tb-btn" data-fq="hfq" title="后复权：反映历史真实累积收益">后复权</button>
+                    <button class="tb-btn" data-fq="bf" title="不复权：显示历史除权真实走势">不复权</button>
+                  </div>
+                </div>
+
+                <!-- 第二排：同花顺风格专业划线工具栏 (图文结合、分段清晰、一目了然) -->
+                <div class="sd-toolbar-row sd-draw-row sd-drawings-toolbar" id="sd-draw-toolbar">
+                  <!-- 组1：选择 -->
+                  <div class="sd-draw-group">
+                    <button class="tb-btn sd-tool-btn active" data-tool="cursor" title="光标选择工具（选择、拉伸、移动已画线条）">
+                      <svg class="svg-icon" aria-hidden="true"><use href="#i-cursor" /></svg>
+                      <span>选择</span>
+                    </button>
+                  </div>
+
+                  <div class="tb-sep"></div>
+
+                  <!-- 组2：基础线型 -->
+                  <div class="sd-draw-group">
+                    <button class="tb-btn sd-tool-btn" data-tool="trendline" title="趋势线（两点连接支撑阻力斜线）">
+                      <svg class="svg-icon" aria-hidden="true"><use href="#i-trendline" /></svg>
+                      <span>趋势线</span>
+                    </button>
+                    <button class="tb-btn sd-tool-btn" data-tool="horizontal" title="水平线（单击一键放置关键支撑阻力价位横线）">
+                      <svg class="svg-icon" aria-hidden="true"><use href="#i-hline" /></svg>
+                      <span>水平线</span>
+                    </button>
+                    <button class="tb-btn sd-tool-btn" data-tool="channel" title="通道线（两点基线 + 第三点平行线）">
+                      <svg class="svg-icon" aria-hidden="true"><path d="M3 17l13-13M8 21l13-13" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+                      <span>通道线</span>
+                    </button>
+                    <button class="tb-btn sd-tool-btn" data-tool="polyline" title="折线（连续点击连线，双击或回车结束）">
+                      <svg class="svg-icon" aria-hidden="true"><path d="M3 18l5-10 6 7 7-11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                      <span>折线</span>
+                    </button>
+                  </div>
+
+                  <div class="tb-sep"></div>
+
+                  <!-- 组3：形态区间 -->
+                  <div class="sd-draw-group">
+                    <button class="tb-btn sd-tool-btn" data-tool="rectangle" title="矩形箱体（两点对角框选震荡盘整区间）">
+                      <svg class="svg-icon" aria-hidden="true"><use href="#i-rect" /></svg>
+                      <span>箱体</span>
+                    </button>
+                    <button class="tb-btn sd-tool-btn" data-tool="circle" title="异动圆（两点定圆，圈定形态异动）">
+                      <svg class="svg-icon" aria-hidden="true"><ellipse cx="12" cy="12" rx="9" ry="7" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
+                      <span>椭圆</span>
+                    </button>
+                  </div>
+
+                  <div class="tb-sep"></div>
+
+                  <!-- 组4：比例量度 -->
+                  <div class="sd-draw-group">
+                    <button class="tb-btn sd-tool-btn" data-tool="fibonacci" title="黄金分割线（高低极值点，自动计算0.236/0.382/0.5/0.618/0.786）">
+                      <svg class="svg-icon" aria-hidden="true"><path d="M3 5h18M3 9h18M3 12h18M3 15h18M3 19h18" stroke="currentColor" stroke-width="1.4"/></svg>
+                      <span>黄金分割</span>
+                    </button>
+                    <button class="tb-btn sd-tool-btn" data-tool="measure" title="价格标尺（测算区间涨跌额、涨跌幅%及K线根数）">
+                      <svg class="svg-icon" aria-hidden="true"><path d="M4 8h16v8H4zM8 8v3M12 8v5M16 8v3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                      <span>标尺</span>
+                    </button>
+                  </div>
+
+                  <div class="tb-sep"></div>
+
+                  <!-- 组5：文字标注 -->
+                  <div class="sd-draw-group">
+                    <button class="tb-btn sd-tool-btn" data-tool="text" title="文字便签（在K线图上任意位置放置备忘文字）">
+                      <span style="font-weight:900;font-size:11px;font-family:serif;">Aa</span>
+                      <span>便签</span>
+                    </button>
+                  </div>
+
+                  <div class="tb-sep"></div>
+
+                  <!-- 组6：辅助开关 -->
+                  <div class="sd-draw-group">
+                    <button class="tb-btn sd-toggle-btn" id="sd-draw-magnet" title="轻微辅助吸附（开启时轻触吸附K线极值，再次点击切换强磁吸）">
+                      <svg class="svg-icon" aria-hidden="true"><use href="#i-magnet" /></svg>
+                      <span>磁吸</span>
+                    </button>
+                    <button class="tb-btn sd-toggle-btn" id="sd-draw-lock" title="锁定所有划线（禁止移动/拖拽）">
+                      <svg class="svg-icon" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M8 11V7a4 4 0 018 0v4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+                      <span>锁定</span>
+                    </button>
+                  </div>
+
+                  <div class="tb-sep"></div>
+
+                  <!-- 组7：调色与样式 -->
+                  <div class="sd-draw-group">
+                    <div class="sd-palette-wrap">
+                      <button class="tb-btn sd-palette-btn" id="sd-palette-btn" title="划线颜色与线宽设置" aria-haspopup="true" aria-expanded="false">
+                        <span class="sd-color-preview" id="sd-color-preview" style="background:#38bdf8"></span>
+                        <span>调色</span>
+                        <svg class="svg-icon" style="width:8px;height:8px;margin-left:1px" aria-hidden="true"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                      </button>
+                      <div class="sd-palette-pop" id="sd-palette-pop" style="display:none">
+                        <div class="sd-pop-title">划线颜色</div>
+                        <div class="sd-color-grid">
+                          <span class="sd-c-dot active" data-color="#38bdf8" style="background:#38bdf8" title="天蓝(默认)"></span>
+                          <span class="sd-c-dot" data-color="#f59e0b" style="background:#f59e0b" title="琥珀金"></span>
+                          <span class="sd-c-dot" data-color="#cdf24b" style="background:#cdf24b" title="Volt绿"></span>
+                          <span class="sd-c-dot" data-color="#ff2d2d" style="background:#ff2d2d" title="看涨红"></span>
+                          <span class="sd-c-dot" data-color="#00b35c" style="background:#00b35c" title="看跌绿"></span>
+                          <span class="sd-c-dot" data-color="#e040fb" style="background:#e040fb" title="紫罗兰"></span>
+                          <span class="sd-c-dot" data-color="#ffffff" style="background:#ffffff" title="纯白"></span>
+                        </div>
+                        <div class="sd-pop-title" style="margin-top:8px">线条粗细</div>
+                        <div class="sd-line-opts">
+                          <button class="sd-opt-btn active" data-width="1.8">细线</button>
+                          <button class="sd-opt-btn" data-width="3.0">粗线</button>
+                        </div>
+                        <div class="sd-pop-title" style="margin-top:8px">线条类型</div>
+                        <div class="sd-line-opts">
+                          <button class="sd-opt-btn sd-dash-btn active" data-dash="solid" title="实线">
+                            <svg viewBox="0 0 26 6" aria-hidden="true"><line x1="1" y1="3" x2="25" y2="3" stroke="currentColor" stroke-width="2"/></svg>
+                            <span>实线</span>
+                          </button>
+                          <button class="sd-opt-btn sd-dash-btn" data-dash="dashed-dense" title="短虚线（间隔密）">
+                            <svg viewBox="0 0 26 6" aria-hidden="true"><line x1="1" y1="3" x2="25" y2="3" stroke="currentColor" stroke-width="2" stroke-dasharray="2 2"/></svg>
+                            <span>短虚线</span>
+                          </button>
+                          <button class="sd-opt-btn sd-dash-btn" data-dash="dashed" title="常规虚线">
+                            <svg viewBox="0 0 26 6" aria-hidden="true"><line x1="1" y1="3" x2="25" y2="3" stroke="currentColor" stroke-width="2" stroke-dasharray="4 3"/></svg>
+                            <span>虚线</span>
+                          </button>
+                          <button class="sd-opt-btn sd-dash-btn" data-dash="dashed-sparse" title="长虚线（间隔疏）">
+                            <svg viewBox="0 0 26 6" aria-hidden="true"><line x1="1" y1="3" x2="25" y2="3" stroke="currentColor" stroke-width="2" stroke-dasharray="7 4"/></svg>
+                            <span>长虚线</span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- 弹性占位符 -->
+                  <div class="sd-toolbar-spacer"></div>
+
+                  <!-- 组8：动作与清理 -->
+                  <div class="sd-draw-group sd-ops-group">
+                    <button class="tb-btn sd-act-btn" id="sd-draw-undo" title="撤销上一次划线">
+                      <svg class="svg-icon" aria-hidden="true"><path d="M9 14L4 9l5-5M4 9h11a5 5 0 015 5v3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                      <span>撤销</span>
+                    </button>
+                    <button class="tb-btn sd-act-btn" id="sd-draw-delete" title="删除选中划线 (Delete)">
+                      <svg class="svg-icon" aria-hidden="true"><use href="#i-trash" /></svg>
+                      <span>删除</span>
+                    </button>
+                    <button class="tb-btn sd-act-btn sd-clear-btn" id="sd-draw-clear-all" title="清空当前标的全部划线">
+                      <span>清空</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 图表主舞台：ECharts 容器池 -->
+              <div class="sd-chart-stage">
+                <!-- 1. 分时走势区 -->
+                <div id="sd-minute-chart" style="width:100%;flex:1;min-height:160px;"></div>
+                <div id="sd-minute-vol" style="width:100%;height:80px;flex-shrink:0;"></div>
+
+                <!-- 2. K 线走势区 -->
+                <div id="sd-kline-chart" style="width:100%;flex:1;min-height:160px;display:none;"></div>
+                <div id="sd-volume-chart" style="width:100%;height:80px;flex-shrink:0;display:none;"></div>
+
+                <!-- 3. 副图技术指标容器 -->
+                <div id="sd-indicator-chart" style="width:100%;height:80px;flex-shrink:0;display:none;"></div>
+
+                <!-- 加载菊花与悬浮提示 -->
+                <div class="loading-overlay" id="sd-loading" style="display:none;"><div class="spinner"></div></div>
+
+                <!-- 行情加载异常与重试提示 -->
+                <div class="sd-chart-error" id="sd-chart-error" style="display:none;">
+                  <span class="sd-error-text" id="sd-error-text">数据加载超时</span>
+                  <button class="sd-retry-btn" id="sd-retry-btn">点击重试</button>
+                </div>
+
+                <!-- 内嵌便签输入框（点击便签工具放置时即时弹出，回车保存，彻底取代原生 window.prompt） -->
+                <div class="sd-inline-text-pop" id="sd-inline-text-pop" style="display:none;">
+                  <input type="text" id="sd-itp-input" placeholder="输入便签文字，按 Enter 完成..." maxlength="25" autocomplete="off" />
+                  <button class="sd-itp-btn" id="sd-itp-ok">确定</button>
+                  <button class="sd-itp-btn sd-itp-cancel" id="sd-itp-cancel">取消</button>
+                </div>
+
+                <!-- 框选局部放大浮动按钮：拖拽画框时出现，点击切换至局部 K 线 -->
+                <div class="sd-box-zoom-prompt" id="sd-box-zoom-prompt" style="display:none;">
+                  <button class="sd-bzp-btn" id="sd-bzp-btn" title="将 K 线放大切换至该区间">
+                    <svg class="svg-icon" style="width:12px;height:12px;" aria-hidden="true"><use href="#i-bolt"/></svg> 查看这部分
+                  </button>
+                  <button class="sd-bzp-close" id="sd-bzp-close" title="关闭提示">&times;</button>
+                </div>
+
+                <!-- 恢复全部视窗浮动按钮 -->
+                <button class="sd-zoom-reset-btn" id="sd-zoom-reset-btn" style="display:none;" title="恢复显示全部 K 线">
+                  <svg class="svg-icon" style="width:11px;height:11px;" aria-hidden="true"><use href="#i-refresh"/></svg> 恢复全部 K 线
+                </button>
+
+                <!-- 划线右键进入的编辑浮层：设置线条名称、粗细、颜色及删除 -->
+                <div class="sd-line-edit-pop" id="sd-line-edit-pop" style="display:none;">
+                  <div class="sd-lep-head">
+                    <span class="sd-lep-title">设置划线属性</span>
+                    <button class="sd-lep-close" id="sd-lep-close">&times;</button>
+                  </div>
+                  <div class="sd-lep-body">
+                    <div class="sd-lep-row">
+                      <label>名称备注</label>
+                      <input type="text" id="sd-lep-name" placeholder="如: 支撑线 / 突破位" maxlength="20" autocomplete="off" />
+                    </div>
+                    <div class="sd-lep-row">
+                      <label>线条颜色</label>
+                      <div class="sd-color-grid" id="sd-lep-colors">
+                        <span class="sd-c-dot" data-color="#38bdf8" style="background:#38bdf8" title="天蓝"></span>
+                        <span class="sd-c-dot" data-color="#f59e0b" style="background:#f59e0b" title="琥珀金"></span>
+                        <span class="sd-c-dot" data-color="#cdf24b" style="background:#cdf24b" title="Volt绿"></span>
+                        <span class="sd-c-dot" data-color="#ff2d2d" style="background:#ff2d2d" title="看涨红"></span>
+                        <span class="sd-c-dot" data-color="#00b35c" style="background:#00b35c" title="看跌绿"></span>
+                        <span class="sd-c-dot" data-color="#e040fb" style="background:#e040fb" title="紫罗兰"></span>
+                        <span class="sd-c-dot" data-color="#ffffff" style="background:#ffffff" title="纯白"></span>
+                      </div>
+                    </div>
+                    <div class="sd-lep-row">
+                      <label>线条粗细</label>
+                      <div class="sd-line-opts" id="sd-lep-widths">
+                        <button class="sd-opt-btn" data-width="1.2">细(1px)</button>
+                        <button class="sd-opt-btn active" data-width="2.0">中(2px)</button>
+                        <button class="sd-opt-btn" data-width="3.5">粗(4px)</button>
+                      </div>
+                    </div>
+                    <div class="sd-lep-row">
+                      <label>线条类型</label>
+                      <div class="sd-line-opts" id="sd-lep-styles">
+                        <button class="sd-opt-btn sd-dash-btn active" data-dash="solid" title="实线">
+                          <svg viewBox="0 0 26 6" aria-hidden="true"><line x1="1" y1="3" x2="25" y2="3" stroke="currentColor" stroke-width="2"/></svg>
+                          <span>实线</span>
+                        </button>
+                        <button class="sd-opt-btn sd-dash-btn" data-dash="dashed-dense" title="短虚线（间隔密）">
+                          <svg viewBox="0 0 26 6" aria-hidden="true"><line x1="1" y1="3" x2="25" y2="3" stroke="currentColor" stroke-width="2" stroke-dasharray="2 2"/></svg>
+                          <span>短虚线</span>
+                        </button>
+                        <button class="sd-opt-btn sd-dash-btn" data-dash="dashed" title="常规虚线">
+                          <svg viewBox="0 0 26 6" aria-hidden="true"><line x1="1" y1="3" x2="25" y2="3" stroke="currentColor" stroke-width="2" stroke-dasharray="4 3"/></svg>
+                          <span>虚线</span>
+                        </button>
+                        <button class="sd-opt-btn sd-dash-btn" data-dash="dashed-sparse" title="长虚线（间隔疏）">
+                          <svg viewBox="0 0 26 6" aria-hidden="true"><line x1="1" y1="3" x2="25" y2="3" stroke="currentColor" stroke-width="2" stroke-dasharray="7 4"/></svg>
+                          <span>长虚线</span>
+                        </button>
+                      </div>
+                    </div>
+                    <div class="sd-lep-foot">
+                      <button class="btn btn-accent" id="sd-lep-save" style="font-size:11px;padding:3px 10px;">完成</button>
+                      <button class="btn" id="sd-lep-del" style="font-size:11px;padding:3px 10px;color:var(--color-up);">删除此线</button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 拖拽调宽分隔条：拖动调整右侧看板宽度 -->
+            <div class="sd-side-resizer" id="sd-side-resizer" role="separator" aria-orientation="vertical" tabindex="0" title="拖动调整看板宽度"></div>
+
+            <!-- ===== 右侧：1:1 复刻原始 Dashboard 卡片面板（无 AI 模块） ===== -->
+            <div class="sd-right-panel">
+              <!-- 1. 标的报价卡 -->
+              <div class="side-card quote-summary-card">
+                <div class="symbol-title-row">
+                  <div>
+                    <span class="symbol-name" id="sd-dash-name">–</span>
+                    <span class="symbol-code" id="sd-dash-code">–</span>
+                  </div>
+                  <div>
+                    <button class="btn" id="sd-btn-dash-fav"><svg class="svg-icon" aria-hidden="true"><use href="#i-star" /></svg> 自选</button>
+                  </div>
+                </div>
+                <div class="price-large-row">
+                  <span class="price-large up" id="sd-dash-price">–</span>
+                  <span class="up" id="sd-dash-change">–</span>
+                </div>
+                <!-- 涨跌停与均价辅助速览 -->
+                <div class="sd-limit-row" style="display:flex;gap:12px;margin-top:6px;font-size:11px;color:var(--natives-text-muted);">
+                  <span>涨停: <b class="up" id="sd-limit-up">–</b></span>
+                  <span>跌停: <b class="down" id="sd-limit-down">–</b></span>
+                  <span>均价: <b id="sd-avg-price">–</b></span>
+                </div>
+              </div>
+
+              <!-- 2. 公司市值与估值股本卡片（全量展开） -->
+              <div class="side-card valuation-card">
+                <div class="side-card-header">市值与估值股本<span class="sc-arrow">▼</span></div>
+                <div class="metrics-grid">
+                  <div class="metric-box"><span class="metric-label">总市值(亿)</span><span class="metric-val" id="sd-v-mktcap">-</span></div>
+                  <div class="metric-box"><span class="metric-label">流通市值(亿)</span><span class="metric-val" id="sd-v-circ-mktcap">-</span></div>
+                  <div class="metric-box"><span class="metric-label">市盈率(PE动)</span><span class="metric-val" id="sd-v-pe">-</span></div>
+                  <div class="metric-box"><span class="metric-label">市净率(PB)</span><span class="metric-val" id="sd-v-pb">-</span></div>
+                  <div class="metric-box"><span class="metric-label">股息率%</span><span class="metric-val" id="sd-v-div">-</span></div>
+                  <div class="metric-box"><span class="metric-label">流通股本(亿)</span><span class="metric-val" id="sd-v-circ-shares">-</span></div>
+                  <div class="metric-box"><span class="metric-label">总股本(亿)</span><span class="metric-val" id="sd-v-total-shares">-</span></div>
+                  <div class="metric-box"><span class="metric-label">当日均价</span><span class="metric-val" id="sd-v-avg">-</span></div>
+                </div>
+              </div>
+
+              <!-- 3. 五档盘口 & 深度力量卡片（全量展开） -->
+              <div class="side-card depth-card">
+                <div class="side-card-header">五档盘口与深度力量<span class="sc-arrow">▼</span></div>
+                <div class="depth-grid">
+                  <div class="depth-side" id="sd-depth-asks">
+                    <div class="depth-row"><span class="depth-label">卖五</span><span class="num down">-</span><span class="num">-</span></div>
+                    <div class="depth-row"><span class="depth-label">卖四</span><span class="num down">-</span><span class="num">-</span></div>
+                    <div class="depth-row"><span class="depth-label">卖三</span><span class="num down">-</span><span class="num">-</span></div>
+                    <div class="depth-row"><span class="depth-label">卖二</span><span class="num down">-</span><span class="num">-</span></div>
+                    <div class="depth-row"><span class="depth-label">卖一</span><span class="num down">-</span><span class="num">-</span></div>
+                  </div>
+                  <div class="depth-side" id="sd-depth-bids">
+                    <div class="depth-row"><span class="depth-label">买一</span><span class="num up">-</span><span class="num">-</span></div>
+                    <div class="depth-row"><span class="depth-label">买二</span><span class="num up">-</span><span class="num">-</span></div>
+                    <div class="depth-row"><span class="depth-label">买三</span><span class="num up">-</span><span class="num">-</span></div>
+                    <div class="depth-row"><span class="depth-label">买四</span><span class="num up">-</span><span class="num">-</span></div>
+                    <div class="depth-row"><span class="depth-label">买五</span><span class="num up">-</span><span class="num">-</span></div>
+                  </div>
+                </div>
+                <div class="power-bar-wrap">
+                  <div class="power-bar-title">
+                    <span>买盘: <b id="sd-bid-vol-text">0</b></span>
+                    <span>力量比: <b id="sd-bid-ratio-text">50%</b></span>
+                    <span>卖盘: <b id="sd-ask-vol-text">0</b></span>
+                  </div>
+                  <div class="power-bar">
+                    <div class="power-bar-fill" id="sd-power-bar-fill" style="width: 50%;"></div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 4. 核心指标简况网格卡片（全量展开） -->
+              <div class="side-card metrics-card">
+                <div class="side-card-header">盘口关键指标<span class="sc-arrow">▼</span></div>
+                <div class="metrics-grid">
+                  <div class="metric-box"><span class="metric-label">最高</span><span class="metric-val" id="sd-m-high">-</span></div>
+                  <div class="metric-box"><span class="metric-label">最低</span><span class="metric-val" id="sd-m-low">-</span></div>
+                  <div class="metric-box"><span class="metric-label">今开</span><span class="metric-val" id="sd-m-open">-</span></div>
+                  <div class="metric-box"><span class="metric-label">昨收</span><span class="metric-val" id="sd-m-prev">-</span></div>
+                  <div class="metric-box"><span class="metric-label">成交额(万)</span><span class="metric-val" id="sd-m-amount">-</span></div>
+                  <div class="metric-box"><span class="metric-label">换手%</span><span class="metric-val" id="sd-m-turnover">-</span></div>
+                  <div class="metric-box"><span class="metric-label">量比</span><span class="metric-val" id="sd-m-vol-ratio">-</span></div>
+                  <div class="metric-box"><span class="metric-label">振幅%</span><span class="metric-val" id="sd-m-amplitude">-</span></div>
+                  <div class="metric-box"><span class="metric-label">委比%</span><span class="metric-val" id="sd-m-weibi">-</span></div>
+                  <div class="metric-box"><span class="metric-label">委差(手)</span><span class="metric-val" id="sd-m-weicha">-</span></div>
+                </div>
+              </div>
+
+              <!-- 5. 标的异动预警卡片 -->
+              <div class="side-card alert-card">
+                <div class="side-card-header">标的异动预警 (Alerts)<span class="sc-arrow">▼</span></div>
+                <div class="alert-body">
+                  <div class="alert-controls">
+                    <span>涨跌幅突破 ±</span>
+                    <input type="number" id="sd-alert-threshold" step="0.5" value="3.0">
+                    <span>%</span>
+                    <button class="btn btn-accent" id="sd-btn-set-alert">设预警</button>
+                  </div>
+                  <div style="font-size: 11px; color: var(--natives-text-muted); margin-top: 6px;">
+                    状态: <span id="sd-alert-status" class="up">已就绪</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>

@@ -25,7 +25,6 @@ pub struct FundModule {
     /// 取消信号：NAV/导入等长任务必须轮询（计划 §15/§30）。
     cancellation: Option<std::sync::Arc<app_runtime_core::CancellationToken>>,
     store: Option<Arc<Store>>,
-    python_child: Option<std::process::Child>,
 }
 
 fn open_ready_store(data_dir: &std::path::Path, product_version: &str) -> Result<Store, String> {
@@ -55,7 +54,6 @@ impl FundModule {
             product_version: None,
             cancellation: None,
             store: None,
-            python_child: None,
         }
     }
 
@@ -153,29 +151,6 @@ impl BuiltInAppModule for FundModule {
             .ok_or("module not initialized")?;
         let store = open_ready_store(data_dir, product_version)?;
         self.store = Some(Arc::new(store));
-
-        // 启动伴生 Python 趋势分析引擎子进程
-        let engine_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("engine");
-        let app_py = engine_dir.join("app.py");
-        if app_py.exists() {
-            match std::process::Command::new("python3")
-                .arg(&app_py)
-                .arg("--port")
-                .arg("8795")
-                .current_dir(&engine_dir)
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .spawn()
-            {
-                Ok(child) => {
-                    self.python_child = Some(child);
-                }
-                Err(e) => {
-                    eprintln!("Warning: failed to spawn trends python engine: {e}");
-                }
-            }
-        }
-
         Ok(())
     }
 
@@ -236,19 +211,6 @@ impl BuiltInAppModule for FundModule {
 
     fn shutdown(&mut self) -> Result<(), String> {
         self.store = None;
-        if let Some(mut child) = self.python_child.take() {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
         Ok(())
-    }
-}
-
-impl Drop for FundModule {
-    fn drop(&mut self) {
-        if let Some(mut child) = self.python_child.take() {
-            let _ = child.kill();
-            let _ = child.wait();
-        }
     }
 }

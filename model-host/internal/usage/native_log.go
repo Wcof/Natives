@@ -31,6 +31,7 @@ type NativeEvent struct {
 	OutputTokens     int64
 	CacheReadTokens  int64
 	CacheWriteTokens int64
+	ReasoningTokens  int64
 	TotalTokens      int64
 	SessionID        string
 	ParserVersion    string
@@ -329,6 +330,7 @@ func nativeEventToEvent(n NativeEvent) *Event {
 		OutputTokens:     n.OutputTokens,
 		CacheReadTokens:  n.CacheReadTokens,
 		CacheWriteTokens: n.CacheWriteTokens,
+		ReasoningTokens:  n.ReasoningTokens,
 		TotalTokens:      n.TotalTokens,
 		BillingAtom:      n.BillingAtom,
 		SessionID:        n.SessionID,

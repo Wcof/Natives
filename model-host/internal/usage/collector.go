@@ -69,6 +69,8 @@ var nativeSources = []nativeSource{
 		collect: collectKimiSource},
 	{toolID: "atomcode", displayName: "AtomCode", parserVersion: "atomcode-session/1", rootParts: []string{".atomcode"},
 		collect: collectAtomcodeSource},
+	{toolID: "grok-build", displayName: "Grok Build", parserVersion: "grok-session/1", rootParts: []string{".grok"},
+		collect: collectGrokSource},
 }
 
 // NativeCollectorToolIDs 返回有真实采集路径的工具 ID（矩阵测试对照用）。

@@ -80,9 +80,11 @@ void NativesStatusBarSweepProjectProcesses(void) {
 @property (nonatomic, copy) NSString *latestTooltip;
 @property (nonatomic, assign) double worstLimitPercent; // 0~100，无数据为 -1
 @property (nonatomic, strong) NSTimer *refreshTimer;
-// 最近一次手动刷新获得的 Codex 真实额度（内存驻留；面板重开时复用，不重复请求上游）
-@property (nonatomic, copy) NSDictionary *lastCodexLive;
-// 顶栏双行轮播：帧序列（用量帧 + 各渠道额度帧）、1 秒渲染 / 3 秒切换
+// 最近一次 8766 查询的账号额度快照（ADR-0033 Phase 2；8766 不可达时来自缓存兜底）
+@property (nonatomic, copy) NSArray *lastQuotaAccounts;
+// 额度数据来源标注："8766" / "cache" / "none"（none 时面板显示"模型服务未运行"）
+@property (nonatomic, copy) NSString *lastQuotaSource;
+// 顶栏双行轮播：帧序列（用量帧 + 各渠道额度帧）、1 秒渲染 / 20 秒切换
 @property (nonatomic, copy) NSArray *carouselFrames;
 @property (nonatomic, assign) NSUInteger carouselTick;
 @property (nonatomic, strong) NSTimer *carouselTimer;
@@ -137,7 +139,7 @@ void NativesStatusBarSweepProjectProcesses(void) {
                                                         repeats:YES];
     [self fetchAndUpdateState];
 
-    // 顶栏双行轮播：每秒渲染（额度倒计时走秒），每 3 秒切换一帧
+    // 顶栏双行轮播：每秒渲染（额度倒计时走秒），每 20 秒切换一帧
     self.carouselTimer = [NSTimer timerWithTimeInterval:1.0
                                                  target:self
                                                selector:@selector(carouselTickHandler)
@@ -145,6 +147,11 @@ void NativesStatusBarSweepProjectProcesses(void) {
                                                 repeats:YES];
     [[NSRunLoop mainRunLoop] addTimer:self.carouselTimer forMode:NSRunLoopCommonModes];
     [self rebuildQuotaFrames];
+
+    // 启动时在后台执行一次真实额度同步，确保顶栏立即拥有最新鲜活数据
+    [self fetchLimitsWithCompletion:^(NSArray *items) {
+        [self rebuildQuotaFrames];
+    } live:YES];
 }
 
 - (NSImage *)createTemplateIcon {
@@ -212,11 +219,14 @@ void NativesStatusBarSweepProjectProcesses(void) {
 
     NSNotificationCenter *nc = [NSNotificationCenter defaultCenter];
     [nc addObserver:self selector:@selector(panelClosed) name:NSWindowWillCloseNotification object:self.popoverPanel];
-    [nc addObserver:self selector:@selector(panelResignedKey) name:NSWindowDidResignKeyNotification object:self.popoverPanel];
     return self.popoverPanel;
 }
 
-- (void)panelResignedKey {
+- (void)closePanel {
+    if (self.clickOutsideMonitor) {
+        [NSEvent removeMonitor:self.clickOutsideMonitor];
+        self.clickOutsideMonitor = nil;
+    }
     if (self.popoverPanel && self.popoverPanel.isVisible) {
         [self.popoverPanel orderOut:nil];
     }
@@ -232,7 +242,7 @@ void NativesStatusBarSweepProjectProcesses(void) {
 
 - (void)togglePanel {
     if (self.popoverPanel && self.popoverPanel.isVisible) {
-        [self.popoverPanel orderOut:nil];
+        [self closePanel];
         return;
     }
 
@@ -256,6 +266,26 @@ void NativesStatusBarSweepProjectProcesses(void) {
     [self.webView loadHTMLString:NativesStatusBarPanelHTML() baseURL:nil];
     [panel makeKeyAndOrderFront:nil];
     [panel makeFirstResponder:self.webView];
+
+    // 全局鼠标监听：仅在点击面板外部（且不在状态栏按钮上）时才关闭面板，
+    // 面板内部的所有点击（Tab、滚动、刷新）绝不会误关闭窗口。
+    if (!self.clickOutsideMonitor) {
+        __unsafe_unretained typeof(self) weakSelf = self;
+        self.clickOutsideMonitor = [NSEvent addGlobalMonitorForEventsMatchingMask:(NSEventMaskLeftMouseDown | NSEventMaskRightMouseDown) handler:^(NSEvent *event) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (!weakSelf || !weakSelf.popoverPanel || !weakSelf.popoverPanel.isVisible) return;
+                NSPoint mouseLoc = [NSEvent mouseLocation];
+                NSRect panelFrame = weakSelf.popoverPanel.frame;
+                NSRect btnFrame = NSZeroRect;
+                if (weakSelf.statusItem.button.window) {
+                    btnFrame = [weakSelf.statusItem.button.window convertRectToScreen:weakSelf.statusItem.button.frame];
+                }
+                if (!NSPointInRect(mouseLoc, panelFrame) && !NSPointInRect(mouseLoc, btnFrame)) {
+                    [weakSelf closePanel];
+                }
+            });
+        }];
+    }
 }
 
 - (void)webView:(WKWebView *)webView didFinishNavigation:(WKNavigation *)navigation {
@@ -263,6 +293,10 @@ void NativesStatusBarSweepProjectProcesses(void) {
 }
 
 - (void)panelClosed {
+    if (self.clickOutsideMonitor) {
+        [NSEvent removeMonitor:self.clickOutsideMonitor];
+        self.clickOutsideMonitor = nil;
+    }
     self.popoverPanel = nil;
     self.webView = nil;
 }
@@ -282,13 +316,8 @@ void NativesStatusBarSweepProjectProcesses(void) {
 
     dispatch_group_t group = dispatch_group_create();
 
-    NSURLSessionConfiguration *config = [NSURLSessionConfiguration ephemeralSessionConfiguration];
-    config.timeoutIntervalForRequest = 1.5;
-    NSURLSession *session = [NSURLSession sessionWithConfiguration:config];
-
     dispatch_group_enter(group);
-    // 面板状态一律走本地聚合（tokenusage 库 + ZCode/Codex/pi 直连会话扫描），
-    // 这是服务端 tray/state（仅 tokenusage 库）的超集；扫描可能读数百个会话文件，
+    // 面板状态走本地 tokenusage.db 只读聚合（与服务端 tray/state 100% 同库同口径），
     // 放后台线程执行，结果回主线程投递
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         NSDictionary *state = FetchStateFromLocalSqlite();
@@ -299,25 +328,29 @@ void NativesStatusBarSweepProjectProcesses(void) {
                     if (stateData) {
                         [self updateWithStateJson:[[NSString alloc] initWithData:stateData encoding:NSUTF8StringEncoding]];
                     }
-                    id panel = state[@"panel"];
-                    if (panel) {
-                        [self postToPanel:@{@"type": @"panel", @"panel": panel}];
-                    }
-                    [self postToPanel:@{@"type": @"limits", @"items": FetchLimitsFromLocalSqlite() ?: @[]}];
-                } else {
-                    NSDictionary *emptyPanel = @{
-                        @"today": @{@"totalTokens": @0, @"costUsd": @0.0},
-                        @"thisWeek": @{@"totalTokens": @0, @"costUsd": @0.0},
-                        @"thisMonth": @{@"totalTokens": @0, @"costUsd": @0.0},
-                        @"allTime": @{@"totalTokens": @0, @"costUsd": @0.0},
-                        @"tools": @[],
-                        @"toolsByPeriod": @{@"today": @[], @"thisWeek": @[], @"thisMonth": @[], @"allTime": @[]},
-                        @"sessions": @[],
-                        @"trends": @[]
-                    };
-                    [self postToPanel:@{@"type": @"panel", @"panel": emptyPanel}];
-                    [self postToPanel:@{@"type": @"limits", @"items": @[]}];
-                }
+	                    id panel = state[@"panel"];
+	                    if (panel) {
+	                        NSArray *currentLimits = [self currentLimitsSnapshot];
+	                        NSMutableDictionary *msg = [@{@"type": @"panel", @"panel": panel} mutableCopy];
+	                        if (currentLimits.count > 0) {
+	                            msg[@"limits"] = currentLimits;
+	                        }
+	                        msg[@"quotaSource"] = self.lastQuotaSource ?: @"none";
+	                        [self postToPanel:msg];
+	                    }
+	                } else {
+	                    NSDictionary *emptyPanel = @{
+	                        @"today": @{@"totalTokens": @0, @"costUsd": @0.0},
+	                        @"thisWeek": @{@"totalTokens": @0, @"costUsd": @0.0},
+	                        @"thisMonth": @{@"totalTokens": @0, @"costUsd": @0.0},
+	                        @"allTime": @{@"totalTokens": @0, @"costUsd": @0.0},
+	                        @"tools": @[],
+	                        @"toolsByPeriod": @{@"today": @[], @"thisWeek": @[], @"thisMonth": @[], @"allTime": @[]},
+	                        @"sessions": @[],
+	                        @"trends": @[]
+	                    };
+	                    [self postToPanel:@{@"type": @"panel", @"panel": emptyPanel}];
+	                }
             }
             dispatch_group_leave(group);
         });
@@ -326,44 +359,77 @@ void NativesStatusBarSweepProjectProcesses(void) {
     dispatch_group_enter(group);
     [self fetchLimitsWithCompletion:^(NSArray *items) {
         if (self.webView) {
-            [self postToPanel:@{@"type": @"limits", @"items": items ?: @[]}];
+            [self postToPanel:@{@"type": @"limits", @"items": items ?: @[],
+                                @"quotaSource": self.lastQuotaSource ?: @"none"}];
         }
         dispatch_group_leave(group);
     } live:live];
 
     dispatch_group_notify(group, dispatch_get_main_queue(), ^{
-        [session finishTasksAndInvalidate];
         if (completion) completion();
         // 额度数据（Codex 实时结果 / 扩展写入的缓存）落地后重建顶栏轮播帧
         [self rebuildQuotaFrames];
     });
 }
 
-// 账号额度解析（后台线程）：本地 limits_cache 真实行 + 账号身份为基底。
-// Codex 真实额度仅在 live=YES（用户手动刷新）时实时请求上游；请求结果驻留内存，
-// 面板重开与状态轮询一律复用最近一次结果，不重复请求（避免高频请求触发账号风控）。
-// 无凭据/请求失败/尚未手动刷新时不产生任何占位数据，如实保留空窗口。
+// 将 8766 查询/缓存兜底得到的账号额度覆盖合并进本地基底账号列表
+// （按 providerId+account 匹配；未命中的账号条目原样追加，如 8766 有而本地身份缺失）
+static inline NSArray *MergeQuotaAccountsIntoBase(NSArray *base, NSArray *quotaAccounts) {
+    if (quotaAccounts.count == 0) return base ?: @[];
+    NSMutableArray *out = [base mutableCopy] ?: [NSMutableArray array];
+    for (NSDictionary *acc in quotaAccounts) {
+        if (![acc isKindOfClass:[NSDictionary class]]) continue;
+        NSMutableDictionary *target = nil;
+        for (NSMutableDictionary *it in out) {
+            if ([it[@"providerId"] isKindOfClass:[NSString class]] &&
+                [it[@"providerId"] isEqualToString:acc[@"providerId"]] &&
+                [it[@"account"] isKindOfClass:[NSString class]] &&
+                [it[@"account"] isEqualToString:acc[@"account"]]) {
+                target = it;
+                break;
+            }
+        }
+        if (!target) {
+            [out addObject:[acc mutableCopy]];
+            continue;
+        }
+        target[@"windows"] = acc[@"windows"];
+        target[@"status"] = acc[@"status"];
+        if ([acc[@"windows"] isKindOfClass:[NSMutableArray class]]) {
+            SortQuotaWindows5HFirst(acc[@"windows"]);
+        }
+    }
+    return out;
+}
+
+- (NSArray *)currentLimitsSnapshot {
+    NSArray *base = FetchLimitsFromLocalSqlite();
+    return MergeQuotaAccountsIntoBase(base, self.lastQuotaAccounts);
+}
+
+// 账号额度解析（后台线程，ADR-0033 Phase 2 / 审计 B2）：
+//   本地 limits_cache/账号身份为基底；额度经 8766 只读查询面获取——
+//   live=YES（用户手动刷新）时先触发 POST /ai/quota/refresh（model-host 内部
+//   执行上游探测，顶栏不再直连任何上游端点/Keychain），随后 GET /ai/quota；
+//   live=NO（面板打开/30s 轮询）只读最近结果，不触发上游请求（反封号口径不变）。
+//   8766 不可达时回落 quota-cache.json 只读兜底；两者皆空即"模型服务未运行"空态。
 - (void)fetchLimitsWithCompletion:(void (^)(NSArray *items))completion live:(BOOL)live {
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         NSArray *base = FetchLimitsFromLocalSqlite();
-        NSDictionary *codexLive = nil;
-        if (live) {
-            codexLive = FetchCodexUsageLive();
-            if (codexLive) self.lastCodexLive = codexLive;
-        } else {
-            codexLive = self.lastCodexLive;
-        }
-        NSArray *items = MergeCodexLiveUsage(base, codexLive);
+        NSString *quotaSource = @"none";
+        NSArray *quotaAccounts = FetchQuotaAccountsViaAIQuery(live, &quotaSource);
+        self.lastQuotaAccounts = quotaAccounts;
+        self.lastQuotaSource = quotaSource;
+        NSArray *items = MergeQuotaAccountsIntoBase(base, quotaAccounts);
         dispatch_async(dispatch_get_main_queue(), ^{
             completion(items ?: @[]);
         });
     });
 }
 
-// 刷新动作（仅由用户点击触发）：重拉面板状态，并实时请求 Codex 额度上游，全部落地后
-// 通知面板停止转圈。额度上游请求只由本动作发起；面板打开与 30s 状态轮询均不请求。
-// 运行时不可达时本地 SQLite 直读兜底。顶栏进程无 Bearer 会话（ADR-0032 仅豁免
-// 只读路由），不请求会话制的额度回源端点。
+// 刷新动作（仅由用户点击触发）：重拉面板状态，并经 8766 触发一次上游额度刷新，
+// 全部落地后通知面板停止转圈。上游请求只由 model-host 在本动作内发起；
+// 面板打开与 30s 状态轮询均不触发。运行时不可达时本地 SQLite 直读兜底。
 - (void)performPanelRefresh {
     if (!self.webView) return;
     [self fetchPanelDataLive:YES completion:^{
@@ -390,7 +456,7 @@ void NativesStatusBarSweepProjectProcesses(void) {
         return;
     }
     [self openTargetApp:action];
-    [self.popoverPanel orderOut:nil];
+    [self closePanel];
 }
 
 #pragma mark - NSMenuDelegate 与上下文菜单
@@ -501,6 +567,7 @@ void NativesStatusBarSweepProjectProcesses(void) {
         return;
     }
 
+    button.imagePosition = NSImageLeft;
     button.attributedTitle = [[NSAttributedString alloc] initWithString:@""];
     NSString *title = @"";
     switch (self.displayMode) {
@@ -531,7 +598,7 @@ void NativesStatusBarSweepProjectProcesses(void) {
 - (NSString *)compactCountdownFromEpoch:(double)epoch {
     if (epoch <= 0) return nil;
     NSTimeInterval seconds = epoch - [NSDate date].timeIntervalSince1970;
-    if (seconds <= 0) return @"0S";
+    if (seconds <= 0) return @"已重置";
     long long sec = (long long)seconds;
     if (sec < 60) return [NSString stringWithFormat:@"%lldS", sec];
     if (sec < 3600) return [NSString stringWithFormat:@"%lldM%lldS", sec / 60, sec % 60];
@@ -563,8 +630,7 @@ void NativesStatusBarSweepProjectProcesses(void) {
 
 // 百分比：整数不带小数，非整数保留一位（数字在前、% 后置）
 - (NSString *)percentText:(double)pct {
-    if (pct == (double)llround(pct)) return [NSString stringWithFormat:@"%.0f%%", pct];
-    return [NSString stringWithFormat:@"%.1f%%", pct];
+    return [NSString stringWithFormat:@"%.0f%%", pct];
 }
 
 // 费用：$ 前置改为数字前置、$ 后置（"3.42$"）
@@ -603,26 +669,60 @@ void NativesStatusBarSweepProjectProcesses(void) {
 
 - (void)rebuildQuotaFrames {
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        NSArray *items = FetchLimitsFromLocalSqlite();
-        items = MergeCodexLiveUsage(items, self.lastCodexLive);
+        NSArray *items = [self currentLimitsSnapshot];
 
         NSMutableArray *quotaFrames = [NSMutableArray array];
         for (NSDictionary *item in items) {
             if (![item isKindOfClass:[NSDictionary class]]) continue;
             NSArray *windows = [item[@"windows"] isKindOfClass:[NSArray class]] ? item[@"windows"] : @[];
             if (windows.count == 0) continue; // 无额度数据的渠道直接跳过
-            NSDictionary *selected = [self selectDisplayWindow:windows];
-            if (!selected) continue;
 
-            double sortPct = 101.0;
-            if ([selected[@"pct"] isKindOfClass:[NSNumber class]]) sortPct = [selected[@"pct"] doubleValue];
+            // 检查该渠道内部是否有不同模型分组（例如 Antigravity 同时具备 Claude/GPT 与 Gemini 独立额度）
+            NSMutableDictionary<NSString *, NSMutableArray *> *groups = [NSMutableDictionary dictionary];
+            for (NSDictionary *w in windows) {
+                if (![w isKindOfClass:[NSDictionary class]]) continue;
+                NSString *grp = [w[@"group"] isKindOfClass:[NSString class]] && [w[@"group"] length] > 0
+                    ? w[@"group"] : ExtractModelGroupFromLabel(w[@"label"]);
+                if (grp.length == 0) grp = item[@"providerId"] ?: @"";
+                if (!groups[grp]) groups[grp] = [NSMutableArray array];
+                [groups[grp] addObject:w];
+            }
 
-            [quotaFrames addObject:@{
-                @"kind": @"quota",
-                @"provider": item[@"providerId"] ?: @"",
-                @"window": selected,
-                @"sortPct": @(sortPct)
-            }];
+            for (NSString *grpName in groups) {
+                // 谷歌(antigravity)渠道只轮询 Gemini 额度，Claude 等其它模型组跳过不参与轮播
+                if ([item[@"providerId"] isEqualToString:@"antigravity"] && ![grpName containsString:@"Gemini"]) {
+                    continue;
+                }
+
+                NSArray *grpWindows = groups[grpName];
+                NSDictionary *selected = [self selectDisplayWindow:grpWindows];
+                if (!selected) continue;
+
+                double sortPct = 101.0;
+                if ([selected[@"pct"] isKindOfClass:[NSNumber class]]) sortPct = [selected[@"pct"] doubleValue];
+
+                NSString *subProvider = item[@"providerId"] ?: @"";
+                NSString *displayName = @"";
+                if ([grpName containsString:@"Claude"]) {
+                    displayName = @"Claude";
+                    subProvider = @"claude"; // 图标用 C
+                } else if ([grpName containsString:@"Gemini"]) {
+                    displayName = @"Gemini";
+                    subProvider = @"antigravity"; // 图标用 G
+                } else {
+                    displayName = [item[@"providerId"] isEqualToString:@"codex"] ? @"Codex" : grpName;
+                    if ([item[@"providerId"] isEqualToString:@"codex"]) subProvider = @"codex";
+                }
+
+                [quotaFrames addObject:@{
+                    @"kind": @"quota",
+                    @"provider": subProvider,
+                    @"name": displayName,
+                    @"window": selected,
+                    @"allWindows": grpWindows,
+                    @"sortPct": @(sortPct)
+                }];
+            }
         }
         // 余量最少的渠道先轮播（哪个最少先显示哪个）
         [quotaFrames sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
@@ -693,18 +793,43 @@ void NativesStatusBarSweepProjectProcesses(void) {
             [lines addObject:self.latestTokensText ?: @"--"];
             [lines addObject:[self costNumberFirst:self.latestCostText]];
         } else {
-            // 额度帧拆两行降低宽度：上行 窗口简称+百分比（有余量时），下行 重置倒计时
+            // 额度帧拆两行降低宽度：上行 渠道名+百分比（有余量时），下行 重置倒计时
+            NSString *channel = frame[@"name"] ?: @"";
             NSDictionary *w = [frame[@"window"] isKindOfClass:[NSDictionary class]] ? frame[@"window"] : @{};
-            NSString *shortLabel = [self quotaWindowShortLabel:[w[@"label"] isKindOfClass:[NSString class]] ? w[@"label"] : @"额度"];
-            double pct = [w[@"pct"] isKindOfClass:[NSNumber class]] ? [w[@"pct"] doubleValue] : 0.0;
-            if (pct > 0) {
-                [lines addObject:[NSString stringWithFormat:@"%@ %@", shortLabel, [self percentText:pct]]];
-            } else {
-                [lines addObject:shortLabel]; // 耗尽时百分比无意义，不再显示
+            NSArray *allWins = [frame[@"allWindows"] isKindOfClass:[NSArray class]] ? frame[@"allWindows"] : @[];
+
+            NSDictionary *w5h = nil, *wWk = nil;
+            for (NSDictionary *candidate in allWins) {
+                NSString *lbl = candidate[@"label"] ?: @"";
+                if ([lbl containsString:@"5小时"]) w5h = candidate;
+                else if ([lbl containsString:@"周"]) wWk = candidate;
             }
-            double epoch = [w[@"resetEpoch"] isKindOfClass:[NSNumber class]] ? [w[@"resetEpoch"] doubleValue] : 0.0;
-            NSString *countdown = [self compactCountdownFromEpoch:epoch];
-            [lines addObject:countdown ?: @"--"];
+
+            double p5h = (w5h && [w5h[@"pct"] isKindOfClass:[NSNumber class]]) ? [w5h[@"pct"] doubleValue] : -1;
+            double pWk = (wWk && [wWk[@"pct"] isKindOfClass:[NSNumber class]]) ? [wWk[@"pct"] doubleValue] : -1;
+
+            NSString *line1 = @"";
+            NSString *line2 = @"";
+
+            if (p5h > 0) {
+                // 5小时有剩余：上行紧凑 "5H 百分比"，下行紧凑倒计时
+                line1 = [NSString stringWithFormat:@"5H %@", [self percentText:p5h]];
+                double epoch = [w5h[@"resetEpoch"] doubleValue];
+                line2 = [self compactCountdownFromEpoch:epoch] ?: @"--";
+            } else if (pWk > 0) {
+                // 5小时已尽但周还有：上行 "5H 0%"，下行 5小时重置倒计时（等5小时恢复）
+                line1 = @"5H 0%";
+                double epoch = [w5h[@"resetEpoch"] doubleValue];
+                line2 = [self compactCountdownFromEpoch:epoch] ?: @"--";
+            } else {
+                // 5小时与周全部耗尽：上行 "周 百分比"，下行 周额度重置倒计时
+                line1 = [NSString stringWithFormat:@"周 %@", (pWk >= 0 ? [self percentText:pWk] : @"0%")];
+                double epoch = (wWk ? [wWk[@"resetEpoch"] doubleValue] : [w[@"resetEpoch"] doubleValue]);
+                line2 = [self compactCountdownFromEpoch:epoch] ?: @"--";
+            }
+
+            [lines addObject:line1];
+            [lines addObject:line2];
         }
         if (lines.count == 0) continue;
         for (NSString *l in lines) {
@@ -713,9 +838,9 @@ void NativesStatusBarSweepProjectProcesses(void) {
         [rendered addObject:@[lines, frame[@"kind"] ?: @"", frame[@"provider"] ?: @""]];
     }
 
-    // 整帧绘制成一张模板图元：画布 22pt 高；用量帧占上下两半，额度帧单行垂直居中，
-    // 渠道图标 16pt 垂直居中——垂直居中由几何直接保证，不再依赖按钮文本排版
-    CGFloat iconSize = 16.0, iconX = 1.0, textX = iconX + iconSize + 2.0, padding = 3.0;
+    // 整帧绘制成一张紧凑模板图元：画布 22pt 高，图标 14pt 居中，
+    // 严格控制总宽（约 50pt，仅相当于 2~3 个字符宽度），避免在顶栏占过长区域
+    CGFloat iconSize = 14.0, iconX = 0.0, textX = iconX + iconSize + 2.5, padding = 1.5;
     CGFloat height = 22.0, band = height / 2.0;
     CGFloat width = floor(textX + textWidth + padding);
 
@@ -746,6 +871,7 @@ void NativesStatusBarSweepProjectProcesses(void) {
     [image setTemplate:YES];
 
     button.image = image;
+    button.imagePosition = NSImageOnly;
     button.title = @"";
     button.attributedTitle = [[NSAttributedString alloc] initWithString:@""];
 }

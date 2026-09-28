@@ -1,0 +1,97 @@
+{
+  "trend": {
+    "direction": "下降",
+    "strength": 0,
+    "stage": "强势下降趋势",
+    "ma_arrangement": "纠缠",
+    "ma_scores": {
+      "ma20_dir": 0,
+      "ma60_dir": 0,
+      "price_vs_ma20": 0,
+      "price_vs_ma60": 0,
+      "resonance": 0
+    },
+    "trendline": null,
+    "signals": [
+      "MA20向下"
+    ]
+  },
+  "breakout": [
+    {
+      "system": "系统一(20日)",
+      "signal": "持仓",
+      "breakout_price": 371.25,
+      "current_n": 10.2955,
+      "stop_loss": 313.59,
+      "entry_price": 293.0,
+      "position_units": 1,
+      "exit_price": null,
+      "channel_high": 371.25,
+      "channel_low": 293.0,
+      "next_add_price": null,
+      "signals": [
+        "持有空头0日，止损313.59"
+      ],
+      "description": "系统一入场=空@293.00，N=10.2955，持有0日"
+    },
+    {
+      "system": "系统二(55日)",
+      "signal": "持仓",
+      "breakout_price": 408.6,
+      "current_n": 10.2955,
+      "stop_loss": 313.59,
+      "entry_price": 293.0,
+      "position_units": 1,
+      "exit_price": null,
+      "channel_high": 408.6,
+      "channel_low": 293.0,
+      "next_add_price": null,
+      "signals": [
+        "持有空头0日，止损313.59"
+      ],
+      "description": "系统二入场=空@293.00，N=10.2955，持有0日"
+    }
+  ],
+  "volume_price": {
+    "pattern": "价跌量缩",
+    "direction": "看跌",
+    "confidence": 62,
+    "volume_ratio": 1.0,
+    "turnover": 0.0,
+    "obv_trend": "下降",
+    "signals": [
+      "OBV下降"
+    ],
+    "description": "量价模式=价跌量缩，量比=1.0，换手=0.0%"
+  },
+  "pattern": [
+    {
+      "name": "向下突破缺口",
+      "direction": "看跌",
+      "confidence": 65,
+      "status": "已形成",
+      "target_price": null,
+      "key_levels": {
+        "缺口下沿": 292.66
+      },
+      "description": "向下跳空缺口0.34，回补前视为压力"
+    }
+  ],
+  "canslim": {
+    "c_score": 50,
+    "a_score": 20,
+    "n_score": 40,
+    "s_score": 40,
+    "l_score": 20,
+    "i_score": 50,
+    "m_score": 35,
+    "total": 36,
+    "grade": "C",
+    "signals": [
+      "⚠️ 市场环境偏空，谨慎操作",
+      "⚠️ 相对强度弱势，非领涨股"
+    ],
+    "cup_handle": null,
+    "description": "综合36分(C) | C=50 A=20 N=40 S=40 L=20 I=50 M=35"
+  }
+}

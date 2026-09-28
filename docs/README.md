@@ -24,10 +24,11 @@ Natives 是单一用户产品：Chrome Extension 提供界面，Rust native-file
 
 | 任务 | 先读 |
 |---|---|
-| 单一产品、内置 Fund 和 App Center | [托管应用契约](contracts/managed-app-contract.md)、[内置模块标准](standards/technical/06-built-in-modules.md)、[应用中心实施方案](development/app-center-fund-implementation-plan.md) |
+| 单一产品、内置 Fund 和 App Center | [托管应用契约](contracts/managed-app-contract.md)、[内置模块标准](standards/technical/06-built-in-modules.md)、[应用中心实施方案](development/app-center-fund-implementation-plan.md)。注：fund = 投资终端（含基金记账），displayName "投资/Invest" |
 | 安装、引导、打包和发布 | [应用中心实施方案](development/app-center-fund-implementation-plan.md)、[当前架构](architecture/ARCHITECTURE.md) |
 | Files | [Files 审计](architecture/FILE_MANAGER_AUDIT.md) |
 | AI 用量、成本、会话和提醒 | [AI 效能总方案](development/ai-efficiency-components-plan.md)、[整改方案](development/ai-efficiency-remediation-implementation-plan.md)、ADR-0030 |
+| AI 用量/额度/会话查询收口（提案） | [收口方案](development/tokenusage-consolidation-plan.md)、ADR-0030、ADR-0032 |
 | 性能和内存回收 | [性能整改方案](architecture/application-performance-remediation.md)、[性能标准](standards/technical/04-performance.md) |
 | Provider、OAuth、Secret | ADR-0020、[Security](standards/technical/02-security.md)、[Data](standards/technical/03-data.md) |
 | 本地 loopback 端口申请与登记 | [端口注册表](standards/technical/05-port-registry.md)、ADR-0032 |

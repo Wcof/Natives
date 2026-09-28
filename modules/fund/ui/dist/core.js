@@ -52,9 +52,43 @@ const state = {
   tempDrawing: null,
   isDraggingAnchor: -1,
   pendingImportPreview: null,
-  ws: null,
-  wsConnected: false,
+  language: "zh-CN", // 父页握手后同步（07 §5.2）；切换走 storage 变更 + reload
 };
+
+// ---------- 最小 i18n 层（审计 C3 骨架）----------
+// 双语文案表：先骨架后补全——JS 动态生成的用户可见文案逐批迁入，
+// 静态 HTML 文案随后续迭代迁移。缺 key 时回退中文原文。
+const I18N_MESSAGES = {
+  en: {
+    alertTitle: "Investment Alert",
+    alertBody: "Symbol {name} ({symbol}) moved {badge}, please review.",
+    alertSetPrefix: "Set ±",
+    alertSetSuffix: "%",
+  },
+  "zh-CN": {
+    alertTitle: "投资异动预警",
+    alertBody: "标的 {name}（{symbol}）涨跌幅已达 {badge}，请关注。",
+    alertSetPrefix: "已设 ±",
+    alertSetSuffix: "%",
+  },
+};
+
+function t(key, params) {
+  const table = I18N_MESSAGES[state.language] || I18N_MESSAGES["zh-CN"];
+  let text = table[key] ?? I18N_MESSAGES["zh-CN"][key] ?? key;
+  if (params) {
+    for (const [k, v] of Object.entries(params)) {
+      text = text.split("{" + k + "}").join(String(v));
+    }
+  }
+  return text;
+}
+
+function applyLanguage(language) {
+  state.language = language === "en" ? "en" : "zh-CN";
+  document.documentElement.lang = state.language;
+  document.dispatchEvent(new CustomEvent("fund:language-changed", { detail: { language: state.language } }));
+}
 
 // 跨域动作注册表：领域模块在文件底部注册，调用方经 actions.xxx() 访问。
 const actions = {};
@@ -115,4 +149,4 @@ function themeRgba(name, alpha) {
 }
 
 // 挂载命名空间：bundle 模式下后续文件的唯一依赖入口
-globalThis.Fund = { state, actions, api, authFetch, themeColor, themeRgba };
+globalThis.Fund = { state, actions, api, authFetch, themeColor, themeRgba, t, applyLanguage };

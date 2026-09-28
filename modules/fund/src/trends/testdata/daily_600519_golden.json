@@ -1,0 +1,2647 @@
+{
+ "kline_count": 250,
+ "merged_count": 182,
+ "fractal_count": 82,
+ "stroke_count": 20,
+ "zhongshu_count": 9,
+ "fractals": [
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 1376.03,
+   "date": "2025-09-26"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 1418.01,
+   "date": "2025-09-30"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 1368.02,
+   "date": "2025-10-09"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 1387.96,
+   "date": "2025-10-10"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 1363.14,
+   "date": "2025-10-13"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 1436.02,
+   "date": "2025-10-17"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 1402.9,
+   "date": "2025-10-20"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 1417.96,
+   "date": "2025-10-22"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 1395.22,
+   "date": "2025-10-23"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 1426.9,
+   "date": "2025-10-24"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 1368.03,
+   "date": "2025-11-05"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 1426.38,
+   "date": "2025-11-12"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 1393.81,
+   "date": "2025-11-17"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 1434.09,
+   "date": "2025-11-19"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 1387.06,
+   "date": "2025-11-27"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 1410.29,
+   "date": "2025-12-01"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 1366.4,
+   "date": "2025-12-04"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 1384.69,
+   "date": "2025-12-08"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 1331.2,
+   "date": "2025-12-10"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 1388.01,
+   "date": "2025-12-15"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 1363.02,
+   "date": "2025-12-16"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 1387.96,
+   "date": "2025-12-18"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 1372.99,
+   "date": "2025-12-19"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 1386.12,
+   "date": "2025-12-22"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 1369.17,
+   "date": "2025-12-24"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 1391.46,
+   "date": "2025-12-26"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 1349.15,
+   "date": "2025-12-31"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 1408.95,
+   "date": "2026-01-07"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 1380.12,
+   "date": "2026-01-08"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 1402.98,
+   "date": "2026-01-12"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 1297.1,
+   "date": "2026-01-26"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 1325.68,
+   "date": "2026-01-27"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 1293.99,
+   "date": "2026-01-28"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 1539.98,
+   "date": "2026-02-06"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 1435.58,
+   "date": "2026-02-24"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 1481.64,
+   "date": "2026-02-25"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 1355.18,
+   "date": "2026-03-09"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 1381.47,
+   "date": "2026-03-11"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 1362.99,
+   "date": "2026-03-12"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 1470.05,
+   "date": "2026-03-18"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 1372.01,
+   "date": "2026-03-24"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 1389.85,
+   "date": "2026-03-25"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 1368.64,
+   "date": "2026-03-27"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 1451.91,
+   "date": "2026-04-01"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 1424.08,
+   "date": "2026-04-02"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 1441.98,
+   "date": "2026-04-07"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 1404.98,
+   "date": "2026-04-13"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 1449.39,
+   "date": "2026-04-16"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 1371.85,
+   "date": "2026-04-20"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 1391.88,
+   "date": "2026-04-21"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 1376.96,
+   "date": "2026-04-22"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 1430.86,
+   "date": "2026-04-24"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 1372.09,
+   "date": "2026-04-28"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 1381.73,
+   "date": "2026-04-29"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 1332.03,
+   "date": "2026-05-06"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 1359.98,
+   "date": "2026-05-07"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 1222.08,
+   "date": "2026-05-27"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 1300.98,
+   "date": "2026-06-01"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 1222.19,
+   "date": "2026-06-10"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 1266.98,
+   "date": "2026-06-15"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 1176.98,
+   "date": "2026-06-22"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 1235.98,
+   "date": "2026-06-23"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 1151.01,
+   "date": "2026-06-30"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 1215.52,
+   "date": "2026-07-02"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 1170.28,
+   "date": "2026-07-10"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 1344.7,
+   "date": "2026-07-21"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 1283.24,
+   "date": "2026-07-23"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 1309.21,
+   "date": "2026-07-24"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 1279.58,
+   "date": "2026-07-27"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 1363.35,
+   "date": "2026-08-03"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 1300.01,
+   "date": "2026-08-06"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 1359.97,
+   "date": "2026-08-11"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 1332.51,
+   "date": "2026-08-12"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 1359.6,
+   "date": "2026-08-14"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 1280.34,
+   "date": "2026-08-17"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 1308.88,
+   "date": "2026-08-20"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 1270.33,
+   "date": "2026-08-24"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 1317.0,
+   "date": "2026-08-25"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 1286.0,
+   "date": "2026-08-31"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 1338.86,
+   "date": "2026-09-07"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 1248.1,
+   "date": "2026-09-22"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 1271.5,
+   "date": "2026-09-23"
+  }
+ ],
+ "strokes": [
+  {
+   "direction": "up",
+   "start_price": 1363.14,
+   "end_price": 1417.96,
+   "start_date": "2025-10-13",
+   "end_date": "2025-10-22",
+   "macd_area": 48.35,
+   "has_divergence": false
+  },
+  {
+   "direction": "down",
+   "start_price": 1426.9,
+   "end_price": 1368.03,
+   "start_date": "2025-10-24",
+   "end_date": "2025-11-05",
+   "macd_area": 58.16,
+   "has_divergence": false
+  },
+  {
+   "direction": "up",
+   "start_price": 1368.03,
+   "end_price": 1434.09,
+   "start_date": "2025-11-05",
+   "end_date": "2025-11-19",
+   "macd_area": 68.91,
+   "has_divergence": false
+  },
+  {
+   "direction": "down",
+   "start_price": 1434.09,
+   "end_price": 1387.06,
+   "start_date": "2025-11-19",
+   "end_date": "2025-11-27",
+   "macd_area": 28.61,
+   "has_divergence": false
+  },
+  {
+   "direction": "up",
+   "start_price": 1331.2,
+   "end_price": 1387.96,
+   "start_date": "2025-12-10",
+   "end_date": "2025-12-18",
+   "macd_area": 36.14,
+   "has_divergence": false
+  },
+  {
+   "direction": "down",
+   "start_price": 1408.95,
+   "end_price": 1297.1,
+   "start_date": "2026-01-07",
+   "end_date": "2026-01-26",
+   "macd_area": 104.83,
+   "has_divergence": false
+  },
+  {
+   "direction": "up",
+   "start_price": 1293.99,
+   "end_price": 1539.98,
+   "start_date": "2026-01-28",
+   "end_date": "2026-02-06",
+   "macd_area": 175.13,
+   "has_divergence": false
+  },
+  {
+   "direction": "down",
+   "start_price": 1539.98,
+   "end_price": 1435.58,
+   "start_date": "2026-02-06",
+   "end_date": "2026-02-24",
+   "macd_area": 179.52,
+   "has_divergence": false
+  },
+  {
+   "direction": "up",
+   "start_price": 1355.18,
+   "end_price": 1470.05,
+   "start_date": "2026-03-09",
+   "end_date": "2026-03-18",
+   "macd_area": 123.78,
+   "has_divergence": false
+  },
+  {
+   "direction": "down",
+   "start_price": 1470.05,
+   "end_price": 1368.64,
+   "start_date": "2026-03-18",
+   "end_date": "2026-03-27",
+   "macd_area": 44.62,
+   "has_divergence": true
+  },
+  {
+   "direction": "up",
+   "start_price": 1368.64,
+   "end_price": 1441.98,
+   "start_date": "2026-03-27",
+   "end_date": "2026-04-07",
+   "macd_area": 39.06,
+   "has_divergence": false
+  },
+  {
+   "direction": "down",
+   "start_price": 1441.98,
+   "end_price": 1404.98,
+   "start_date": "2026-04-07",
+   "end_date": "2026-04-13",
+   "macd_area": 33.31,
+   "has_divergence": false
+  },
+  {
+   "direction": "up",
+   "start_price": 1371.85,
+   "end_price": 1430.86,
+   "start_date": "2026-04-20",
+   "end_date": "2026-04-24",
+   "macd_area": 40.19,
+   "has_divergence": false
+  },
+  {
+   "direction": "down",
+   "start_price": 1430.86,
+   "end_price": 1332.03,
+   "start_date": "2026-04-24",
+   "end_date": "2026-05-06",
+   "macd_area": 49.21,
+   "has_divergence": false
+  },
+  {
+   "direction": "up",
+   "start_price": 1222.08,
+   "end_price": 1266.98,
+   "start_date": "2026-05-27",
+   "end_date": "2026-06-15",
+   "macd_area": 50.31,
+   "has_divergence": false
+  },
+  {
+   "direction": "down",
+   "start_price": 1266.98,
+   "end_price": 1151.01,
+   "start_date": "2026-06-15",
+   "end_date": "2026-06-30",
+   "macd_area": 41.02,
+   "has_divergence": true
+  },
+  {
+   "direction": "up",
+   "start_price": 1151.01,
+   "end_price": 1344.7,
+   "start_date": "2026-06-30",
+   "end_date": "2026-07-21",
+   "macd_area": 207.42,
+   "has_divergence": false
+  },
+  {
+   "direction": "down",
+   "start_price": 1363.35,
+   "end_price": 1332.51,
+   "start_date": "2026-08-03",
+   "end_date": "2026-08-12",
+   "macd_area": 45.18,
+   "has_divergence": false
+  },
+  {
+   "direction": "up",
+   "start_price": 1270.33,
+   "end_price": 1338.86,
+   "start_date": "2026-08-24",
+   "end_date": "2026-09-07",
+   "macd_area": 100.9,
+   "has_divergence": false
+  },
+  {
+   "direction": "down",
+   "start_price": 1338.86,
+   "end_price": 1248.1,
+   "start_date": "2026-09-07",
+   "end_date": "2026-09-22",
+   "macd_area": 82.78,
+   "has_divergence": false
+  }
+ ],
+ "zhongshus": [
+  {
+   "start_date": "2025-10-13",
+   "end_date": "2025-11-05",
+   "zg": 1417.96,
+   "zd": 1368.03,
+   "zz": 1392.99,
+   "is_broken": true,
+   "break_direction": "up"
+  },
+  {
+   "start_date": "2025-11-05",
+   "end_date": "2026-01-07",
+   "zg": 1434.09,
+   "zd": 1387.06,
+   "zz": 1410.57,
+   "is_broken": true,
+   "break_direction": "down"
+  },
+  {
+   "start_date": "2025-12-10",
+   "end_date": "2026-01-28",
+   "zg": 1387.96,
+   "zd": 1331.2,
+   "zz": 1359.58,
+   "is_broken": true,
+   "break_direction": "up"
+  },
+  {
+   "start_date": "2026-01-28",
+   "end_date": "2026-03-18",
+   "zg": 1539.98,
+   "zd": 1435.58,
+   "zz": 1487.78,
+   "is_broken": true,
+   "break_direction": "down"
+  },
+  {
+   "start_date": "2026-03-09",
+   "end_date": "2026-04-24",
+   "zg": 1470.05,
+   "zd": 1368.64,
+   "zz": 1419.34,
+   "is_broken": true,
+   "break_direction": "down"
+  },
+  {
+   "start_date": "2026-03-27",
+   "end_date": "2026-04-24",
+   "zg": 1441.98,
+   "zd": 1404.98,
+   "zz": 1423.48,
+   "is_broken": true,
+   "break_direction": "down"
+  },
+  {
+   "start_date": "2026-04-20",
+   "end_date": "2026-06-15",
+   "zg": 1430.86,
+   "zd": 1371.85,
+   "zz": 1401.35,
+   "is_broken": true,
+   "break_direction": "down"
+  },
+  {
+   "start_date": "2026-05-27",
+   "end_date": "2026-06-30",
+   "zg": 1266.98,
+   "zd": 1222.08,
+   "zz": 1244.53,
+   "is_broken": true,
+   "break_direction": "up"
+  },
+  {
+   "start_date": "2026-06-30",
+   "end_date": "2026-09-07",
+   "zg": 1344.7,
+   "zd": 1332.51,
+   "zz": 1338.61,
+   "is_broken": true,
+   "break_direction": "down"
+  }
+ ],
+ "signals": [
+  {
+   "type": "buy1",
+   "type_name": "\u4e00\u7c7b\u4e70\u70b9",
+   "price": 1368.64,
+   "date": "2026-03-27",
+   "confidence": 86,
+   "description": "\u4e00\u7c7b\u4e70\u70b9\uff1a\u65e5\u7ebf\u5e95\u80cc\u9a70\uff0cMACD\u9762\u79ef44.6\u8f83\u524d\u7b14\u8870\u51cf\uff0c\u7a7a\u5934\u529b\u5ea6\u8870\u7aed"
+  },
+  {
+   "type": "buy1",
+   "type_name": "\u4e00\u7c7b\u4e70\u70b9",
+   "price": 1151.01,
+   "date": "2026-06-30",
+   "confidence": 65,
+   "description": "\u4e00\u7c7b\u4e70\u70b9\uff1a\u65e5\u7ebf\u5e95\u80cc\u9a70\uff0cMACD\u9762\u79ef41.0\u8f83\u524d\u7b14\u8870\u51cf\uff0c\u7a7a\u5934\u529b\u5ea6\u8870\u7aed"
+  },
+  {
+   "type": "buy2",
+   "type_name": "\u4e8c\u7c7b\u4e70\u70b9",
+   "price": 1404.98,
+   "date": "2026-04-13",
+   "confidence": 70,
+   "description": "\u4e8c\u7c7b\u4e70\u70b9\uff1a\u4e00\u7c7b\u4e70\u70b9\u540e\u53cd\u5f39\u518d\u56de\u843d\uff0c\u672a\u7834\u524d\u4f4e1368.64"
+  },
+  {
+   "type": "buy2",
+   "type_name": "\u4e8c\u7c7b\u4e70\u70b9",
+   "price": 1332.51,
+   "date": "2026-08-12",
+   "confidence": 70,
+   "description": "\u4e8c\u7c7b\u4e70\u70b9\uff1a\u4e00\u7c7b\u4e70\u70b9\u540e\u53cd\u5f39\u518d\u56de\u843d\uff0c\u672a\u7834\u524d\u4f4e1151.01"
+  },
+  {
+   "type": "buy3",
+   "type_name": "\u4e09\u7c7b\u4e70\u70b9",
+   "price": 1435.58,
+   "date": "2026-02-24",
+   "confidence": 75,
+   "description": "\u4e09\u7c7b\u4e70\u70b9\uff1a\u4e2d\u67a2[1331.20-1387.96]\u5411\u4e0a\u7a81\u7834\u540e\u56de\u8e29\uff0c\u672a\u56de\u5230\u4e2d\u67a2\u5185"
+  },
+  {
+   "type": "buy3",
+   "type_name": "\u4e09\u7c7b\u4e70\u70b9",
+   "price": 1332.51,
+   "date": "2026-08-12",
+   "confidence": 75,
+   "description": "\u4e09\u7c7b\u4e70\u70b9\uff1a\u4e2d\u67a2[1222.08-1266.98]\u5411\u4e0a\u7a81\u7834\u540e\u56de\u8e29\uff0c\u672a\u56de\u5230\u4e2d\u67a2\u5185"
+  }
+ ],
+ "current_state": "\u5904\u4e8e\u5411\u4e0b\u7b14\u4e2d\uff0c\u7a7a\u5934\u5ef6\u7eed\uff0c\u6700\u8fd1\u4e2d\u67a2\u5df2\u5411\u4e0b\u7a81\u7834\uff0c\u6700\u65b0\u4fe1\u53f7\uff1a\u4e09\u7c7b\u4e70\u70b9@1332.51",
+ "summary": "\u6700\u65b0\u4fe1\u53f7\uff1a\u4e09\u7c7b\u4e70\u70b9@1332.51(2026-08-12)",
+ "description": "\u517182\u4e2a\u5206\u578b\u300120\u7b14\u30019\u4e2a\u4e2d\u67a2\u30016\u4e2a\u4fe1\u53f7\u3002\u5904\u4e8e\u5411\u4e0b\u7b14\u4e2d\uff0c\u7a7a\u5934\u5ef6\u7eed\uff0c\u6700\u8fd1\u4e2d\u67a2\u5df2\u5411\u4e0b\u7a81\u7834\uff0c\u6700\u65b0\u4fe1\u53f7\uff1a\u4e09\u7c7b\u4e70\u70b9@1332.51",
+ "chart_signals": [
+  {
+   "coord": [
+    "2026-03-27",
+    1368.636
+   ],
+   "symbol": "triangle",
+   "symbolRotate": 0,
+   "symbolSize": 14,
+   "itemStyle": {
+    "color": "#E24B4A",
+    "opacity": 0.9
+   },
+   "label": {
+    "show": true,
+    "position": "bottom",
+    "formatter": "\u4e00\u7c7b\u4e70\u70b9",
+    "fontSize": 10,
+    "color": "#E24B4A"
+   },
+   "type_name": "\u4e00\u7c7b\u4e70\u70b9",
+   "date": "2026-03-27",
+   "price": 1368.64,
+   "confidence": 86,
+   "description": "\u4e00\u7c7b\u4e70\u70b9\uff1a\u65e5\u7ebf\u5e95\u80cc\u9a70\uff0cMACD\u9762\u79ef44.6\u8f83\u524d\u7b14\u8870\u51cf\uff0c\u7a7a\u5934\u529b\u5ea6\u8870\u7aed"
+  },
+  {
+   "coord": [
+    "2026-06-30",
+    1151.01
+   ],
+   "symbol": "triangle",
+   "symbolRotate": 0,
+   "symbolSize": 14,
+   "itemStyle": {
+    "color": "#E24B4A",
+    "opacity": 0.9
+   },
+   "label": {
+    "show": true,
+    "position": "bottom",
+    "formatter": "\u4e00\u7c7b\u4e70\u70b9",
+    "fontSize": 10,
+    "color": "#E24B4A"
+   },
+   "type_name": "\u4e00\u7c7b\u4e70\u70b9",
+   "date": "2026-06-30",
+   "price": 1151.01,
+   "confidence": 65,
+   "description": "\u4e00\u7c7b\u4e70\u70b9\uff1a\u65e5\u7ebf\u5e95\u80cc\u9a70\uff0cMACD\u9762\u79ef41.0\u8f83\u524d\u7b14\u8870\u51cf\uff0c\u7a7a\u5934\u529b\u5ea6\u8870\u7aed"
+  },
+  {
+   "coord": [
+    "2026-04-13",
+    1404.976
+   ],
+   "symbol": "triangle",
+   "symbolRotate": 0,
+   "symbolSize": 14,
+   "itemStyle": {
+    "color": "#D85A30",
+    "opacity": 0.9
+   },
+   "label": {
+    "show": true,
+    "position": "bottom",
+    "formatter": "\u4e8c\u7c7b\u4e70\u70b9",
+    "fontSize": 10,
+    "color": "#D85A30"
+   },
+   "type_name": "\u4e8c\u7c7b\u4e70\u70b9",
+   "date": "2026-04-13",
+   "price": 1404.98,
+   "confidence": 70,
+   "description": "\u4e8c\u7c7b\u4e70\u70b9\uff1a\u4e00\u7c7b\u4e70\u70b9\u540e\u53cd\u5f39\u518d\u56de\u843d\uff0c\u672a\u7834\u524d\u4f4e1368.64"
+  },
+  {
+   "coord": [
+    "2026-08-12",
+    1332.51
+   ],
+   "symbol": "triangle",
+   "symbolRotate": 0,
+   "symbolSize": 14,
+   "itemStyle": {
+    "color": "#D85A30",
+    "opacity": 0.9
+   },
+   "label": {
+    "show": true,
+    "position": "bottom",
+    "formatter": "\u4e8c\u7c7b\u4e70\u70b9",
+    "fontSize": 10,
+    "color": "#D85A30"
+   },
+   "type_name": "\u4e8c\u7c7b\u4e70\u70b9",
+   "date": "2026-08-12",
+   "price": 1332.51,
+   "confidence": 70,
+   "description": "\u4e8c\u7c7b\u4e70\u70b9\uff1a\u4e00\u7c7b\u4e70\u70b9\u540e\u53cd\u5f39\u518d\u56de\u843d\uff0c\u672a\u7834\u524d\u4f4e1151.01"
+  },
+  {
+   "coord": [
+    "2026-02-24",
+    1435.576
+   ],
+   "symbol": "triangle",
+   "symbolRotate": 0,
+   "symbolSize": 14,
+   "itemStyle": {
+    "color": "#BA7517",
+    "opacity": 0.9
+   },
+   "label": {
+    "show": true,
+    "position": "bottom",
+    "formatter": "\u4e09\u7c7b\u4e70\u70b9",
+    "fontSize": 10,
+    "color": "#BA7517"
+   },
+   "type_name": "\u4e09\u7c7b\u4e70\u70b9",
+   "date": "2026-02-24",
+   "price": 1435.58,
+   "confidence": 75,
+   "description": "\u4e09\u7c7b\u4e70\u70b9\uff1a\u4e2d\u67a2[1331.20-1387.96]\u5411\u4e0a\u7a81\u7834\u540e\u56de\u8e29\uff0c\u672a\u56de\u5230\u4e2d\u67a2\u5185"
+  },
+  {
+   "coord": [
+    "2026-08-12",
+    1332.51
+   ],
+   "symbol": "triangle",
+   "symbolRotate": 0,
+   "symbolSize": 14,
+   "itemStyle": {
+    "color": "#BA7517",
+    "opacity": 0.9
+   },
+   "label": {
+    "show": true,
+    "position": "bottom",
+    "formatter": "\u4e09\u7c7b\u4e70\u70b9",
+    "fontSize": 10,
+    "color": "#BA7517"
+   },
+   "type_name": "\u4e09\u7c7b\u4e70\u70b9",
+   "date": "2026-08-12",
+   "price": 1332.51,
+   "confidence": 75,
+   "description": "\u4e09\u7c7b\u4e70\u70b9\uff1a\u4e2d\u67a2[1222.08-1266.98]\u5411\u4e0a\u7a81\u7834\u540e\u56de\u8e29\uff0c\u672a\u56de\u5230\u4e2d\u67a2\u5185"
+  }
+ ],
+ "chart_fractals": [
+  {
+   "coord": [
+    "2025-09-26",
+    1376.029
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#3B6D11",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "bottom"
+  },
+  {
+   "coord": [
+    "2025-09-30",
+    1418.009
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#A32D2D",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "top"
+  },
+  {
+   "coord": [
+    "2025-10-09",
+    1368.019
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#3B6D11",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "bottom"
+  },
+  {
+   "coord": [
+    "2025-10-10",
+    1387.959
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#A32D2D",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "top"
+  },
+  {
+   "coord": [
+    "2025-10-13",
+    1363.139
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#3B6D11",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "bottom"
+  },
+  {
+   "coord": [
+    "2025-10-17",
+    1436.019
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#A32D2D",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "top"
+  },
+  {
+   "coord": [
+    "2025-10-20",
+    1402.899
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#3B6D11",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "bottom"
+  },
+  {
+   "coord": [
+    "2025-10-22",
+    1417.959
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#A32D2D",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "top"
+  },
+  {
+   "coord": [
+    "2025-10-23",
+    1395.219
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#3B6D11",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "bottom"
+  },
+  {
+   "coord": [
+    "2025-10-24",
+    1426.899
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#A32D2D",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "top"
+  },
+  {
+   "coord": [
+    "2025-11-05",
+    1368.029
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#3B6D11",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "bottom"
+  },
+  {
+   "coord": [
+    "2025-11-12",
+    1426.379
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#A32D2D",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "top"
+  },
+  {
+   "coord": [
+    "2025-11-17",
+    1393.809
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#3B6D11",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "bottom"
+  },
+  {
+   "coord": [
+    "2025-11-19",
+    1434.089
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#A32D2D",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "top"
+  },
+  {
+   "coord": [
+    "2025-11-27",
+    1387.059
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#3B6D11",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "bottom"
+  },
+  {
+   "coord": [
+    "2025-12-01",
+    1410.289
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#A32D2D",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "top"
+  },
+  {
+   "coord": [
+    "2025-12-04",
+    1366.399
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#3B6D11",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "bottom"
+  },
+  {
+   "coord": [
+    "2025-12-08",
+    1384.689
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#A32D2D",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "top"
+  },
+  {
+   "coord": [
+    "2025-12-10",
+    1331.199
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#3B6D11",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "bottom"
+  },
+  {
+   "coord": [
+    "2025-12-15",
+    1388.009
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#A32D2D",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "top"
+  },
+  {
+   "coord": [
+    "2025-12-16",
+    1363.019
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#3B6D11",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "bottom"
+  },
+  {
+   "coord": [
+    "2025-12-18",
+    1387.959
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#A32D2D",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "top"
+  },
+  {
+   "coord": [
+    "2025-12-19",
+    1372.986
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#3B6D11",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "bottom"
+  },
+  {
+   "coord": [
+    "2025-12-22",
+    1386.116
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#A32D2D",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "top"
+  },
+  {
+   "coord": [
+    "2025-12-24",
+    1369.166
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#3B6D11",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "bottom"
+  },
+  {
+   "coord": [
+    "2025-12-26",
+    1391.456
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#A32D2D",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "top"
+  },
+  {
+   "coord": [
+    "2025-12-31",
+    1349.146
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#3B6D11",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "bottom"
+  },
+  {
+   "coord": [
+    "2026-01-07",
+    1408.946
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#A32D2D",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "top"
+  },
+  {
+   "coord": [
+    "2026-01-08",
+    1380.116
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#3B6D11",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "bottom"
+  },
+  {
+   "coord": [
+    "2026-01-12",
+    1402.976
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#A32D2D",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "top"
+  },
+  {
+   "coord": [
+    "2026-01-26",
+    1297.096
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#3B6D11",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "bottom"
+  },
+  {
+   "coord": [
+    "2026-01-27",
+    1325.676
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#A32D2D",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "top"
+  },
+  {
+   "coord": [
+    "2026-01-28",
+    1293.986
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#3B6D11",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "bottom"
+  },
+  {
+   "coord": [
+    "2026-02-06",
+    1539.976
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#A32D2D",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "top"
+  },
+  {
+   "coord": [
+    "2026-02-24",
+    1435.576
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#3B6D11",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "bottom"
+  },
+  {
+   "coord": [
+    "2026-02-25",
+    1481.636
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#A32D2D",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "top"
+  },
+  {
+   "coord": [
+    "2026-03-09",
+    1355.176
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#3B6D11",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "bottom"
+  },
+  {
+   "coord": [
+    "2026-03-11",
+    1381.466
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#A32D2D",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "top"
+  },
+  {
+   "coord": [
+    "2026-03-12",
+    1362.986
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#3B6D11",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "bottom"
+  },
+  {
+   "coord": [
+    "2026-03-18",
+    1470.046
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#A32D2D",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "top"
+  },
+  {
+   "coord": [
+    "2026-03-24",
+    1372.006
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#3B6D11",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "bottom"
+  },
+  {
+   "coord": [
+    "2026-03-25",
+    1389.846
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#A32D2D",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "top"
+  },
+  {
+   "coord": [
+    "2026-03-27",
+    1368.636
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#3B6D11",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "bottom"
+  },
+  {
+   "coord": [
+    "2026-04-01",
+    1451.906
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#A32D2D",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "top"
+  },
+  {
+   "coord": [
+    "2026-04-02",
+    1424.076
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#3B6D11",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "bottom"
+  },
+  {
+   "coord": [
+    "2026-04-07",
+    1441.976
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#A32D2D",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "top"
+  },
+  {
+   "coord": [
+    "2026-04-13",
+    1404.976
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#3B6D11",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "bottom"
+  },
+  {
+   "coord": [
+    "2026-04-16",
+    1449.386
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#A32D2D",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "top"
+  },
+  {
+   "coord": [
+    "2026-04-20",
+    1371.846
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#3B6D11",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "bottom"
+  },
+  {
+   "coord": [
+    "2026-04-21",
+    1391.876
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#A32D2D",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "top"
+  },
+  {
+   "coord": [
+    "2026-04-22",
+    1376.956
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#3B6D11",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "bottom"
+  },
+  {
+   "coord": [
+    "2026-04-24",
+    1430.856
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#A32D2D",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "top"
+  },
+  {
+   "coord": [
+    "2026-04-28",
+    1372.086
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#3B6D11",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "bottom"
+  },
+  {
+   "coord": [
+    "2026-04-29",
+    1381.726
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#A32D2D",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "top"
+  },
+  {
+   "coord": [
+    "2026-05-06",
+    1332.026
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#3B6D11",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "bottom"
+  },
+  {
+   "coord": [
+    "2026-05-07",
+    1359.976
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#A32D2D",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "top"
+  },
+  {
+   "coord": [
+    "2026-05-27",
+    1222.076
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#3B6D11",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "bottom"
+  },
+  {
+   "coord": [
+    "2026-06-01",
+    1300.976
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#A32D2D",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "top"
+  },
+  {
+   "coord": [
+    "2026-06-10",
+    1222.186
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#3B6D11",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "bottom"
+  },
+  {
+   "coord": [
+    "2026-06-15",
+    1266.976
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#A32D2D",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "top"
+  },
+  {
+   "coord": [
+    "2026-06-22",
+    1176.976
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#3B6D11",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "bottom"
+  },
+  {
+   "coord": [
+    "2026-06-23",
+    1235.976
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#A32D2D",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "top"
+  },
+  {
+   "coord": [
+    "2026-06-30",
+    1151.01
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#3B6D11",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "bottom"
+  },
+  {
+   "coord": [
+    "2026-07-02",
+    1215.52
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#A32D2D",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "top"
+  },
+  {
+   "coord": [
+    "2026-07-10",
+    1170.28
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#3B6D11",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "bottom"
+  },
+  {
+   "coord": [
+    "2026-07-21",
+    1344.7
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#A32D2D",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "top"
+  },
+  {
+   "coord": [
+    "2026-07-23",
+    1283.24
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#3B6D11",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "bottom"
+  },
+  {
+   "coord": [
+    "2026-07-24",
+    1309.21
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#A32D2D",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "top"
+  },
+  {
+   "coord": [
+    "2026-07-27",
+    1279.58
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#3B6D11",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "bottom"
+  },
+  {
+   "coord": [
+    "2026-08-03",
+    1363.35
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#A32D2D",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "top"
+  },
+  {
+   "coord": [
+    "2026-08-06",
+    1300.01
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#3B6D11",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "bottom"
+  },
+  {
+   "coord": [
+    "2026-08-11",
+    1359.97
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#A32D2D",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "top"
+  },
+  {
+   "coord": [
+    "2026-08-12",
+    1332.51
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#3B6D11",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "bottom"
+  },
+  {
+   "coord": [
+    "2026-08-14",
+    1359.6
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#A32D2D",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "top"
+  },
+  {
+   "coord": [
+    "2026-08-17",
+    1280.34
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#3B6D11",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "bottom"
+  },
+  {
+   "coord": [
+    "2026-08-20",
+    1308.88
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#A32D2D",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "top"
+  },
+  {
+   "coord": [
+    "2026-08-24",
+    1270.33
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#3B6D11",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "bottom"
+  },
+  {
+   "coord": [
+    "2026-08-25",
+    1317.0
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#A32D2D",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "top"
+  },
+  {
+   "coord": [
+    "2026-08-31",
+    1286.0
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#3B6D11",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "bottom"
+  },
+  {
+   "coord": [
+    "2026-09-07",
+    1338.86
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#A32D2D",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "top"
+  },
+  {
+   "coord": [
+    "2026-09-22",
+    1248.1
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#3B6D11",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "bottom"
+  },
+  {
+   "coord": [
+    "2026-09-23",
+    1271.5
+   ],
+   "symbol": "circle",
+   "symbolSize": 7,
+   "itemStyle": {
+    "color": "transparent",
+    "borderColor": "#A32D2D",
+    "borderWidth": 1.5
+   },
+   "fractal_type": "top"
+  }
+ ],
+ "chart_zhongshus": [
+  {
+   "xAxis": [
+    "2025-10-13",
+    "2025-11-05"
+   ],
+   "yAxis": [
+    1368.029,
+    1417.959
+   ],
+   "itemStyle": {
+    "color": "rgba(83, 74, 183, 0.08)",
+    "borderColor": "rgba(83, 74, 183, 0.4)"
+   },
+   "broken": true,
+   "break_direction": "up",
+   "zg": 1417.959,
+   "zd": 1368.029
+  },
+  {
+   "xAxis": [
+    "2025-11-05",
+    "2026-01-07"
+   ],
+   "yAxis": [
+    1387.059,
+    1434.089
+   ],
+   "itemStyle": {
+    "color": "rgba(83, 74, 183, 0.08)",
+    "borderColor": "rgba(83, 74, 183, 0.4)"
+   },
+   "broken": true,
+   "break_direction": "down",
+   "zg": 1434.089,
+   "zd": 1387.059
+  },
+  {
+   "xAxis": [
+    "2025-12-10",
+    "2026-01-28"
+   ],
+   "yAxis": [
+    1331.199,
+    1387.959
+   ],
+   "itemStyle": {
+    "color": "rgba(83, 74, 183, 0.08)",
+    "borderColor": "rgba(83, 74, 183, 0.4)"
+   },
+   "broken": true,
+   "break_direction": "up",
+   "zg": 1387.959,
+   "zd": 1331.199
+  },
+  {
+   "xAxis": [
+    "2026-01-28",
+    "2026-03-18"
+   ],
+   "yAxis": [
+    1435.576,
+    1539.976
+   ],
+   "itemStyle": {
+    "color": "rgba(83, 74, 183, 0.08)",
+    "borderColor": "rgba(83, 74, 183, 0.4)"
+   },
+   "broken": true,
+   "break_direction": "down",
+   "zg": 1539.976,
+   "zd": 1435.576
+  },
+  {
+   "xAxis": [
+    "2026-03-09",
+    "2026-04-24"
+   ],
+   "yAxis": [
+    1368.636,
+    1470.046
+   ],
+   "itemStyle": {
+    "color": "rgba(83, 74, 183, 0.08)",
+    "borderColor": "rgba(83, 74, 183, 0.4)"
+   },
+   "broken": true,
+   "break_direction": "down",
+   "zg": 1470.046,
+   "zd": 1368.636
+  },
+  {
+   "xAxis": [
+    "2026-03-27",
+    "2026-04-24"
+   ],
+   "yAxis": [
+    1404.976,
+    1441.976
+   ],
+   "itemStyle": {
+    "color": "rgba(83, 74, 183, 0.08)",
+    "borderColor": "rgba(83, 74, 183, 0.4)"
+   },
+   "broken": true,
+   "break_direction": "down",
+   "zg": 1441.976,
+   "zd": 1404.976
+  },
+  {
+   "xAxis": [
+    "2026-04-20",
+    "2026-06-15"
+   ],
+   "yAxis": [
+    1371.846,
+    1430.856
+   ],
+   "itemStyle": {
+    "color": "rgba(83, 74, 183, 0.08)",
+    "borderColor": "rgba(83, 74, 183, 0.4)"
+   },
+   "broken": true,
+   "break_direction": "down",
+   "zg": 1430.856,
+   "zd": 1371.846
+  },
+  {
+   "xAxis": [
+    "2026-05-27",
+    "2026-06-30"
+   ],
+   "yAxis": [
+    1222.076,
+    1266.976
+   ],
+   "itemStyle": {
+    "color": "rgba(83, 74, 183, 0.08)",
+    "borderColor": "rgba(83, 74, 183, 0.4)"
+   },
+   "broken": true,
+   "break_direction": "up",
+   "zg": 1266.976,
+   "zd": 1222.076
+  },
+  {
+   "xAxis": [
+    "2026-06-30",
+    "2026-09-07"
+   ],
+   "yAxis": [
+    1332.51,
+    1344.7
+   ],
+   "itemStyle": {
+    "color": "rgba(83, 74, 183, 0.08)",
+    "borderColor": "rgba(83, 74, 183, 0.4)"
+   },
+   "broken": true,
+   "break_direction": "down",
+   "zg": 1344.7,
+   "zd": 1332.51
+  }
+ ],
+ "chart_strokes": [
+  {
+   "coords": [
+    [
+     "2025-10-13",
+     1363.139
+    ],
+    [
+     "2025-10-22",
+     1417.959
+    ]
+   ],
+   "lineStyle": {
+    "color": "#E24B4A",
+    "width": 1.5,
+    "type": "solid"
+   },
+   "has_divergence": false
+  },
+  {
+   "coords": [
+    [
+     "2025-10-24",
+     1426.899
+    ],
+    [
+     "2025-11-05",
+     1368.029
+    ]
+   ],
+   "lineStyle": {
+    "color": "#639922",
+    "width": 1.5,
+    "type": "solid"
+   },
+   "has_divergence": false
+  },
+  {
+   "coords": [
+    [
+     "2025-11-05",
+     1368.029
+    ],
+    [
+     "2025-11-19",
+     1434.089
+    ]
+   ],
+   "lineStyle": {
+    "color": "#E24B4A",
+    "width": 1.5,
+    "type": "solid"
+   },
+   "has_divergence": false
+  },
+  {
+   "coords": [
+    [
+     "2025-11-19",
+     1434.089
+    ],
+    [
+     "2025-11-27",
+     1387.059
+    ]
+   ],
+   "lineStyle": {
+    "color": "#639922",
+    "width": 1.5,
+    "type": "solid"
+   },
+   "has_divergence": false
+  },
+  {
+   "coords": [
+    [
+     "2025-12-10",
+     1331.199
+    ],
+    [
+     "2025-12-18",
+     1387.959
+    ]
+   ],
+   "lineStyle": {
+    "color": "#E24B4A",
+    "width": 1.5,
+    "type": "solid"
+   },
+   "has_divergence": false
+  },
+  {
+   "coords": [
+    [
+     "2026-01-07",
+     1408.946
+    ],
+    [
+     "2026-01-26",
+     1297.096
+    ]
+   ],
+   "lineStyle": {
+    "color": "#639922",
+    "width": 1.5,
+    "type": "solid"
+   },
+   "has_divergence": false
+  },
+  {
+   "coords": [
+    [
+     "2026-01-28",
+     1293.986
+    ],
+    [
+     "2026-02-06",
+     1539.976
+    ]
+   ],
+   "lineStyle": {
+    "color": "#E24B4A",
+    "width": 1.5,
+    "type": "solid"
+   },
+   "has_divergence": false
+  },
+  {
+   "coords": [
+    [
+     "2026-02-06",
+     1539.976
+    ],
+    [
+     "2026-02-24",
+     1435.576
+    ]
+   ],
+   "lineStyle": {
+    "color": "#639922",
+    "width": 1.5,
+    "type": "solid"
+   },
+   "has_divergence": false
+  },
+  {
+   "coords": [
+    [
+     "2026-03-09",
+     1355.176
+    ],
+    [
+     "2026-03-18",
+     1470.046
+    ]
+   ],
+   "lineStyle": {
+    "color": "#E24B4A",
+    "width": 1.5,
+    "type": "solid"
+   },
+   "has_divergence": false
+  },
+  {
+   "coords": [
+    [
+     "2026-03-18",
+     1470.046
+    ],
+    [
+     "2026-03-27",
+     1368.636
+    ]
+   ],
+   "lineStyle": {
+    "color": "#639922",
+    "width": 1.5,
+    "type": "dashed"
+   },
+   "has_divergence": true
+  },
+  {
+   "coords": [
+    [
+     "2026-03-27",
+     1368.636
+    ],
+    [
+     "2026-04-07",
+     1441.976
+    ]
+   ],
+   "lineStyle": {
+    "color": "#E24B4A",
+    "width": 1.5,
+    "type": "solid"
+   },
+   "has_divergence": false
+  },
+  {
+   "coords": [
+    [
+     "2026-04-07",
+     1441.976
+    ],
+    [
+     "2026-04-13",
+     1404.976
+    ]
+   ],
+   "lineStyle": {
+    "color": "#639922",
+    "width": 1.5,
+    "type": "solid"
+   },
+   "has_divergence": false
+  },
+  {
+   "coords": [
+    [
+     "2026-04-20",
+     1371.846
+    ],
+    [
+     "2026-04-24",
+     1430.856
+    ]
+   ],
+   "lineStyle": {
+    "color": "#E24B4A",
+    "width": 1.5,
+    "type": "solid"
+   },
+   "has_divergence": false
+  },
+  {
+   "coords": [
+    [
+     "2026-04-24",
+     1430.856
+    ],
+    [
+     "2026-05-06",
+     1332.026
+    ]
+   ],
+   "lineStyle": {
+    "color": "#639922",
+    "width": 1.5,
+    "type": "solid"
+   },
+   "has_divergence": false
+  },
+  {
+   "coords": [
+    [
+     "2026-05-27",
+     1222.076
+    ],
+    [
+     "2026-06-15",
+     1266.976
+    ]
+   ],
+   "lineStyle": {
+    "color": "#E24B4A",
+    "width": 1.5,
+    "type": "solid"
+   },
+   "has_divergence": false
+  },
+  {
+   "coords": [
+    [
+     "2026-06-15",
+     1266.976
+    ],
+    [
+     "2026-06-30",
+     1151.01
+    ]
+   ],
+   "lineStyle": {
+    "color": "#639922",
+    "width": 1.5,
+    "type": "dashed"
+   },
+   "has_divergence": true
+  },
+  {
+   "coords": [
+    [
+     "2026-06-30",
+     1151.01
+    ],
+    [
+     "2026-07-21",
+     1344.7
+    ]
+   ],
+   "lineStyle": {
+    "color": "#E24B4A",
+    "width": 1.5,
+    "type": "solid"
+   },
+   "has_divergence": false
+  },
+  {
+   "coords": [
+    [
+     "2026-08-03",
+     1363.35
+    ],
+    [
+     "2026-08-12",
+     1332.51
+    ]
+   ],
+   "lineStyle": {
+    "color": "#639922",
+    "width": 1.5,
+    "type": "solid"
+   },
+   "has_divergence": false
+  },
+  {
+   "coords": [
+    [
+     "2026-08-24",
+     1270.33
+    ],
+    [
+     "2026-09-07",
+     1338.86
+    ]
+   ],
+   "lineStyle": {
+    "color": "#E24B4A",
+    "width": 1.5,
+    "type": "solid"
+   },
+   "has_divergence": false
+  },
+  {
+   "coords": [
+    [
+     "2026-09-07",
+     1338.86
+    ],
+    [
+     "2026-09-22",
+     1248.1
+    ]
+   ],
+   "lineStyle": {
+    "color": "#639922",
+    "width": 1.5,
+    "type": "solid"
+   },
+   "has_divergence": false
+  }
+ ]
+}

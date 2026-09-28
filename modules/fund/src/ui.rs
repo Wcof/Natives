@@ -9,7 +9,9 @@
 //! 1. Overview 面板：顶部 KPI 监控矩阵（总览/多空比/领涨/领跌/预警）、自选列表、60px 原生 Canvas Sparkline、红绿跳动闪烁。
 //! 2. Trends 面板：多周期走势图（分时 VWAP、天、周、月、7日）、当前价格水平虚线标尺、极值标注、十字标尺 Tooltip。
 //! 3. Alerts 预警引擎：日内涨跌幅/突破规则监听、Chrome Badge 动态红绿角标联动、系统通知。
-//! 4. 数据管道通信：全双工 WebSocket (ws://127.0.0.1:8765/ws) + Loopback HTTP 弹性回退。
+//! 4. 数据管道通信：Loopback HTTP 轮询（/api/market/*，交易时段分级调度）。历史 WebSocket
+//!    通道已退役——app-runtime 从未提供 /ws 端点，fund UI 的 ws 死路径已于 2026-09-28
+//!    随审计 A2/C2 移除。
 
 /// 页面骨架仅为开发参考（含装配顺序注释），不直接内嵌；生产 HTML 由下方 INDEX_HTML 编译期装配。
 const ECHARTS_JS: &str = include_str!("../ui/dist/echarts.min.js");
@@ -29,10 +31,12 @@ const INDEX_HTML: &str = concat!(
     "  <style>\n",
     include_str!("../ui/dist/styles/trends.css"),
     include_str!("../ui/dist/styles/trends-cards.css"),
+    include_str!("../ui/dist/styles/stock-detail.css"),
     "</style>\n",
     include_str!("../ui/dist/partials/header.html"),
     include_str!("../ui/dist/partials/view-watchlist.html"),
     include_str!("../ui/dist/partials/view-market.html"),
+    include_str!("../ui/dist/partials/view-stock-detail.html"),
     include_str!("../ui/dist/partials/view-trends.html"),
     include_str!("../ui/dist/partials/view-positions.html"),
     include_str!("../ui/dist/partials/view-tx.html"),
@@ -65,6 +69,12 @@ const BUNDLE_JS: &str = concat!(
     "\n",
     include_str!("../ui/dist/trends-chart.js"),
     "\n",
+    include_str!("../ui/dist/trends-kline.js"),
+    "\n",
+    include_str!("../ui/dist/trends-minute.js"),
+    "\n",
+    include_str!("../ui/dist/trends-interact.js"),
+    "\n",
     include_str!("../ui/dist/trends-indicator.js"),
     "\n",
     include_str!("../ui/dist/trends-chan.js"),
@@ -80,6 +90,10 @@ const BUNDLE_JS: &str = concat!(
     include_str!("../ui/dist/trends-scan.js"),
     "\n",
     include_str!("../ui/dist/trends.js"),
+    "\n",
+    include_str!("../ui/dist/stock-drawings.js"),
+    "\n",
+    include_str!("../ui/dist/stock-detail.js"),
     "\n",
     include_str!("../ui/dist/app.js"),
 );

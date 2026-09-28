@@ -33,7 +33,9 @@ docs/standards/
 │   ├── 03-data.md
 │   ├── 04-performance.md
 │   ├── 05-backend.md
-│   └── 06-built-in-modules.md
+│   ├── 05-port-registry.md
+│   ├── 06-built-in-modules.md
+│   └── 07-built-in-app-development.md
 ├── frontend/
 │   ├── 01-structure.md
 │   ├── 02-state-and-data.md
@@ -61,7 +63,9 @@ docs/standards/
 | Extension 结构、状态、i18n | `frontend/01-03` |
 | Files / Workspace | `technical/01` + `technical/03-05` |
 | Model / Usage / Keychain | `technical/01-05` + ADR-0030 |
-| 应用中心 / 内置模块 | `technical/06-built-in-modules.md` + `technical/02-05` |
+| 应用中心 / 内置模块 | `technical/06-built-in-modules.md` + `technical/07-built-in-app-development.md` + `technical/02-05` |
+| 本地端口申请与登记 | `technical/05-port-registry.md` + ADR-0032/0033 |
+| 内置模块 UI 开发 | `technical/07-built-in-app-development.md` |
 | 性能与内存 | `technical/04-performance.md` |
 | UI / 空间组件 | `ui-ux/01-03`；空间内组件永远消费空间局部样式角色 |
 | 安装与完整产品 | ADR-0029 + `technical/02` + `technical/06-built-in-modules.md` |

@@ -95,10 +95,25 @@
         "path": "modules/fund/ui",
         "treeSha256": "<hex>"
       }
+    },
+    {
+      "appId": "tokenusage",
+      "entryRoute": "app.html?app=tokenusage",
+      "moduleApiVersion": 1,
+      "dataSchemaVersion": 1,
+      "capabilityVersion": 1,
+      "ui": {
+        "path": "modules/tokenusage/ui",
+        "treeSha256": "<hex>"
+      }
     }
   ]
 }
 ```
+
+> 示例展示双模块形态；实际清单以 `modules/registry.json`（fund + tokenusage）为准，
+> 安装器按 registry 迭代产出。`dataSchemaVersion` 示例值为占位，以各模块真实
+> manifest 为准（fund 当前为 2）。
 
 规则：
 

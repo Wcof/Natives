@@ -139,7 +139,19 @@ pub fn acquire_runtime(
     let Some(product) = FileLock::try_acquire(product_lock_path(apps_root, app_id))? else {
         return Ok(Err(RuntimeUnavailable::Busy));
     };
-    let Some(runtime) = FileLock::try_acquire(runtime_lock_path(apps_root, app_id))? else {
+    let mut runtime = FileLock::try_acquire(runtime_lock_path(apps_root, app_id))?;
+    if runtime.is_none() {
+        // 短暂微等待自愈：旧实例 stdin EOF 退出通常在 50~200ms 内释放锁，
+        // 避免因进程退出时序差误报 APP_RUNNING_ELSEWHERE 导致扩展进入慢重试卡屏。
+        for _ in 0..6 {
+            std::thread::sleep(std::time::Duration::from_millis(50));
+            runtime = FileLock::try_acquire(runtime_lock_path(apps_root, app_id))?;
+            if runtime.is_some() {
+                break;
+            }
+        }
+    }
+    let Some(runtime) = runtime else {
         return Ok(Err(RuntimeUnavailable::AlreadyRunning));
     };
     let Some((slot, slot_lock)) = acquire_slot(apps_root, crate::protocol::MAX_RUNTIME_SLOTS)?

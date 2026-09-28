@@ -1,0 +1,124 @@
+{
+ "kline_count": 31,
+ "fractal_count": 10,
+ "stroke_count": 2,
+ "current_state": "\u5904\u4e8e\u5411\u4e0b\u7b14\u4e2d\uff0c\u7a7a\u5934\u5ef6\u7eed",
+ "summary": "\u6682\u65e0\u4e70\u5356\u4fe1\u53f7",
+ "description": "\u517110\u4e2a\u5206\u578b\u30012\u7b14\u3002\u5904\u4e8e\u5411\u4e0b\u7b14\u4e2d\uff0c\u7a7a\u5934\u5ef6\u7eed",
+ "signals": [],
+ "fractals": [
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 286.98,
+   "time": "09:44"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 288.69,
+   "time": "09:49"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 287.23,
+   "time": "09:59"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 288.85,
+   "time": "10:04"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 287.23,
+   "time": "10:09"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 292.4,
+   "time": "10:39"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 289.78,
+   "time": "10:59"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 291.86,
+   "time": "11:14"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 290.97,
+   "time": "11:24"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 292.48,
+   "time": "13:04"
+  }
+ ],
+ "strokes": [
+  {
+   "direction": "up",
+   "start_price": 286.98,
+   "end_price": 292.4,
+   "start_time": "09:44",
+   "end_time": "10:39",
+   "macd_area": 1.7302,
+   "has_divergence": false
+  },
+  {
+   "direction": "down",
+   "start_price": 292.4,
+   "end_price": 290.97,
+   "start_time": "10:39",
+   "end_time": "11:24",
+   "macd_area": 10.864,
+   "has_divergence": false
+  }
+ ],
+ "macd_bar": [
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.652923,
+  1.077273,
+  1.279687,
+  1.133638,
+  1.039277,
+  0.827732,
+  0.915064,
+  1.108487,
+  1.254542,
+  1.176963,
+  1.051311,
+  1.029906,
+  1.094496,
+  1.200542,
+  0.897427,
+  0.592505,
+  0.32406,
+  0.036927,
+  -0.134632
+ ]
+}

@@ -1,0 +1,169 @@
+{
+ "kline_count": 31,
+ "fractal_count": 13,
+ "stroke_count": 4,
+ "current_state": "\u5411\u4e0a\u7b14\u9876\u80cc\u9a70\uff0c\u6ce8\u610f\u4e00\u7c7b\u5356\u70b9\u98ce\u9669\uff0c\u6700\u8fd1sell1\u4fe1\u53f7\u572813:19",
+ "summary": "\u6700\u65b0\u4fe1\u53f7\uff1a\u4e00\u7c7b\u5356\u70b9@1236.20",
+ "description": "\u517113\u4e2a\u5206\u578b\u30014\u7b14\u30011\u4e2a\u4fe1\u53f7\u3002\u5411\u4e0a\u7b14\u9876\u80cc\u9a70\uff0c\u6ce8\u610f\u4e00\u7c7b\u5356\u70b9\u98ce\u9669\uff0c\u6700\u8fd1sell1\u4fe1\u53f7\u572813:19",
+ "signals": [
+  {
+   "type": "sell1",
+   "type_name": "\u4e00\u7c7b\u5356\u70b9",
+   "price": 1236.2,
+   "time": "13:19",
+   "description": "\u4e00\u7c7b\u5356\u70b9\uff1a\u9876\u80cc\u9a70\uff0cMACD\u9762\u79ef3.04\u8f83\u524d\u7b14\u8870\u51cf\uff0c\u591a\u5934\u529b\u5ea6\u8870\u7aed",
+   "confidence": 83
+  }
+ ],
+ "fractals": [
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 1240.73,
+   "time": "09:44"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 1233.49,
+   "time": "09:59"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 1237.48,
+   "time": "10:04"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 1229.38,
+   "time": "10:19"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 1231.37,
+   "time": "10:24"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 1228.1,
+   "time": "10:29"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 1234.4,
+   "time": "10:54"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 1231.21,
+   "time": "10:59"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 1234.5,
+   "time": "11:04"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 1230.58,
+   "time": "11:14"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 1232.87,
+   "time": "11:19"
+  },
+  {
+   "type": "bottom",
+   "type_name": "\u5e95\u5206\u578b",
+   "price": 1230.5,
+   "time": "11:29"
+  },
+  {
+   "type": "top",
+   "type_name": "\u9876\u5206\u578b",
+   "price": 1236.2,
+   "time": "13:19"
+  }
+ ],
+ "strokes": [
+  {
+   "direction": "down",
+   "start_price": 1240.73,
+   "end_price": 1229.38,
+   "start_time": "09:44",
+   "end_time": "10:19",
+   "macd_area": 0.0,
+   "has_divergence": false
+  },
+  {
+   "direction": "up",
+   "start_price": 1228.1,
+   "end_price": 1234.5,
+   "start_time": "10:29",
+   "end_time": "11:04",
+   "macd_area": 7.0921,
+   "has_divergence": false
+  },
+  {
+   "direction": "down",
+   "start_price": 1234.5,
+   "end_price": 1230.5,
+   "start_time": "11:04",
+   "end_time": "11:29",
+   "macd_area": 4.0596,
+   "has_divergence": false
+  },
+  {
+   "direction": "up",
+   "start_price": 1230.5,
+   "end_price": 1236.2,
+   "start_time": "11:29",
+   "end_time": "13:19",
+   "macd_area": 3.0371,
+   "has_divergence": true
+  }
+ ],
+ "macd_bar": [
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  0.0,
+  -1.118359,
+  -1.612068,
+  -1.06713,
+  -0.970645,
+  -0.700697,
+  -0.959173,
+  -0.664012,
+  -0.85978,
+  -0.778768,
+  -0.522736,
+  -0.549954,
+  -0.684379,
+  -0.59924,
+  -0.478862,
+  -0.059997,
+  0.464278,
+  0.750387,
+  0.764573,
+  0.769209
+ ]
+}

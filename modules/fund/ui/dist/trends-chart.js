@@ -49,6 +49,38 @@ const C = (trends.C = {
   avgLine: '#cdf24b',
 });
 
+function updateTrendsThemeColors() {
+  const isLight = document.documentElement.dataset.theme === 'archive';
+  C.text = isLight ? '#1a1a18' : '#aaa';
+  C.textDim = isLight ? '#6b6355' : '#666';
+  C.grid = isLight ? '#e8dfce' : '#1a1a1a';
+  C.axis = isLight ? '#d8cfbe' : '#333';
+  C.preClose = isLight ? '#8c8273' : '#555';
+  C.avgLine = isLight ? '#cc785c' : '#cdf24b';
+}
+updateTrendsThemeColors();
+
+trends.reloadTheme = function() {
+  updateTrendsThemeColors();
+  if (charts.klineChart) {
+    const opts = {
+      textStyle: { color: C.text },
+      categoryAxis: {
+        axisLine: { lineStyle: { color: C.axis } },
+        axisLabel: { color: C.textDim },
+      },
+      valueAxis: {
+        axisLine: { lineStyle: { color: C.axis } },
+        axisLabel: { color: C.textDim },
+        splitLine: { lineStyle: { color: C.grid } },
+      },
+    };
+    Object.values(charts).forEach(c => {
+      if (c && typeof c.setOption === 'function') c.setOption(opts);
+    });
+  }
+};
+
 let _zoomBound = false;
 let _tooltipBound = false;
 
@@ -106,6 +138,8 @@ function initCharts() {
     if (vd) vd.onclick = () => switchView('dayk');
     const vw = document.getElementById('view-week');
     if (vw) vw.onclick = () => switchView('week');
+    const vmo = document.getElementById('view-month');
+    if (vmo) vmo.onclick = () => switchView('month');
     const vm = document.getElementById('view-minute');
     if (vm) vm.onclick = () => switchView('minute');
 
@@ -114,11 +148,20 @@ function initCharts() {
       btn.onclick = () => {
         document.querySelectorAll('.tb-btn[data-range]').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
-        applyRange(parseInt(btn.dataset.range));
+        const r = parseInt(btn.dataset.range, 10);
+        if (typeof applyRange === 'function') {
+          applyRange(r);
+        } else if (trends.chart?.applyRange) {
+          trends.chart.applyRange(r);
+        }
       };
     });
 
-    bindChartTooltip();
+    if (typeof bindChartTooltip === 'function') {
+      bindChartTooltip();
+    } else if (trends.chart?.bindChartTooltip) {
+      trends.chart.bindChartTooltip();
+    }
     return true;
   } catch (err) {
     console.warn("initCharts error:", err);

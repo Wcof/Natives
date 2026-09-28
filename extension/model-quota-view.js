@@ -59,7 +59,27 @@ export function dedupeQuotaWindows(windows, t) {
       byKey.set(label, { ...w, name: label });
     }
   }
-  return [...byKey.values()];
+  const result = [...byKey.values()];
+  result.sort((a, b) => {
+    const rank = (w) => {
+      const l = (w.name || '').toLowerCase();
+      if (l.includes('5小时') || l.includes('5h') || l.includes('hour')) return 1;
+      if (l.includes('日') || l.includes('day')) return 2;
+      if (l.includes('周') || l.includes('week')) return 3;
+      if (l.includes('月') || l.includes('month')) return 4;
+      return 5;
+    };
+    const grp = (w) => {
+      if (w.group) return w.group;
+      const l = w.name || '';
+      return l.includes('·') ? l.split('·')[0].trim() : '';
+    };
+    const gA = grp(a);
+    const gB = grp(b);
+    if (gA !== gB) return gA.localeCompare(gB);
+    return rank(a) - rank(b);
+  });
+  return result;
 }
 
 export function renderQuotaView(container, { files = [], quotaMap = {}, t, onAction }) {

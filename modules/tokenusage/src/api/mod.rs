@@ -5,7 +5,7 @@ use app_runtime_core::http::HttpRequest;
 
 mod sessions;
 mod settings;
-mod stats;
+pub(crate) mod stats;
 
 use sessions::{api_session_detail, api_sessions};
 use settings::{

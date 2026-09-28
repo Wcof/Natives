@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"strings"
 	"time"
@@ -180,6 +181,179 @@ var antigravityQuotaEndpoints = []string{
 	"https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuotaSummary",
 }
 
+// antigravityQuotaBucket / antigravityQuotaPayload 是 retrieveUserQuotaSummary
+// 的响应结构：桶可能出现在根级 buckets 或 groups[].buckets，模型组
+// （Gemini / Claude 与 GPT）各自拥有独立的周/5小时窗口，必须保留 Group 维度。
+type antigravityQuotaBucket struct {
+	RemainingFraction      *float64 `json:"remaining_fraction"`
+	RemainingFractionCamel *float64 `json:"remainingFraction"`
+	ResetTime              string   `json:"reset_time"`
+	ResetTimeCamel         string   `json:"resetTime"`
+	DisplayName            string   `json:"display_name"`
+	DisplayNameCamel       string   `json:"displayName"`
+	ModelGroup             string   `json:"model_group"`
+}
+
+type antigravityQuotaPayload struct {
+	Buckets []antigravityQuotaBucket `json:"buckets"`
+	Groups  []struct {
+		Name        string                   `json:"name"`
+		DisplayName string                   `json:"displayName"`
+		Buckets     []antigravityQuotaBucket `json:"buckets"`
+	} `json:"groups"`
+}
+
+// antigravitySuspiciousFresh 判定上游"全新窗口"视图指纹：余量≈100% 且 reset
+// 与请求时刻+窗口长误差 <8s。真实窗口的 reset 锚定在固定边界，不随请求时间
+// 漂移；实测上游偶发把同一账号翻成该视图（Gemini 组周窗口 32.6% ↔ 100%）。
+func antigravitySuspiciousFresh(w QuotaWindow, now time.Time) bool {
+	if w.RemainingPercent == nil || *w.RemainingPercent < 99.99 {
+		return false
+	}
+	name := strings.ToLower(w.Name)
+	var window time.Duration
+	switch {
+	case strings.Contains(name, "five hour") || strings.Contains(name, "5小时"):
+		window = 5 * time.Hour
+	case strings.Contains(name, "week") || strings.Contains(name, "周"):
+		window = 7 * 24 * time.Hour
+	default:
+		return false
+	}
+	if strings.TrimSpace(w.ResetTime) == "" {
+		return false
+	}
+	ts, err := time.Parse(time.RFC3339, w.ResetTime)
+	if err != nil {
+		return false
+	}
+	return math.Abs(ts.Sub(now.Add(window)).Seconds()) < 8
+}
+
+func antigravityHasSuspiciousFresh(windows []QuotaWindow) bool {
+	now := time.Now()
+	for _, w := range windows {
+		if antigravitySuspiciousFresh(w, now) {
+			return true
+		}
+	}
+	return false
+}
+
+// mergeAntigravityMinWindows 按 组+窗口 合并两次查询：真实视图（非指纹行）
+// 优先，两次同为真实视图时取最小余量（保守展示），指纹行只作兜底。
+func mergeAntigravityMinWindows(first, second []QuotaWindow) []QuotaWindow {
+	now := time.Now()
+	best := make(map[string]QuotaWindow, len(first)+len(second))
+	for _, w := range first {
+		best[w.Group+"|"+w.Name] = w
+	}
+	for _, w := range second {
+		key := w.Group + "|" + w.Name
+		prev, ok := best[key]
+		if !ok {
+			best[key] = w
+			continue
+		}
+		prevFresh := antigravitySuspiciousFresh(prev, now)
+		newFresh := antigravitySuspiciousFresh(w, now)
+		if prevFresh && !newFresh {
+			best[key] = w
+			continue
+		}
+		if prevFresh == newFresh && w.RemainingPercent != nil &&
+			(prev.RemainingPercent == nil || *w.RemainingPercent < *prev.RemainingPercent) {
+			best[key] = w
+		}
+	}
+	merged := make([]QuotaWindow, 0, len(first)+len(second))
+	seen := make(map[string]bool, len(first)+len(second))
+	for _, w := range first {
+		key := w.Group + "|" + w.Name
+		if !seen[key] {
+			merged = append(merged, best[key])
+			seen[key] = true
+		}
+	}
+	for _, w := range second {
+		key := w.Group + "|" + w.Name
+		if !seen[key] {
+			merged = append(merged, best[key])
+			seen[key] = true
+		}
+	}
+	return merged
+}
+
+// queryAntigravityOnce 对单个端点做一次额度查询并解析窗口。
+func (c *Client) queryAntigravityOnce(ctx context.Context, endpoint, token string, bodyData []byte) ([]QuotaWindow, error) {
+	req, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewReader(bodyData))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "antigravity/cli/1.0.13 (aidev_client; os_type=darwin; arch=arm64)")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
+	resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		return nil, quotaHTTPError(resp.StatusCode, bodyBytes)
+	}
+
+	var data antigravityQuotaPayload
+	if err := json.Unmarshal(bodyBytes, &data); err != nil {
+		return nil, errors.New("Antigravity 返回了无法识别的额度数据")
+	}
+
+	windows := make([]QuotaWindow, 0, len(data.Buckets)+len(data.Groups))
+	addBucket := func(name string, group string, frac *float64, reset string) {
+		var rem *float64
+		if frac != nil {
+			val := *frac * 100.0
+			if val < 0 {
+				val = 0
+			}
+			if val > 100 {
+				val = 100
+			}
+			rem = &val
+		}
+		windows = append(windows, QuotaWindow{
+			Name:             name,
+			Group:            group,
+			RemainingPercent: rem,
+			ResetTime:        reset,
+		})
+	}
+
+	for _, b := range data.Buckets {
+		name := firstNonEmpty(b.DisplayName, b.DisplayNameCamel)
+		if name == "" {
+			name = "Gemini Models"
+		}
+		addBucket(name, "", firstPercent(b.RemainingFraction, b.RemainingFractionCamel), firstNonEmpty(b.ResetTime, b.ResetTimeCamel))
+	}
+	for _, g := range data.Groups {
+		group := firstNonEmpty(g.DisplayName, g.Name)
+		for _, b := range g.Buckets {
+			name := firstNonEmpty(b.DisplayName, b.DisplayNameCamel)
+			if name == "" {
+				name = group
+			}
+			addBucket(name, group, firstPercent(b.RemainingFraction, b.RemainingFractionCamel), firstNonEmpty(b.ResetTime, b.ResetTimeCamel))
+		}
+	}
+	if len(windows) == 0 {
+		return nil, errors.New("Antigravity 返回成功，但没有可识别的额度分组")
+	}
+	return windows, nil
+}
+
 func (c *Client) queryAntigravity(ctx context.Context, token, extraJSON string, res *QuotaResult) error {
 	projectID := ""
 	if extraJSON != "" {
@@ -193,99 +367,19 @@ func (c *Client) queryAntigravity(ctx context.Context, token, extraJSON string, 
 
 	var lastErr error = errors.New("无可用额度端点")
 	for _, endpoint := range antigravityQuotaEndpoints {
-		req, reqErr := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewReader(bodyData))
-		if reqErr != nil {
-			return reqErr
-		}
-		req.Header.Set("Authorization", "Bearer "+token)
-		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("User-Agent", "antigravity/cli/1.0.13 (aidev_client; os_type=darwin; arch=arm64)")
-
-		resp, err := c.httpClient.Do(req)
+		windows, err := c.queryAntigravityOnce(ctx, endpoint, token, bodyData)
 		if err != nil {
 			lastErr = err
-			continue
-		}
-		bodyBytes, _ := io.ReadAll(io.LimitReader(resp.Body, 256*1024))
-		resp.Body.Close()
-
-		if resp.StatusCode >= 400 {
-			lastErr = quotaHTTPError(resp.StatusCode, bodyBytes)
 			continue // 验证门禁等错误：回退下一个端点
 		}
-
-		var data struct {
-			Buckets []struct {
-				RemainingFraction      *float64 `json:"remaining_fraction"`
-				RemainingFractionCamel *float64 `json:"remainingFraction"`
-				ResetTime              string   `json:"reset_time"`
-				ResetTimeCamel         string   `json:"resetTime"`
-				DisplayName            string   `json:"display_name"`
-				DisplayNameCamel       string   `json:"displayName"`
-				ModelGroup             string   `json:"model_group"`
-			} `json:"buckets"`
-			Groups []struct {
-				Name        string `json:"name"`
-				DisplayName string `json:"displayName"`
-				Buckets     []struct {
-					RemainingFraction      *float64 `json:"remaining_fraction"`
-					RemainingFractionCamel *float64 `json:"remainingFraction"`
-					ResetTime              string   `json:"reset_time"`
-					ResetTimeCamel         string   `json:"resetTime"`
-					DisplayName            string   `json:"display_name"`
-					DisplayNameCamel       string   `json:"displayName"`
-				} `json:"buckets"`
-			} `json:"groups"`
-		}
-		if err := json.Unmarshal(bodyBytes, &data); err != nil {
-			lastErr = errors.New("Antigravity 返回了无法识别的额度数据")
-			continue
-		}
-
-		// Parse buckets from root or groups；模型组（Gemini / Claude 与 GPT）
-		// 各自拥有独立的周/5小时窗口，必须保留 Group 维度，不得折叠
-		addBucket := func(name string, group string, frac *float64, reset string) {
-			var rem *float64
-			if frac != nil {
-				val := *frac * 100.0
-				if val < 0 {
-					val = 0
-				}
-				if val > 100 {
-					val = 100
-				}
-				rem = &val
-			}
-			res.Windows = append(res.Windows, QuotaWindow{
-				Name:             name,
-				Group:            group,
-				RemainingPercent: rem,
-				ResetTime:        reset,
-			})
-		}
-
-		for _, b := range data.Buckets {
-			name := firstNonEmpty(b.DisplayName, b.DisplayNameCamel)
-			if name == "" {
-				name = "Gemini Models"
-			}
-			addBucket(name, "", firstPercent(b.RemainingFraction, b.RemainingFractionCamel), firstNonEmpty(b.ResetTime, b.ResetTimeCamel))
-		}
-		for _, g := range data.Groups {
-			group := firstNonEmpty(g.DisplayName, g.Name)
-			for _, b := range g.Buckets {
-				name := firstNonEmpty(b.DisplayName, b.DisplayNameCamel)
-				if name == "" {
-					name = group
-				}
-				addBucket(name, group, firstPercent(b.RemainingFraction, b.RemainingFractionCamel), firstNonEmpty(b.ResetTime, b.ResetTimeCamel))
+		// 上游偶发"全新窗口"假视图：复查同端点一次，按组+窗口取最小余量
+		// 收敛到真实用量视图；两次一致时结果不变。仅手动刷新路径触发。
+		if antigravityHasSuspiciousFresh(windows) {
+			if retry, retryErr := c.queryAntigravityOnce(ctx, endpoint, token, bodyData); retryErr == nil {
+				windows = mergeAntigravityMinWindows(windows, retry)
 			}
 		}
-
-		if len(res.Windows) == 0 {
-			lastErr = errors.New("Antigravity 返回成功，但没有可识别的额度分组")
-			continue
-		}
+		res.Windows = windows
 		return nil
 	}
 	return lastErr

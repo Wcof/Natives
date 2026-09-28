@@ -2,6 +2,23 @@
   "addFirstWidget": {
     "message": "Add first widget"
   },
+"extDescription": {
+    "message": "Access your local files, personal space and built-in apps in Chrome"
+  },
+  "extName": {
+    "message": "Natives"
+  },
+"investAlertNotifyBody": {
+    "message": "$NAME$ ($SYMBOL$) has moved $BADGE$. Please review.",
+    "placeholders": {
+      "name": { "content": "$1" },
+      "symbol": { "content": "$2" },
+      "badge": { "content": "$3" }
+    }
+  },
+  "investAlertNotifyTitle": {
+    "message": "Investment Alert"
+  },
   "addWidget": {
     "message": "Add widget"
   },

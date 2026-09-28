@@ -272,5 +272,6 @@ trends.indicator = {
   calcBOLL,
   calcWR,
 };
+globalThis.Fund.indicators = trends.indicator;
 
 })();

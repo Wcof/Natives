@@ -136,12 +136,14 @@ var usageSources = []UsageSource{
 	{
 		ID: "grok-build", Name: "Grok Build", InAgentClients: true,
 		Caps: SourceCapabilities{
-			HistoricalUsage: CapUnsupported, LiveEvent: CapUnsupported,
-			Billing: CapUnavailable, Quota: CapUnavailable,
-			Attribution: CapUnsupported, Notification: CapUnsupported,
-			Privacy: "metadata_only",
+			HistoricalUsage: CapImplemented, // grok-session/1（收口方案 Phase 0）：sessions/<proj>/<uuid>/updates.jsonl turn_completed 终态用量
+			LiveEvent:       CapUnsupported,
+			Billing:         CapUnavailable, Quota: CapUnavailable,
+			Attribution: CapPartial, // sessionId/prompt_id/eventId 稳定归属；modelUsage 按模型拆分
+			Notification: CapUnsupported,
+			Privacy:      "metadata_only",
 		},
-		Audit: "2026-09-12 source 审计（~/.grok，CLI 0.2.118）：sessions/<proj>/<uuid>/{chat_history,events}.jsonl 与 summary.json 均无 usage/token/cost 字段（键名级核验）；memtrace 仅 start/sample 心跳。无本机计量来源，显式 unsupported",
+		Audit: "2026-09-27 重新核验（CLI 更新后）：updates.jsonl 携带 turn_completed 结构化 usage（inputTokens/outputTokens/cachedReadTokens/reasoningTokens/modelUsage），终态幂等解析入库；2026-09-12 旧审计（chat_history/events.jsonl 无用量字段）针对旧版本，已被本次取代",
 	},
 	{
 		ID: "openclaw", Name: "OpenClaw", InAgentClients: true,
