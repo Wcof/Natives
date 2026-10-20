@@ -1,13 +1,14 @@
 // All extension distributors and budget checks consume these exact bytes.
 import { existsSync, readdirSync, readFileSync, lstatSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
-import { dirname, join, relative, resolve } from 'node:path';
+import { dirname, join, posix, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { transformSync } from 'esbuild';
+import { isFundModuleKey } from './modules/fund-locales.mjs';
 
 export const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const OMIT = new Set(['node_modules', '.git', 'fixtures', 'test', 'tests', '__pycache__']);
-const FILES = /^(manifest\.json|(?!(?:ui-harness|test-dom-mock|files-preview)\.js$)(?:[^/]+|plugins\/.+|apps\/.+|ai-performance\/.+|tokenusage\/.+)\.(?:html|css|js)|icons\/(?:agents\/)?(?!folder-source\.svg$)[^/]+|_locales\/[^/]+\/messages\.json)$/;
+const FILES = /^(manifest\.json|(?!(?:ui-harness|test-dom-mock|files-preview)\.js$)(?:[^/]+|platform\/.+|plugins\/.+|apps\/.+|ai-performance\/.+|ai-usage-client\/.+|tokenusage\/.+)\.(?:html|css|js)|icons\/(?:agents\/)?(?!folder-source\.svg$)[^/]+|_locales\/[^/]+\/messages\.json)$/;
 
 // 生产 Extension 身份稳定化（本地加载已解压模式）：
 // manifest.json 注入固定 RSA 公钥（key 字段），Chrome 由此派生稳定 Extension ID，
@@ -69,6 +70,11 @@ function manifestBytes(root, mode = 'production') {
 }
 const EXECUTABLE_MAGIC = new Set(['7f454c46', 'cffaedfe', 'cefaedfe', 'feedfacf', 'feedface', 'cafebabe', 'bebafeca']);
 
+// Web-only bootstrap assets are served by Core as embedded resources
+// (ADR-0042). They remain in extension/ for source/tests but are not part of
+// the Chrome extension package.
+const WEB_ONLY = new Set(['web-entry.js', 'platform/session.js']);
+
 export function distributableFiles(root = ROOT) {
   const base = join(root, 'extension'), files = [];
   if (!existsSync(base)) return files;
@@ -84,10 +90,21 @@ export function distributableFiles(root = ROOT) {
           || EXECUTABLE_MAGIC.has(bytes.subarray(0, 4).toString('hex')) || bytes.subarray(0, 2).toString() === 'MZ') {
         throw new Error('Native executable or package in extension: ' + file);
       }
+      if (WEB_ONLY.has(file)) continue;
       if (FILES.test(file) && !file.split('/').some((part) => part.startsWith('.'))) files.push(file);
     }
   }
   visit(base);
+  const shipped = new Set(files);
+  for (const file of files.filter(file => file.endsWith('.js'))) {
+    const source = extensionFileBytes(file, root).toString('utf8');
+    for (const pattern of [/\bfrom\s*["'](\.[^"']+)["']/g, /\bimport\s*["'](\.[^"']+)["']/g, /\bimport\(\s*["'](\.[^"']+)["']\s*\)/g]) {
+      for (const match of source.matchAll(pattern)) {
+        const dependency = posix.normalize(posix.join(posix.dirname(file), match[1].split(/[?#]/)[0]));
+        if (!shipped.has(dependency) && !WEB_ONLY.has(dependency)) throw Error(`Missing production import: ${file} -> ${dependency}`);
+      }
+    }
+  }
   return files.sort();
 }
 
@@ -95,9 +112,16 @@ export function extensionFileBytes(file, root = ROOT) {
   const bytes = readFileSync(join(root, 'extension', file));
   const loader = file.endsWith('.js') ? 'js' : file.endsWith('.css') ? 'css' : null;
   if (loader) return Buffer.from(transformSync(bytes.toString('utf8'), {
-    loader, minify: true, target: 'chrome120', legalComments: 'none', charset: 'utf8',
+    loader, minify: true, treeShaking: ['platform/transport.js', 'platform/surface.js', 'platform/events.js', 'platform/storage.js', 'platform/web-session.js'].includes(file), target: 'chrome120', legalComments: 'none', charset: 'utf8',
+    define: { __NATIVES_EXTENSION_BUILD__: 'true' },
   }).code);
-  if (file === 'manifest.json' || file.startsWith('_locales/')) return Buffer.from(JSON.stringify(JSON.parse(bytes)));
+  if (file.startsWith('_locales/')) {
+    // Fund-owned module namespaces are embedded in the signed module iframe by
+    // modules:ui:build. Keep one locale authority in source, without shipping that projection twice.
+    const messages = Object.fromEntries(Object.entries(JSON.parse(bytes)).filter(([key]) => !isFundModuleKey(key)));
+    return Buffer.from(JSON.stringify(messages));
+  }
+  if (file === 'manifest.json') return Buffer.from(JSON.stringify(JSON.parse(bytes)));
   if (file.endsWith('.svg')) {
     // SVG 无构建期压缩通道；去除注释与标签间空白（不改动矢量语义）。
     const minified = bytes.toString('utf8')

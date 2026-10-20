@@ -5,6 +5,17 @@ import { createSpaceResetModal } from './space-modal-reset.js';
 
 console.log('--- Space Modals Unit Tests ---');
 
+// createSpaceNameModal 直接查 DOM 中的模板选择行（P3：模板只含布局），
+// Node 单测环境用最小 mock 顶住：行默认隐藏，仅新建时展示。
+globalThis.document = {
+  getElementById(id) {
+    if (id === 'ws-template-row') return { hidden: true };
+    if (id === 'ws-template-select') return { value: 'classic', onchange: null };
+    if (id === 'ws-template-investment-desc') return { hidden: true };
+    return null;
+  },
+};
+
 function createMockElement(initial = {}) {
   return {
     textContent: initial.textContent || '',
@@ -13,6 +24,7 @@ function createMockElement(initial = {}) {
     returnValue: initial.returnValue || '',
     onclose: null,
     showModal() { this.open = true; },
+    close(value) { this.returnValue = value; this.open = false; this.onclose?.(); },
     focus() { this.focused = true; },
     select() { this.selected = true; },
     ...initial,
@@ -32,6 +44,7 @@ function createMockElement(initial = {}) {
     'ws-name-title': titleEl,
     'ws-name-input': inputEl,
     'ws-name-modal': modalEl,
+    'ws-name-cancel': createMockElement(),
   };
   const $ = (id) => elements[id];
   const t = (k, fallback) => fallback || k;
@@ -53,12 +66,14 @@ function createMockElement(initial = {}) {
   assert.equal(inputEl.focused, true);
   assert.equal(inputEl.selected, true);
 
-  // 1.2 Confirm with valid name
+  // 1.2 Confirm with valid name（默认 classic 模板；模板值随保存回调传出）
   inputEl.value = 'My New Workspace';
   modalEl.returnValue = 'default';
+  let savedTemplate = null;
   modalEl.onclose();
   assert.equal(savedWs, null);
   assert.equal(savedName, 'My New Workspace');
+  assert.equal(savedTemplate, null, '首个实例的回调不感知模板参数');
   console.log('✓ Name modal create confirmed passed');
 
   // 1.3 Open for rename
@@ -70,8 +85,7 @@ function createMockElement(initial = {}) {
   assert.equal(inputEl.value, 'Work Project');
 
   // 1.4 Cancel rename
-  modalEl.returnValue = 'cancel';
-  modalEl.onclose();
+  elements['ws-name-cancel'].onclick();
   assert.equal(savedWs, null);
   assert.equal(savedName, null);
   console.log('✓ Name modal rename cancelled passed');
@@ -86,6 +100,50 @@ function createMockElement(initial = {}) {
   assert.equal(savedWs, null);
   assert.equal(savedName, null);
   console.log('✓ Name modal empty name rejection passed');
+}
+
+// ─── Test 1b: createSpaceNameModal 模板选择（P3 / ADR-0036）────────────────
+
+{
+  const templateSelect = { value: 'classic', onchange: null };
+  globalThis.document = {
+    getElementById(id) {
+      if (id === 'ws-template-row') return { hidden: true };
+      if (id === 'ws-template-select') return templateSelect;
+      if (id === 'ws-template-investment-desc') return { hidden: true };
+      return null;
+    },
+  };
+
+  const inputEl = createMockElement();
+  const modalEl = createMockElement();
+  const elements = { 'ws-name-input': inputEl, 'ws-name-modal': modalEl, 'ws-name-cancel': createMockElement() };
+  const $ = (id) => elements[id];
+  const t = (k, fallback) => fallback || k;
+  let savedTemplate = null;
+  const nameModal = createSpaceNameModal({
+    $, t,
+    onSaveWorkspaceName: (_ws, _name, template) => { savedTemplate = template; },
+  });
+
+  // 新建时选择投资概览模板 → 模板值传出，且仅布局、无金额样例（Host 侧断言）
+  nameModal.open(null);
+  templateSelect.value = 'investment';
+  inputEl.value = '投资概览';
+  modalEl.returnValue = 'default';
+  modalEl.onclose();
+  assert.equal(savedTemplate, 'investment');
+
+  // 重命名时模板选择行隐藏；open() 会把 select 重置回 classic，
+  // rename 语义（workspace_rename）本身不受模板影响。
+  savedTemplate = null;
+  nameModal.open({ id: 'ws-1', name: 'Existing', revision: 1 });
+  assert.equal(templateSelect.value, 'classic', '重命名时模板选择重置');
+  inputEl.value = 'Renamed';
+  modalEl.returnValue = 'default';
+  modalEl.onclose();
+  assert.equal(savedTemplate, 'classic', '重命名走 workspace_rename，模板仅新建时生效');
+  console.log('✓ Name modal investment template selection passed');
 }
 
 // ─── Test 2: createSpaceDeleteModal ────────────────────────────────────────

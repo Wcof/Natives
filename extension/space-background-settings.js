@@ -123,5 +123,5 @@ export function createSpaceBackgroundSettings({
     container.append(header, body);
   }
 
-  return { render };
+  return { render, setLanguage(next){language=next;} };
 }

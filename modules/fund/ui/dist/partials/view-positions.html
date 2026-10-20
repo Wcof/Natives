@@ -1,13 +1,42 @@
-      <!-- 4. 持仓记账模块 -->
+      <!-- 4. 持仓页（R2 T04 供体 Stocks 复刻：全部/股票/基金 Tab、账户分组、行情/净值、快捷操作） -->
       <section id="view-positions" hidden>
-        <div class="toolbar-bar">
-          <div style="font-weight: 600;">投资与基金记账：总成本 <b id="pos-total-cost" class="num">0.00</b> | 已实现盈亏 <b id="pos-total-realized" class="num">0.00</b></div>
+        <header class="investment-page-head"><div><h2 data-i18n="fundLedgerPagePositions">持仓记账</h2><p data-i18n="fundLedgerPositionsScope">按账户查看证券持仓，股票看股数与价格，基金看份额与净值。</p></div><div class="investment-page-actions"><button type="button" id="pos-open-ledger" data-i18n="fundLedgerPageTransactions"></button><button type="button" class="btn btn-accent" id="holding-add" data-i18n="fundLedgerAddHolding"></button></div></header>
+        <div class="pos-toolbar">
+          <div class="pos-tabs" role="tablist" data-i18n-aria-label="fundLedgerTabListAria">
+            <button type="button" id="pos-tab-all" class="pos-tab" role="tab" aria-controls="positions-groups" aria-selected="true" data-i18n="fundHomeAll">全部</button>
+            <button type="button" id="pos-tab-stock" class="pos-tab" role="tab" aria-controls="positions-groups" aria-selected="false" tabindex="-1" data-i18n="fundHomeStocks">股票</button>
+            <button type="button" id="pos-tab-etf" class="pos-tab" role="tab" aria-controls="positions-groups" aria-selected="false" tabindex="-1" data-i18n="fundLedgerTypeEtf">场内基金</button>
+            <button type="button" id="pos-tab-otc" class="pos-tab" role="tab" aria-controls="positions-groups" aria-selected="false" tabindex="-1" data-i18n="fundLedgerTypeOtcFund">场外基金</button>
+          </div>
+          <p id="pos-tab-meta" class="pos-tab-meta" role="status"></p>
+          <section class="pos-management" aria-labelledby="pos-management-title"><h3 id="pos-management-title" data-i18n="fundLedgerPositionsManagement"></h3><label class="pos-sort-label"><span data-i18n="fundLedgerSortLabel">排序</span>
+            <select id="pos-account-sort" aria-label="账户排序" data-i18n-aria-label="fundLedgerSortLabel">
+              <option value="default" data-i18n="fundLedgerSortDefault">默认</option>
+              <option value="name" data-i18n="fundLedgerSortName">按名称</option>
+              <option value="amountAsc" data-i18n="fundLedgerSortAmountAsc">金额正序</option>
+              <option value="amountDesc" data-i18n="fundLedgerSortAmountDesc">金额倒序</option>
+              <option value="dayPnlDesc" data-i18n="fundLedgerSortDayPnlDesc">今日收益倒序</option>
+              <option value="dayPnlAsc" data-i18n="fundLedgerSortDayPnlAsc">今日收益正序</option>
+            </select></label>
+          <div class="pos-summary">
+            <span><span data-i18n="fundLedgerThCost">持有成本</span> <b id="pos-total-cost" class="num">0.00</b></span>
+            <span><span data-i18n="fundLedgerMarketValue">市值</span> <b id="pos-total-value" class="num">–</b></span>
+            <span><span id="pos-total-day-label" data-i18n="fundLedgerColDayPnl">今日收益</span> <b id="pos-total-day-pnl" class="num">–</b></span>
+            <span><span data-i18n="fundLedgerThRealized">已实现收益</span> <b id="pos-total-realized" class="num">0.00</b></span>
+            <span><span data-i18n="fundLedgerThProjected">预计收益</span> <b id="pos-total-projected" class="num">–</b></span>
+            <span><span data-i18n="fundLedgerUpdatedAt">更新于</span> <b id="pos-total-updated" class="num">–</b></span>
+            <button type="button" id="pos-capability" class="pos-cap-icon" data-i18n-title="fundLedgerCapabilityMatrix" data-i18n-aria-label="fundLedgerCapabilityMatrix" title="能力范围" aria-label="能力范围"><svg class="svg-icon" aria-hidden="true"><use href="#i-bolt" /></svg></button>
+          </div>
+          <div class="pos-tools">
+            <label class="investment-check"><input id="pos-detailed" type="checkbox"><span data-i18n="fundLedgerExpandAllDetails">展开所有详情</span></label>
+            <button type="button" id="pos-display-toggle" role="switch" aria-checked="false" title="隐藏/显示金额" data-i18n-title="fundHomeHideShowAmounts"></button>
+            <button type="button" id="pos-accounts" data-i18n="fundLedgerAccountManage">账户管理</button>
+            <button type="button" id="holding-history" data-i18n="fundHomeOpeningHistory">期初记录</button>
+            <button type="button" id="pos-refresh" data-i18n="fundHomeRefresh">刷新</button>
+          </div></section>
         </div>
-        <table class="data-table" id="positions-table">
-          <thead>
-            <tr><th>账户</th><th>标的代码</th><th>标的名称</th><th class="num">持有份额</th><th class="num">持有成本</th><th class="num">已实现收益</th><th class="num">截至日期</th></tr>
-          </thead>
-          <tbody></tbody>
-        </table>
+        <p class="pos-order-hint" data-i18n="fundLedgerIncomeScope"></p>
+        <p id="positions-status" role="status" aria-live="polite"></p>
+        <div id="positions-groups" role="tabpanel" aria-labelledby="pos-tab-all"></div>
+        <section id="holding-legacy"></section>
       </section>
-

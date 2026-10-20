@@ -1,40 +1,21 @@
+import { storage } from './platform/storage.js';
+import { getMessage } from './platform/i18n.js';
+import { isExtension } from './platform/env.js';
+
 export async function storageGet(key, fallback) {
-  if (chrome.storage?.local) {
-    try {
-      const value = await Promise.race([
-        chrome.storage.local.get({ [key]: fallback }),
-        new Promise((resolve) => setTimeout(() => resolve(undefined), 500)),
-      ]);
-      if (value) return value[key] ?? fallback;
-    } catch {}
-  }
-  try {
-    return JSON.parse(localStorage.getItem(key) || JSON.stringify(fallback));
-  } catch {
-    return fallback;
-  }
+  const value = await storage.local.get({ [key]: fallback });
+  return value[key] ?? fallback;
 }
 
 export async function storageSet(key, value) {
-  if (chrome.storage?.local) {
-    try {
-      const saved = await Promise.race([
-        chrome.storage.local.set({ [key]: value }).then(() => true),
-        new Promise((resolve) => setTimeout(() => resolve(false), 500)),
-      ]);
-      if (saved) return;
-    } catch {}
-  }
-  try {
-    localStorage.setItem(key, JSON.stringify(value));
-  } catch {}
+  await storage.local.set({ [key]: value });
 }
 
 export function createFilesLocale({ onChange }) {
   let messages = {};
   let language = 'zh_CN';
   let switchToken = 0;
-  const t = (key, fallback) => messages[key]?.message || chrome.i18n?.getMessage(key) || fallback;
+  const t = (key, fallback) => messages[key]?.message || (typeof chrome !== 'undefined' && chrome.i18n?.getMessage(key)) || getMessage(key) || fallback;
 
   function apply() {
     document.documentElement.lang = language === 'en' ? 'en' : 'zh-CN';
@@ -56,12 +37,16 @@ export function createFilesLocale({ onChange }) {
     }
   }
 
-  const ready = storageGet('natives-language', '').then((stored) => load(stored === 'en' || stored === 'zh_CN' ? stored : 'zh_CN'));
+  const ready = storageGet('natives-language', '').then((stored) => {
+    const defaultLanguage = !isExtension && globalThis.navigator?.language && !globalThis.navigator.language.startsWith('zh')
+      ? 'en' : 'zh_CN';
+    return load(stored === 'en' || stored === 'zh_CN' ? stored : defaultLanguage);
+  });
 
-  async function switchLanguage(nextLanguage) {
+  async function switchLanguage(nextLanguage, persist = true) {
     const token = ++switchToken;
     const next = nextLanguage === 'en' ? 'en' : 'zh_CN';
-    await storageSet('natives-language', next);
+    if (persist) await storageSet('natives-language', next);
     await load(next);
     if (token !== switchToken) return;
     apply();

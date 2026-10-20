@@ -12,14 +12,15 @@
 // NATIVES_DEV_PRODUCT_SOURCE) and never needs sudo. Only `--system` writes
 // the root-owned /Library/Application Support/Natives-Local/ installer
 // candidate, which requires an administrator password.
-import { existsSync, mkdirSync, readFileSync, writeFileSync, copyFileSync, readdirSync, statSync, rmSync, chmodSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, copyFileSync, readdirSync, statSync, rmSync, chmodSync, renameSync } from 'node:fs';
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { treeSha256 } from '../lib/tree-hash.mjs';
 import { checkProductManifest } from './check-product-manifest.mjs';
+import { buildExtension } from '../extension-package.mjs';
 
 const ROOT = resolve(fileURLToPath(new URL('../..', import.meta.url)));
 // `--system`：拷入 root-owned 安装候选（A-Local/B-Local 安装器验收用）。
@@ -47,12 +48,23 @@ function rustTargetArch() {
 
 // 1. 统一 App Runtime：与 npm run dev 同为 debug 构建（is_production_build()
 //    为否 → local 命名空间 / 开发信任根，见 app_signing.rs）。
-console.log('building natives-app-runtime (debug)…');
-execFileSync('rtk', ['env', '-u', 'CARGO_TARGET_DIR', 'cargo', 'build', '-p', 'app-runtime'],
+// `--release`：同一条密封链构建 Release 二进制（性能验收用；05 §8 要求
+// 同机同构建可比样本）。默认仍为 debug；不改变任何验证与签名规则。
+const useRelease = process.argv.includes('--release');
+const rustProfile = useRelease ? 'release' : 'debug';
+// Runtime embeds ui/dist; seal only resources rebuilt from current ui/src.
+execFileSync('rtk', ['npm', 'run', 'modules:ui:build'], { stdio: 'inherit', cwd: ROOT });
+console.log(`building natives-app-runtime (${rustProfile})…`);
+execFileSync('rtk', ['env', '-u', 'CARGO_TARGET_DIR', 'cargo', 'build', '-p', 'app-runtime',
+  ...(useRelease ? ['--release'] : [])],
   { stdio: 'inherit', cwd: ROOT });
-const appRuntimeBin = resolve(ROOT, 'target/debug/natives-app-runtime');
-if (!existsSync(appRuntimeBin)) throw new Error('missing natives-app-runtime debug binary');
+const appRuntimeBin = resolve(ROOT, `target/${rustProfile}/natives-app-runtime`);
+if (!existsSync(appRuntimeBin)) throw new Error(`missing natives-app-runtime ${rustProfile} binary`);
 const appRuntimeSha256 = digest(readFileSync(appRuntimeBin));
+const stagingRoot = join(ROOT, '.tmp', 'dev-product-source');
+mkdirSync(stagingRoot, { recursive: true });
+const extensionStage = mkdtempSync(join(stagingRoot, 'extension-'));
+buildExtension(join(extensionStage, 'ChromeExtension'), ROOT, process.argv.includes('--local') ? 'local' : 'production');
 
 // 2. 内置模块 UI 树：与 installer-package.mjs 同源（modules/registry.json）。
 const registry = JSON.parse(readFileSync(resolve(ROOT, 'modules/registry.json'), 'utf8'));
@@ -71,6 +83,10 @@ const modules = registry.apps.map((entry) => {
     moduleApiVersion: meta.moduleApiVersion,
     dataSchemaVersion: meta.dataSchemaVersion,
     capabilityVersion: meta.capabilityVersion,
+    capabilities: meta.capabilities || [],
+    requires: meta.requires || [],
+    views: meta.views || [],
+    optionalActions: meta.optionalActions || [],
     ui: { path: `modules/${meta.appId}/ui`, treeSha256: treeSha256(uiDist) },
   };
 });
@@ -83,6 +99,7 @@ const manifest = {
   version: JSON.parse(readFileSync(resolve(ROOT, 'package.json'), 'utf8')).version,
   platform: 'darwin',
   arch: rustTargetArch(),
+  extension: { path: 'ChromeExtension', treeSha256: treeSha256(join(extensionStage, 'ChromeExtension')) },
   appRuntime: {
     protocolVersion: 2,
     path: 'hosts/natives-app-runtime',
@@ -105,13 +122,21 @@ function writeSource(source, useElevate, commitFrom) {
     if (args[0] === 'mkdir' && args[1] === '-p') mkdirSync(args[2], { recursive: true });
     else if (args[0] === 'install') {
       const mode = parseInt(args[1].replace('-m', ''), 8); // install -m 是八进制
-      copyFileSync(args[2], args[3]);
-      chmodSync(args[3], mode);
+      // 新 inode 原子替换，避免原地覆盖已执行的 Mach-O 后命中旧签名缓存。
+      const stage = mkdtempSync(join(dirname(args[3]), '.natives-install-'));
+      try {
+        const payload = join(stage, 'payload');
+        copyFileSync(args[2], payload);
+        chmodSync(payload, mode);
+        renameSync(payload, args[3]);
+      } finally { rmSync(stage, { recursive: true, force: true }); }
     } else if (args[0] === 'rm' && args[1] === '-rf') rmSync(args[2], { recursive: true, force: true });
     else if (args[0] === 'cp' && args[1] === '-R') execFileSync('cp', ['-R', args[2], args[3]]);
     else throw new Error(`unhandled place step: ${args.join(' ')}`);
   };
   mkdirSync(source, { recursive: true });
+  place(['rm', '-rf', `${source}/ChromeExtension`]);
+  place(['cp', '-R', join(commitFrom || extensionStage, 'ChromeExtension'), `${source}/ChromeExtension`]);
   if (commitFrom) {
     place(['mkdir', '-p', `${source}/hosts`]);
     place(['mkdir', '-p', `${source}/modules`]);
@@ -153,6 +178,7 @@ function writeSource(source, useElevate, commitFrom) {
 
 const stageDir = process.env.STAGE_DIR;
 if (stageDir && system) {
+  execFileSync('cp', ['-R', join(extensionStage, 'ChromeExtension'), join(stageDir, 'ChromeExtension')]);
   mkdirSync(join(stageDir, 'hosts'), { recursive: true });
   copyFileSync(appRuntimeBin, join(stageDir, 'hosts/natives-app-runtime'));
   for (const module of modules) {
@@ -171,27 +197,14 @@ if (stageDir && system) {
   console.log(`  modules: ${modules.map((m) => m.appId).join(', ')}`);
   console.log('下一步：以管理员权限执行本脚本 --commit <stageDir> --system 拷入 root 系统源。');
 } else {
-  const commitFrom = process.argv[2] === '--commit' ? process.argv[3] : undefined;
+  const commitIdx = process.argv.indexOf('--commit');
+  const commitFrom = commitIdx >= 0 ? process.argv[commitIdx + 1] : undefined;
   writeSource(SOURCE, system, commitFrom);
   console.log(`refreshed ${SOURCE}${system ? ' (root 系统源，安装候选)' : ' (用户目录，零 sudo)'}`);
   console.log(`  appRuntime sha256: ${appRuntimeSha256}`);
   console.log(`  modules: ${modules.map((m) => m.appId).join(', ')}`);
   console.log('重新运行 npm run dev 后，扩展首次 apps:handshake 会触发 configure_product 重写 v2 activation。');
 
-  // 同步更新 ~/.natives-local/apps/*/activation.json 中的 appRuntimeSha256，
-  // 确保开发者重新运行本脚本后，无需等待扩展握手即可立刻使最新二进制通过校验。
-  const appsDir = join(homedir(), '.natives-local', 'apps');
-  if (existsSync(appsDir)) {
-    for (const entry of readdirSync(appsDir, { withFileTypes: true })) {
-      if (!entry.isDirectory()) continue;
-      const actPath = join(appsDir, entry.name, 'activation.json');
-      if (existsSync(actPath)) {
-        try {
-          const act = JSON.parse(readFileSync(actPath, 'utf8'));
-          act.appRuntimeSha256 = appRuntimeSha256;
-          writeFileSync(actPath, JSON.stringify(act, null, 2) + '\n');
-        } catch {}
-      }
-    }
-  }
+  // Activation receipts are written only by Core's verified apps:handshake.
 }
+rmSync(extensionStage, { recursive: true, force: true });

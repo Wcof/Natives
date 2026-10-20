@@ -5,10 +5,15 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+
+	"github.com/ldh/natives/model-host/internal/lifecycle"
 )
 
 // Launch starts the installed client. Desktop apps are opened detached; CLI
 // clients get a fresh terminal window on macOS, matching the reference GUI.
+// 每个启动器子进程（open/osascript/cmd/terminal）异步 reap：短命 helper 退出后
+// 由父进程回收，不产生僵尸；用户打开的终端与应用不是本进程子进程，生命周期
+// 不绑定 Host（方案 L2.3/L2.4）。
 func Launch(definition Definition, target, workingDirectory string) error {
 	home := homeDir()
 	if target == "" && len(definition.LaunchTargets) > 0 {
@@ -44,7 +49,11 @@ func launchDetachedApp(appPath string) error {
 	cmd.Stdin = nil
 	cmd.Stdout = nil
 	cmd.Stderr = nil
-	return cmd.Start()
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	lifecycle.Reap(cmd)
+	return nil
 }
 
 func launchInTerminal(exe, workingDirectory string) error {
@@ -58,13 +67,13 @@ func launchInTerminal(exe, workingDirectory string) error {
 	activate
 	do script "%sexec '%s'"
 end tell`, cdPrefix, strings.ReplaceAll(exe, "'", "'\\''"))
-		return exec.Command("osascript", "-e", script).Start()
+		return startReaped(exec.Command("osascript", "-e", script))
 	case "windows":
 		cmd := exec.Command("cmd", "/D", "/K", "call", exe)
 		if workingDirectory != "" && pathExists(workingDirectory) {
 			cmd.Dir = workingDirectory
 		}
-		return cmd.Start()
+		return startReaped(cmd)
 	default:
 		for _, terminal := range []struct {
 			name string
@@ -81,11 +90,21 @@ end tell`, cdPrefix, strings.ReplaceAll(exe, "'", "'\\''"))
 				if workingDirectory != "" && pathExists(workingDirectory) {
 					cmd.Dir = workingDirectory
 				}
-				return cmd.Start()
+				return startReaped(cmd)
 			}
 		}
 		return fmt.Errorf("未找到可用的终端模拟器")
 	}
+}
+
+// startReaped 启动启动器 helper 并异步回收：Start 失败原样返回错误；
+// 成功后 Wait 恰一次由 Reap 负责。
+func startReaped(cmd *exec.Cmd) error {
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	lifecycle.Reap(cmd)
+	return nil
 }
 
 func shellQuote(value string) string {

@@ -10,12 +10,12 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/watcher/synthesizer"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/watcher/synthesizer"
 	"gopkg.in/yaml.v3"
 
-	sdkAuth "github.com/router-for-me/CLIProxyAPI/v7/sdk/auth"
-	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
+	sdkAuth "github.com/router-for-me/CLIProxyAPI/v8/sdk/auth"
+	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -151,10 +151,11 @@ func (w *Watcher) Stop() error {
 
 // SetConfig updates the current configuration
 func (w *Watcher) SetConfig(cfg *config.Config) {
+	cloned := cfg.CloneForRuntime()
 	w.clientsMutex.Lock()
 	defer w.clientsMutex.Unlock()
-	w.config = cfg
-	w.oldConfigYaml, _ = yaml.Marshal(cfg)
+	w.config = cloned
+	w.oldConfigYaml, _ = yaml.Marshal(cloned)
 }
 
 // SetPluginAuthParser updates the plugin auth parser used for file auth synthesis.

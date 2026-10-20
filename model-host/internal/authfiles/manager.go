@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ldh/natives/model-host/internal/lifecycle"
 )
 
 type AuthFileItem struct {
@@ -194,7 +196,12 @@ func (m *Manager) OpenDir() error {
 	default:
 		cmd = exec.Command("xdg-open", path)
 	}
-	return cmd.Start()
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	// 短命启动器 helper：异步 Wait 恰一次，防止长寿 Host 进程下产生僵尸。
+	lifecycle.Reap(cmd)
+	return nil
 }
 
 func (m *Manager) ReadFile(name string) ([]byte, error) {

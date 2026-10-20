@@ -1,0 +1,13 @@
+<section id="view-assets" hidden>
+  <header class="investment-page-head"><div><h2 data-i18n="fundHomeOfflineTitle">线下投资资产</h2>
+  <p data-i18n="fundHomeOfflineScope">实物黄金、定期存款、银行理财和其他手工估值投资；不含房产等固定资产。</p></div><button id="offline-add" type="button" class="btn btn-accent" data-i18n="fundHomeAddOffline">添加线下资产</button></header>
+  <div id="offline-summary" class="investment-summary"></div>
+  <div class="toolbar-bar">
+    <label><span data-i18n="fundHomeType">类型</span><select id="offline-filter"><option value="" data-i18n="fundHomeAll">全部</option><option value="gold" data-i18n="fundHomePhysicalGold">实物黄金</option><option value="deposit" data-i18n="fundHomeTermDeposit">定期存款</option><option value="wealth" data-i18n="fundHomeBankWealth">银行理财</option><option value="other" data-i18n="fundHomeOther">其他</option></select></label>
+    <label><input id="offline-deleted" type="checkbox"><span data-i18n="fundHomeShowArchived">包含已删除记录</span></label>
+  </div>
+  <div class="investment-feedback"><p id="asset-msg" role="status" aria-live="polite"></p><button id="offline-retry" type="button" hidden data-i18n="fundLedgerRetry">重试</button></div>
+  <div id="offline-cards" class="investment-asset-grid" data-i18n-aria-label="fundHomeOfflineTitle"></div>
+  <div class="investment-pagination"><span data-i18n="fundHomeOfflinePageScope">当前筛选，每页最多 50 条。</span><div><button id="offline-prev" type="button" data-i18n="fundHomePrevious">上一页</button> <span id="offline-page">1</span> <button id="offline-next" type="button" data-i18n="fundHomeNext">下一页</button></div></div>
+  <section id="offline-legacy"></section>
+</section>

@@ -1,4 +1,5 @@
 mod handshake;
+mod secret;
 mod session;
 mod start;
 mod status;
@@ -25,7 +26,9 @@ impl Controller {
             "app:start" => self.handle_start(req),
             "app:status" => self.handle_status(req),
             "app:data_status" => self.handle_data_status(req),
+            "app:card_snapshot" => self.handle_card_snapshot(req),
             "app:session" => self.handle_session(req),
+            "app:secret" => self.handle_secret(req),
             "app:stop" => self.handle_stop(req),
             _ => write_error(
                 &req.id,

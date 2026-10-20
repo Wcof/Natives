@@ -15,7 +15,7 @@ const MAX_ID_BYTES: usize = 128;
 const MAX_METHOD_BYTES: usize = 64;
 const MAX_IMPORT_CHUNK_BASE64_BYTES: usize = 700_000;
 
-#[derive(Clone, Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct Request {
     pub(crate) id: String,
@@ -153,6 +153,11 @@ pub(crate) fn validate_request(request: &Request) -> Result<(), String> {
             | "workspace_reset"
             | "settings_get"
             | "settings_set"
+            | "preferences_get"
+            | "preferences_set"
+            | "preferences_import"
+            | "diagnostics_get"
+            | "diagnostics_reset"
             | "apps:handshake"
             | "apps:list"
             | "apps:get"
@@ -237,6 +242,9 @@ pub(crate) fn validate_request(request: &Request) -> Result<(), String> {
         "workspace_reset" => &["workspaceId", "template", "expectedRevision"],
         "settings_get" => &["keys"],
         "settings_set" => &["entries"],
+        "preferences_get" => &[],
+        "preferences_set" => &["entries", "expectedRevision"],
+        "preferences_import" => &["entries", "expectedRevision", "source"],
         "apps:list" | "apps:health" | "apps:product_status" | "apps:open_onboarding" => &[],
         "apps:handshake" => &["origin"],
         "apps:get" => &["appId"],
@@ -315,7 +323,11 @@ pub(crate) fn validate_request(request: &Request) -> Result<(), String> {
                 return Err("invalid limit".into());
             }
             if key == "offset" {
-                let max_offset = 100_000;
+                let max_offset = if request.method == "import_chunk" {
+                    file_manager::MAX_IMPORT_BYTES
+                } else {
+                    100_000
+                };
                 if number > max_offset {
                     return Err("invalid offset".into());
                 }
@@ -395,6 +407,15 @@ pub(crate) fn validate_request(request: &Request) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn chunk_offsets_use_file_size_budget_instead_of_list_page_limit() {
+        let request = Request {
+            id: "chunk".into(),
+            method: "import_chunk".into(),
+            params: serde_json::json!({"uploadId":"one","offset":131072,"data":"YQ=="}),
+        };
+        assert!(validate_request(&request).is_ok());
+    }
     use super::*;
 
     use std::io::Cursor;

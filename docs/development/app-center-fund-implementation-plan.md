@@ -1,8 +1,8 @@
 # Natives 安装与应用中心当前实施方案
 
-> 版本：v4.0 · 2026-09-14
+> 版本：v4.0 · 维护日期：2026-10-03
 >
-> 本文件是执行入口。Natives 是唯一用户产品；Fund、Portfolio、Ledger、NAV、Import 和 Migration 是同一安装包内的内置模块。模块没有下载、独立安装、独立更新、独立卸载、在线目录、`.nap` 或独立 Release。
+> 本文件是安装与应用中心的执行入口，架构以 ADR-0031 及现行 Standards 为准。Natives 是唯一用户产品；Fund 是随包内置应用，Portfolio、Ledger、NAV、Import 和 Migration 是 Fund 内部领域，没有单独应用身份。模块没有下载、独立安装、独立更新、独立卸载、在线目录、`.nap` 或独立 Release。投资页面需求以 plan 的现行方案为准，当前实施状态见 ROADMAP。
 
 ## 1. 产品边界
 

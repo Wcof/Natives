@@ -98,7 +98,9 @@ pub(crate) fn handle(request: &Request) -> Result<Value, String> {
                 .map_err(|e| e.to_string())
         }
         "search" => run_search(request, None),
-        "locate" => run_locate(request),
+        // locate 已移入 main.rs 的有界任务路径（可取消）；此分支仅作兜底，
+        // 不持有取消 token（防御性保留同步语义）。
+        "locate" => run_locate(request, None),
         "read_file" => {
             let path = request
                 .params

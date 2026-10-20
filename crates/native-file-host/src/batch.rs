@@ -11,7 +11,11 @@ pub(crate) fn emit_batch_progress(
     completed: usize,
     total: usize,
     cancelled: &AtomicBool,
+    progress: Option<&dyn Fn(usize, usize)>,
 ) {
+    if let Some(progress) = progress {
+        progress(completed, total);
+    }
     if let Some(writer) = writer {
         let progress_id = format!("{request_id}:progress");
         let _ = respond(
@@ -59,6 +63,7 @@ pub(crate) fn run_batch(
     request: &Request,
     cancelled: &AtomicBool,
     writer: Option<&Arc<Mutex<io::Stdout>>>,
+    progress: Option<&dyn Fn(usize, usize)>,
 ) -> Result<Value, String> {
     let paths = request
         .params
@@ -121,7 +126,14 @@ pub(crate) fn run_batch(
                     .is_some_and(|parent| parent == *target)
                 {
                     skipped.push(path);
-                    emit_batch_progress(writer, &request.id, processed + 1, total, cancelled);
+                    emit_batch_progress(
+                        writer,
+                        &request.id,
+                        processed + 1,
+                        total,
+                        cancelled,
+                        progress,
+                    );
                     continue;
                 }
                 file_manager::move_entry(&path, target.to_string_lossy().as_ref())
@@ -134,7 +146,14 @@ pub(crate) fn run_batch(
             Ok(value) => completed.push(value),
             Err(error) => errors.push(json!({"path": path, "error": error.to_string()})),
         }
-        emit_batch_progress(writer, &request.id, processed + 1, total, cancelled);
+        emit_batch_progress(
+            writer,
+            &request.id,
+            processed + 1,
+            total,
+            cancelled,
+            progress,
+        );
     }
     let result_key = match request.method.as_str() {
         "copy_batch" => "copied",

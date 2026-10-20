@@ -9,7 +9,9 @@ const ROOT = resolve(fileURLToPath(new URL('../..', import.meta.url)));
 export const BUDGET = 360 * 1024;
 // 2026-09-13 用户决定：Hard Gate 自 300 KiB 放宽 20%（ADR-0024 §8 资源预算修订），为内置模块
 // 图标资产与产品功能字节预留空间。漂移锚点同步重置为本次批准的字节状态；20 KiB 漂移归因纪律不变。
-const DRIFT_BASELINE = 318632;
+// 2026-09-30 重置：ADR-0036 空间投资卡（5 个静态卡 renderer + 页面级 feed + 双语 locale）
+// 为产品功能增量，Hard Gate 360 KiB 不变（当前 339 KiB，headroom 29 KiB）。
+const DRIFT_BASELINE = 339172;
 const DRIFT_ALLOWANCE = 20480;
 
 export { distributableFiles };

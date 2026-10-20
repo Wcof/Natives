@@ -1,0 +1,120 @@
+/*
+ * Fund 模块主题（DES 02 单源体系）：
+ * 产品基础角色由 extension/theme.css 唯一维护，经 build-ui 在构建期组合到
+ * dist/styles/theme.css 前部。本文件只拥有投资专属语义：
+ *   1. 金融涨跌（cn/intl）、指标系列、绘图默认样式；
+ *   2. 投资字号、间距、圆角、动效密度角色；
+ *   3. 模块基础元素样式（body 等）。
+ * 不得重复声明基础角色（--natives-bg/surface/accent/text/border/状态色等，
+ * check-ui 会失败）；金融语义不搬入宿主，宿主布局不进入本文件。
+ */
+
+:root {
+  /* 密度：圆角 / 字号 / 间距（8px 基线）/ 动效（集中定义，组件消费） */
+  --natives-radius: 7px;
+  --fund-card-radius: 14px;
+  --fund-card-padding: 22px;
+  --fund-allocation-height: 480px;
+  --fund-content-width: 1280px;
+  --fund-content-inset: 28px;
+  --fund-section-gap: 22px;
+  --fund-allocation-2: #617ea3;
+  --fund-allocation-3: #a58a57;
+  --fund-allocation-4: #8e779f;
+  --fund-allocation-5: #66928b;
+  --fund-holding-card-radius: 16px;
+  --fund-holding-card-min-width: 300px;
+  --natives-fs-secondary: 12px;
+  --natives-fs-body: 14px;
+  --natives-fs-table-amount: 14px;
+  --natives-fs-metric: 20px;
+  --natives-fs-amount: 24px;
+  --natives-space-1: 8px;
+  --natives-space-2: 12px;
+  --natives-space-3: 16px;
+  --natives-space-4: 24px;
+  --natives-space-5: 32px;
+  --fund-research-main-height: clamp(360px, 52vh, 600px);
+  --fund-research-volume-height: 90px;
+  --fund-research-indicator-height: 160px;
+  --fund-research-flow-height: 120px;
+  --natives-dur-fast: 120ms;
+  --natives-dur-base: 200ms;
+  --natives-dur-panel: 300ms;
+  /* 保留既有别名消费面 */
+  --font-mono: var(--natives-font-mono);
+}
+
+/* 主体基础元素样式（模块内唯一 body 定义，随主题消费基础角色） */
+* { box-sizing: border-box; }
+body {
+  font: var(--natives-fs-body)/1.6 var(--natives-font);
+  margin: 0; padding: 0; background: var(--natives-bg); color: var(--natives-text-primary);
+  overflow-x: hidden;
+}
+.app-container { display: flex; flex-direction: column; height: 100vh; }
+
+/* ===== 图表 / 系列 / 绘图角色：Archive（默认） ===== */
+:root {
+  /* 图表语义角色（themeColor/themeRgba 直接读取；保持 6 位 HEX 可解析，
+     tooltip 背景为 rgba 值由图表直接消费）。 */
+  --chart-grid: #e5e9ef;
+  --chart-axis: #c3cbd6;
+  --chart-text: #202733;
+  --chart-text-dim: #5b6677;
+  --chart-pre-close: #8a94a3;
+  --chart-tooltip-bg: rgba(255, 255, 255, 0.95);
+  --chart-tooltip-border: #e5e9ef;
+  /* 金融涨跌（cn：红涨绿跌） */
+  --color-up: #b13642;
+  --color-down: #217052;
+  /* 指标系列（MA / MACD / KDJ / BOLL / WR 等共享调色板，按序取用） */
+  --series-1: #345780;
+  --series-2: #b13642;
+  --series-3: #217052;
+  --series-4: #805a18;
+  --series-5: #5b3f73;
+  --series-6: #3d7ea6;
+  /* 绘图默认样式（options.color 缺省时消费；显式用户色不由这里覆盖） */
+  --draw-line: #345780;
+  --draw-anchor: #345780;
+  --draw-selected: #b13642;
+  --draw-fill: rgba(52, 87, 128, 0.12);
+}
+
+/* ===== Volt：保留深色方向，涨跌对齐产品通用表 ===== */
+:root[data-theme="volt"] {
+  --fund-allocation-2:#7fc4d8;
+  --fund-allocation-3:#e6c07b;
+  --fund-allocation-4:#b8a7e0;
+  --fund-allocation-5:#8cd6b3;
+  --chart-grid: #262920;
+  --chart-axis: #3d4133;
+  --chart-text: #f2f2ea;
+  --chart-text-dim: #9fa190;
+  --chart-pre-close: #6d7360;
+  --chart-tooltip-bg: rgba(19, 20, 16, 0.96);
+  --chart-tooltip-border: #262920;
+  --color-up: #ff9a9f;
+  --color-down: #8cd6b3;
+  --series-1: #cdf24b;
+  --series-2: #ff9a9f;
+  --series-3: #8cd6b3;
+  --series-4: #e6c07b;
+  --series-5: #b8a7e0;
+  --series-6: #7fc4d8;
+  --draw-line: #cdf24b;
+  --draw-anchor: #cdf24b;
+  --draw-selected: #ff9a9f;
+  --draw-fill: rgba(205, 242, 75, 0.14);
+}
+
+/* ===== 国际配色反转：绿涨红跌（显式值，避免主题叠加歧义） ===== */
+:root[data-color-mode="intl"] {
+  --color-up: #217052;
+  --color-down: #b13642;
+}
+:root[data-theme="volt"][data-color-mode="intl"] {
+  --color-up: #8cd6b3;
+  --color-down: #ff9a9f;
+}

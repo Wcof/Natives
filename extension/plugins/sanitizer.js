@@ -2,6 +2,10 @@
 
 export const WIDGET_KEYS = [
   'widget/aiPerformance',
+  // 投资卡（ADR-0036 / 方案 02 §5）：静态 key，随构建期注册。
+  'widget/investmentHoldings', 'widget/investmentAssets',
+  'widget/investmentGoal', 'widget/investmentAllocation',
+  'widget/investmentAllocationCheck',
   // R1（方案 §4.1）：七个独立 AI 效能组件（旧 aiPerformance 保留为兼容 key）。
   'widget/aiCost', 'widget/aiTokens', 'widget/aiSessions',
   'widget/aiRequests', 'widget/aiLimits', 'widget/aiAttention', 'widget/aiSavings',

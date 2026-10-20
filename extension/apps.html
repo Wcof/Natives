@@ -4,6 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title data-i18n="appsCenterTitle">应用中心</title>
+    <link rel="stylesheet" href="theme.css" />
     <link rel="stylesheet" href="apps.css" />
   </head>
   <body>
@@ -24,9 +25,10 @@
     </svg>
 
     <nav class="apps-nav">
-      <div class="brand"><svg class="icon"><use href="#i-bolt" /></svg><span data-i18n="appName">Natives</span></div>
+      <div class="brand"><svg class="icon"><use href="#i-bolt" /></svg><span>Natives</span></div>
       <button id="apps-toggle-sidebar-btn" class="apps-nav-item collapse" type="button" data-i18n-title="collapseSidebar" title="折叠侧栏" aria-label="折叠侧栏" aria-pressed="false"><svg class="icon"><use href="#i-panel" /></svg><span data-i18n="collapseSidebar">折叠侧栏</span></button>
       <button id="nav-center" class="apps-nav-item active" type="button"><svg class="icon"><use href="#i-grid" /></svg><span data-i18n="appsCenter">应用中心</span></button>
+      <button id="app-module-settings" class="apps-nav-item" type="button" hidden><svg class="icon"><use href="#i-box" /></svg><span data-i18n="moduleSettings">应用设置</span></button>
       <div class="spacer"></div>
       <button id="nav-back" class="apps-nav-item back" type="button"><svg class="icon"><use href="#i-back" /></svg><span data-i18n="backToSpace">返回</span></button>
     </nav>
@@ -45,6 +47,6 @@
     <button id="apps-expand-sidebar-btn" class="apps-expand-btn" type="button" hidden data-i18n-title="expandSidebar" title="展开侧栏" aria-label="展开侧栏" aria-pressed="true"><svg class="icon"><use href="#i-panel" /></svg></button>
 
     <div id="apps-toast" class="apps-toast" role="status" hidden></div>
-    <script type="module" src="apps.js"></script>
+    <script type="module" src="apps-boot.js"></script>
   </body>
 </html>

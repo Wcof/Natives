@@ -8,7 +8,7 @@ setupTestDomEnvironment();
 
 console.log('--- 25 Space Widgets Structural & Baseline Verification ---');
 
-assert.equal(WIDGET_KEYS.length, 32, 'Must register exactly 32 widgets (25 legacy + 7 independent AI components)');
+assert.equal(WIDGET_KEYS.length, 37, 'Must register exactly 37 widgets (25 legacy + 7 AI + 5 investment, ADR-0036)');
 const manifest = JSON.parse(readFileSync(new URL('./manifest.json', import.meta.url), 'utf8'));
 assert.deepEqual(manifest.optional_permissions?.sort(), ['bookmarks', 'topSites']);
 // Every host the network widgets fetch must stay declared, or real Chrome CORS-blocks them.

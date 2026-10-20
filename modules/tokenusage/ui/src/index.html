@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Token Monitor</title>
+    <link rel="stylesheet" href="/styles/theme.css" />
+    <link rel="stylesheet" href="/styles/layout.css" />
+
+  </head>
+  <body>
+    <div class="shell">
+      <!-- Titlebar -->
+      <header class="titlebar">
+        <div>
+          <div class="app-title">
+            <span class="app-title-text" data-i18n="title">Token Monitor</span>
+            <span class="app-title-mark">Σ</span>
+            <span class="live-dot" id="live-dot" hidden></span>
+          </div>
+          <div class="status-text" id="status-text" data-i18n="localData">Local-first · Live</div>
+        </div>
+        <nav class="period-tabs" aria-label="Period" data-i18n-aria="period">
+          <button class="period-tab active" data-period="today" data-i18n="today">天</button>
+          <button class="period-tab" data-period="week" data-i18n="week">周</button>
+          <button class="period-tab" data-period="month" data-i18n="month">月</button>
+          <button class="period-tab" data-period="allTime" data-i18n="allTime">总</button>
+        </nav>
+      </header>
+
+      <!-- Total Panel -->
+      <section class="total-panel">
+        <div class="total-label" data-i18n="totalTokens">TOTAL TOKENS</div>
+        <div class="total-number-row">
+          <div id="totalTokens" class="total-number">--</div>
+          <div id="cost" class="cost">--</div>
+        </div>
+      </section>
+
+      <!-- View Switcher -->
+      <nav class="view-switcher" role="tablist">
+        <button class="view-btn active" data-view="home" data-i18n="home">--</button>
+        <button class="view-btn" data-view="limits" data-i18n="limits">--</button>
+        <button class="view-btn" data-view="tools" data-i18n="tools">--</button>
+        <button class="view-btn" data-view="sessions" data-i18n="sessions">--</button>
+        <button class="view-btn" data-view="models" data-i18n="models">--</button>
+        <button class="view-btn" data-view="trends" data-i18n="trends">--</button>
+      </nav>
+
+      <!-- Content Area -->
+      <main class="content-area" id="content-area">
+        <!-- 1. Home View -->
+        <section id="view-home" class="breakdown">
+          <!-- Populated by JS -->
+        </section>
+
+        <!-- 2. Limits View -->
+        <section id="view-limits" class="limits-grid" style="display:none;">
+          <!-- Populated by JS -->
+        </section>
+
+        <!-- 3. Tools View -->
+        <section id="view-tools" style="display:none;">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th data-i18n="toolName">工具名称</th>
+                <th data-i18n="category">分类</th>
+                <th data-i18n="tokens">Token 消耗</th>
+                <th data-i18n="costUsd">费用 (USD)</th>
+                <th data-i18n="requests">请求数</th>
+                <th data-i18n="status">状态</th>
+              </tr>
+            </thead>
+            <tbody id="tools-table-body"></tbody>
+          </table>
+        </section>
+
+        <!-- 4. Sessions View -->
+        <section id="view-sessions" style="display:none;">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th data-i18n="sessionTitle">会话标题 / 项目</th>
+                <th data-i18n="tool">工具</th>
+                <th data-i18n="tokens">Token 消耗</th>
+                <th data-i18n="cost">费用</th>
+                <th data-i18n="requests">请求数</th>
+                <th data-i18n="time">时间</th>
+              </tr>
+            </thead>
+            <tbody id="sessions-table-body"></tbody>
+          </table>
+        </section>
+
+        <!-- 5. Models View -->
+        <section id="view-models" style="display:none;">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th data-i18n="model">模型</th>
+                <th data-i18n="input">输入</th>
+                <th data-i18n="output">输出</th>
+                <th data-i18n="totalTokens">总 Token</th>
+                <th data-i18n="cost">费用</th>
+              </tr>
+            </thead>
+            <tbody id="models-table-body"></tbody>
+          </table>
+        </section>
+
+        <!-- 6. Trends View -->
+        <section id="view-trends" style="display:none;">
+          <table class="data-table">
+            <thead>
+              <tr>
+                <th data-i18n="date">日期</th>
+                <th data-i18n="tool">工具</th>
+                <th data-i18n="tokens">Token 消耗</th>
+                <th data-i18n="cost">费用</th>
+                <th data-i18n="requests">请求数</th>
+              </tr>
+            </thead>
+            <tbody id="trends-table-body"></tbody>
+          </table>
+        </section>
+      </main>
+
+      <!-- Footer -->
+      <footer class="footer">
+        <div class="live-token-rate">
+
+          <span id="liveRateText">--</span>
+        </div>
+        <div class="footer-actions">
+          <button id="btn-refresh" class="btn-icon" title="刷新数据" data-i18n-title="refresh" aria-label="刷新数据" data-i18n-aria="refresh"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M5.4 8a7 7 0 0 1 11.5-3L20 8M4 16l3.1 3A7 7 0 0 0 18.6 16"/></svg></button>
+        </div>
+      </footer>
+    </div>
+
+    <!-- Session Detail Modal -->
+    <dialog id="session-modal" class="modal-backdrop" aria-labelledby="modal-title">
+      <div class="modal-window">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
+          <strong id="modal-title" style="font-size:13px;" data-i18n="sessionDetails">会话明细</strong>
+          <button id="btn-modal-close" aria-label="关闭" data-i18n-aria="close" class="btn-icon" style="border:none;"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m6 6 12 12M6 18 18 6"/></svg></button>
+        </div>
+        <div id="modal-content"></div>
+      </div>
+    </dialog>
+
+    <script src="/brands.js"></script>
+    <script src="/locale.js"></script>
+    <script src="/app.js"></script>
+  </body>
+</html>

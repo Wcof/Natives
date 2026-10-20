@@ -196,6 +196,7 @@ function renderAnalyticsTab(container, data, filter, t) {
 }
 
 function createRankCard(title, list = [], t) {
+  list = list || [];
   const card = document.createElement('div');
   card.className = 'model-rank-card';
   card.innerHTML = `
@@ -304,6 +305,7 @@ function renderEventsTab(container, data, filter, t) {
 }
 
 function selectFilter(name, label, items = [], selected = '') {
+  items = items || [];
   return `<select data-action="filter-usage-dimension" data-filter="${name}"><option value="">${escapeText(label)}</option>${items.map((item) => `<option value="${escapeText(item.key)}" ${item.key === selected ? 'selected' : ''}>${escapeText(item.name || item.key)}</option>`).join('')}</select>`;
 }
 

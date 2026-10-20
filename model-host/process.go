@@ -24,8 +24,20 @@ func bridgeModelHost(dir string, input io.Reader, output io.Writer) error {
 	if err != nil {
 		return err
 	}
+	// Chrome input has one reader for the entire bridge lifetime. The same pipe
+	// survives worker replacement, so a retired copy loop cannot steal frames.
+	workerInput, bridgeInput, err := os.Pipe()
+	if err != nil {
+		return err
+	}
+	defer workerInput.Close()
+	defer bridgeInput.Close()
+	go func() {
+		_, _ = io.Copy(bridgeInput, input)
+		_ = bridgeInput.Close()
+	}()
 	for attempt := 0; attempt < 3; attempt++ {
-		code, spawnErr := spawnWorkerAndRelay(executable, input, output)
+		code, spawnErr := spawnWorkerAndRelay(executable, workerInput, output)
 		if spawnErr != nil {
 			return spawnErr
 		}
@@ -36,17 +48,13 @@ func bridgeModelHost(dir string, input io.Reader, output io.Writer) error {
 	return nil
 }
 
-func spawnWorkerAndRelay(executable string, input io.Reader, output io.Writer) (int, error) {
-	workerInput, bridgeInput, err := os.Pipe()
-	if err != nil {
-		return -1, err
-	}
-	defer bridgeInput.Close()
+func spawnWorkerAndRelay(executable string, workerInput *os.File, output io.Writer) (int, error) {
 	bridgeOutput, workerOutput, err := os.Pipe()
 	if err != nil {
 		return -1, err
 	}
 	defer bridgeOutput.Close()
+	defer workerOutput.Close()
 
 	// Chrome owns this bridge. Only the worker owns the engine and resident policy.
 	args := append(append([]string{}, os.Args[1:]...), workerArgument)
@@ -56,7 +64,6 @@ func spawnWorkerAndRelay(executable string, input io.Reader, output io.Writer) (
 	if err = command.Start(); err != nil {
 		return -1, err
 	}
-	_ = workerInput.Close()
 	_ = workerOutput.Close()
 	waited := make(chan int, 1)
 	go func() {
@@ -69,10 +76,6 @@ func spawnWorkerAndRelay(executable string, input io.Reader, output io.Writer) (
 			}
 		}
 		waited <- code
-	}()
-	go func() {
-		_, _ = io.Copy(bridgeInput, input)
-		_ = bridgeInput.Close()
 	}()
 	_, _ = io.Copy(output, bridgeOutput)
 	// stdout 关闭有两种可能：worker 已退出（读取退出码，75 则重建），

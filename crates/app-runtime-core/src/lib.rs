@@ -15,6 +15,7 @@ pub mod lock;
 pub mod module;
 pub mod origin;
 pub mod protocol;
+pub mod secrets;
 pub mod session;
 
 pub use activation::{verify_activation, verify_activation_with_generation, ActivationRecord};

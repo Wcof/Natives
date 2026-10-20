@@ -6,6 +6,12 @@ use super::types::{StoreResult, WidgetRecord, WorkspaceError};
 
 pub const WIDGET_KEYS: &[&str] = &[
     "widget/aiPerformance",
+    // 投资卡（ADR-0036 / 方案 02 §5）：与扩展构建期 WIDGET_KEYS 同步。
+    "widget/investmentHoldings",
+    "widget/investmentAssets",
+    "widget/investmentGoal",
+    "widget/investmentAllocation",
+    "widget/investmentAllocationCheck",
     // R1（方案 §4.1）：七个独立 AI 效能组件；旧 aiPerformance 保留为兼容 key。
     "widget/aiCost",
     "widget/aiTokens",

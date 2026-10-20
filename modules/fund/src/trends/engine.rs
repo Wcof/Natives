@@ -122,7 +122,10 @@ fn calc_risk_level(
     if canslim.m_score < 30 {
         risk_points += 1;
     }
-    if breakouts.iter().any(|b| b.signals.iter().any(|s| s.contains("止损"))) {
+    if breakouts
+        .iter()
+        .any(|b| b.signals.iter().any(|s| s.contains("止损")))
+    {
         risk_points += 1;
     }
 
@@ -210,7 +213,10 @@ fn build_trade_plan(
             } else {
                 format!("{}", ep)
             };
-            let mut note = format!("{}：持仓中(突破价{})，止损{:.2}", b.system, ep_str, b.stop_loss);
+            let mut note = format!(
+                "{}：持仓中(突破价{})，止损{:.2}",
+                b.system, ep_str, b.stop_loss
+            );
             if let Some(nap) = b.next_add_price {
                 note.push_str(&format!("；加仓价{:.2}", nap));
             }
@@ -223,7 +229,10 @@ fn build_trade_plan(
     plan.insert("action".into(), serde_json::json!(action));
     plan.insert("entry_price".into(), serde_json::json!(py_round(entry, 2)));
     plan.insert("stop_loss".into(), serde_json::json!(py_round(stop, 2)));
-    plan.insert("target_price".into(), serde_json::json!(py_round(target, 2)));
+    plan.insert(
+        "target_price".into(),
+        serde_json::json!(py_round(target, 2)),
+    );
     plan.insert("position_size".into(), serde_json::json!(position_size));
     plan.insert("holding_period".into(), serde_json::json!(holding_period));
     plan.insert("risk_reward_ratio".into(), serde_json::json!(risk_reward));
@@ -252,7 +261,10 @@ fn build_plain_summary(
         if canslim.m_score < 30 {
             desc_parts.push("大盘环境偏空".into());
         }
-        return format!("建议观望，{}。建议耐心等待信号明确后再操作。", desc_parts.join("，"));
+        return format!(
+            "建议观望，{}。建议耐心等待信号明确后再操作。",
+            desc_parts.join("，")
+        );
     }
 
     let trend_desc = if trend.strength >= 70 {
@@ -271,11 +283,26 @@ fn build_plain_summary(
         desc_parts.push("量价配合良好".into());
     }
 
-    let entry = plan.get("entry_price").and_then(|v| v.as_f64()).unwrap_or(0.0);
-    let stop = plan.get("stop_loss").and_then(|v| v.as_f64()).unwrap_or(0.0);
-    let target = plan.get("target_price").and_then(|v| v.as_f64()).unwrap_or(0.0);
-    let rr = plan.get("risk_reward_ratio").and_then(|v| v.as_f64()).unwrap_or(0.0);
-    let pos = plan.get("position_size").and_then(|v| v.as_str()).unwrap_or("");
+    let entry = plan
+        .get("entry_price")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+    let stop = plan
+        .get("stop_loss")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+    let target = plan
+        .get("target_price")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+    let rr = plan
+        .get("risk_reward_ratio")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+    let pos = plan
+        .get("position_size")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
 
     format!(
         "出现买入信号，{}。建议{}入场，买入价{:.2}，止损{:.2}，目标{:.2}（盈亏比{}）。",
@@ -334,8 +361,7 @@ pub fn run_analysis(
     let confidence = (score as f64 * 0.8).trunc() as i64 + 12 * qualified_count - 40;
     let confidence = confidence.max(10);
 
-    let (risk_level, signal_strength) =
-        calc_risk_level(score, &trend, &vp, &canslim, &breakouts);
+    let (risk_level, signal_strength) = calc_risk_level(score, &trend, &vp, &canslim, &breakouts);
 
     // ---- 信号聚合 ----
     let mut buy_signals = Vec::new();
@@ -445,8 +471,7 @@ pub fn run_analysis(
     ];
     let description = desc_parts.join(" | ");
 
-    let plain_summary =
-        build_plain_summary(action, &trend, &patterns, &vp, &canslim, &trade_plan);
+    let plain_summary = build_plain_summary(action, &trend, &patterns, &vp, &canslim, &trade_plan);
 
     SignalEngineResult {
         action: action.into(),

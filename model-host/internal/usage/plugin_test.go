@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	cliproxyusage "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
+	cliproxyusage "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/usage"
 )
 
 func TestUsagePluginAttributesKeyAndDoesNotPersistUpstreamBody(t *testing.T) {
@@ -24,7 +24,9 @@ func TestUsagePluginAttributesKeyAndDoesNotPersistUpstreamBody(t *testing.T) {
 		Fail:   cliproxyusage.Failure{StatusCode: 401, Body: "token=must-not-be-persisted"},
 		Detail: cliproxyusage.Detail{InputTokens: 10, OutputTokens: 2, TotalTokens: 12},
 	})
-	plugin.Close()
+	closeCtx, closeCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	plugin.Close(closeCtx)
+	closeCancel()
 	events, err := store.GetEvents(Filter{Range: "all", Limit: 10})
 	if err != nil || len(events.Events) != 1 {
 		t.Fatalf("events = %+v, %v", events, err)
@@ -47,7 +49,9 @@ func TestUsagePluginProcessesRecordEvenWithCancelledContext(t *testing.T) {
 		RequestedAt: time.Now().UTC(),
 		Detail:      cliproxyusage.Detail{InputTokens: 5, OutputTokens: 15, TotalTokens: 20},
 	})
-	plugin.Close()
+	closeCtx, closeCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	plugin.Close(closeCtx)
+	closeCancel()
 
 	events, err := store.GetEvents(Filter{Range: "all", Limit: 10})
 	if err != nil || len(events.Events) != 1 {

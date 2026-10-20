@@ -38,6 +38,14 @@ impl Fixed {
         }
     }
 
+    /// 份额 4 位定点（与净值同精度，语义独立命名）。
+    pub fn share(raw: i64) -> Self {
+        Self {
+            raw,
+            scale: SCALE_NAV,
+        }
+    }
+
     pub fn amount(raw: i64) -> Self {
         Self {
             raw,
@@ -57,7 +65,7 @@ impl Fixed {
     /// 非零尾数拒绝（PrecisionError）；纯零尾数截断接受。
     pub fn parse(text: &str, scale: u32) -> Result<Self, PrecisionError> {
         let text = text.trim();
-        if text.is_empty() {
+        if text.is_empty() || scale > 18 {
             return Err(PrecisionError);
         }
         let bytes = text.as_bytes();
@@ -111,7 +119,7 @@ impl Fixed {
             return Err(PrecisionError);
         }
         while fraction_digits < scale as i32 {
-            raw *= 10;
+            raw = raw.checked_mul(10).ok_or(PrecisionError)?;
             fraction_digits += 1;
         }
         Ok(Self {
@@ -122,6 +130,9 @@ impl Fixed {
 
     /// 定点乘法：结果 scale = a.scale + b.scale，再按目标 scale ROUND_DOWN。
     pub fn checked_mul_to(&self, other: &Self, target_scale: u32) -> Option<Self> {
+        if target_scale > 18 {
+            return None;
+        }
         let wide = (self.raw as i128) * (other.raw as i128);
         let total = (self.scale + other.scale) as i32;
         let mut value = wide;
@@ -133,6 +144,10 @@ impl Fixed {
             }
             value /= 10;
             drop -= 1;
+        }
+        while drop < 0 {
+            value = value.checked_mul(10)?;
+            drop += 1;
         }
         if truncated_nonzero {
             // ROUND_DOWN（向零截断），丢弃的尾数不为零是允许的，但须为非负
@@ -173,13 +188,31 @@ impl Fixed {
     /// （例如 ratio_raw=30, ratio_denom=100 表示 0.30），结果 ROUND_DOWN 到
     /// self.scale。
     pub fn checked_ratio(&self, ratio_raw: i64, ratio_denom: i64) -> Option<Self> {
-        let wide = (self.raw as i128 * ratio_raw as i128) / ratio_denom as i128;
+        let wide = (self.raw as i128 * ratio_raw as i128).checked_div(ratio_denom as i128)?;
         if wide > i64::MAX as i128 || wide < i64::MIN as i128 {
             return None;
         }
         Some(Self {
             raw: wide as i64,
             scale: self.scale,
+        })
+    }
+
+    /// 派生单价（例如剩余成本／份额），向零截断，不回写成本权威。
+    pub fn checked_div_to(&self, other: &Self, target_scale: u32) -> Option<Self> {
+        if target_scale > 18 || other.raw == 0 {
+            return None;
+        }
+        let exponent = other.scale as i32 + target_scale as i32 - self.scale as i32;
+        let (mut numerator, mut denominator) = (self.raw as i128, other.raw as i128);
+        if exponent >= 0 {
+            numerator = numerator.checked_mul(10_i128.checked_pow(exponent as u32)?)?;
+        } else {
+            denominator = denominator.checked_mul(10_i128.checked_pow((-exponent) as u32)?)?;
+        }
+        Some(Self {
+            raw: numerator.checked_div(denominator)?.try_into().ok()?,
+            scale: target_scale,
         })
     }
 
@@ -224,6 +257,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn integer_padding_overflow_is_rejected() {
+        assert_eq!(Fixed::parse("92233720368547759", 2), Err(PrecisionError));
+        assert_eq!(
+            Fixed::parse("92233720368547758.07", 2).unwrap().raw(),
+            i64::MAX
+        );
+        assert_eq!(Fixed::parse("92233720368547758.08", 2), Err(PrecisionError));
+        assert_eq!(
+            Fixed::parse("92233720368547757.99", 2).unwrap().raw(),
+            9_223_372_036_854_775_799
+        );
+    }
+
+    #[test]
     fn parse_nav_precision() {
         let nav = Fixed::parse("1.2345", 4).unwrap();
         assert_eq!(nav.raw(), 12345);
@@ -266,5 +313,28 @@ mod tests {
         let amount = Fixed::parse("100.00", 2).unwrap();
         let reduced = amount.checked_ratio(30, 100).unwrap();
         assert_eq!(reduced.to_string_value(), "30");
+    }
+
+    #[test]
+    fn derived_price_and_invalid_division_are_checked() {
+        assert_eq!(
+            Fixed::parse("3", 2)
+                .unwrap()
+                .checked_div_to(&Fixed::parse("7", 4).unwrap(), 4)
+                .unwrap()
+                .to_string_value(),
+            "0.4285"
+        );
+        assert!(Fixed::amount(100).checked_ratio(1, 0).is_none());
+        assert!(Fixed::amount(100)
+            .checked_div_to(&Fixed::share(0), 4)
+            .is_none());
+        assert_eq!(
+            Fixed::amount(100)
+                .checked_mul_to(&Fixed::amount(100), 6)
+                .unwrap()
+                .to_string_value(),
+            "1"
+        );
     }
 }

@@ -60,7 +60,10 @@ pub fn calc_donchian_channel(klines: &[KlineBar], period: usize) -> (f64, f64) {
     } else {
         &klines[klines.len() - period - 1..klines.len() - 1]
     };
-    let high = window.iter().map(|k| k.high).fold(f64::NEG_INFINITY, f64::max);
+    let high = window
+        .iter()
+        .map(|k| k.high)
+        .fold(f64::NEG_INFINITY, f64::max);
     let low = window.iter().map(|k| k.low).fold(f64::INFINITY, f64::min);
     (high, low)
 }
@@ -75,7 +78,10 @@ fn find_last_entry(klines: &[KlineBar], period: usize) -> Option<(&'static str, 
         if window.len() < period {
             continue;
         }
-        let window_high = window.iter().map(|k| k.high).fold(f64::NEG_INFINITY, f64::max);
+        let window_high = window
+            .iter()
+            .map(|k| k.high)
+            .fold(f64::NEG_INFINITY, f64::max);
         let window_low = window.iter().map(|k| k.low).fold(f64::INFINITY, f64::min);
         let k = &klines[i];
         if k.high > window_high {
@@ -150,7 +156,11 @@ fn analyze_system(klines: &[KlineBar], period: usize, system_name: &str) -> Brea
         let stop = entry + 2.0 * n_val;
         let units = 1i64;
         let next_add = None;
-        let exit_window = if system_name.contains("系统一") { 10 } else { 20 };
+        let exit_window = if system_name.contains("系统一") {
+            10
+        } else {
+            20
+        };
         let (high_exit_level, _) = calc_donchian_channel(klines, exit_window);
         let last = klines.last().unwrap();
         let (signal, exit_price, sig_text) = if last.high >= high_exit_level {

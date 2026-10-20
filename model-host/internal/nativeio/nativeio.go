@@ -56,18 +56,37 @@ func Read(r io.Reader) (Request, error) {
 }
 
 func (w *Writer) Write(response Response) error {
-	payload, err := json.Marshal(response)
+	payload, err := MarshalResponse(response)
 	if err != nil {
 		return err
 	}
+	return w.WriteEncoded(payload)
+}
+
+// MarshalResponse 编码一次响应帧体（长度前缀之外的部分）。
+// Hub 先编码做字节核算，再经 WriteEncoded 落盘，避免二次序列化。
+func MarshalResponse(response Response) ([]byte, error) {
+	payload, err := json.Marshal(response)
+	if err != nil {
+		return nil, err
+	}
+	if len(payload) > maxMessageBytes {
+		return nil, errors.New("native response exceeds size limit")
+	}
+	return payload, nil
+}
+
+// WriteEncoded 写入已编码响应（加长度前缀）。调用方需自行保证互斥：
+// Writer 的锁只覆盖 WriteEncoded 及 Write 内部路径。
+func (w *Writer) WriteEncoded(payload []byte) error {
 	if len(payload) > maxMessageBytes {
 		return errors.New("native response exceeds size limit")
 	}
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if err = binary.Write(w.out, binary.LittleEndian, uint32(len(payload))); err != nil {
+	if err := binary.Write(w.out, binary.LittleEndian, uint32(len(payload))); err != nil {
 		return err
 	}
-	_, err = w.out.Write(payload)
+	_, err := w.out.Write(payload)
 	return err
 }

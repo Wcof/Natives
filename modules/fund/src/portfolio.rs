@@ -37,6 +37,22 @@ impl From<rusqlite::Error> for PortfolioError {
     }
 }
 
+impl std::fmt::Display for PortfolioError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PortfolioError::Oversell {
+                available_raw,
+                requested_raw,
+                date,
+            } => write!(
+                f,
+                "oversell on {date}: available {available_raw}, requested {requested_raw}"
+            ),
+            PortfolioError::Db(message) => write!(f, "{message}"),
+        }
+    }
+}
+
 /// 回放单个 (account, fund) 的持仓：期初快照 + 全部已确认流水。
 /// 若从未有过任何快照或流水，返回 Ok(None)；
 /// 若发生过交易但当前清仓（份额为 0），返回 Ok(Some(Position))，保留累计已实现收益。
@@ -57,7 +73,7 @@ pub fn replay_position(
     let snapshot: Option<(i64, Option<i64>, i64, bool, String)> = conn
         .query_row(
             "SELECT quantity_raw, cost_raw, derived_cost, cost_raw IS NULL, as_of
-             FROM opening_snapshots WHERE account_id = ?1 AND fund_id = ?2",
+             FROM opening_snapshots WHERE account_id = ?1 AND fund_id = ?2 AND deleted_at IS NULL",
             params![account_id, fund_id],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
         )
@@ -77,7 +93,7 @@ pub fn replay_position(
     let mut stmt = conn.prepare(
         "SELECT type, quantity_raw, amount_raw, fee_raw, trade_date
          FROM transactions
-         WHERE account_id = ?1 AND fund_id = ?2 AND state = 'confirmed'
+         WHERE account_id = ?1 AND fund_id = ?2 AND state = 'confirmed' AND deleted_at IS NULL
          ORDER BY trade_date, id",
     )?;
     let rows = stmt.query_map(params![account_id, fund_id], |r| {
@@ -90,17 +106,66 @@ pub fn replay_position(
         ))
     })?;
 
+    // 持仓校准锚点（N09）：按 (as_of_date, id) 顺序，在处理完 ≤as_of 的
+    // 已确认流水后应用（同日锚点视为当日终态）；置份额与成本为校准值，
+    // 不重算历史已实现收益，后续成本基线为校准值。多锚点按时间依次覆盖。
+    let mut cal_stmt = conn.prepare(
+        "SELECT as_of_date, quantity_raw, cost_minor
+         FROM position_calibrations WHERE account_id = ?1 AND fund_id = ?2
+         ORDER BY as_of_date, id",
+    )?;
+    let cals = cal_stmt
+        .query_map(params![account_id, fund_id], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, i64>(1)?,
+                r.get::<_, i64>(2)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut cal_idx = 0usize;
+    let apply_calibration = |cal: &(String, i64, i64),
+                             quantity_raw: &mut i64,
+                             cost_raw: &mut i64,
+                             cost_unknown: &mut bool,
+                             as_of: &mut String| {
+        *quantity_raw = cal.1;
+        *cost_raw = cal.2;
+        *cost_unknown = false;
+        if *quantity_raw == 0 {
+            *cost_raw = 0;
+        }
+        if cal.0.as_str() > as_of.as_str() {
+            *as_of = cal.0.clone();
+        }
+    };
+
     for row in rows {
         let (tx_type, q_raw, amount_raw, fee_raw, date) = row?;
         has_history = true;
+        while cal_idx < cals.len() && cals[cal_idx].0.as_str() < date.as_str() {
+            apply_calibration(
+                &cals[cal_idx],
+                &mut quantity_raw,
+                &mut cost_raw,
+                &mut cost_unknown,
+                &mut as_of,
+            );
+            cal_idx += 1;
+        }
         as_of = date.clone();
         if tx_type == "BUY" {
             if quantity_raw == 0 {
                 // 此前已清仓或无历史持仓：新买入份额成本完全已知
                 cost_unknown = false;
             }
-            quantity_raw += q_raw;
-            cost_raw += amount_raw + fee_raw;
+            quantity_raw = quantity_raw
+                .checked_add(q_raw)
+                .ok_or_else(|| PortfolioError::Db("数量溢出".into()))?;
+            cost_raw = cost_raw
+                .checked_add(amount_raw)
+                .and_then(|v| v.checked_add(fee_raw))
+                .ok_or_else(|| PortfolioError::Db("成本溢出".into()))?;
             // 注意：若此前存在未知成本份额（quantity_raw > 0 && cost_unknown），
             // 后续买入不能将整体 cost_unknown 覆盖为 false，保持未知标记。
         } else {
@@ -121,7 +186,11 @@ pub fn replay_position(
                 let sold_cost = sold_cost as i64;
                 cost_raw -= sold_cost;
                 // 已实现收益 = 卖出金额 − 费用 − 扣除成本。
-                realized_raw += amount_raw - fee_raw - sold_cost;
+                realized_raw = realized_raw
+                    .checked_add(amount_raw)
+                    .and_then(|v| v.checked_sub(fee_raw))
+                    .and_then(|v| v.checked_sub(sold_cost))
+                    .ok_or_else(|| PortfolioError::Db("收益溢出".into()))?;
             }
             quantity_raw -= sell_raw;
             if quantity_raw == 0 {
@@ -129,6 +198,19 @@ pub fn replay_position(
                 cost_unknown = false;
             }
         }
+    }
+
+    // 剩余锚点（日期 ≥ 最后一条流水）：按序应用，晚日期覆盖早日期。
+    while cal_idx < cals.len() {
+        has_history = true;
+        apply_calibration(
+            &cals[cal_idx],
+            &mut quantity_raw,
+            &mut cost_raw,
+            &mut cost_unknown,
+            &mut as_of,
+        );
+        cal_idx += 1;
     }
 
     if !has_history {
@@ -193,6 +275,130 @@ pub struct PositionRow {
     pub cost_raw: i64,
     pub realized_raw: i64,
     pub as_of: String,
+}
+
+/// 卡片/资产汇总的共享查询（ADR-0036 / 方案 05 §2）：当前在持 (account, fund)
+/// 的回放真值，保留 `cost_unknown` 与 `as_of`。positions 投影表不持久化
+/// cost_unknown，卡片与汇总不得直接求和 `positions.cost_raw` 冒充完整成本。
+pub fn holdings_with_cost_status(conn: &Connection) -> rusqlite::Result<Vec<Position>> {
+    let mut stmt =
+        conn.prepare("SELECT DISTINCT account_id, fund_id FROM positions WHERE quantity_raw > 0")?;
+    let pairs: Vec<(i64, i64)> = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<Result<Vec<_>, _>>()?;
+    let mut holdings = Vec::with_capacity(pairs.len());
+    for (account_id, fund_id) in pairs {
+        let position = replay_position(conn, account_id, fund_id).map_err(|e| {
+            rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_ERROR),
+                Some(e.to_string()),
+            )
+        })?;
+        if let Some(position) = position {
+            if position.quantity_raw > 0 {
+                holdings.push(position);
+            }
+        }
+    }
+    Ok(holdings)
+}
+
+/// 持仓页账户元数据（T04）：结构化 ID/版本/顺序/归档标记，按 (sort_order,id)。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AccountMeta {
+    pub id: i64,
+    pub name: String,
+    pub version: i64,
+    pub sort_order: i64,
+    pub archived: bool,
+}
+
+/// 持仓完整明细（T04 A19~A22）：回放真值（含 cost_unknown）+ 标的身份 +
+/// 净值游标 + 待确认笔数，单读快照一致返回，避免 UI 多次请求间的撕裂读。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HoldingDetail {
+    pub account_id: i64,
+    pub fund_id: i64,
+    pub fund_code: String,
+    pub fund_name: String,
+    pub quantity_raw: i64,
+    pub cost_raw: i64,
+    pub realized_raw: i64,
+    pub as_of: String,
+    pub cost_unknown: bool,
+    pub latest_nav_raw: Option<i64>,
+    pub latest_nav_date: Option<String>,
+    pub pending_count: i64,
+}
+
+/// 持仓页一次性快照：账户元数据（含归档，UI 自行过滤）与在持明细。
+/// 明细以 `holdings_with_cost_status` 回放为权威，禁止用投影表冒充未知成本。
+pub fn holdings_detail(
+    conn: &Connection,
+) -> rusqlite::Result<(Vec<AccountMeta>, Vec<HoldingDetail>)> {
+    let mut stmt = conn.prepare(
+        "SELECT id, name, version, sort_order, archived_at IS NOT NULL
+         FROM accounts ORDER BY sort_order, id",
+    )?;
+    let accounts = stmt
+        .query_map([], |r| {
+            Ok(AccountMeta {
+                id: r.get(0)?,
+                name: r.get(1)?,
+                version: r.get(2)?,
+                sort_order: r.get(3)?,
+                archived: r.get(4)?,
+            })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+
+    let holdings = holdings_with_cost_status(conn)?;
+
+    let mut fund_stmt =
+        conn.prepare("SELECT id, code, name, latest_nav_raw, latest_nav_date FROM funds")?;
+    let funds: std::collections::HashMap<i64, (String, String, Option<i64>, Option<String>)> =
+        fund_stmt
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, i64>(0)?,
+                    (r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?),
+                ))
+            })?
+            .collect::<Result<_, _>>()?;
+
+    let mut pending_stmt = conn.prepare(
+        "SELECT account_id, fund_id, COUNT(*) FROM transactions
+         WHERE state = 'pending' AND deleted_at IS NULL
+         GROUP BY account_id, fund_id",
+    )?;
+    let pending: std::collections::HashMap<(i64, i64), i64> = pending_stmt
+        .query_map([], |r| Ok(((r.get(0)?, r.get(1)?), r.get(2)?)))?
+        .collect::<Result<_, _>>()?;
+
+    let mut rows = Vec::with_capacity(holdings.len());
+    for h in &holdings {
+        let Some((code, name, nav_raw, nav_date)) = funds.get(&h.fund_id) else {
+            continue;
+        };
+        rows.push(HoldingDetail {
+            account_id: h.account_id,
+            fund_id: h.fund_id,
+            fund_code: code.clone(),
+            fund_name: name.clone(),
+            quantity_raw: h.quantity_raw,
+            cost_raw: h.cost_raw,
+            realized_raw: h.realized_raw,
+            as_of: h.as_of.clone(),
+            cost_unknown: h.cost_unknown,
+            latest_nav_raw: *nav_raw,
+            latest_nav_date: nav_date.clone(),
+            pending_count: pending
+                .get(&(h.account_id, h.fund_id))
+                .copied()
+                .unwrap_or(0),
+        });
+    }
+    Ok((accounts, rows))
 }
 
 /// 列出全部当前有在持份额的持仓（投影表；写入路径已保证与回放同步）。
@@ -278,7 +484,7 @@ pub fn replay_history(
     let mut stmt = conn.prepare(
         "SELECT trade_date, fund_id, type, quantity_raw, amount_raw, fee_raw
          FROM transactions
-         WHERE account_id = ?1 AND state = 'confirmed' AND trade_date <= ?2
+         WHERE account_id = ?1 AND state = 'confirmed' AND deleted_at IS NULL AND trade_date <= ?2
          ORDER BY trade_date, id",
     )?;
     let ops = stmt
@@ -303,7 +509,7 @@ pub fn replay_history(
     // 期初快照计入（as_of 及之后生效）。
     let mut snap_stmt = conn.prepare(
         "SELECT as_of, fund_id, quantity_raw, cost_raw
-         FROM opening_snapshots WHERE account_id = ?1 AND as_of <= ?2",
+         FROM opening_snapshots WHERE account_id = ?1 AND as_of <= ?2 AND deleted_at IS NULL",
     )?;
     let snaps = snap_stmt
         .query_map(params![account_id, to_date], |r| {

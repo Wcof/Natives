@@ -1,0 +1,26 @@
+{
+  "status": "ready",
+  "generatedAt": "2026-09-28T08:00:00Z",
+  "sources": [
+    {
+      "id": "claude-code",
+      "displayName": "Claude Code",
+      "category": "cli",
+      "enabled": true,
+      "lastSuccessAt": "2026-09-28T08:00:00Z",
+      "recordsImported": 80,
+      "bytesRead": 1048576,
+      "availability": "available"
+    },
+    {
+      "id": "zcode",
+      "displayName": "ZCode",
+      "category": "ide",
+      "enabled": true,
+      "lastSuccessAt": "2026-09-28T07:45:00Z",
+      "recordsImported": 48,
+      "bytesRead": 524288,
+      "availability": "available"
+    }
+  ]
+}

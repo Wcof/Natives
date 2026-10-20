@@ -350,7 +350,7 @@ fn write_http(
         reason,
         ctype,
         body,
-        "default-src 'none'; script-src 'unsafe-inline'; connect-src 'self'; style-src 'unsafe-inline'; form-action 'none'; base-uri 'none'; frame-ancestors chrome-extension:",
+        "default-src 'none'; script-src 'unsafe-inline'; connect-src 'self'; style-src 'self' 'unsafe-inline'; form-action 'none'; base-uri 'none'; frame-ancestors chrome-extension:",
     )
 }
 

@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -22,14 +23,95 @@ import (
 )
 
 func TestModelHostProcessHelper(t *testing.T) {
+	if os.Getenv("NATIVES_MODEL_HOST_RESTART_TEST") == "1" {
+		writer := nativeio.NewWriter(os.Stdout)
+		_ = writer.Write(nativeio.Response{OK: true, Event: "ready"})
+		for {
+			request, err := nativeio.Read(os.Stdin)
+			if err != nil {
+				os.Exit(0)
+			}
+			_ = writer.Write(nativeio.Response{ID: request.ID, OK: true})
+			if request.Method == "restart" {
+				os.Exit(workerRestartExitCode)
+			}
+		}
+	}
 	if os.Getenv("NATIVES_MODEL_HOST_PROCESS_TEST") != "1" {
 		return
 	}
 	store := secrets.NewMemoryStore()
 	store.Values["gateway:access-key"] = "process-test-key"
 	store.Values["process-provider"] = "process-upstream-key"
+	if ref := os.Getenv("NATIVES_MODEL_HOST_PROCESS_REAL_SECRET_REF"); ref != "" {
+		// security resolves the login keychain via HOME; restore isolation before run.
+		isolatedHome, homeSet := os.LookupEnv("HOME")
+		account, lookupErr := user.Current()
+		if lookupErr != nil {
+			os.Exit(2)
+		}
+		_ = os.Setenv("HOME", account.HomeDir)
+		value, err := (secrets.KeyringStore{}).Get(ref)
+		if homeSet {
+			_ = os.Setenv("HOME", isolatedHome)
+		} else {
+			_ = os.Unsetenv("HOME")
+		}
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "read-only upstream credential unavailable")
+			os.Exit(2)
+		}
+		// Only read the existing credential; all writes remain in this process.
+		store.Values[ref] = value
+	}
 	run(store)
 	os.Exit(0)
+}
+
+func TestBridgeReadsChromeInputOnceAcrossWorkerRestart(t *testing.T) {
+	t.Setenv("NATIVES_MODEL_HOST_RESTART_TEST", "1")
+	inputReader, input, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer inputReader.Close()
+	defer input.Close()
+	output, outputWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer output.Close()
+	defer outputWriter.Close()
+	// Run only the child helper when the bridge launches this test executable.
+	originalArgs := os.Args
+	os.Args = []string{originalArgs[0], "-test.run=^TestModelHostProcessHelper$", "--"}
+	defer func() { os.Args = originalArgs }()
+	done := make(chan error, 1)
+	go func() { done <- bridgeModelHost(t.TempDir(), inputReader, outputWriter) }()
+	output.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if response := readResponse(t, output); response.Event != "ready" {
+		t.Fatal("first worker not ready")
+	}
+	writeRequest(t, input, nativeio.Request{ID: "restart", Method: "restart"})
+	if response := readResponse(t, output); response.ID != "restart" {
+		t.Fatal("restart response missing")
+	}
+	if response := readResponse(t, output); response.Event != "ready" {
+		t.Fatal("replacement worker not ready")
+	}
+	writeRequest(t, input, nativeio.Request{ID: "after", Method: "snapshot"})
+	if response := readResponse(t, output); response.ID != "after" {
+		t.Fatal("replacement worker lost Chrome request")
+	}
+	input.Close()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("bridge did not exit after EOF")
+	}
 }
 
 func TestResidentGatewaySurvivesBrowserProcessTermination(t *testing.T) {

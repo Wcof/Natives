@@ -1,3 +1,4 @@
+mod support;
 use app_runtime_core::framing::{read_frame, write_frame};
 use app_runtime_core::protocol::{AppRequest, AppResponse, HandshakeResultV2, StartResult};
 use std::io::{Read, Write};
@@ -7,42 +8,39 @@ use std::time::{Duration, Instant};
 
 const TEST_ORIGIN: &str = "chrome-extension://abcdefghijklmnopabcdefghijklmnop/";
 
-fn setup_test_apps_root(root: &std::path::Path, app_id: &str) {
-    let app_dir = root.join(app_id);
-    std::fs::create_dir_all(&app_dir).unwrap();
+fn setup_test_apps_root(root: &std::path::Path, app_id: &str) -> std::path::PathBuf {
+    let apps_root = root.join("apps");
+    std::fs::create_dir_all(apps_root.join(app_id)).unwrap();
+    let runtime_sha = app_runtime_core::sha256_hex(&std::fs::read(bin_path()).unwrap());
     let act = serde_json::json!({
-        "receiptVersion": 2,
-        "appId": app_id,
+        "receiptVersion": 3,
         "productVersion": "0.1.0",
-        "runtimeHost": "com.natives.app_runtime",
-        "appProtocolVersion": 2,
-        "activeVersion": "0.1.0",
-        "generation": 1,
-        "activationState": "ready",
-        "enabled": true,
+        "productGeneration": 1,
+        "productManifestSha256": "0".repeat(64),
+        "runtime": { "host": "com.natives.local.app_runtime", "protocolVersion": 2, "sha256": runtime_sha },
+        "modules": {
+            "fund": { "moduleApiVersion": 1, "dataSchemaVersion": 5, "capabilityVersion": 2, "uiTreeSha256": "0".repeat(64) },
+            "tokenusage": { "moduleApiVersion": 1, "dataSchemaVersion": 2, "capabilityVersion": 2, "uiTreeSha256": "0".repeat(64) }
+        },
         "allowedOrigins": [TEST_ORIGIN]
     });
+    std::fs::create_dir_all(root.join("product")).unwrap();
     std::fs::write(
-        app_dir.join("activation.json"),
+        root.join("product/activation.json"),
         serde_json::to_vec(&act).unwrap(),
     )
     .unwrap();
+    apps_root
 }
 
 fn bin_path() -> std::path::PathBuf {
-    let mut path = std::env::current_exe().unwrap();
-    path.pop(); // drop test binary name
-    if path.ends_with("deps") {
-        path.pop();
-    }
-    path.push("natives-app-runtime");
-    path
+    support::runtime_binary()
 }
 
 #[test]
 fn test_fund_module_e2e_lifecycle_and_data_persistence() {
     let temp = tempfile::tempdir().unwrap();
-    setup_test_apps_root(temp.path(), "fund");
+    let apps_root = setup_test_apps_root(temp.path(), "fund");
 
     let port: u16;
     let token: String;
@@ -51,7 +49,7 @@ fn test_fund_module_e2e_lifecycle_and_data_persistence() {
     {
         let mut child = Command::new(bin_path())
             .arg(TEST_ORIGIN)
-            .env("NATIVES_APPS_ROOT", temp.path())
+            .env("NATIVES_APPS_ROOT", &apps_root)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()
@@ -100,7 +98,12 @@ fn test_fund_module_e2e_lifecycle_and_data_persistence() {
         let mut http_resp = String::new();
         http.read_to_string(&mut http_resp).unwrap();
         assert!(http_resp.contains("200 OK"));
-        assert!(http_resp.contains("基金记账"));
+        assert!(http_resp.contains("<title>投资终端</title>"));
+        assert!(http_resp.contains("id=\"pos-tab-stock\""));
+        // DES-D01：展示分类为股票/场内基金/场外基金（旧 fund Tab 撤销）。
+        assert!(http_resp.contains("id=\"pos-tab-etf\""));
+        assert!(http_resp.contains("id=\"pos-tab-otc\""));
+        assert!(!http_resp.contains("id=\"pos-tab-fund\""));
 
         // 4. Issue bearer session
         let session_req = AppRequest {
@@ -189,7 +192,7 @@ fn test_fund_module_e2e_lifecycle_and_data_persistence() {
     {
         let mut child = Command::new(bin_path())
             .arg(TEST_ORIGIN)
-            .env("NATIVES_APPS_ROOT", temp.path())
+            .env("NATIVES_APPS_ROOT", &apps_root)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()

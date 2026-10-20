@@ -1,3 +1,4 @@
+import { subscribeWidgetClock, relativeTimeArgs } from '../widget-clock.js';
 import { escapeHtml } from '../sanitizer.js';
 
 export const sinceWidget = {
@@ -9,7 +10,7 @@ export const sinceWidget = {
     const update = () => {
       const target = Number(data.time) || (data.sinceDate ? new Date(data.sinceDate).getTime() : Date.now());
       const difference = target - Date.now();
-      const relative = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' }).format(...relativeArgs(difference));
+      const relative = new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' }).format(...relativeTimeArgs(difference));
       container.replaceChildren();
       const heading = document.createElement('h3');
       const title = document.createElement('span');
@@ -21,8 +22,8 @@ export const sinceWidget = {
       container.append(heading);
     };
     update();
-    const intervalId = setInterval(update, 1000);
-    return () => clearInterval(intervalId);
+    const stopClock = subscribeWidgetClock(update, 1000);
+    return () => stopClock();
   },
   renderSettings(container, data = {}, onChange = () => {}, { t = (key, fallback) => fallback || key } = {}) {
     container.innerHTML = `<div class="inspector-field-group">
@@ -38,14 +39,6 @@ export const sinceWidget = {
   },
   styles: '.Since.relativeTime { font-style:italic; }',
 };
-
-function relativeArgs(milliseconds) {
-  const seconds = Math.abs(milliseconds) / 1000;
-  if (seconds >= 86400) return [Math.round(milliseconds / 86400000), 'day'];
-  if (seconds >= 3600) return [Math.round(milliseconds / 3600000), 'hour'];
-  if (seconds >= 60) return [Math.round(milliseconds / 60000), 'minute'];
-  return [Math.round(milliseconds / 1000), 'second'];
-}
 
 function toLocalInput(timestamp) {
   const date = new Date(timestamp - new Date(timestamp).getTimezoneOffset() * 60000);

@@ -75,6 +75,7 @@ type Price struct {
 }
 
 type Filter struct {
+	SessionKey   string       `json:"sessionKey,omitempty"`
 	Range        string       `json:"range,omitempty"` // "4h", "24h", "72h", "today", "7d", "30d", "all", "custom"
 	StartTime    *time.Time   `json:"startTime,omitempty"`
 	EndTime      *time.Time   `json:"endTime,omitempty"`
@@ -99,6 +100,9 @@ type MetricCards struct {
 	TPS              float64 `json:"tps"`
 	CacheHitRate     float64 `json:"cacheHitRate"`
 	EstimatedCostUSD float64 `json:"estimatedCostUsd"`
+	// Priced 仅在全部有用量的记录都有存储计费或价格覆盖时为 true。
+	// false 时消费方显示未知（--），严禁渲染成 $0.00。
+	Priced bool `json:"priced"`
 }
 
 type TrendPoint struct {
@@ -130,7 +134,10 @@ type RankItem struct {
 	Requests int64   `json:"requests"`
 	Tokens   int64   `json:"tokens"`
 	CostUSD  float64 `json:"costUsd"`
-	Percent  float64 `json:"percent"`
+	// Priced 标记金额是否可信（存储计费>0 或价格目录覆盖该模型）；
+	// false 时消费方显示未知（--）而非 $0.00。
+	Priced  bool    `json:"priced"`
+	Percent float64 `json:"percent"`
 }
 
 type AnalyticsResult struct {
@@ -158,11 +165,14 @@ type SessionStat struct {
 	ToolID           string  `json:"toolId,omitempty"`
 	SourceInstanceID string  `json:"sourceInstanceId,omitempty"`
 	Source           string  `json:"source,omitempty"`
+	Title            string  `json:"title,omitempty"`
 	Requests         int64   `json:"requests"`
 	Tokens           int64   `json:"tokens"`
 	CostUSD          float64 `json:"costUsd"`
-	FirstAt          string  `json:"firstAt,omitempty"`
-	LastAt           string  `json:"lastAt,omitempty"`
+	// Priced 标记金额是否可信；false 时消费方显示未知（--）而非 $0.00。
+	Priced  bool   `json:"priced"`
+	FirstAt string `json:"firstAt,omitempty"`
+	LastAt  string `json:"lastAt,omitempty"`
 }
 
 // DayCount 为单日 distinct 会话数；每日独立去重，不得跨日相加当区间总数。

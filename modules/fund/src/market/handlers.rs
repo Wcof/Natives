@@ -170,6 +170,9 @@ pub fn api_market_detail(request: &HttpRequest) -> Result<String, (u16, String)>
             reader
                 .read_to_end(&mut bytes)
                 .map_err(|e| upstream_err(format!("tencent quote read: {e}")))?;
+            if bytes.len() > 2 * 1024 * 1024 {
+                return Err(upstream_err("response_too_large".into()));
+            }
             let (decoded, _, _) = encoding_rs::GBK.decode(&bytes);
             let raw = decoded.into_owned();
 
@@ -195,7 +198,7 @@ pub fn api_market_detail(request: &HttpRequest) -> Result<String, (u16, String)>
             let low = parse_f64(34).unwrap_or(price);
             let amount = parse_f64(37).unwrap_or(0.0); // 万元
             let turnover = parse_f64(38); // 换手率 %
-            let pe = parse_f64(39);
+            let pe = parse_f64(39); // PE(TTM)
             let circ_market_cap = parse_f64(44); // 流通市值 (亿元)
             let market_cap = parse_f64(45); // 总市值 (亿元)
             let pb = parse_f64(46); // 市净率 PB
@@ -203,9 +206,13 @@ pub fn api_market_detail(request: &HttpRequest) -> Result<String, (u16, String)>
             let limit_down = parse_f64(48);
             let volume_ratio = parse_f64(49); // 量比
             let avg_price = parse_f64(51); // 当日均价
+            let pe_dyn = parse_f64(52); // PE(动)
             let dividend_yield = parse_f64(64); // 股息率 %
-            let total_shares = parse_f64(72); // 总股本 (股)
-            let circ_shares = parse_f64(73); // 流通股本 (股)
+                                                // 股本位与市值位数学自洽：流通市值=circ[72]×现价、总市值=total[73]×现价，
+                                                // [72]=流通股本、[73]=总股本（此前互换导致部分流通标的股本卡错位）。
+            let total_shares = parse_f64(73); // 总股本 (股)
+            let circ_shares = parse_f64(72); // 流通股本 (股)
+            let wei_cha = parse_f64(50); // 委差 (手)
             let amplitude = parse_f64(43); // 振幅 %
 
             // 五档买卖盘解析
@@ -232,6 +239,12 @@ pub fn api_market_detail(request: &HttpRequest) -> Result<String, (u16, String)>
             } else {
                 0.5
             };
+            // 委比%（(买五总-卖五总)/(买五总+卖五总)×100），与委托差 [50] 同口径
+            let wei_bi = if total_bid_vol + total_ask_vol > 0.0 {
+                (total_bid_vol - total_ask_vol) / (total_bid_vol + total_ask_vol) * 100.0
+            } else {
+                0.0
+            };
 
             // 优先从已知常量映射获取名称，避免 GBK 编码问题
             let name = query_param(&request.path, "name")
@@ -251,7 +264,7 @@ pub fn api_market_detail(request: &HttpRequest) -> Result<String, (u16, String)>
                 .unwrap_or_else(|| fields.get(1).unwrap_or(&"").to_string());
 
             let json = format!(
-        "{{\"symbol\":{},\"name\":{},\"price\":{:.2},\"prevClose\":{:.2},\"open\":{:.2},\"high\":{:.2},\"low\":{:.2},\"change\":{:.2},\"changePct\":{:.2},\"volume\":{:.0},\"amount\":{:.2},\"turnover\":{},\"volumeRatio\":{},\"amplitude\":{},\"limitUp\":{},\"limitDown\":{},\"pe\":{},\"pb\":{},\"marketCap\":{},\"circMarketCap\":{},\"dividendYield\":{},\"totalShares\":{},\"circShares\":{},\"avgPrice\":{},\"bids\":[{}],\"asks\":[{}],\"bidVol\":{:.0},\"askVol\":{:.0},\"bidRatio\":{:.3}}}",
+        "{{\"symbol\":{},\"name\":{},\"price\":{:.2},\"prevClose\":{:.2},\"open\":{:.2},\"high\":{:.2},\"low\":{:.2},\"change\":{:.2},\"changePct\":{:.2},\"volume\":{:.0},\"amount\":{:.2},\"turnover\":{},\"volumeRatio\":{},\"amplitude\":{},\"limitUp\":{},\"limitDown\":{},\"pe\":{},\"peDyn\":{},\"pb\":{},\"marketCap\":{},\"circMarketCap\":{},\"dividendYield\":{},\"totalShares\":{},\"circShares\":{},\"avgPrice\":{},\"weiBi\":{},\"weiCha\":{},\"bids\":[{}],\"asks\":[{}],\"bidVol\":{:.0},\"askVol\":{:.0},\"bidRatio\":{:.3}}}",
         json_string(&symbol),
         json_string(&name),
         price,
@@ -269,6 +282,7 @@ pub fn api_market_detail(request: &HttpRequest) -> Result<String, (u16, String)>
         num_or_null(limit_up),
         num_or_null(limit_down),
         num_or_null(pe),
+        num_or_null(pe_dyn),
         num_or_null(pb),
         num_or_null(market_cap),
         num_or_null(circ_market_cap),
@@ -276,6 +290,8 @@ pub fn api_market_detail(request: &HttpRequest) -> Result<String, (u16, String)>
         num_or_null(total_shares),
         num_or_null(circ_shares),
         num_or_null(avg_price),
+        num_or_null(Some(wei_bi)),
+        num_or_null(wei_cha),
         bids.join(","),
         asks.join(","),
         total_bid_vol,
@@ -315,6 +331,25 @@ pub fn api_market_minute(request: &HttpRequest) -> Result<String, (u16, String)>
             .and_then(|d| d.get("data"))
             .and_then(|arr| arr.as_array())
             .unwrap_or(&empty_vec);
+
+        // 交易日与昨收（前收）取自上游权威字段：data.<symbol>.data.date 与
+        // qt.<symbol>[4]。分时图 y 轴基准与涨跌幅右轴必须锚定真实昨收，
+        // 不允许回退到开盘价（高开/低开时整轴错位）。
+        let symbol_node = resp.get("data").and_then(|d| d.get(&symbol));
+        let trade_date = symbol_node
+            .and_then(|s| s.get("data"))
+            .and_then(|d| d.get("date"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let pre_close = symbol_node
+            .and_then(|s| s.get("qt"))
+            .and_then(|q| q.get(&symbol))
+            .and_then(|a| a.as_array())
+            .and_then(|a| a.get(4))
+            .and_then(|v| v.as_str())
+            .and_then(|s| s.parse::<f64>().ok())
+            .unwrap_or(0.0);
 
         let mut points = Vec::with_capacity(data_arr.len());
         let mut prev_cum_vol = 0.0;
@@ -359,8 +394,10 @@ pub fn api_market_minute(request: &HttpRequest) -> Result<String, (u16, String)>
         }
 
         Ok(format!(
-            "{{\"symbol\":{},\"count\":{},\"points\":[{}]}}",
+            "{{\"symbol\":{},\"date\":{},\"source\":\"web.ifzq.gtimg.cn\",\"preClose\":{},\"count\":{},\"points\":[{}]}}",
             json_string(&symbol),
+            json_string(&trade_date),
+            pre_close,
             points.len(),
             points.join(",")
         ))
@@ -413,7 +450,12 @@ pub fn api_market_kline(request: &HttpRequest) -> Result<String, (u16, String)> 
     let fq = query_param(&request.path, "fq").unwrap_or_else(|| "qfq".to_string());
     let fq = match fq.as_str() {
         "qfq" | "hfq" | "bf" => fq,
-        _ => "qfq".to_string(),
+        _ => {
+            return Err((
+                400,
+                "{\"error\":\"APP_PARAM_INVALID\",\"message\":\"unsupported fq\"}".into(),
+            ))
+        }
     };
 
     // 日 K 串行拉 4 页上游（~0.8s），30s TTL 内重复切换直接复用整页结果
@@ -478,11 +520,11 @@ pub(crate) fn fetch_minute_points(
     Ok((times, prices, volumes))
 }
 
-pub(crate) fn fetch_kline_bars(
+pub(crate) fn fetch_kline_data(
     symbol: &str,
     period: &str,
     fq: &str,
-) -> Result<Vec<crate::trends::KlineBar>, (u16, String)> {
+) -> Result<(Vec<crate::trends::KlineBar>, &'static str), (u16, String)> {
     let kline_key = match fq {
         "bf" => period.to_string(),
         prefix => format!("{prefix}{period}"),
@@ -502,7 +544,7 @@ pub(crate) fn fetch_kline_bars(
 
         let end_param = end_date.as_deref().unwrap_or("");
         let url = format!(
-            "https://web.ifzq.gtimg.cn/appstock/app/fqkline/get?param={},{},,{end_param},800,{}",
+            "https://proxy.finance.qq.com/ifzqgtimg/appstock/app/newfqkline/get?param={},{},,{end_param},800,{}",
             symbol, period, fq
         );
         let resp_res = agent().get(&url).call();
@@ -528,7 +570,7 @@ pub(crate) fn fetch_kline_bars(
 
         let symbol_data = resp.get("data").and_then(|d| d.get(symbol));
         let bars = symbol_data
-            .and_then(|s| s.get(&kline_key).or_else(|| s.get(period)))
+            .and_then(|s| s.get(&kline_key))
             .and_then(|arr| arr.as_array());
 
         let Some(bars_vec) = bars else { break };
@@ -611,22 +653,24 @@ pub(crate) fn fetch_kline_bars(
     for i in 1..bars.len() {
         let prev_close = bars[i - 1].close;
         if prev_close > 0.0 {
-            bars[i].pct = crate::trends::py_round(
-                (bars[i].close - prev_close) / prev_close * 100.0,
-                2,
-            );
+            bars[i].pct =
+                crate::trends::py_round((bars[i].close - prev_close) / prev_close * 100.0, 2);
         }
     }
-    Ok(bars)
+    Ok((bars, "proxy.finance.qq.com"))
 }
 
-fn kline_fetch_upstream(symbol: &str, period: &str, fq: &str) -> Result<String, (u16, String)> {
-    let bars = fetch_kline_bars(symbol, period, fq)?;
+pub(crate) fn kline_fetch_upstream(
+    symbol: &str,
+    period: &str,
+    fq: &str,
+) -> Result<String, (u16, String)> {
+    let (bars, source) = super::fetch_kline_data(symbol, period, fq)?;
     let candles: Vec<String> = bars
         .iter()
         .map(|k| {
             format!(
-                "{{\"time\":{},\"open\":{:.2},\"close\":{:.2},\"high\":{:.2},\"low\":{:.2},\"volume\":{:.0}}}",
+                "{{\"time\":{},\"open\":{:.4},\"close\":{:.4},\"high\":{:.4},\"low\":{:.4},\"volume\":{:.0}}}",
                 json_string(&k.date),
                 k.open,
                 k.close,
@@ -638,12 +682,91 @@ fn kline_fetch_upstream(symbol: &str, period: &str, fq: &str) -> Result<String, 
         .collect();
 
     Ok(format!(
-        "{{\"symbol\":{},\"period\":{},\"count\":{},\"candles\":[{}]}}",
+        "{{\"symbol\":{},\"period\":{},\"source\":{},\"adjustment\":{},\"count\":{},\"candles\":[{}]}}",
         json_string(&symbol),
         json_string(&period),
+        json_string(source),
+        json_string(fq),
         candles.len(),
         candles.join(",")
     ))
+}
+
+/// N04 统一估值的有界行情获取：每批 60、最多 10 批；上游失败显式 failed，
+/// 缺价标的保持缺位不填 0。价格立即转为 4 位定点，不经 f64 回写权威。
+pub(crate) struct QuoteBatch {
+    pub quotes: std::collections::BTreeMap<String, crate::assets::QuoteInput>,
+    pub fetched_at: i64,
+    pub failed: bool,
+}
+
+pub(crate) fn fetch_quote_batch(symbols: &[String]) -> QuoteBatch {
+    let fetched_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    // 单元测试保持离线隔离：域测试不依赖真实上游（真机链覆盖真实取价）。
+    #[cfg(test)]
+    {
+        let _ = symbols;
+        return QuoteBatch {
+            quotes: Default::default(),
+            fetched_at,
+            failed: false,
+        };
+    }
+    #[cfg(not(test))]
+    {
+        let mut map = std::collections::BTreeMap::new();
+        let mut failed = symbols.len() > 600;
+        for batch in symbols.chunks(60).take(10) {
+            let request = HttpRequest::for_internal(
+                "GET",
+                &format!("/api/market/quotes?codes={}", batch.join(",")),
+                vec![],
+            );
+            match api_market_quotes(&request)
+                .ok()
+                .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+            {
+                Some(value) => {
+                    for q in value["quotes"].as_array().into_iter().flatten() {
+                        let Some(code) = q["code"].as_str() else {
+                            continue;
+                        };
+                        let Some(price) =
+                            q["price"].as_f64().filter(|p| p.is_finite() && *p >= 0.0)
+                        else {
+                            continue;
+                        };
+                        let Ok(raw) = crate::fixed::Fixed::parse(&price.to_string(), 4) else {
+                            continue;
+                        };
+                        map.insert(
+                            code.to_string(),
+                            crate::assets::QuoteInput {
+                                price_raw: raw.raw(),
+                                change_raw: q["change"]
+                                    .as_f64()
+                                    .and_then(|v| {
+                                        crate::fixed::Fixed::parse(&v.to_string(), 4).ok()
+                                    })
+                                    .map(|v| v.raw()),
+                                as_of: q["asOf"].as_str().map(String::from),
+                                source: "market-api".into(),
+                            },
+                        );
+                    }
+                }
+                None => failed = true,
+            }
+        }
+        QuoteBatch {
+            quotes: map,
+            fetched_at,
+            failed,
+        }
+    }
 }
 
 /// GET /api/market/theme/etfs?codes=sh512880,sz159806 — 批量实时行情。

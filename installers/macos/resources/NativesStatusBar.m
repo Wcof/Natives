@@ -10,8 +10,8 @@
 
 // ===== 项目进程清场（防僵尸兜底） =====
 // 场景：npm run statusbar 反复重启会残留旧实例（多托盘图标/过期面板）。
-// 启动时清掉同二进制旧实例再拉起；退出时（atexit，覆盖菜单退出/关窗/交接
-// 完成等全部正常退出路径）再兜底清扫一轮。匹配口径 = 可执行文件路径完全一致
+// 仅启动时清掉同二进制旧实例再拉起；退出只回收自己拥有的资源。
+// 匹配口径 = 可执行文件路径完全一致
 // （重建换装后路径不变，旧 inode 进程同样命中），不误伤其它项目组件。
 void NativesStatusBarSweepProjectProcesses(void) {
     static NSString *selfPath = nil;
@@ -56,7 +56,9 @@ void NativesStatusBarSweepProjectProcesses(void) {
         [NSThread sleepForTimeInterval:0.05];
     }
     for (NSNumber *pidNum in victims) {
-        kill((pid_t)pidNum.intValue, SIGKILL);
+        char pathBuf[PROC_PIDPATHINFO_MAXSIZE];
+        if (proc_pidpath(pidNum.intValue, pathBuf, sizeof(pathBuf)) > 0 &&
+            [[NSString stringWithUTF8String:pathBuf] isEqualToString:selfPath]) kill(pidNum.intValue, SIGKILL);
     }
 }
 
@@ -88,6 +90,18 @@ void NativesStatusBarSweepProjectProcesses(void) {
 @property (nonatomic, copy) NSArray *carouselFrames;
 @property (nonatomic, assign) NSUInteger carouselTick;
 @property (nonatomic, strong) NSTimer *carouselTimer;
+// 8766 不可达时按需拉起的 model-host worker（生命周期跟随顶栏进程，非常驻）
+@property (nonatomic, strong) NSTask *modelHostTask;
+// 持有 worker stdin 的写端：顶栏退出 → 管道 EOF → worker 退出（ADR-0020 非常驻边界）
+@property (nonatomic, strong) NSPipe *modelHostStdinPipe;
+@property (nonatomic, strong) NSLock *modelHostSpawnLock;
+@property (nonatomic, assign) BOOL usageFetchInFlight;
+@property (nonatomic, assign) BOOL panelFetchInFlight;
+@property (nonatomic, assign) BOOL pendingPanelFetch;
+@property (nonatomic, assign) BOOL pendingPanelRefresh;
+@property (nonatomic, assign) NSUInteger panelGeneration;
+@property (nonatomic, assign) NSUInteger usageGeneration;
+@property (atomic, assign) BOOL shuttingDown;
 @end
 
 @implementation NativesStatusBar
@@ -105,11 +119,13 @@ void NativesStatusBarSweepProjectProcesses(void) {
     self = [super init];
     if (self) {
         _displayMode = NativesStatusBarDisplayModeBoth;
-        _runtimeBaseUrl = @"http://127.0.0.1:8765"; // 默认 loopback 运行时地址
+        _runtimeBaseUrl = @"http://127.0.0.1:8766"; // ADR-0033 / ADR-0035: AI 查询统一走 model-host 8766
         _latestDisplayText = @"--";
         _latestTokensText = @"--";
         _latestCostText = @"--";
+        _worstLimitPercent = -1;
         _latestTooltip = @"Token Usage";
+        _modelHostSpawnLock = [NSLock new];
     }
     return self;
 }
@@ -148,10 +164,15 @@ void NativesStatusBarSweepProjectProcesses(void) {
     [[NSRunLoop mainRunLoop] addTimer:self.carouselTimer forMode:NSRunLoopCommonModes];
     [self rebuildQuotaFrames];
 
-    // 启动时在后台执行一次真实额度同步，确保顶栏立即拥有最新鲜活数据
+    // 启动只读已有额度；上游探测只由显式刷新触发。
     [self fetchLimitsWithCompletion:^(NSArray *items) {
         [self rebuildQuotaFrames];
-    } live:YES];
+    } live:NO];
+
+    // 启动预热：Chrome 断开 NM 后 model-host 已退出，后台按需拉起数据源
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        [self ensureModelHostAlive];
+    });
 }
 
 - (NSImage *)createTemplateIcon {
@@ -223,6 +244,8 @@ void NativesStatusBarSweepProjectProcesses(void) {
 }
 
 - (void)closePanel {
+    self.panelGeneration++;
+    self.pendingPanelFetch = NO; self.pendingPanelRefresh = NO;
     if (self.clickOutsideMonitor) {
         [NSEvent removeMonitor:self.clickOutsideMonitor];
         self.clickOutsideMonitor = nil;
@@ -247,6 +270,7 @@ void NativesStatusBarSweepProjectProcesses(void) {
     }
 
     NSPanel *panel = [self ensurePanel];
+    self.panelGeneration++;
 
     NSRect iconRect = [self.statusItem.button frame];
     NSWindow *buttonWindow = [self.statusItem.button window];
@@ -270,7 +294,7 @@ void NativesStatusBarSweepProjectProcesses(void) {
     // 全局鼠标监听：仅在点击面板外部（且不在状态栏按钮上）时才关闭面板，
     // 面板内部的所有点击（Tab、滚动、刷新）绝不会误关闭窗口。
     if (!self.clickOutsideMonitor) {
-        __unsafe_unretained typeof(self) weakSelf = self;
+        __weak typeof(self) weakSelf = self;
         self.clickOutsideMonitor = [NSEvent addGlobalMonitorForEventsMatchingMask:(NSEventMaskLeftMouseDown | NSEventMaskRightMouseDown) handler:^(NSEvent *event) {
             dispatch_async(dispatch_get_main_queue(), ^{
                 if (!weakSelf || !weakSelf.popoverPanel || !weakSelf.popoverPanel.isVisible) return;
@@ -293,6 +317,9 @@ void NativesStatusBarSweepProjectProcesses(void) {
 }
 
 - (void)panelClosed {
+    self.panelGeneration++;
+    [NSNotificationCenter.defaultCenter removeObserver:self name:NSWindowWillCloseNotification object:self.popoverPanel];
+    [self.webView.configuration.userContentController removeScriptMessageHandlerForName:@"native"];
     if (self.clickOutsideMonitor) {
         [NSEvent removeMonitor:self.clickOutsideMonitor];
         self.clickOutsideMonitor = nil;
@@ -313,19 +340,26 @@ void NativesStatusBarSweepProjectProcesses(void) {
         if (completion) completion();
         return;
     }
+    if (self.panelFetchInFlight) {
+        self.pendingPanelFetch = YES;
+        self.pendingPanelRefresh |= live;
+        return;
+    }
+    self.panelFetchInFlight = YES;
+    NSUInteger generation = self.panelGeneration;
+    NSUInteger usageGeneration = ++self.usageGeneration;
 
     dispatch_group_t group = dispatch_group_create();
 
     dispatch_group_enter(group);
-    // 面板状态走本地 tokenusage.db 只读聚合（与服务端 tray/state 100% 同库同口径），
-    // 放后台线程执行，结果回主线程投递
+    // 面板状态只走 Model Host 8766 的稳定 Usage Query 合约。
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        NSDictionary *state = FetchStateFromLocalSqlite();
+        NSDictionary *state = [self readPanelState];
         dispatch_async(dispatch_get_main_queue(), ^{
-            if (self.webView) {
+            if (self.webView && generation == self.panelGeneration && !self.shuttingDown) {
                 if (state) {
                     NSData *stateData = [NSJSONSerialization dataWithJSONObject:state options:0 error:nil];
-                    if (stateData) {
+                    if (stateData && usageGeneration == self.usageGeneration) {
                         [self updateWithStateJson:[[NSString alloc] initWithData:stateData encoding:NSUTF8StringEncoding]];
                     }
 	                    id panel = state[@"panel"];
@@ -336,11 +370,14 @@ void NativesStatusBarSweepProjectProcesses(void) {
 	                            msg[@"limits"] = currentLimits;
 	                        }
 	                        msg[@"quotaSource"] = self.lastQuotaSource ?: @"none";
+	                        msg[@"usageSource"] = state[@"usageSource"] ?: @"8766";
+	                        msg[@"usageOffline"] = @NO;
 	                        [self postToPanel:msg];
 	                    }
 	                } else {
+	                    // 8766 不可达：显式空态 + 离线标注，严禁把「取不到」渲染成真实的 0
 	                    NSDictionary *emptyPanel = @{
-	                        @"today": @{@"totalTokens": @0, @"costUsd": @0.0},
+                        @"today": @{@"totalTokens": @0, @"costUsd": @0.0, @"priced": @NO},
 	                        @"thisWeek": @{@"totalTokens": @0, @"costUsd": @0.0},
 	                        @"thisMonth": @{@"totalTokens": @0, @"costUsd": @0.0},
 	                        @"allTime": @{@"totalTokens": @0, @"costUsd": @0.0},
@@ -349,7 +386,9 @@ void NativesStatusBarSweepProjectProcesses(void) {
 	                        @"sessions": @[],
 	                        @"trends": @[]
 	                    };
-	                    [self postToPanel:@{@"type": @"panel", @"panel": emptyPanel}];
+	                    [self postToPanel:@{@"type": @"panel", @"panel": emptyPanel,
+                                        @"quotaSource": self.lastQuotaSource ?: @"none",
+                                        @"usageOffline": @YES}];
 	                }
             }
             dispatch_group_leave(group);
@@ -358,7 +397,7 @@ void NativesStatusBarSweepProjectProcesses(void) {
 
     dispatch_group_enter(group);
     [self fetchLimitsWithCompletion:^(NSArray *items) {
-        if (self.webView) {
+        if (self.webView && generation == self.panelGeneration && !self.shuttingDown) {
             [self postToPanel:@{@"type": @"limits", @"items": items ?: @[],
                                 @"quotaSource": self.lastQuotaSource ?: @"none"}];
         }
@@ -366,75 +405,131 @@ void NativesStatusBarSweepProjectProcesses(void) {
     } live:live];
 
     dispatch_group_notify(group, dispatch_get_main_queue(), ^{
-        if (completion) completion();
+        self.panelFetchInFlight = NO;
+        if (completion && generation == self.panelGeneration && !self.shuttingDown) completion();
         // 额度数据（Codex 实时结果 / 扩展写入的缓存）落地后重建顶栏轮播帧
         [self rebuildQuotaFrames];
+        if (self.pendingPanelFetch && self.popoverPanel.isVisible && !self.shuttingDown) {
+            BOOL refresh = self.pendingPanelRefresh;
+            self.pendingPanelFetch = NO; self.pendingPanelRefresh = NO;
+            if (refresh) [self performPanelRefresh]; else [self fetchPanelData];
+        }
     });
 }
 
-// 将 8766 查询/缓存兜底得到的账号额度覆盖合并进本地基底账号列表
-// （按 providerId+account 匹配；未命中的账号条目原样追加，如 8766 有而本地身份缺失）
-static inline NSArray *MergeQuotaAccountsIntoBase(NSArray *base, NSArray *quotaAccounts) {
-    if (quotaAccounts.count == 0) return base ?: @[];
-    NSMutableArray *out = [base mutableCopy] ?: [NSMutableArray array];
-    for (NSDictionary *acc in quotaAccounts) {
-        if (![acc isKindOfClass:[NSDictionary class]]) continue;
-        NSMutableDictionary *target = nil;
-        for (NSMutableDictionary *it in out) {
-            if ([it[@"providerId"] isKindOfClass:[NSString class]] &&
-                [it[@"providerId"] isEqualToString:acc[@"providerId"]] &&
-                [it[@"account"] isKindOfClass:[NSString class]] &&
-                [it[@"account"] isEqualToString:acc[@"account"]]) {
-                target = it;
-                break;
-            }
-        }
-        if (!target) {
-            [out addObject:[acc mutableCopy]];
-            continue;
-        }
-        target[@"windows"] = acc[@"windows"];
-        target[@"status"] = acc[@"status"];
-        if ([acc[@"windows"] isKindOfClass:[NSMutableArray class]]) {
-            SortQuotaWindows5HFirst(acc[@"windows"]);
-        }
-    }
-    return out;
-}
-
 - (NSArray *)currentLimitsSnapshot {
-    NSArray *base = FetchLimitsFromLocalSqlite();
-    return MergeQuotaAccountsIntoBase(base, self.lastQuotaAccounts);
+    return self.lastQuotaAccounts ?: @[];
 }
 
-// 账号额度解析（后台线程，ADR-0033 Phase 2 / 审计 B2）：
-//   本地 limits_cache/账号身份为基底；额度经 8766 只读查询面获取——
+// 账号额度解析（后台线程，ADR-0033 Phase 2 / 架构 Wave 2 终态）：
+//   额度唯一经 8766 只读查询面获取——
 //   live=YES（用户手动刷新）时先触发 POST /ai/quota/refresh（model-host 内部
 //   执行上游探测，顶栏不再直连任何上游端点/Keychain），随后 GET /ai/quota；
 //   live=NO（面板打开/30s 轮询）只读最近结果，不触发上游请求（反封号口径不变）。
 //   8766 不可达时回落 quota-cache.json 只读兜底；两者皆空即"模型服务未运行"空态。
+//   彻底废除对本地 state.json、~/.codex/auth.json 以及 limits_cache 权威表的违规直读。
 - (void)fetchLimitsWithCompletion:(void (^)(NSArray *items))completion live:(BOOL)live {
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
-        NSArray *base = FetchLimitsFromLocalSqlite();
+        [self ensureModelHostAlive]; // 额度查询同样依赖 8766；不可达时先按需拉起
         NSString *quotaSource = @"none";
         NSArray *quotaAccounts = FetchQuotaAccountsViaAIQuery(live, &quotaSource);
-        self.lastQuotaAccounts = quotaAccounts;
-        self.lastQuotaSource = quotaSource;
-        NSArray *items = MergeQuotaAccountsIntoBase(base, quotaAccounts);
         dispatch_async(dispatch_get_main_queue(), ^{
-            completion(items ?: @[]);
+            self.lastQuotaAccounts = quotaAccounts;
+            self.lastQuotaSource = quotaSource;
+            completion(quotaAccounts ?: @[]);
         });
     });
 }
 
 // 刷新动作（仅由用户点击触发）：重拉面板状态，并经 8766 触发一次上游额度刷新，
 // 全部落地后通知面板停止转圈。上游请求只由 model-host 在本动作内发起；
-// 面板打开与 30s 状态轮询均不触发。运行时不可达时本地 SQLite 直读兜底。
+// 面板打开与 30s 状态轮询均不触发。运行时不可达时显示明确空态。
 - (void)performPanelRefresh {
     if (!self.webView) return;
     [self fetchPanelDataLive:YES completion:^{
         [self postToPanel:@{@"type": @"refreshDone"}];
     }];
+}
+
+#pragma mark - model-host 按需拉起（ADR-0033 数据源保活）
+
+// 确保 model-host（8766 数据权威）可用。model-host 由 Chrome NM 连接按需拉起、
+// 客户端断开即退出（resident=false），因此顶栏场景下 8766 长期不可达，实时
+// 用量/额度/刷新全部失效。此处复用其既有 worker 模式按需重建数据源：
+//   - 首实例 Acquire 成功 → 成为 worker，8766 上线；已有首实例 → 本进程退化为
+//     bridge，同样不冲突（singleinstance socket 语义）。
+//   - 生命周期严格跟随顶栏：stdin 写端由顶栏持有，顶栏退出 → EOF → worker 退出；
+//     用户显式开启常驻设置时按其选择继续驻留。不违反 ADR-0020 非常驻边界。
+- (BOOL)ensureModelHostAlive {
+    [self.modelHostSpawnLock lock];
+    @try {
+        if (self.shuttingDown) return NO;
+        if (AIQueryHealthzAlive(1.0)) return YES;
+        NSTask *existing = self.modelHostTask;
+        if (existing && existing.isRunning) {
+            // 已按需拉起过且仍在运行（可能尚在 Engine.Restore 启动期）：只等就绪，
+            // 绝不重复 spawn——Acquire 失败的实例会退化为常挂的 bridge 进程。
+            // 就绪等待必须真实让渡 CPU：healthz 对未监听端口是毫秒级拒绝，
+            // 无 sleep 会瞬间烧完尝试次数提前返回 NO（生命周期整改 T4）。
+            for (int attempt = 0; attempt < 60; attempt++) {
+                if (self.shuttingDown) return NO;
+                if (AIQueryHealthzAlive(0.5)) return YES;
+                if (!existing.isRunning) break;
+                [NSThread sleepForTimeInterval:0.1];
+            }
+            return NO;
+        }
+        NSString *executable = LocateModelHostExecutable();
+        if (!executable) return NO;
+
+        NSTask *task = [[NSTask alloc] init];
+        task.executableURL = [NSURL fileURLWithPath:executable];
+        task.arguments = @[@"--model-host-worker"];
+        NSPipe *stdinPipe = [NSPipe pipe];
+        NSPipe *stdoutPipe = [NSPipe pipe];
+        NSPipe *stderrPipe = [NSPipe pipe];
+        task.standardInput = stdinPipe;
+        task.standardOutput = stdoutPipe;
+        task.standardError = stderrPipe;
+        // worker 的 NM 输出与日志无消费方，持续 drain，防管道缓冲写满阻塞 worker
+        stdoutPipe.fileHandleForReading.readabilityHandler = ^(NSFileHandle *handle) {
+            [handle availableData];
+        };
+        stderrPipe.fileHandleForReading.readabilityHandler = ^(NSFileHandle *handle) {
+            [handle availableData];
+        };
+        __weak typeof(self) weakSelf = self;
+        task.terminationHandler = ^(NSTask *finished) {
+            ((NSPipe *)finished.standardOutput).fileHandleForReading.readabilityHandler = nil;
+            ((NSPipe *)finished.standardError).fileHandleForReading.readabilityHandler = nil;
+            [weakSelf modelHostDidExit:finished];
+        };
+        NSError *launchError = nil;
+        if (![task launchAndReturnError:&launchError]) return NO;
+        self.modelHostTask = task;
+        self.modelHostStdinPipe = stdinPipe;
+
+        // 等待 8766 就绪（Engine.Restore + 端口绑定）；同样按 0.1s 步进让渡 CPU，
+        // 使就绪窗口真实覆盖 Engine 启动耗时（生命周期整改 T4）。
+        for (int attempt = 0; attempt < 50; attempt++) {
+            if (self.shuttingDown) return NO;
+            if (AIQueryHealthzAlive(0.5)) return YES;
+            if (!task.isRunning) return NO;
+            [NSThread sleepForTimeInterval:0.1];
+        }
+        return NO;
+    } @finally {
+        [self.modelHostSpawnLock unlock];
+    }
+}
+
+- (void)modelHostDidExit:(NSTask *)finished {
+    [self.modelHostSpawnLock lock];
+    if (self.modelHostTask == finished) {
+        self.modelHostTask = nil;
+        self.modelHostStdinPipe = nil;
+    }
+    [self.modelHostSpawnLock unlock];
 }
 
 - (void)postToPanel:(NSDictionary *)dict {
@@ -521,8 +616,8 @@ static inline NSArray *MergeQuotaAccountsIntoBase(NSArray *base, NSArray *quotaA
 
     NSArray *modes = @[
         @{@"title": @"Token 与费用 (1.25M · $3.42)", @"mode": @(NativesStatusBarDisplayModeBoth)},
-        @{@"title": @"仅今日 Token (1.25M)", @"mode": @(NativesStatusBarDisplayModeTokens)},
-        @{@"title": @"仅今日费用 ($3.42)", @"mode": @(NativesStatusBarDisplayModeCost)},
+        @{@"title": @"仅 Token (1.25M)", @"mode": @(NativesStatusBarDisplayModeTokens)},
+        @{@"title": @"仅费用 ($3.42)", @"mode": @(NativesStatusBarDisplayModeCost)},
         @{@"title": @"额度进度条/百分比", @"mode": @(NativesStatusBarDisplayModeBars)},
         @{@"title": @"仅图标", @"mode": @(NativesStatusBarDisplayModeIconOnly)}
     ];
@@ -609,10 +704,11 @@ static inline NSArray *MergeQuotaAccountsIntoBase(NSArray *base, NSArray *quotaA
 // 窗口类型缩写：5小时额度→5H、周额度→周、日额度→日、月额度→月
 - (NSString *)quotaWindowShortLabel:(NSString *)label {
     NSString *raw = label ?: @"";
-    if ([raw containsString:@"5小时"]) return @"5H";
-    if ([raw containsString:@"周"]) return @"周";
-    if ([raw containsString:@"日"]) return @"日";
-    if ([raw containsString:@"月"]) return @"月";
+    NSInteger priority = QuotaWindowSortPriority(raw);
+    if (priority == 1) return @"5H";
+    if (priority == 2) return @"日";
+    if (priority == 3) return @"周";
+    if (priority == 4) return @"月";
     return raw;
 }
 
@@ -649,9 +745,9 @@ static inline NSArray *MergeQuotaAccountsIntoBase(NSArray *base, NSArray *quotaA
         NSString *label = [w[@"label"] isKindOfClass:[NSString class]] ? w[@"label"] : @"";
         NSNumber *pctNum = [w[@"pct"] isKindOfClass:[NSNumber class]] ? w[@"pct"] : nil;
         double pct = pctNum ? pctNum.doubleValue : 101.0;
-        if ([label containsString:@"5小时"]) {
+        if (QuotaWindowSortPriority(label) == 1) {
             if (pct < pct5h) { pct5h = pct; best5h = w; }
-        } else if ([label containsString:@"周"]) {
+        } else if (QuotaWindowSortPriority(label) == 3) {
             if (pct < pctWeekly) { pctWeekly = pct; bestWeekly = w; }
         } else {
             if (pct < pctOther) { pctOther = pct; bestOther = w; }
@@ -668,7 +764,6 @@ static inline NSArray *MergeQuotaAccountsIntoBase(NSArray *base, NSArray *quotaA
 // 找不到标准窗口时回退到剩余最少 / 次少的两条
 
 - (void)rebuildQuotaFrames {
-    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         NSArray *items = [self currentLimitsSnapshot];
 
         NSMutableArray *quotaFrames = [NSMutableArray array];
@@ -728,8 +823,10 @@ static inline NSArray *MergeQuotaAccountsIntoBase(NSArray *base, NSArray *quotaA
         [quotaFrames sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
             return [@([a[@"sortPct"] doubleValue]) compare:@([b[@"sortPct"] doubleValue])];
         }];
+        NSDictionary *worst = quotaFrames.firstObject;
+        self.worstLimitPercent = worst ? [worst[@"sortPct"] doubleValue] : -1;
+        self.worstLimitText = worst ? [NSString stringWithFormat:@"%@ %.0f%%", worst[@"name"], self.worstLimitPercent] : @"";
 
-        dispatch_async(dispatch_get_main_queue(), ^{
             NSMutableArray *frames = [NSMutableArray array];
             [frames addObject:@{@"kind": @"usage",
                                  @"tokens": self.latestTokensText ?: @"--",
@@ -738,8 +835,6 @@ static inline NSArray *MergeQuotaAccountsIntoBase(NSArray *base, NSArray *quotaA
             self.carouselFrames = frames;
             self.carouselTick = 0;
             [self renderCarouselFrame];
-        });
-    });
 }
 
 // 额度行文案（单行，按约束状态）："5H 86% · 3时20分后重置" / "5H · 1时20分后重置" / "周 · 6天后重置"
@@ -794,39 +889,10 @@ static inline NSArray *MergeQuotaAccountsIntoBase(NSArray *base, NSArray *quotaA
             [lines addObject:[self costNumberFirst:self.latestCostText]];
         } else {
             // 额度帧拆两行降低宽度：上行 渠道名+百分比（有余量时），下行 重置倒计时
-            NSString *channel = frame[@"name"] ?: @"";
-            NSDictionary *w = [frame[@"window"] isKindOfClass:[NSDictionary class]] ? frame[@"window"] : @{};
-            NSArray *allWins = [frame[@"allWindows"] isKindOfClass:[NSArray class]] ? frame[@"allWindows"] : @[];
-
-            NSDictionary *w5h = nil, *wWk = nil;
-            for (NSDictionary *candidate in allWins) {
-                NSString *lbl = candidate[@"label"] ?: @"";
-                if ([lbl containsString:@"5小时"]) w5h = candidate;
-                else if ([lbl containsString:@"周"]) wWk = candidate;
-            }
-
-            double p5h = (w5h && [w5h[@"pct"] isKindOfClass:[NSNumber class]]) ? [w5h[@"pct"] doubleValue] : -1;
-            double pWk = (wWk && [wWk[@"pct"] isKindOfClass:[NSNumber class]]) ? [wWk[@"pct"] doubleValue] : -1;
-
-            NSString *line1 = @"";
-            NSString *line2 = @"";
-
-            if (p5h > 0) {
-                // 5小时有剩余：上行紧凑 "5H 百分比"，下行紧凑倒计时
-                line1 = [NSString stringWithFormat:@"5H %@", [self percentText:p5h]];
-                double epoch = [w5h[@"resetEpoch"] doubleValue];
-                line2 = [self compactCountdownFromEpoch:epoch] ?: @"--";
-            } else if (pWk > 0) {
-                // 5小时已尽但周还有：上行 "5H 0%"，下行 5小时重置倒计时（等5小时恢复）
-                line1 = @"5H 0%";
-                double epoch = [w5h[@"resetEpoch"] doubleValue];
-                line2 = [self compactCountdownFromEpoch:epoch] ?: @"--";
-            } else {
-                // 5小时与周全部耗尽：上行 "周 百分比"，下行 周额度重置倒计时
-                line1 = [NSString stringWithFormat:@"周 %@", (pWk >= 0 ? [self percentText:pWk] : @"0%")];
-                double epoch = (wWk ? [wWk[@"resetEpoch"] doubleValue] : [w[@"resetEpoch"] doubleValue]);
-                line2 = [self compactCountdownFromEpoch:epoch] ?: @"--";
-            }
+            NSDictionary *window = frame[@"window"];
+            NSString *label = [self quotaWindowShortLabel:window[@"label"]];
+            NSString *line1 = [NSString stringWithFormat:@"%@ %@", label, [self percentText:[window[@"pct"] doubleValue]]];
+            NSString *line2 = [self compactCountdownFromEpoch:[window[@"resetEpoch"] doubleValue]] ?: @"--";
 
             [lines addObject:line1];
             [lines addObject:line2];
@@ -926,7 +992,7 @@ static inline NSArray *MergeQuotaAccountsIntoBase(NSArray *base, NSArray *quotaA
             self.latestCostText = parts[1];
         } else {
             self.latestTokensText = disp;
-            self.latestCostText = disp;
+            self.latestCostText = @"--";
         }
     }
 
@@ -935,11 +1001,13 @@ static inline NSArray *MergeQuotaAccountsIntoBase(NSArray *base, NSArray *quotaA
         self.latestTooltip = tip;
     }
 
+    self.worstLimitText = @"";
+    self.worstLimitPercent = -1;
     NSDictionary *worst = json[@"worstLimit"];
     if ([worst isKindOfClass:[NSDictionary class]]) {
         id rem = worst[@"remainingPercent"];
         NSString *prov = worst[@"providerId"];
-        if (rem && [prov isKindOfClass:[NSString class]]) {
+        if ([rem isKindOfClass:NSNumber.class] && isfinite([rem doubleValue]) && [rem doubleValue] >= 0 && [rem doubleValue] <= 100 && [prov isKindOfClass:[NSString class]]) {
             self.worstLimitText = [NSString stringWithFormat:@"%@ %.0f%%", prov, [rem doubleValue]];
             double pct = [rem doubleValue];
             self.worstLimitPercent = (pct >= 0 && pct <= 100) ? pct : -1;
@@ -956,48 +1024,56 @@ static inline NSArray *MergeQuotaAccountsIntoBase(NSArray *base, NSArray *quotaA
 }
 
 - (void)fetchAndUpdateState {
-    NSURL *url = [NSURL URLWithString:[NSString stringWithFormat:@"%@/api/tray/state", self.runtimeBaseUrl]];
-    if (!url) return;
-
-    NSURLSessionConfiguration *config = [NSURLSessionConfiguration ephemeralSessionConfiguration];
-    config.timeoutIntervalForRequest = 2.0;
-    NSURLSession *session = [NSURLSession sessionWithConfiguration:config];
-
-    NSURLSessionDataTask *task = [session dataTaskWithURL:url completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
-        if (!error && data) {
-            NSString *text = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
-            [self updateWithStateJson:text];
-        } else {
-            NSDictionary *localState = FetchStateFromLocalSqlite();
-            if (localState) {
-                NSData *localData = [NSJSONSerialization dataWithJSONObject:localState options:0 error:nil];
-                if (localData) {
-                    NSString *localText = [[NSString alloc] initWithData:localData encoding:NSUTF8StringEncoding];
-                    [self updateWithStateJson:localText];
-                }
-            }
-        }
-        // 状态更新后重建顶栏轮播帧（今日用量 + 额度缓存有变）
+    if (self.usageFetchInFlight || self.shuttingDown) return;
+    self.usageFetchInFlight = YES;
+    NSUInteger generation = ++self.usageGeneration;
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        NSDictionary *state = [self readUsageState];
         dispatch_async(dispatch_get_main_queue(), ^{
+            self.usageFetchInFlight = NO;
+            if (self.shuttingDown || generation != self.usageGeneration) return;
+            NSDictionary *display = state ?: @{@"displayText": @"-- · --", @"tooltip": @"用量数据暂不可用", @"worstLimit": NSNull.null};
+            NSData *data = [NSJSONSerialization dataWithJSONObject:display options:0 error:nil];
+            if (data) [self updateWithStateJson:[[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding]];
             [self rebuildQuotaFrames];
         });
-    }];
-    [task resume];
-    [session finishTasksAndInvalidate];
+    });
+}
+
+- (NSDictionary *)readUsageState {
+    [self ensureModelHostAlive];
+    return FetchCompactStatusBarState();
+}
+
+- (NSDictionary *)readPanelState {
+    [self ensureModelHostAlive];
+    return FetchStatusBarState();
 }
 
 - (void)openTargetApp:(NSString *)appId {
-    NSString *route = @"app.html";
-    if ([appId isEqualToString:@"space"]) {
-        route = @"space.html";
-    } else if ([appId isEqualToString:@"files"]) {
-        route = @"files.html";
-    } else if (appId.length > 0) {
-        route = [NSString stringWithFormat:@"app.html?app=%@", appId];
+    NSURL *url = NativesStatusBarTargetURL(appId);
+    if (!url) return;
+    if (!NativesStatusBarUsesWeb()) {
+        [NSWorkspace.sharedWorkspace openURL:url];
+        return;
     }
-
-    NSString *cmd = [NSString stringWithFormat:@"open \"chrome-extension://kooobajbofcajlblcannmdckihiejdec/%@\"", route];
-    system([cmd UTF8String]);
+    NSString *core;
+#ifdef SOURCE_ROOT
+    core = [NSString stringWithFormat:@"%s/native-file-host", SOURCE_ROOT];
+#else
+    core = [NSBundle.mainBundle.executablePath.stringByDeletingLastPathComponent stringByAppendingPathComponent:@"native-file-host"];
+#endif
+    NSTask *task = [NSTask new];
+    task.executableURL = [NSURL fileURLWithPath:core];
+    task.arguments = @[@"--launcher-web", appId];
+    task.standardOutput = NSFileHandle.fileHandleWithNullDevice;
+    task.standardError = NSFileHandle.fileHandleWithNullDevice;
+    task.terminationHandler = ^(NSTask *completed) {
+        if (completed.terminationStatus == 0) return;
+        dispatch_async(dispatch_get_main_queue(), ^{ NSBeep(); });
+    };
+    NSError *error;
+    if (![task launchAndReturnError:&error]) NSBeep();
 }
 
 - (void)actOpenTokenUsage {
@@ -1012,7 +1088,31 @@ static inline NSArray *MergeQuotaAccountsIntoBase(NSArray *base, NSArray *quotaA
     [self openTargetApp:@"files"];
 }
 
+// 显式关闭仅属于顶栏的资源：worker stdin 写端与 stdout/stderr drain handler。
+// 顶栏退出 → EOF → worker 按自身 resident 设置决定退出；不终止其他客户端，
+// 不清理其他会话的实例（生命周期整改 T4/L4）。
+- (void)shutdownModelHostConnection {
+    self.shuttingDown = YES;
+    [self.modelHostSpawnLock lock];
+    @try {
+        self.shuttingDown = YES;
+        [self.refreshTimer invalidate];
+        [self.carouselTimer invalidate];
+        NSTask *task = self.modelHostTask;
+        if (task && task.isRunning) {
+            [self.modelHostStdinPipe.fileHandleForWriting closeFile];
+        }
+        if (task) {
+            ((NSPipe *)task.standardOutput).fileHandleForReading.readabilityHandler = nil;
+            ((NSPipe *)task.standardError).fileHandleForReading.readabilityHandler = nil;
+        }
+    } @finally {
+        [self.modelHostSpawnLock unlock];
+    }
+}
+
 - (void)actQuit {
+    [self shutdownModelHostConnection];
     [NSApp terminate:nil];
 }
 

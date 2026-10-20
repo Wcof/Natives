@@ -86,6 +86,8 @@ if [ "$mode" = production ]; then
 fi
 
 base=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
+export COPYFILE_DISABLE=1
+export COPYFILE_DISABLE=1 # keep AppleDouble ._* metadata out of signed trees
 tmp=$(mktemp -d "${TMPDIR:-/tmp}/natives-pkg.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT INT TERM
 payload=$tmp/payload
@@ -155,6 +157,10 @@ for browser in "$payload/Library/Google/Chrome/NativeMessagingHosts" \
   fi
 done
 
+# AppleDouble metadata in the payload changes the canonical extension tree hash.
+xattr -cr "$payload" 2>/dev/null || true
+find "$payload" -type f -name '._*' -delete
+
 # 精确白名单（方案 §5 P0）：/Applications 下唯一允许的条目是主产品
 # Natives.app；任何其他 .app/可执行入口/模块应用仍然禁止。
 if [ -d "$payload/Applications" ]; then
@@ -164,7 +170,18 @@ if [ -d "$payload/Applications" ]; then
   [ -z "$nested" ] || { echo "error: nested .app inside main bundle" >&2; exit 1; }
 fi
 component=$tmp/Natives-component.pkg
-set -- --root "$payload" --identifier "com.natives.$source_name" --version "$version" --install-location /
+# Upgrade must replace the system product source and app bundle, not overlay
+# them: stale files break the signed canonical extension tree.
+scripts=$tmp/scripts
+mkdir -p "$scripts"
+cat > "$scripts/preinstall" <<PREINSTALL
+#!/bin/sh
+set -eu
+rm -rf "/Library/Application Support/$source_name"
+rm -rf "/Applications/$app_name"
+PREINSTALL
+chmod 755 "$scripts/preinstall"
+set -- --root "$payload" --scripts "$scripts" --identifier "com.natives.$source_name" --version "$version" --install-location /
 [ -z "$pkg_sign" ] || set -- "$@" --sign "$pkg_sign"
 pkgbuild "$@" "$component"
 

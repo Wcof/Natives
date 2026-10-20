@@ -300,6 +300,7 @@ console.log('\n--- Batch B: Verifying 29 Widgets ---');
   area.oninput();
   assert.equal(noteSaved.content, 'Updated notes');
   if (typeof d === 'function') d();
+  assert.equal(area.onblur, null, 'Disposed notes must not replay a stale save when rendering a peer update');
   console.log('✓ widget/notes auto-save callback passed');
 }
 

@@ -10,6 +10,16 @@ pub fn index_html() -> String {
 pub fn static_js(path: &str) -> Option<String> {
     match path {
         "/app.js" => Some(APP_JS.to_string()),
+        "/brands.js" => Some(include_str!("../ui/dist/brands.js").to_string()),
+        "/locale.js" => Some(include_str!("../ui/dist/locale.js").to_string()),
+        _ => None,
+    }
+}
+
+pub fn static_css(path: &str) -> Option<&'static str> {
+    match path {
+        "/styles/theme.css" => Some(include_str!("../ui/dist/styles/theme.css")),
+        "/styles/layout.css" => Some(include_str!("../ui/dist/styles/layout.css")),
         _ => None,
     }
 }

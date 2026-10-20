@@ -17,6 +17,12 @@ const DEFAULT_ZH_NAMES = {
   'widget/aiLimits': '额度与预算',
   'widget/aiAttention': '任务提醒',
   'widget/aiSavings': '降本建议',
+  // 投资卡（ADR-0036）。
+  'widget/investmentHoldings': '投资持仓摘要',
+  'widget/investmentAssets': '已记录投资资产',
+  'widget/investmentGoal': '投资资产目标',
+  'widget/investmentAllocation': '资产配置',
+  'widget/investmentAllocationCheck': '配置检查',
   'widget/binaryTime': '二进制时钟',
   'widget/bookmarks': '书签',
   'widget/countdown': '倒计时',

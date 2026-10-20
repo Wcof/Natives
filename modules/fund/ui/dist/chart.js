@@ -165,7 +165,7 @@ function renderCandleChart() {
   const maDefs = [
     { n: 5, color: "--natives-text-primary", label: "MA5" },
     { n: 10, color: "--natives-accent", label: "MA10" },
-    { n: 20, color: "#e58bc0", label: "MA20" },
+    { n: 20, color: "--series-2", label: "MA20" },
   ];
   maDefs.forEach(function(def) {
     mCtx.beginPath();

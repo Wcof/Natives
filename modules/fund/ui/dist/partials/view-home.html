@@ -1,0 +1,246 @@
+      <!-- R2: Dashboard overview above, opportunities and related evidence below. -->
+      <section id="view-home" hidden>
+        <div class="home-wrap">
+          <div class="home-head">
+            <div class="home-head-left"><h2 id="home-overview-title" data-i18n="fundHomeOverviewTitle"></h2>
+              <span class="home-scope"><span data-i18n="fundHomeScopeAssetsTrackedInFundCny">管理范围：纳入 Fund 的资产 · CNY</span></span>
+              <span class="home-asof" id="home-asof">–</span>
+            </div>
+            <div class="home-head-right">
+              <button class="btn" id="home-privacy-btn" title="隐藏/显示金额" data-i18n-title="fundHomeHideShowAmounts"><span data-i18n="fundHomeHideAmounts">隐藏金额</span></button>
+              <button class="btn" id="home-cash-manage"><span data-i18n="fundHomeCashReconciliation">现金核对</span></button>
+              <button class="btn" id="home-refresh-btn" title="重新加载首页快照" data-i18n-title="fundHomeReloadHomeSnapshot"><span data-i18n="fundHomeRefresh">刷新</span></button>
+            </div>
+          </div>
+
+          <div role="status" aria-live="polite" class="home-status-bar" id="home-status-bar" style="display:none"></div>
+
+
+          <section class="home-overview-region" aria-labelledby="home-overview-title">
+
+
+            <div class="home-card home-ledger-strip">
+              <div class="home-ledger-cell" id="hc-total">
+                <div class="hc-label"><span data-i18n="fundHomeManagedAssets1025ab">管理资产</span></div>
+                <div class="hc-value num" id="hc-total-value">–</div>
+                <div class="hc-sub" id="hc-total-sub">–</div>
+                <div class="hc-sub" id="home-recorded-basics"></div>
+                <button class="hc-detail" id="home-currency-manage" hidden data-i18n="fundHomeConfirmCurrency"></button>
+                <button class="hc-detail" data-detail="total"><span data-i18n="fundHomeDetails">详情</span></button>
+              </div>
+
+
+              <div class="home-ledger-cell" id="hc-cash">
+                <div class="hc-label"><span data-i18n="fundHomeAvailableCash">可用现金</span></div>
+                <div class="hc-value num" id="hc-cash-value">–</div>
+                <div class="hc-sub" id="hc-cash-sub"><span data-i18n="fundHomeSettledReservesCommitments">到账 − 预留 − 占用</span></div>
+                <button class="hc-detail" data-detail="cash"><span data-i18n="fundHomeDetails">详情</span></button>
+              </div>
+            <div class="home-ledger-cell"><div class="hc-label" data-i18n="fundHomeDailySummary"></div><div class="hc-value num" id="home-pending-summary">–</div><p class="hc-sub" id="home-daily-summary-note"></p></div>
+<div class="home-ledger-cell"><div class="hc-label" data-i18n="fundHomeReviewSummary"></div><div class="hc-value num" id="home-review-summary">–</div><p class="hc-sub" data-i18n="fundHomeReviewSummaryNote"></p></div></div>
+
+
+          <!-- 区1：目标水位（方案 11 §3.1-1） -->
+          <div class="home-card home-goal home-goal-water">
+            <div class="home-card-title-row cardhead">
+              <span class="home-card-title"><span data-i18n="fundHomePrimaryFinancialGoal">目标水位</span></span>
+              <div class="goal-water-heading-actions"><div id="home-goal-progress"></div><button class="btn" id="home-goal-manage"><span data-i18n="fundHomeManageGoals">管理目标</span></button></div>
+            </div>
+            <div id="home-goal-body"></div>
+          </div>
+
+
+
+
+          <!-- 区2：左侧资产分布、右侧组合设置（方案 P03 双栏） -->
+          <div class="grid2 section-space home-allocation-grid">
+            <section class="card home-distribution-card" aria-labelledby="home-distribution-title">
+              <div class="between cardhead home-card-title-row">
+                <div>
+                  <h2 id="home-distribution-title" class="home-card-title"><span data-i18n="fundHomeDistributionTitle">资产分布</span></h2>
+                  <small class="muted" data-i18n="fundHomeDistributionSubtitle">组合分类 · 实际金额与占比</small>
+                </div>
+                <button class="btn btn-sm" id="home-group-manage"><span data-i18n="fundHomeGroupAdjust">管理分类</span></button>
+              </div>
+              <div id="home-distribution-body" tabindex="0" role="region" aria-labelledby="home-distribution-title"></div>
+              <div id="home-group-body" style="display:none"></div>
+              <div class="divider"></div>
+              <div class="between">
+                <small class="muted" data-i18n="fundHomeDistributionNote">按明确选择的资产归类，每项只计入一次</small>
+              </div>
+            </section>
+
+            <section class="card home-combination-card" aria-labelledby="home-combination-title">
+              <div class="between cardhead home-card-title-row">
+                <div>
+                  <h2 id="home-combination-title" class="home-card-title" data-i18n="fundHomeCombinationTitle">组合设置</h2>
+                  <small class="muted" data-i18n="fundHomeCombinationSubtitle">右侧看目标，与左侧实际分布逐项对照</small>
+                </div>
+                <button class="btn btn-sm" id="home-combination-manage" data-i18n="fundHomeCombinationEdit">编辑比例</button>
+              </div>
+              <div id="home-combination-body" tabindex="0" role="region" aria-labelledby="home-combination-title"></div>
+            </section>
+          </div>
+<div class="home-decision-grid section-space">
+            <!-- 左侧：资讯 -->
+            <section class="card home-news-panel" aria-labelledby="home-news-title">
+              <div class="home-card-title-row cardhead">
+                <span class="home-card-title" id="home-news-title"><span data-i18n="fundHomeNewsPanelTitle">资讯</span></span>
+                <span class="home-evidence-actions">
+                  <button class="btn btn-sm" id="home-sources-manage"><span data-i18n="fundHomeSources86c5e9">信息源</span></button>
+                  <button class="btn btn-sm" id="home-reports-manage"><span data-i18n="fundHomeReportsTitle">分析报告</span></button>
+                </span>
+              </div>
+              <div class="home-news-scroll" id="home-news-scroll" tabindex="0" role="region" aria-label="资讯列表，可上下滚动" data-i18n-aria-label="fundHomeNewsRegion">
+                <div id="home-evidence-body"></div>
+              </div>
+              <p class="home-panel-foot"><span data-i18n="fundHomeNewsFootHint">内容可上下滚动 · 点击资讯的“AI 决策”在右侧分析</span></p>
+            </section>
+
+            <!-- 右侧：AI 决策 -->
+            <section class="card decision home-ai-panel" id="home-ai-panel" aria-labelledby="home-ai-title">
+              <div class="home-card-title-row cardhead">
+                <div style="display:flex;align-items:center;gap:8px">
+                  <span class="home-card-title" id="home-ai-title" tabindex="-1"><span data-i18n="fundHomeAiPanelTitle">AI 决策</span></span>
+                  <span class="tag blue"><span data-i18n="fundHomeAiPanelBadge">原地分析</span></span>
+                </div>
+                <span class="home-evidence-actions">
+                  <button class="btn btn-sm" id="home-history"><span data-i18n="fundHomeDecisionHistory">决策历史</span></button>
+                  <button class="btn btn-sm" id="home-ai-explain" title="基于当前快照生成有依据的决策参考" data-i18n-title="fundHomeGenerateAnAiExplanationFromTheCurrent"><span data-i18n="fundHomeExplainThisAssessment">全局分析</span></button>
+                </span>
+              </div>
+              <div id="home-ai-body" tabindex="0" role="region" aria-label="AI 决策内容，可上下滚动" data-i18n-aria-label="fundHomeAiRegion"></div>
+              <p class="home-panel-foot"><span data-i18n="fundHomeAiFootHint">内容可上下滚动 · 支持结构校验与报告保存</span></p>
+            </section>
+          </div>
+
+
+            <h2 class="home-performance-title" data-i18n="fundHomePerformanceHeading"></h2>
+<div class="home-income-grid">
+              <article class="home-card home-income-card" id="home-stock-income" aria-labelledby="home-stock-income-title"><h3 id="home-stock-income-title" data-i18n="fundHomeStockIncome"></h3><div data-income-body></div></article>
+              <article class="home-card home-income-card" id="home-fund-income" aria-labelledby="home-fund-income-title"><h3 id="home-fund-income-title" data-i18n="fundHomeFundIncome"></h3><div data-income-body></div></article>
+              <article class="home-card home-income-card" id="home-offline-income" aria-labelledby="home-offline-income-title"><h3 id="home-offline-income-title" data-i18n="fundHomeOfflineIncome"></h3><div data-income-body></div></article>
+              <article class="home-card home-income-card" id="home-all-income" aria-labelledby="home-all-income-title"><h3 id="home-all-income-title" data-i18n="fundHomeAllIncome"></h3><span class="hc-label" data-i18n="fundHomeOverviewDaily"></span><div class="hc-value num" id="home-all-daily-value">–</div><div class="hc-sub" id="home-all-daily-note"></div><dl class="home-income-metrics"><div><dt data-i18n="fundHomeRangeReturn"></dt><dd class="num" id="home-all-period-value">–</dd></div><div><dt data-i18n="fundHomeOverviewTwr"></dt><dd class="num" id="home-twr-value">–</dd></div><div><dt data-i18n="fundHomeOverviewPosition"></dt><dd class="num" id="home-position-value">–</dd></div></dl></article>
+              <p class="hc-sub" id="home-returns-scope"></p>
+            </div>
+
+            <details class="home-card home-history"><summary data-i18n="fundHomeHistoryDisclosure"></summary>
+              <div class="home-ledger-extra"><div class="home-ledger-cell" id="hc-cumulative">
+                <div class="hc-label" data-i18n="fundHomeCumulativeReturn"></div>
+                <div class="hc-value num" id="home-cumulative-value">–</div>
+                <div class="hc-sub" id="home-cumulative-note"></div>
+                <div class="hc-sub" data-i18n="fundHomeCumulativeScope"></div>
+              </div><div class="home-ledger-cell" id="hc-invested">
+                <div class="hc-label"><span data-i18n="fundHomeInvestedMarketValue">已投资市值</span></div>
+                <div class="hc-value num" id="hc-invested-value">–</div>
+                <div class="hc-sub" id="hc-invested-sub"><span data-i18n="fundHomeCurrentNoncashAssetValue">非现金资产当前价值</span></div>
+                <button class="hc-detail" data-detail="invested"><span data-i18n="fundHomeDetails">详情</span></button>
+              </div></div><h3 class="home-card-title" data-i18n="fundHomeOverviewHistory"></h3>
+              <div class="home-period-summary" id="hc-return">
+                <div class="hc-label-row">
+                  <span class="hc-label"><span data-i18n="fundHomePeriodNetReturn">期间净收益</span></span>
+                  <span class="hc-range-tabs" role="group" aria-label="收益区间" data-i18n-aria-label="fundHomeReturnRange">
+                    <button class="hc-range" data-range="today"><span data-i18n="fundHomeToday">Today</span></button>
+                    <button class="hc-range active" data-range="month"><span data-i18n="fundHomeThisMonth">本月</span></button>
+                    <button class="hc-range" data-range="year"><span data-i18n="fundHomeThisYear">今年</span></button>
+                    <button class="hc-range" data-range="all"><span data-i18n="fundHomeSinceTrackingBegan">跟踪以来</span></button>
+                    <button class="hc-range" data-range="custom" aria-controls="home-custom-range"><span data-i18n="fundHomeCustom">自定义</span></button>
+                  </span>
+                </div>
+                <div id="home-selected-range" class="home-selected-range"></div>
+                <div id="home-custom-range" class="home-range-popover" popover="auto" role="dialog" data-i18n-aria-label="fundHomeCustom"></div>
+                <div id="home-range-status" class="home-range-status" role="status" aria-live="polite"></div>
+                <div class="hc-value num" id="hc-return-value">–</div>
+                <div class="hc-sub" id="hc-return-sub"><span data-i18n="fundHomeTodaySReturnIsNotShownWithout">未经完整核验不显示今日收益</span></div>
+                <button class="hc-detail" data-detail="return"><span data-i18n="fundHomeDetails">详情</span></button>
+              </div>
+
+              <p class="evidence-hint" id="home-history-status"></p>
+              <div id="home-history-chart" class="home-history-chart"></div>
+              <p class="evidence-hint" id="home-benchmark-status"></p>
+              <div id="home-benchmark-chart" class="home-history-chart"></div>
+              <div id="home-attribution-body"></div>
+              <div id="home-history-points"></div>
+            </details>
+              <!-- F05 市场概览 -->
+
+
+          </section>
+          <section class="home-opportunities-region" aria-labelledby="home-opportunities-title">
+            <details class="home-card home-extra-research"><summary><h2 id="home-opportunities-title" data-i18n="fundHomeOverviewOpportunities"></h2></summary><div class="home-card home-market">
+                <div class="home-card-title-row">
+                  <span class="home-card-title"><span data-i18n="fundHomeRelatedMarkets">与我相关的市场</span></span>
+                  <span class="home-market-time" id="home-market-time"></span>
+                </div>
+                <div id="home-market-body"></div>
+              </div>
+            <div class="home-card"><div id="home-opportunity-body"></div></div>
+          <!-- 首页资讯与 AI 原地决策两栏等高（方案 P11/P12） -->
+
+
+
+          <div class="home-mid-grid" style="display:grid;grid-template-columns:1fr;gap:12px">
+              <div class="home-card" style="padding:14px 18px">
+                <div class="home-card-title-row" style="margin-bottom:6px">
+                  <h3 class="home-card-title" data-i18n="fundHomeOverviewToday"></h3>
+                  <div style="display:flex;gap:8px;align-items:center">
+                    <button class="btn btn-sm" id="home-today-rules" data-i18n="fundHomeManageRules"></button>
+                    <button class="btn btn-sm" id="home-open-positions" data-i18n="fundHomeOverviewHoldings"></button>
+                  </div>
+                </div>
+                <div id="home-today-body"></div>
+                <div id="home-health-body" class="evidence-hint" style="margin-top:6px"></div>
+                <div id="home-concentration-list"></div>
+                <button class="btn home-health-open" id="home-health-open" style="display:none"></button>
+              </div>
+            </div></details></section>
+          <!-- 详情展开区（摘要四卡共用） -->
+          <div class="home-detail-panel" id="home-detail-panel" style="display:none">
+            <div id="home-detail-body"></div>
+          </div>
+
+
+
+<details class="home-more-details" id="home-finance-details">
+            <summary><span data-i18n="fundHomeOverviewFinanceTools"></span></summary>
+              <!-- F03 旧五类配置（方案 11 §4：历史口径保留，明确标识） -->
+              <div class="home-card home-allocation">
+                <div class="home-card-title-row">
+                  <span class="home-card-title"><span data-i18n="fundHomeAllocationAndInvestmentPlan">配置与建仓计划</span></span>
+                  <button class="btn" id="home-simulate"><span data-i18n="fundHomeSimulateAmounts">金额模拟</span></button>
+                  <button class="btn" id="home-allocation-manage"><span data-i18n="fundHomeEditAllocation">编辑配置</span></button>
+                </div>
+                <div id="home-allocation-body"></div>
+              </div>
+          </details>
+        </div>
+      </section>
+
+<section id="view-news" hidden class="investment-reading-page">
+  <header class="investment-page-head"><div><h2 tabindex="-1" id="news-page-title" data-i18n="fundHomeNews"></h2><p data-i18n="fundHomeNewsPageScope"></p></div><div class="row"><button type="button" id="news-page-refresh" class="btn" data-i18n="fundHomeInformationRefresh"></button><button type="button" id="news-page-next" class="btn" hidden data-i18n="fundHomeInformationNextBatch"></button><button type="button" id="news-page-sources" class="btn" data-i18n="fundHomeSources"></button></div></header>
+  <p id="news-page-status" role="status" aria-live="polite"></p>
+  <div id="news-page-coverage" class="investment-coverage" role="status"></div>
+  <section id="news-page-body" aria-labelledby="news-page-title"></section>
+</section>
+<section id="view-history" hidden class="investment-reading-page">
+  <header class="investment-page-head"><div><h2 tabindex="-1" id="history-page-title" data-i18n="fundHomeDecisionHistory"></h2><p data-i18n="fundHomeDecisionHistoryScope"></p></div><button type="button" id="history-page-reports" class="btn" data-i18n="fundHomeReportsTitle"></button></header>
+  <div id="history-page-body"></div>
+</section>
+<dialog id="home-health-drawer" class="home-drawer" aria-labelledby="home-health-title">
+  <header>
+    <h2 id="home-health-title" tabindex="-1" data-i18n="fundHomeHealthTitle"></h2>
+    <button type="button" class="btn" data-close data-i18n="fundHomeClose"></button>
+  </header>
+  <p class="home-health-scope" id="home-health-scope" role="status" aria-live="polite"></p>
+  <div class="home-health-tabs" role="tablist" aria-label="体检维度" data-i18n-aria-label="fundHomeHealthDimensions">
+    <button role="tab" id="health-tab-types" aria-selected="true" data-dim="types" data-i18n="fundHomeHealthTypes"></button>
+    <button role="tab" id="health-tab-accounts" aria-selected="false" data-dim="accounts" data-i18n="fundHomeHealthAccounts"></button>
+    <button role="tab" id="health-tab-concentration" aria-selected="false" data-dim="concentration" data-i18n="fundHomeHealthConcentration"></button>
+    <button role="tab" id="health-tab-quality" aria-selected="false" data-dim="quality" data-i18n="fundHomeHealthQuality"></button>
+    <button role="tab" id="health-tab-liquidity" aria-selected="false" data-dim="liquidity" data-i18n="fundHomeHealthLiquidity"></button>
+  </div>
+  <div id="home-health-body-drawer" role="tabpanel" aria-live="polite"></div>
+  <footer>
+    <button type="button" class="btn" data-close data-i18n="fundHomeBack"></button>
+  </footer>
+</dialog>

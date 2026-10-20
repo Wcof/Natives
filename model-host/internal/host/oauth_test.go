@@ -11,22 +11,21 @@ import (
 	"testing"
 	"time"
 
+	clipadapter "github.com/ldh/natives/model-host/internal/cliproxy"
 	"github.com/ldh/natives/model-host/internal/domain"
 	"github.com/ldh/natives/model-host/internal/nativeio"
 	"github.com/ldh/natives/model-host/internal/secrets"
-	sdkauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/auth"
-	clipcore "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy"
-	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
-	clipconfig "github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
+	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 )
 
+// fakeLoginManager 消费项目侧签名（mode/T07 审计更正）：SDK 记录只存在于
+// 假实现的内部（经 authStore 适配器落库），不出现在接口签名。
 type fakeLoginManager struct {
-	login func(context.Context, string) (*coreauth.Auth, error)
+	login func(context.Context, string) (clipadapter.AccountView, func(context.Context) error, error)
 }
 
-func (f fakeLoginManager) Login(ctx context.Context, provider string, _ *clipconfig.Config, _ *sdkauth.LoginOptions) (*coreauth.Auth, string, error) {
-	record, err := f.login(ctx, provider)
-	return record, "keychain", err
+func (f fakeLoginManager) Login(ctx context.Context, provider, _ string, _ func(string) string) (clipadapter.AccountView, func(context.Context) error, error) {
+	return f.login(ctx, provider)
 }
 
 func TestOAuthFiveProvidersPersistToSecretStore(t *testing.T) {
@@ -38,10 +37,15 @@ func TestOAuthFiveProvidersPersistToSecretStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer engine.Close()
-	engine.auth = fakeLoginManager{login: func(_ context.Context, provider string) (*coreauth.Auth, error) {
+	engine.auth = fakeLoginManager{login: func(_ context.Context, provider string) (clipadapter.AccountView, func(context.Context) error, error) {
 		record := &coreauth.Auth{ID: provider + "-account", Provider: provider, Label: provider + "@example.test", Status: coreauth.StatusActive, Metadata: map[string]any{"access_token": provider + "-access-secret", "refresh_token": provider + "-refresh-secret"}}
 		_, saveErr := engine.authStore.Save(context.Background(), record)
-		return record, saveErr
+		if saveErr != nil {
+			return clipadapter.AccountView{}, nil, saveErr
+		}
+		view := clipadapter.AccountView{ID: record.ID, Provider: record.Provider, Label: record.Label, Mask: maskSecret(provider + "-access-secret")}
+		id := record.ID
+		return view, func(ctx context.Context) error { return engine.authStore.Delete(ctx, id) }, nil
 	}}
 	snapshot, _ := engine.repo.Load()
 	for _, provider := range domain.OAuthProviders {
@@ -85,10 +89,9 @@ func TestOAuthCatalogKeepsAccountModelIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(engine.Close)
-	hook := oauthCatalogHook{engine: engine}
-	hook.OnModelsRegistered(context.Background(), "codex", "account-a", []*clipcore.ModelInfo{{ID: "shared", DisplayName: "Shared", ContextLength: 100}})
-	hook.OnModelsRegistered(context.Background(), "codex", "account-b", []*clipcore.ModelInfo{{ID: "shared", DisplayName: "Shared", ContextLength: 100}})
-	hook.OnModelsRegistered(context.Background(), "codex", "account-a", []*clipcore.ModelInfo{{ID: "new-a", DisplayName: "New A", ContextLength: 200}})
+	catalogUpdate(engine, "account-a", []clipadapter.ModelInfo{{ID: "shared", DisplayName: "Shared", ContextLength: 100}})
+	catalogUpdate(engine, "account-b", []clipadapter.ModelInfo{{ID: "shared", DisplayName: "Shared", ContextLength: 100}})
+	catalogUpdate(engine, "account-a", []clipadapter.ModelInfo{{ID: "new-a", DisplayName: "New A", ContextLength: 200}})
 	snapshot, _ := repo.Load()
 	provider, _ := findProvider(&snapshot, "codex")
 	shared := provider.Models[slices.IndexFunc(provider.Models, func(model domain.Model) bool { return model.ID == "shared" })]
@@ -109,7 +112,10 @@ func TestOAuthDuplicateCancelAndTimeoutStates(t *testing.T) {
 	}
 	defer engine.Close()
 	engine.oauthTimeout = time.Second
-	engine.auth = fakeLoginManager{login: func(ctx context.Context, _ string) (*coreauth.Auth, error) { <-ctx.Done(); return nil, ctx.Err() }}
+	engine.auth = fakeLoginManager{login: func(ctx context.Context, _ string) (clipadapter.AccountView, func(context.Context) error, error) {
+		<-ctx.Done()
+		return clipadapter.AccountView{}, nil, ctx.Err()
+	}}
 	started, err := engine.startOAuth(context.Background(), json.RawMessage(`{"provider":"codex","expectedRevision":1}`))
 	if err != nil {
 		t.Fatal(err)
@@ -168,10 +174,15 @@ func TestReauthorizationReplacesCredentialWithoutChangingAccountIdentity(t *test
 		t.Fatal(err)
 	}
 	<-events
-	engine.auth = fakeLoginManager{login: func(_ context.Context, _ string) (*coreauth.Auth, error) {
-		fresh := &coreauth.Auth{ID: "temporary-account", Provider: "kimi", Label: "new", Status: coreauth.StatusActive, Metadata: map[string]any{"access_token": "new-token"}}
+	// 重指语义（临时 ID → 既存账户）在适配层实现并有专项测试；此处以
+	// 项目签名模拟重指后的最终态：新凭据直接落在 stable-account。
+	engine.auth = fakeLoginManager{login: func(_ context.Context, _ string) (clipadapter.AccountView, func(context.Context) error, error) {
+		fresh := &coreauth.Auth{ID: "stable-account", Provider: "kimi", Label: "new", Status: coreauth.StatusActive, Metadata: map[string]any{"access_token": "new-token"}}
 		_, saveErr := engine.authStore.Save(context.Background(), fresh)
-		return fresh, saveErr
+		if saveErr != nil {
+			return clipadapter.AccountView{}, nil, saveErr
+		}
+		return clipadapter.AccountView{ID: "stable-account", Provider: "kimi", Label: "new", Mask: maskSecret("new-token")}, func(ctx context.Context) error { return engine.authStore.Delete(ctx, "stable-account") }, nil
 	}}
 	snapshot, _ := repo.Load()
 	if _, err = engine.startOAuth(context.Background(), json.RawMessage(`{"provider":"kimi","accountId":"stable-account","expectedRevision":`+jsonNumber(snapshot.Revision)+`}`)); err != nil {

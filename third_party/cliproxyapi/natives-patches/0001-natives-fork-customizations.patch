@@ -1,8 +1,16 @@
+.../executor/antigravity_executor_credits.go       |   6 +-
+ .../executor/antigravity_executor_credits_test.go  |  13 ++
+ .../executor/helps/payload_mutations_test.go       |  15 +-
+ sdk/cliproxy/natives_version.go                    |   5 +
+ sdk/cliproxy/static_models.go                      |  12 ++
+ sdk/cliproxy/usage/manager.go                      | 240 +++++++++++++++++----
+ 6 files changed, 241 insertions(+), 50 deletions(-)
+
 diff --git a/internal/runtime/executor/antigravity_executor_credits.go b/internal/runtime/executor/antigravity_executor_credits.go
-index 8f699be..5508469 100644
+index 5164539..c017270 100644
 --- a/internal/runtime/executor/antigravity_executor_credits.go
 +++ b/internal/runtime/executor/antigravity_executor_credits.go
-@@ -333,7 +333,11 @@ func antigravityHasExplicitCreditsBalanceExhaustedReason(body []byte) bool {
+@@ -343,7 +343,11 @@ func antigravityHasExplicitCreditsBalanceExhaustedReason(body []byte) bool {
  	return false
  }
  
@@ -16,10 +24,10 @@ index 8f699be..5508469 100644
  	if statusCode == http.StatusTooManyRequests {
  		if retryAfter, parseErr := helps.ParseRetryDelay(body); parseErr == nil && retryAfter != nil {
 diff --git a/internal/runtime/executor/antigravity_executor_credits_test.go b/internal/runtime/executor/antigravity_executor_credits_test.go
-index bba63a6..628b082 100644
+index 8b0bb9e..d32fb73 100644
 --- a/internal/runtime/executor/antigravity_executor_credits_test.go
 +++ b/internal/runtime/executor/antigravity_executor_credits_test.go
-@@ -734,3 +734,16 @@ func TestParseMetaFloat(t *testing.T) {
+@@ -733,3 +733,16 @@ func TestParseMetaFloat(t *testing.T) {
  		})
  	}
  }
@@ -37,7 +45,7 @@ index bba63a6..628b082 100644
 +	}
 +}
 diff --git a/internal/runtime/executor/helps/payload_mutations_test.go b/internal/runtime/executor/helps/payload_mutations_test.go
-index 58df159..65067bd 100644
+index 6e1f882..b4fd394 100644
 --- a/internal/runtime/executor/helps/payload_mutations_test.go
 +++ b/internal/runtime/executor/helps/payload_mutations_test.go
 @@ -3,7 +3,6 @@ package helps
@@ -69,9 +77,20 @@ index 58df159..65067bd 100644
  
  func TestApplyPayloadConfig_CodexAdditionalToolsFilter(t *testing.T) {
  	cfg := &config.Config{
+diff --git a/sdk/cliproxy/natives_version.go b/sdk/cliproxy/natives_version.go
+new file mode 100644
+index 0000000..51d48fe
+--- /dev/null
++++ b/sdk/cliproxy/natives_version.go
+@@ -0,0 +1,5 @@
++package cliproxy
++
++// NativesKernelVersion identifies this vendored SDK at compile time.
++// The development updater regenerates it in the verified candidate tree.
++const NativesKernelVersion = "v8.0.28"
 diff --git a/sdk/cliproxy/static_models.go b/sdk/cliproxy/static_models.go
 new file mode 100644
-index 0000000..2a2c35c
+index 0000000..8985310
 --- /dev/null
 +++ b/sdk/cliproxy/static_models.go
 @@ -0,0 +1,12 @@
@@ -80,7 +99,7 @@ index 0000000..2a2c35c
 +import (
 +	"strings"
 +
-+	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
++	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
 +)
 +
 +// StaticModelDefinitions returns static model definitions for a given channel/provider.
@@ -88,17 +107,43 @@ index 0000000..2a2c35c
 +	return registry.GetStaticModelDefinitionsByChannel(strings.ToLower(strings.TrimSpace(provider)))
 +}
 diff --git a/sdk/cliproxy/usage/manager.go b/sdk/cliproxy/usage/manager.go
-index 643a236..e357b24 100644
+index 2e46ee6..e09e64c 100644
 --- a/sdk/cliproxy/usage/manager.go
 +++ b/sdk/cliproxy/usage/manager.go
-@@ -299,14 +299,13 @@ type queueItem struct {
+@@ -403,62 +403,113 @@ type Plugin interface {
+ }
  
- // Manager maintains a queue of usage records and delivers them to registered plugins.
+ type queueItem struct {
+-	ctx    context.Context
+-	record Record
+-}
++	record  Record
++	payload int // approximate queued byte weight of the record
++}
++
++// Queue budget constants. The constructor capacity must be real: Publish never
++// grows the queue beyond `buffer` items or `maxQueueBytes` total bytes. Records
++// waiting in the queue must not pin request contexts, oversized response bodies
++// or credential-bearing header values (Natives lifecycle plan L3/F1).
++const (
++	defaultQueueBuffer    = 512
++	maxQueueBytes         = 8 << 20 // 8 MiB total queued payload
++	maxFailBodyBytes      = 4 << 10 // 4 KiB diagnostic failure body prefix
++	maxResponseHeaderData = 8 << 10 // 8 KiB total response-header snapshot bytes
++)
+ 
+-// Manager maintains a queue of usage records and delivers them to registered plugins.
++// Manager maintains a bounded queue of usage records and delivers them to
++// registered plugins. The queue applies backpressure when full (Publish waits
++// until space frees or the manager is stopped) instead of growing without
++// bound; Stop drains pending records, joins the dispatcher and never allows
++// Publish to silently resurrect it.
  type Manager struct {
 -	once     sync.Once
 -	stopOnce sync.Once
 -	cancel   context.CancelFunc
 +	cancel context.CancelFunc
++	buffer int
  
 -	mu     sync.Mutex
 -	cond   *sync.Cond
@@ -107,12 +152,34 @@ index 643a236..e357b24 100644
 +	mu      sync.Mutex
 +	cond    *sync.Cond
 +	queue   []queueItem
++	bytes   int
 +	running bool
 +	closed  bool
++	exited  chan struct{} // closed when the dispatcher goroutine fully returns
  
  	pluginsMu sync.RWMutex
  	plugins   []Plugin
-@@ -325,14 +324,21 @@ func (m *Manager) Start(ctx context.Context) {
+ 	named     map[string]int
+ }
+ 
+-// NewManager constructs a manager with a buffered queue.
++// NewManager constructs a manager with a bounded queue. Non-positive buffers
++// fall back to the 512-slot default.
+ func NewManager(buffer int) *Manager {
+-	m := &Manager{}
++	if buffer <= 0 {
++		buffer = defaultQueueBuffer
++	}
++	m := &Manager{buffer: buffer}
+ 	m.cond = sync.NewCond(&m.mu)
+ 	return m
+ }
+ 
+-// Start launches the background dispatcher. Calling Start multiple times is safe.
++// Start launches the background dispatcher. Calling Start multiple times is
++// safe. Start after Stop re-opens the manager for gateway restarts; only
++// Publish may not resurrect a stopped dispatcher.
+ func (m *Manager) Start(ctx context.Context) {
  	if m == nil {
  		return
  	}
@@ -136,13 +203,18 @@ index 643a236..e357b24 100644
 +	workerCtx, m.cancel = context.WithCancel(ctx)
 +	m.running = true
 +	m.closed = false
++	exited := make(chan struct{})
++	m.exited = exited
 +	m.mu.Unlock()
 +
-+	go m.run(workerCtx)
++	go m.run(workerCtx, exited)
  }
  
- // Stop stops the dispatcher and drains the queue.
-@@ -340,15 +346,19 @@ func (m *Manager) Stop() {
+-// Stop stops the dispatcher and drains the queue.
++// Stop stops the dispatcher, drains every queued record into the registered
++// plugins and joins the dispatcher goroutine before returning. Repeated or
++// concurrent Stop calls are safe and idempotent.
+ func (m *Manager) Stop() {
  	if m == nil {
  		return
  	}
@@ -164,9 +236,541 @@ index 643a236..e357b24 100644
 +		m.cancel = nil
 +	}
 +	m.closed = true
++	exited := m.exited
++	// Wake Publish backpressure waiters: they fall through to synchronous
++	// delivery once closed, and the dispatcher drains the remaining queue.
++	m.cond.Broadcast()
 +	m.running = false
 +	m.mu.Unlock()
 +	m.cond.Broadcast()
++	if exited != nil {
++		// Bounded join: the dispatcher only drains its bounded queue into
++		// plugin enqueue paths, so this normally returns immediately.
++		select {
++		case <-exited:
++		case <-time.After(5 * time.Second):
++			log.Warnf("usage: dispatcher drain did not finish within 5s; %d record(s) remain queued", m.queueLength())
++		}
++	}
  }
  
  // Register appends a plugin to the delivery list.
+@@ -496,7 +547,12 @@ func (m *Manager) RegisterNamed(name string, plugin Plugin) {
+ }
+ 
+ // Publish enqueues a usage record for processing. If no plugin is registered
+-// the record will be discarded downstream.
++// the record will be discarded downstream. The queue is bounded: when full,
++// Publish applies cancellable backpressure (waiting on manager Stop or queue
++// space, never on the caller's request context, so a completed upstream
++// request's usage is not dropped by a downstream disconnect). A record
++// published after Stop is delivered synchronously to the still-registered
++// plugins instead of resurrecting the dispatcher.
+ func (m *Manager) Publish(ctx context.Context, record Record) {
+ 	if m == nil {
+ 		return
+@@ -532,19 +588,62 @@ func (m *Manager) Publish(ctx context.Context, record Record) {
+ 			record.IsNativeKey = IsNativeAccessProvider(record.AccessProvider)
+ 		}
+ 	}
+-	// ensure worker is running even if Start was not called explicitly
+-	m.Start(context.Background())
++	// Bound record weight before queueing: diagnostic bodies and response
++	// header snapshots are trimmed; billing atoms (tokens, cost inputs,
++	// identity) are never altered.
++	trimRecordForQueue(&record)
++	payload := recordWeight(record)
++
+ 	m.mu.Lock()
++	// ensure worker is running even if Start was not called explicitly,
++	// but never resurrect a manager that Stop already drained and closed.
++	if !m.running && !m.closed {
++		m.mu.Unlock()
++		m.Start(context.Background())
++		m.mu.Lock()
++	}
+ 	if m.closed {
++		// Stopped manager: synchronous best-effort delivery to still-open
++		// plugins keeps late records persistable without a new dispatcher.
+ 		m.mu.Unlock()
++		m.dispatch(queueItem{record: record, payload: payload})
+ 		return
+ 	}
+-	m.queue = append(m.queue, queueItem{ctx: ctx, record: record})
++	for len(m.queue) >= m.buffer || m.bytes+payload > maxQueueBytes {
++		m.cond.Wait()
++		if m.closed {
++			m.mu.Unlock()
++			m.dispatch(queueItem{record: record, payload: payload})
++			return
++		}
++	}
++	m.queue = append(m.queue, queueItem{record: record, payload: payload})
++	m.bytes += payload
+ 	m.mu.Unlock()
+ 	m.cond.Signal()
+ }
+ 
+-func (m *Manager) run(ctx context.Context) {
++func (m *Manager) queueLength() int {
++	m.mu.Lock()
++	defer m.mu.Unlock()
++	return len(m.queue)
++}
++
++func (m *Manager) run(ctx context.Context, exited chan struct{}) {
++	defer func() {
++		m.mu.Lock()
++		remaining := m.queue
++		m.queue = nil
++		m.bytes = 0
++		m.mu.Unlock()
++		for _, item := range remaining {
++			m.dispatch(item)
++		}
++		// Only the dispatcher created with this exited channel closes it;
++		// a restarted manager installs a fresh channel, so a late return of
++		// a previous dispatcher can never double-close the new one.
++		close(exited)
++	}()
+ 	for {
+ 		m.mu.Lock()
+ 		for !m.closed && len(m.queue) == 0 {
+@@ -555,8 +654,11 @@ func (m *Manager) run(ctx context.Context) {
+ 			return
+ 		}
+ 		item := m.queue[0]
++		m.queue[0] = queueItem{} // release the consumed slot reference
+ 		m.queue = m.queue[1:]
++		m.bytes -= item.payload
+ 		m.mu.Unlock()
++		m.cond.Broadcast() // wake backpressure waiters
+ 		m.dispatch(item)
+ 	}
+ }
+@@ -569,12 +671,76 @@ func (m *Manager) dispatch(item queueItem) {
+ 	if len(plugins) == 0 {
+ 		return
+ 	}
++	// The request context is intentionally not retained in the queue; plugins
++	// receive a detached context because usage persistence must not be
++	// cancelled by downstream HTTP disconnects.
+ 	for _, plugin := range plugins {
+ 		if plugin == nil {
+ 			continue
+ 		}
+-		safeInvoke(plugin, item.ctx, item.record)
++		safeInvoke(plugin, context.Background(), item.record)
++	}
++}
++
++// recordWeight approximates the queued byte weight of a record.
++func recordWeight(record Record) int {
++	weight := 128 // struct baseline
++	for _, value := range []string{
++		record.RequestID, record.TraceID, record.Provider, record.BaseURL,
++		record.ExecutorType, record.Model, record.Alias, record.APIKey,
++		record.SessionID, record.ParentSessionID, record.AuthID, record.AuthIndex,
++		record.AccessTokenSHA256, record.AuthType, record.Source,
++		record.ReasoningEffort, record.ServiceTier, record.RequestServiceTier,
++		record.ResponseServiceTier, record.ResponseModel, record.Fail.Body,
++	} {
++		weight += len(value)
++	}
++	for key, values := range record.ResponseHeaders {
++		weight += len(key)
++		for _, value := range values {
++			weight += len(value)
++		}
++	}
++	return weight
++}
++
++// trimRecordForQueue bounds diagnostic payloads retained while queued:
++// failure bodies are cut to a fixed prefix and response-header snapshots are
++// trimmed to a total byte budget. Tokens, costs, identity and model fields
++// are preserved exactly so billing and dedup stay correct.
++func trimRecordForQueue(record *Record) {
++	if len(record.Fail.Body) > maxFailBodyBytes {
++		record.Fail.Body = record.Fail.Body[:maxFailBodyBytes] + "...[truncated]"
++	}
++	if record.ResponseHeaders == nil {
++		return
++	}
++	total := 0
++	for key, values := range record.ResponseHeaders {
++		total += len(key)
++		for _, value := range values {
++			total += len(value)
++		}
++	}
++	if total <= maxResponseHeaderData {
++		return
++	}
++	trimmed := make(http.Header, len(record.ResponseHeaders))
++	used := 0
++	for key, values := range record.ResponseHeaders {
++		if used+len(key) > maxResponseHeaderData {
++			break
++		}
++		used += len(key)
++		for _, value := range values {
++			if used+len(value) > maxResponseHeaderData {
++				break
++			}
++			used += len(value)
++			trimmed[key] = append(trimmed[key], value)
++		}
+ 	}
++	record.ResponseHeaders = trimmed
+ }
+ 
+ func safeInvoke(plugin Plugin, ctx context.Context, record Record) {
+
+Changes:
+
+internal/runtime/executor/antigravity_executor_credits.go
+  @@ -343,7 +343,11 @@ func antigravityHasExplicitCreditsBalanceExhaustedReason(body []byte) bool {
+  -func newAntigravityStatusErr(statusCode int, body []byte) statusErr {
+  +func newAntigravityStatusErr(statusCode int, body []byte) error {
+  +	// Natives: "user location is not supported" 属临时性区域限制，按可重试错误上报而非永久失败
+  +	if statusCode == http.StatusBadRequest && bytes.Contains(bytes.ToLower(body), []byte("user location is not supported")) {
+  +		return &cliproxyauth.Error{Message: string(body), Retryable: true, HTTPStatus: http.StatusServiceUnavailable}
+  +	}
+   	err := statusErr{code: statusCode, msg: string(body)}
+   	if statusCode == http.StatusTooManyRequests {
+   		if retryAfter, parseErr := helps.ParseRetryDelay(body); parseErr == nil && retryAfter != nil {
+  +5 -1
+
+internal/runtime/executor/antigravity_executor_credits_test.go
+  @@ -733,3 +733,16 @@ func TestParseMetaFloat(t *testing.T) {
+  +
+  +func TestNewAntigravityStatusErrTreatsUnsupportedLocationAsTransient(t *testing.T) {
+  +	err := newAntigravityStatusErr(http.StatusBadRequest, []byte(`{"error":{"message":"User location is not supported for the API use."}}`))
+  +	var authErr *cliproxyauth.Error
+  +	if !errors.As(err, &authErr) || authErr.StatusCode() != http.StatusServiceUnavailable || !authErr.Retryable {
+  +		t.Fatalf("error = %#v, want retryable status %d", err, http.StatusServiceUnavailable)
+  +	}
+  +	ordinary := newAntigravityStatusErr(http.StatusBadRequest, []byte(`{"error":{"message":"invalid request"}}`))
+  +	status, ok := ordinary.(interface{ StatusCode() int })
+  +	if !ok || status.StatusCode() != http.StatusBadRequest {
+  +		t.Fatalf("ordinary error = %#v, want status %d", ordinary, http.StatusBadRequest)
+  +	}
+  +}
+  +13 -0
+
+internal/runtime/executor/helps/payload_mutations_test.go
+  @@ -3,7 +3,6 @@ package helps
+  -	"os"
+   	"strings"
+   	"testing"
+   
+  @@ -282,17 +281,9 @@ func BenchmarkSetStringIfDifferentLargeCanonicalPayload(b *testing.B) {
+  -func TestConfigExampleDocumentsCodexAdditionalToolsPayloadFilter(t *testing.T) {
+  -	data, err := os.ReadFile("../../../../config.example.yaml")
+  -	if err != nil {
+  -		t.Fatalf("failed to read config.example.yaml: %v", err)
+  -	}
+  -	content := string(data)
+  -	const expectedPath = `'input.#(type=="additional_tools")#.tools.#(name=="functions")#.tools.#(name=="apply_patch")#'`
+  -	if !strings.Contains(content, expectedPath) {
+  -		t.Fatalf("config.example.yaml does not contain expected additional_tools path: %s", expectedPath)
+  -	}
+  -}
+  +// TestConfigExampleDocumentsCodexAdditionalToolsPayloadFilter is intentionally
+  +// absent in the Natives fork: it reads the upstream repo-root config.example.yaml,
+  +// which the trimmed fork layout excludes. See NATIVES_FORK.md.
+   
+   func TestApplyPayloadConfig_CodexAdditionalToolsFilter(t *testing.T) {
+   	cfg := &config.Config{
+  +3 -12
+
+sdk/cliproxy/natives_version.go
+  @@ -0,0 +1,5 @@
+  +package cliproxy
+  +
+  +// NativesKernelVersion identifies this vendored SDK at compile time.
+  +// The development updater regenerates it in the verified candidate tree.
+  +const NativesKernelVersion = "v8.0.28"
+  +5 -0
+
+sdk/cliproxy/static_models.go
+  @@ -0,0 +1,12 @@
+  +package cliproxy
+  +
+  +import (
+  +	"strings"
+  +
+  +	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
+  +)
+  +
+  +// StaticModelDefinitions returns static model definitions for a given channel/provider.
+  +func StaticModelDefinitions(provider string) []*ModelInfo {
+  +	return registry.GetStaticModelDefinitionsByChannel(strings.ToLower(strings.TrimSpace(provider)))
+  +}
+  +12 -0
+
+sdk/cliproxy/usage/manager.go
+  @@ -403,62 +403,113 @@ type Plugin interface {
+  -	ctx    context.Context
+  -	record Record
+  -}
+  +	record  Record
+  +	payload int // approximate queued byte weight of the record
+  +}
+  +
+  +// Queue budget constants. The constructor capacity must be real: Publish never
+  +// grows the queue beyond `buffer` items or `maxQueueBytes` total bytes. Records
+  +// waiting in the queue must not pin request contexts, oversized response bodies
+  +// or credential-bearing header values (Natives lifecycle plan L3/F1).
+  +const (
+  +	defaultQueueBuffer    = 512
+  +	maxQueueBytes         = 8 << 20 // 8 MiB total queued payload
+  +	maxFailBodyBytes      = 4 << 10 // 4 KiB diagnostic failure body prefix
+  +	maxResponseHeaderData = 8 << 10 // 8 KiB total response-header snapshot bytes
+  +)
+   
+  -// Manager maintains a queue of usage records and delivers them to registered plugins.
+  +// Manager maintains a bounded queue of usage records and delivers them to
+  +// registered plugins. The queue applies backpressure when full (Publish waits
+  +// until space frees or the manager is stopped) instead of growing without
+  +// bound; Stop drains pending records, joins the dispatcher and never allows
+  +// Publish to silently resurrect it.
+   type Manager struct {
+  -	once     sync.Once
+  -	stopOnce sync.Once
+  -	cancel   context.CancelFunc
+  +	cancel context.CancelFunc
+  +	buffer int
+   
+  -	mu     sync.Mutex
+  -	cond   *sync.Cond
+  -	queue  []queueItem
+  -	closed bool
+  +	mu      sync.Mutex
+  +	cond    *sync.Cond
+  +	queue   []queueItem
+  +	bytes   int
+  +	running bool
+  +	closed  bool
+  +	exited  chan struct{} // closed when the dispatcher goroutine fully returns
+   
+   	pluginsMu sync.RWMutex
+   	plugins   []Plugin
+   	named     map[string]int
+   }
+   
+  -// NewManager constructs a manager with a buffered queue.
+  +// NewManager constructs a manager with a bounded queue. Non-positive buffers
+  +// fall back to the 512-slot default.
+   func NewManager(buffer int) *Manager {
+  -	m := &Manager{}
+  +	if buffer <= 0 {
+  +		buffer = defaultQueueBuffer
+  +	}
+  +	m := &Manager{buffer: buffer}
+   	m.cond = sync.NewCond(&m.mu)
+   	return m
+   }
+   
+  -// Start launches the background dispatcher. Calling Start multiple times is safe.
+  +// Start launches the background dispatcher. Calling Start multiple times is
+  +// safe. Start after Stop re-opens the manager for gateway restarts; only
+  +// Publish may not resurrect a stopped dispatcher.
+   func (m *Manager) Start(ctx context.Context) {
+   	if m == nil {
+   		return
+   	}
+  -	m.once.Do(func() {
+  -		if ctx == nil {
+  -			ctx = context.Background()
+  -		}
+  -		var workerCtx context.Context
+  -		workerCtx, m.cancel = context.WithCancel(ctx)
+  -		go m.run(workerCtx)
+  -	})
+  +	m.mu.Lock()
+  +	if m.running {
+  +		m.mu.Unlock()
+  +		return
+  +	}
+  +	if ctx == nil {
+  +		ctx = context.Background()
+  +	}
+  +	var workerCtx context.Context
+  +	workerCtx, m.cancel = context.WithCancel(ctx)
+  +	m.running = true
+  +	m.closed = false
+  +	exited := make(chan struct{})
+  +	m.exited = exited
+  +	m.mu.Unlock()
+  +
+  +	go m.run(workerCtx, exited)
+   }
+   
+  -// Stop stops the dispatcher and drains the queue.
+  +// Stop stops the dispatcher, drains every queued record into the registered
+  +// plugins and joins the dispatcher goroutine before returning. Repeated or
+  +// concurrent Stop calls are safe and idempotent.
+  ... (33 lines truncated)
+  @@ -496,7 +547,12 @@ func (m *Manager) RegisterNamed(name string, plugin Plugin) {
+  -// the record will be discarded downstream.
+  +// the record will be discarded downstream. The queue is bounded: when full,
+  +// Publish applies cancellable backpressure (waiting on manager Stop or queue
+  +// space, never on the caller's request context, so a completed upstream
+  +// request's usage is not dropped by a downstream disconnect). A record
+  +// published after Stop is delivered synchronously to the still-registered
+  +// plugins instead of resurrecting the dispatcher.
+   func (m *Manager) Publish(ctx context.Context, record Record) {
+   	if m == nil {
+   		return
+  @@ -532,19 +588,62 @@ func (m *Manager) Publish(ctx context.Context, record Record) {
+  -	// ensure worker is running even if Start was not called explicitly
+  -	m.Start(context.Background())
+  +	// Bound record weight before queueing: diagnostic bodies and response
+  +	// header snapshots are trimmed; billing atoms (tokens, cost inputs,
+  +	// identity) are never altered.
+  +	trimRecordForQueue(&record)
+  +	payload := recordWeight(record)
+  +
+   	m.mu.Lock()
+  +	// ensure worker is running even if Start was not called explicitly,
+  +	// but never resurrect a manager that Stop already drained and closed.
+  +	if !m.running && !m.closed {
+  +		m.mu.Unlock()
+  +		m.Start(context.Background())
+  +		m.mu.Lock()
+  +	}
+   	if m.closed {
+  +		// Stopped manager: synchronous best-effort delivery to still-open
+  +		// plugins keeps late records persistable without a new dispatcher.
+   		m.mu.Unlock()
+  +		m.dispatch(queueItem{record: record, payload: payload})
+   		return
+   	}
+  -	m.queue = append(m.queue, queueItem{ctx: ctx, record: record})
+  +	for len(m.queue) >= m.buffer || m.bytes+payload > maxQueueBytes {
+  +		m.cond.Wait()
+  +		if m.closed {
+  +			m.mu.Unlock()
+  +			m.dispatch(queueItem{record: record, payload: payload})
+  +			return
+  +		}
+  +	}
+  +	m.queue = append(m.queue, queueItem{record: record, payload: payload})
+  +	m.bytes += payload
+   	m.mu.Unlock()
+   	m.cond.Signal()
+   }
+   
+  -func (m *Manager) run(ctx context.Context) {
+  +func (m *Manager) queueLength() int {
+  +	m.mu.Lock()
+  +	defer m.mu.Unlock()
+  +	return len(m.queue)
+  +}
+  +
+  +func (m *Manager) run(ctx context.Context, exited chan struct{}) {
+  +	defer func() {
+  +		m.mu.Lock()
+  +		remaining := m.queue
+  +		m.queue = nil
+  +		m.bytes = 0
+  +		m.mu.Unlock()
+  +		for _, item := range remaining {
+  +			m.dispatch(item)
+  +		}
+  +		// Only the dispatcher created with this exited channel closes it;
+  +		// a restarted manager installs a fresh channel, so a late return of
+  +		// a previous dispatcher can never double-close the new one.
+  +		close(exited)
+  +	}()
+   	for {
+   		m.mu.Lock()
+   		for !m.closed && len(m.queue) == 0 {
+  @@ -555,8 +654,11 @@ func (m *Manager) run(ctx context.Context) {
+  +		m.queue[0] = queueItem{} // release the consumed slot reference
+   		m.queue = m.queue[1:]
+  +		m.bytes -= item.payload
+   		m.mu.Unlock()
+  +		m.cond.Broadcast() // wake backpressure waiters
+   		m.dispatch(item)
+   	}
+   }
+  @@ -569,12 +671,76 @@ func (m *Manager) dispatch(item queueItem) {
+  +	// The request context is intentionally not retained in the queue; plugins
+  +	// receive a detached context because usage persistence must not be
+  +	// cancelled by downstream HTTP disconnects.
+   	for _, plugin := range plugins {
+   		if plugin == nil {
+   			continue
+   		}
+  -		safeInvoke(plugin, item.ctx, item.record)
+  +		safeInvoke(plugin, context.Background(), item.record)
+  +	}
+  +}
+  +
+  +// recordWeight approximates the queued byte weight of a record.
+  +func recordWeight(record Record) int {
+  +	weight := 128 // struct baseline
+  +	for _, value := range []string{
+  +		record.RequestID, record.TraceID, record.Provider, record.BaseURL,
+  +		record.ExecutorType, record.Model, record.Alias, record.APIKey,
+  +		record.SessionID, record.ParentSessionID, record.AuthID, record.AuthIndex,
+  +		record.AccessTokenSHA256, record.AuthType, record.Source,
+  +		record.ReasoningEffort, record.ServiceTier, record.RequestServiceTier,
+  +		record.ResponseServiceTier, record.ResponseModel, record.Fail.Body,
+  +	} {
+  +		weight += len(value)
+  +	}
+  +	for key, values := range record.ResponseHeaders {
+  +		weight += len(key)
+  +		for _, value := range values {
+  +			weight += len(value)
+  +		}
+  +	}
+  +	return weight
+  +}
+  +
+  +// trimRecordForQueue bounds diagnostic payloads retained while queued:
+  +// failure bodies are cut to a fixed prefix and response-header snapshots are
+  +// trimmed to a total byte budget. Tokens, costs, identity and model fields
+  +// are preserved exactly so billing and dedup stay correct.
+  +func trimRecordForQueue(record *Record) {
+  +	if len(record.Fail.Body) > maxFailBodyBytes {
+  +		record.Fail.Body = record.Fail.Body[:maxFailBodyBytes] + "...[truncated]"
+  +	}
+  +	if record.ResponseHeaders == nil {
+  +		return
+  +	}
+  +	total := 0
+  +	for key, values := range record.ResponseHeaders {
+  +		total += len(key)
+  +		for _, value := range values {
+  +			total += len(value)
+  +		}
+  +	}
+  +	if total <= maxResponseHeaderData {
+  +		return
+  +	}
+  +	trimmed := make(http.Header, len(record.ResponseHeaders))
+  +	used := 0
+  +	for key, values := range record.ResponseHeaders {
+  +		if used+len(key) > maxResponseHeaderData {
+  +			break
+  +		}
+  +		used += len(key)
+  +		for _, value := range values {
+  +			if used+len(value) > maxResponseHeaderData {
+  +				break
+  +			}
+  +			used += len(value)
+  +			trimmed[key] = append(trimmed[key], value)
+  +		}
+   	}
+  +	record.ResponseHeaders = trimmed
+   }
+   
+   func safeInvoke(plugin Plugin, ctx context.Context, record Record) {
+  +203 -37
+[full diff: rtk git diff --no-compact]

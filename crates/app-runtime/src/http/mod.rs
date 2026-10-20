@@ -4,27 +4,33 @@ pub(crate) use client::{handle_http_client, write_http};
 
 use app_runtime_core::error::{AppErrorBody, AppErrorCode};
 use app_runtime_core::framing::write_frame;
-use app_runtime_core::protocol::MAX_FRAME_BYTES;
 use app_runtime_core::protocol::AppResponse;
+use app_runtime_core::protocol::MAX_FRAME_BYTES;
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
-pub(crate) fn json_str(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 2);
-    for ch in s.chars() {
-        match ch {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
-            c => out.push(c),
-        }
+pub(crate) fn error_json(message: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(message)
+        .ok()
+        .filter(|v| v.is_object() && (v.get("error").is_some() || v.get("message").is_some()))
+        .unwrap_or_else(|| serde_json::json!({"error":message}))
+        .to_string()
+}
+
+#[cfg(test)]
+mod error_tests {
+    #[test]
+    fn module_errors_are_valid_json_and_keep_their_code() {
+        let msg = r#"{"error":"GROUP_PLAN_CONFLICT","message":"请刷新"}"#;
+        let value: serde_json::Value = serde_json::from_str(&super::error_json(msg)).unwrap();
+        assert_eq!(value["error"], "GROUP_PLAN_CONFLICT");
+        assert_eq!(value["message"], "请刷新");
+        let text = "quote \" and newline\n";
+        let value: serde_json::Value = serde_json::from_str(&super::error_json(text)).unwrap();
+        assert_eq!(value["error"], text);
     }
-    out
 }
 
 pub(crate) fn write_json_response<T: serde::Serialize>(
@@ -57,7 +63,12 @@ pub(crate) fn write_json_response<T: serde::Serialize>(
     }
 }
 
-pub(crate) fn write_error(id: &str, code: AppErrorCode, message: impl Into<String>, retryable: bool) {
+pub(crate) fn write_error(
+    id: &str,
+    code: AppErrorCode,
+    message: impl Into<String>,
+    retryable: bool,
+) {
     write_json_response::<serde_json::Value>(
         id,
         false,
@@ -88,27 +99,32 @@ pub(crate) fn apps_root() -> PathBuf {
         })
 }
 
-/// ADR-0032：默认绑定固定端口 8765（可用环境变量 `NATIVES_APP_RUNTIME_PORT`
-/// 覆盖，设为 `0` 强制动态端口）；默认端口被占用时回退动态端口（`:0`），
-/// 实际端口经 `StartResult.port` 上报。绑定始终限于 127.0.0.1。
+/// ADR-0035：Release App Runtime 统一绑定动态端口（127.0.0.1:0），废除固定 8765 抢占。
+/// 实际分配端口经 Native Messaging `app:start` 响应 `StartResult.port` 上报。
+/// 测试环境可通过环境变量 `NATIVES_APP_RUNTIME_PORT` 注入特定端口。
 pub(crate) fn bind_loopback_listener() -> std::io::Result<TcpListener> {
-    const DEFAULT_PORT: u16 = 8765;
     let port = std::env::var("NATIVES_APP_RUNTIME_PORT")
         .ok()
         .and_then(|v| v.trim().parse::<u16>().ok())
-        .unwrap_or(DEFAULT_PORT);
-    match TcpListener::bind(("127.0.0.1", port)) {
-        Ok(l) => Ok(l),
-        Err(e) if port != 0 && e.kind() == std::io::ErrorKind::AddrInUse => {
-            TcpListener::bind(("127.0.0.1", 0))
-        }
-        Err(e) => Err(e),
+        .unwrap_or(0);
+    TcpListener::bind(("127.0.0.1", port))
+}
+
+/// HTTP 并发槽的 RAII 守卫：请求线程异常返回（panic 等）也保证计数回落，
+/// 不让异常请求永久占用并发槽导致后续全部 503（L15）。
+struct HttpSlotGuard;
+
+impl Drop for HttpSlotGuard {
+    fn drop(&mut self) {
+        crate::ACTIVE_HTTP_REQUESTS.fetch_sub(1, Ordering::SeqCst);
     }
 }
 
 pub(crate) fn serve_loopback_http(listener: TcpListener, shutdown: Arc<AtomicBool>) {
     for stream in listener.incoming() {
         if shutdown.load(Ordering::SeqCst) {
+            // 关闭路径的唤醒连接或迟到连接：不再处理，直接丢弃。
+            drop(stream);
             break;
         }
         match stream {
@@ -129,8 +145,8 @@ pub(crate) fn serve_loopback_http(listener: TcpListener, shutdown: Arc<AtomicBoo
                 }
                 crate::ACTIVE_HTTP_REQUESTS.fetch_add(1, Ordering::SeqCst);
                 std::thread::spawn(move || {
+                    let _slot = HttpSlotGuard;
                     handle_http_client(s);
-                    crate::ACTIVE_HTTP_REQUESTS.fetch_sub(1, Ordering::SeqCst);
                 });
             }
             Err(_) => break,

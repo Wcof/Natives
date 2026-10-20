@@ -1,0 +1,59 @@
+{
+  "status": "ready",
+  "byModel": [
+    {
+      "key": "anthropic/claude-3-5-sonnet",
+      "name": "claude-3-5-sonnet",
+      "requests": 90,
+      "tokens": 1800000,
+      "costUsd": 1.12,
+      "percent": 75.4
+    },
+    {
+      "key": "openai/gpt-4o",
+      "name": "gpt-4o",
+      "requests": 38,
+      "tokens": 650000,
+      "costUsd": 0.3652,
+      "percent": 24.6
+    }
+  ],
+  "byProvider": [
+    {
+      "key": "anthropic",
+      "name": "Anthropic",
+      "requests": 90,
+      "tokens": 1800000,
+      "costUsd": 1.12,
+      "percent": 75.4
+    },
+    {
+      "key": "openai",
+      "name": "OpenAI",
+      "requests": 38,
+      "tokens": 650000,
+      "costUsd": 0.3652,
+      "percent": 24.6
+    }
+  ],
+  "bySource": [
+    {
+      "key": "Claude Code",
+      "name": "Claude Code",
+      "requests": 80,
+      "tokens": 1600000,
+      "costUsd": 0.98,
+      "percent": 66.0
+    },
+    {
+      "key": "ZCode",
+      "name": "ZCode",
+      "requests": 48,
+      "tokens": 850000,
+      "costUsd": 0.5052,
+      "percent": 34.0
+    }
+  ],
+  "byAccessKey": [],
+  "byHour": []
+}

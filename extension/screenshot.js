@@ -1,6 +1,19 @@
 import { ScreenshotStitcher } from './screenshot-stitcher.js';
 import { sanitizeFilename } from './screenshot-engine.js';
 
+// DES 02/D07：辅助页外壳跟随产品 natives-theme 偏好。缺偏好／非法值回
+// Archive；每个 document 只注册一次 storage 订阅，无轮询。仅改外壳配色，
+// 不影响截图像素、拼接或保存语义。
+function applyProductTheme(theme) {
+  document.documentElement.dataset.theme = theme === 'volt' ? 'volt' : 'archive';
+}
+try {
+  chrome.storage?.local?.get?.('natives-theme').then(({ 'natives-theme': theme } = {}) => applyProductTheme(theme)).catch(() => {});
+  chrome.storage?.onChanged?.addListener((changes, area) => {
+    if (area === 'local' && changes['natives-theme']) applyProductTheme(changes['natives-theme'].newValue);
+  });
+} catch (e) { /* storage 不可用时保持 :root 默认（Archive） */ }
+
 function t(key, subs) {
   return chrome.i18n?.getMessage?.(key, subs) || key;
 }

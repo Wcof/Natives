@@ -9,7 +9,6 @@
 //! signature and per-file SHA-256 before anything on the user side changes.
 
 use super::mutation::{bump_revision, lock_error, now_millis, AppStore};
-use super::query;
 use super::types::AppError;
 use crate::{app_activation, app_files};
 use rusqlite::{params, OptionalExtension};
@@ -19,6 +18,64 @@ use std::path::PathBuf;
 
 pub const PRODUCT_MANIFEST_NAME: &str = "product-manifest.json";
 pub const PRODUCT_MANIFEST_SIGNATURE_NAME: &str = "product-manifest.sig";
+
+fn verify_declared_capabilities(
+    entry: &serde_json::Value,
+    descriptor: &crate::app_product::FixedModule,
+) -> Result<(), AppError> {
+    for (field, compiled) in [
+        ("capabilities", descriptor.capabilities_json),
+        ("requires", descriptor.requires_json),
+        ("views", descriptor.views_json),
+    ] {
+        let values: Vec<String> =
+            serde_json::from_value(entry.get(field).cloned().unwrap_or(serde_json::json!([])))
+                .map_err(|_| AppError::PackageInvalid(format!("invalid module {field}")))?;
+        let expected: Vec<String> = serde_json::from_str(compiled)
+            .expect("compiled module capabilities are validated by the build");
+        let actual = values.iter().collect::<std::collections::BTreeSet<_>>();
+        if actual.len() != values.len()
+            || actual != expected.iter().collect::<std::collections::BTreeSet<_>>()
+        {
+            return Err(AppError::PackageInvalid(format!(
+                "module {} {field} does not match the compiled descriptor",
+                descriptor.app_id
+            )));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+#[test]
+fn signed_capabilities_cannot_omit_add_or_duplicate_compiled_grants() {
+    let descriptor = crate::app_product::FIXED_MODULES
+        .iter()
+        .find(|module| module.app_id == "fund")
+        .unwrap();
+    let mut entry = serde_json::json!({
+        "capabilities": serde_json::from_str::<serde_json::Value>(descriptor.capabilities_json).unwrap(),
+        "requires": serde_json::from_str::<serde_json::Value>(descriptor.requires_json).unwrap(),
+        "views": serde_json::from_str::<serde_json::Value>(descriptor.views_json).unwrap(),
+    });
+    assert!(verify_declared_capabilities(&entry, descriptor).is_ok());
+    let original = entry.clone();
+    entry["capabilities"] = serde_json::json!([]);
+    assert!(verify_declared_capabilities(&entry, descriptor).is_err());
+    entry = original.clone();
+    entry["capabilities"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!("unknown.grant"));
+    assert!(verify_declared_capabilities(&entry, descriptor).is_err());
+    entry = original;
+    let duplicate = entry["capabilities"][0].clone();
+    entry["capabilities"]
+        .as_array_mut()
+        .unwrap()
+        .push(duplicate);
+    assert!(verify_declared_capabilities(&entry, descriptor).is_err());
+}
 
 #[derive(Serialize, Debug)]
 pub struct ProductStatus {
@@ -78,7 +135,7 @@ fn current_platform() -> (&'static str, &'static str) {
 impl AppStore {
     /// Read and fully verify the signed product manifest from the trusted
     /// system source. Nothing outside the source directory is touched.
-    fn read_source_manifest(&self) -> Result<(serde_json::Value, PathBuf), AppError> {
+    pub(super) fn read_source_manifest(&self) -> Result<(serde_json::Value, PathBuf), AppError> {
         let source = self.product_source();
         let manifest_path = source.join(PRODUCT_MANIFEST_NAME);
         let bytes = std::fs::read(&manifest_path)
@@ -117,24 +174,34 @@ impl AppStore {
                 "APP_PACKAGE_INVALID: product manifest has no modules".into(),
             ));
         }
+        for entry in manifest["modules"].as_array().unwrap() {
+            if let Some(descriptor) = crate::app_product::FIXED_MODULES
+                .iter()
+                .find(|module| entry["appId"].as_str() == Some(module.app_id))
+            {
+                verify_declared_capabilities(entry, descriptor)?;
+            }
+        }
         Ok((manifest, source))
     }
 
     fn product_meta(&self) -> Result<(String, u64), AppError> {
-        self.with_conn(|conn| {
-            let read = |key: &str| -> Result<Option<String>, AppError> {
-                conn.query_row("SELECT value FROM app_meta WHERE key = ?1", [key], |row| {
-                    row.get::<_, String>(0)
-                })
-                .optional()
-                .map_err(AppError::Sql)
-            };
-            let version = read("product_version")?.unwrap_or_default();
-            let generation = read("product_generation")?
-                .and_then(|value| value.parse::<u64>().ok())
-                .unwrap_or(0);
-            Ok((version, generation))
-        })
+        let receipt = app_activation::read_product_activation_receipt(self.app_root())?;
+        Ok(receipt
+            .map(|value| {
+                (
+                    value
+                        .get("productVersion")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default()
+                        .to_string(),
+                    value
+                        .get("productGeneration")
+                        .and_then(serde_json::Value::as_u64)
+                        .unwrap_or(0),
+                )
+            })
+            .unwrap_or_default())
     }
 
     /// Read-only product configuration status for settings and the center.
@@ -161,35 +228,30 @@ impl AppStore {
             ),
             Err(_) => (String::new(), None),
         };
-        // D09：就绪需要当前证据（载荷目录 + activation 投影仍在），
-        // 相同清单快路径也不能掩盖文件/注册丢失。
-        let evidence_ok = generation > 0
-            && self
-                .with_conn(|conn| {
-                    Ok(query::apps(conn, Some(self.app_root()))?.iter().all(|app| {
-                        app.host_registered
-                            && crate::app_activation::read_activation_projection(
-                                self.app_root(),
-                                &app.app_id,
-                            )
-                            .ok()
-                            .flatten()
-                            .is_some()
-                    }))
-                })
-                .unwrap_or(false);
+        let receipt = crate::app_activation::read_product_activation_receipt(self.app_root())
+            .ok()
+            .flatten();
+        let evidence_ok = receipt.as_ref().is_some_and(|receipt| {
+            receipt
+                .get("productGeneration")
+                .and_then(serde_json::Value::as_u64)
+                == Some(generation)
+                && receipt
+                    .get("modules")
+                    .and_then(serde_json::Value::as_object)
+                    .is_some_and(|modules| {
+                        modules.len() == crate::app_product::FIXED_MODULES.len()
+                            && crate::app_product::FIXED_MODULES
+                                .iter()
+                                .all(|module| modules.contains_key(module.app_id))
+                    })
+        });
         let configured = generation > 0 && evidence_ok && !version.is_empty();
-        // applied manifest hash：与 applied 版本一起写入 app_meta。
-        let applied_manifest_sha = self.with_conn(|conn| {
-            Ok(conn
-                .query_row(
-                    "SELECT value FROM app_meta WHERE key = 'product_manifest_sha256'",
-                    [],
-                    |row| row.get::<_, String>(0),
-                )
-                .optional()
-                .map_err(AppError::Sql)?)
-        })?;
+        let applied_manifest_sha = receipt
+            .as_ref()
+            .and_then(|value| value.get("productManifestSha256"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string);
         let integrity_valid = configured
             && source_manifest_sha.is_some()
             && applied_manifest_sha == source_manifest_sha;
@@ -233,17 +295,6 @@ impl AppStore {
             })?
             .to_string();
         let (configured_version, configured_generation) = self.product_meta()?;
-        // 上一代已应用的 manifest 哈希：Phase 4 失败时恢复用（计划 §25.5）。
-        let previous_manifest_sha: Option<String> = self.with_conn(|conn| {
-            Ok(conn
-                .query_row(
-                    "SELECT value FROM app_meta WHERE key = 'product_manifest_sha256'",
-                    [],
-                    |row| row.get::<_, String>(0),
-                )
-                .optional()
-                .map_err(AppError::Sql)?)
-        })?;
         if configured_generation > 0
             && version_tuple(&configured_version) > version_tuple(&product_version)
         {
@@ -252,16 +303,27 @@ impl AppStore {
             )));
         }
         if configured_generation > 0 && configured_version == product_version {
-            let applied_manifest = self.with_conn(|conn| {
-                conn.query_row(
-                    "SELECT value FROM app_meta WHERE key = 'product_manifest_sha256'",
-                    [],
-                    |row| row.get::<_, String>(0),
-                )
-                .optional()
-                .map_err(AppError::Sql)
-            })?;
-            if applied_manifest.as_deref() == Some(manifest_sha.as_str()) {
+            let applied_manifest = app_activation::read_product_activation_receipt(
+                self.app_root(),
+            )?
+            .and_then(|value| {
+                value
+                    .get("productManifestSha256")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string)
+            });
+            // Origin 漂移不算「已应用」：同版同清单但回执 allowedOrigins 不含
+            // 当前请求方（扩展 ID 变更）时必须重写回执，否则 runtime 握手
+            // 永远 APP_SESSION_INVALID（manifest 内容本身不含 origin）。
+            let origin_current = app_activation::read_product_activation_receipt(self.app_root())?
+                .and_then(|value| {
+                    value
+                        .get("allowedOrigins")
+                        .and_then(serde_json::Value::as_array)
+                        .map(|items| items.iter().filter_map(|i| i.as_str()).any(|s| s == origin))
+                })
+                .unwrap_or(false);
+            if applied_manifest.as_deref() == Some(manifest_sha.as_str()) && origin_current {
                 // Identical already-applied manifest: no-op, same generation.
                 return self.product_status();
             }
@@ -356,19 +418,12 @@ impl AppStore {
                     "APP_PACKAGE_INVALID: failed to read appRuntime executable: {e}"
                 ))
             })?;
-            let mut effective_runtime_sha = runtime_sha.to_string();
+            let effective_runtime_sha = runtime_sha.to_string();
             let actual_runtime_sha = hex_sha256(&runtime_bytes);
             if actual_runtime_sha != runtime_sha {
-                if !crate::app_signing::is_production_build() {
-                    // 开发环境自愈机制：在日常开发（local）模式下，若二进制发生变更，
-                    // 自动接受实际二进制哈希，避免频繁中断开发调试或弹出密封阻断提示。
-                    effective_runtime_sha = actual_runtime_sha;
-                } else {
-                    return Err(AppError::PackageInvalid(
-                        "appRuntime payload hash mismatch against the signed product manifest"
-                            .into(),
-                    ));
-                }
+                return Err(AppError::PackageInvalid(
+                    "appRuntime payload hash mismatch against the signed product manifest".into(),
+                ));
             }
             app_activation::make_executable(&runtime_exe)?;
             let runtime_host =
@@ -408,13 +463,23 @@ impl AppStore {
             // -----------------------------------------------------------------
             struct PreparedModule {
                 app_id: String,
-                version: String,
-                name_zh: String,
-                runtime_spec: serde_json::Value,
                 enabled: bool,
                 show_in_sidebar: bool,
                 sidebar_order: i64,
                 projection: serde_json::Value,
+            }
+            let manifest_ids = entries
+                .iter()
+                .filter_map(|entry| entry.get("appId").and_then(serde_json::Value::as_str))
+                .collect::<std::collections::BTreeSet<_>>();
+            let registry_ids = crate::app_product::FIXED_MODULES
+                .iter()
+                .map(|module| module.app_id)
+                .collect::<std::collections::BTreeSet<_>>();
+            if manifest_ids != registry_ids || manifest_ids.len() != entries.len() {
+                return Err(AppError::PackageInvalid(
+                    "product manifest module IDs do not match the compiled module registry".into(),
+                ));
             }
             let mut prepared = Vec::new();
             for entry in entries {
@@ -425,20 +490,25 @@ impl AppStore {
                         AppError::InvalidState("APP_PACKAGE_INVALID: module appId missing".into())
                     })?;
                 app_files::validate_identifier(app_id, "app id")?;
+                let descriptor = crate::app_product::FIXED_MODULES
+                    .iter()
+                    .find(|module| module.app_id == app_id)
+                    .expect("registry equality checked");
+                for (field, expected) in [
+                    ("moduleApiVersion", descriptor.module_api_version),
+                    ("dataSchemaVersion", descriptor.data_schema_version),
+                    ("capabilityVersion", descriptor.capability_version),
+                ] {
+                    if entry.get(field).and_then(serde_json::Value::as_u64) != Some(expected) {
+                        return Err(AppError::PackageInvalid(format!(
+                            "module {app_id} {field} does not match the compiled descriptor"
+                        )));
+                    }
+                }
                 let version = entry
                     .get("version")
                     .and_then(serde_json::Value::as_str)
                     .unwrap_or(&product_version);
-                let default_route = format!("app.html?app={app_id}");
-                let entry_route = entry
-                    .get("entryRoute")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or(&default_route);
-                let name = entry.get("name").cloned().unwrap_or(serde_json::json!({}));
-                let name_zh = name
-                    .get("zh_CN")
-                    .and_then(serde_json::Value::as_str)
-                    .unwrap_or(app_id);
 
                 // Module UI tree 强校验（计划 §20.2/§21）：签名清单声明的
                 // ui.treeSha256 必须与系统源内真实 UI 资源树一致。
@@ -455,15 +525,9 @@ impl AppStore {
                         app_files::validate_app_path(&source, &ui_dir)?;
                         match crate::app_tree_hash::tree_sha256(&ui_dir)? {
                             Some(actual) if actual == expected_tree => {}
-                            Some(actual) => {
-                                if !crate::app_signing::is_production_build() {
-                                    // 开发环境自愈：UI 变动在 dev 模式下放行，避免阻断
-                                } else {
-                                    return Err(AppError::PackageInvalid(format!(
-                                        "module {app_id} UI tree hash mismatch against the signed product manifest (expected {expected_tree}, got {actual})"
-                                    )));
-                                }
-                            }
+                            Some(actual) => return Err(AppError::PackageInvalid(format!(
+                                "module {app_id} UI tree hash mismatch against the signed product manifest (expected {expected_tree}, got {actual})"
+                            ))),
                             None => {
                                 return Err(AppError::PackageInvalid(format!(
                                     "module {app_id} UI tree missing from the verified system source"
@@ -476,7 +540,7 @@ impl AppStore {
                 // 只读读取用户偏好与激活代数（不改正式状态）。
                 let preference = self.with_conn(|conn| {
                     conn.query_row(
-                        "SELECT enabled, show_in_sidebar, sidebar_order FROM apps WHERE app_id = ?1",
+                        "SELECT enabled, show_in_sidebar, sidebar_order FROM builtin_app_preferences WHERE app_id = ?1",
                         [app_id],
                         |row| {
                             Ok((
@@ -493,37 +557,31 @@ impl AppStore {
                     preference.unwrap_or((1, 1, 0));
                 let enabled = enabled_i64 != 0;
                 let show_in_sidebar = show_in_sidebar_i64 != 0;
-                let runtime_spec = serde_json::json!({
-                    "host": runtime_host,
-                    "version": version,
-                    "entryRoute": entry_route,
-                });
-                let activation_generation =
-                    app_activation::next_activation_generation(self.app_root(), app_id);
+                let ui_tree_sha = entry
+                    .get("ui")
+                    .and_then(|u| u.get("treeSha256"))
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or("");
                 let projection = serde_json::json!({
-                    "receiptVersion": 2,
+                    "receiptVersion": 3,
                     "appId": app_id,
                     "productVersion": product_version,
-                    "productGeneration": {
-                        "activationGeneration": activation_generation
-                    },
                     "runtimeHost": runtime_host,
                     "appProtocolVersion": 2,
                     "appRuntimeSha256": effective_runtime_sha,
                     "moduleApiVersion": entry.get("moduleApiVersion").cloned().unwrap_or(serde_json::json!(1)),
                     "dataSchemaVersion": entry.get("dataSchemaVersion").cloned().unwrap_or(serde_json::json!(1)),
                     "capabilityVersion": entry.get("capabilityVersion").cloned().unwrap_or(serde_json::json!(1)),
+                    "uiTreeSha256": ui_tree_sha,
+                    "capabilities": entry.get("capabilities").cloned().unwrap_or(serde_json::json!([])),
+                    "requires": entry.get("requires").cloned().unwrap_or(serde_json::json!([])),
+                    "views": entry.get("views").cloned().unwrap_or(serde_json::json!([])),
+                    "optionalActions": entry.get("optionalActions").cloned().unwrap_or(serde_json::json!([])),
                     "activeVersion": version,
-                    "generation": activation_generation,
-                    "activationState": if enabled { "ready" } else { "disabled" },
-                    "enabled": enabled,
                     "allowedOrigins": [origin.clone()],
                 });
                 prepared.push(PreparedModule {
                     app_id: app_id.to_string(),
-                    version: version.to_string(),
-                    name_zh: name_zh.to_string(),
-                    runtime_spec,
                     enabled,
                     show_in_sidebar,
                     sidebar_order,
@@ -532,56 +590,49 @@ impl AppStore {
             }
 
             // -----------------------------------------------------------------
-            // Phase 3: DB Transaction（一次事务写全部 app projections + 产品 meta，
-            // 计划 §25.3：多模块配置必须原子，禁止半 generation）
+            // Phase 3: Atomically Commit Product Activation Receipt v3 (.next -> rename)
+            // 必须在任何 DB 修改前完成单文件原子切换；若失败，DB 保持干净且无任何文件变更
+            // -----------------------------------------------------------------
+            let next_generation = app_activation::next_product_generation(self.app_root());
+            let mut modules_map = serde_json::Map::new();
+            for module in &prepared {
+                modules_map.insert(module.app_id.clone(), module.projection.clone());
+            }
+            let product_receipt = serde_json::json!({
+                "receiptVersion": 3,
+                "productVersion": product_version,
+                "productGeneration": next_generation,
+                "productManifestSha256": manifest_sha,
+                "runtime": {
+                    "host": runtime_host,
+                    "protocolVersion": 2,
+                    "sha256": effective_runtime_sha,
+                },
+                "modules": modules_map,
+                "allowedOrigins": [origin.clone()],
+            });
+            app_activation::write_product_activation_receipt(self.app_root(), &product_receipt)?;
+
+            // -----------------------------------------------------------------
+            // Phase 4: DB Transaction（写入用户偏好与产品元数据，绑定同一 productGeneration）
             // -----------------------------------------------------------------
             self.with_conn(|conn| {
                 let tx = conn.unchecked_transaction()?;
                 let now = now_millis();
                 for module in &prepared {
                     tx.execute(
-                        "INSERT INTO apps (app_id, kind, name, version, enabled, show_in_sidebar, sidebar_order,
-                            runtime_spec_json, surface_json, manifest_json, installed_at, updated_at, revision, host_registered, needs_migration)
-                         VALUES (?1, 'managed_local', ?2, ?3, ?4, ?5, ?6, ?7, '{}', '{}', ?8, ?8, 0, 1, 0)
+                        "INSERT INTO builtin_app_preferences (app_id, enabled, show_in_sidebar, sidebar_order, updated_at, revision)
+                         VALUES (?1, ?2, ?3, ?4, ?5, 0)
                          ON CONFLICT(app_id) DO UPDATE SET
-                            kind = 'managed_local',
-                            name = excluded.name,
-                            version = excluded.version, host_registered = 1, needs_migration = 0,
-                            runtime_spec_json = excluded.runtime_spec_json, updated_at = excluded.updated_at,
+                            updated_at = excluded.updated_at,
                             revision = revision + 1",
                         params![
                             module.app_id,
-                            module.name_zh,
-                            module.version,
                             module.enabled,
                             module.show_in_sidebar,
                             module.sidebar_order,
-                            module.runtime_spec.to_string(),
                             now,
                         ],
-                    )
-                    .map_err(AppError::Sql)?;
-                }
-                let generation: u64 = tx
-                    .query_row(
-                        "SELECT value FROM app_meta WHERE key = 'product_generation'",
-                        [],
-                        |row| row.get::<_, String>(0),
-                    )
-                    .optional()
-                    .map_err(AppError::Sql)?
-                    .and_then(|value| value.parse::<u64>().ok())
-                    .unwrap_or(0)
-                    + 1;
-                for (key, value) in [
-                    ("product_generation", generation.to_string()),
-                    ("product_version", product_version.clone()),
-                    ("product_manifest_sha256", manifest_sha.clone()),
-                ] {
-                    tx.execute(
-                        "INSERT INTO app_meta (key, value, revision) VALUES (?1, ?2, 0)
-                         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                        params![key, value],
                     )
                     .map_err(AppError::Sql)?;
                 }
@@ -591,59 +642,21 @@ impl AppStore {
             })?;
 
             // -----------------------------------------------------------------
-            // Phase 4: Commit File Receipts（原子 rename activation.json + legacy
-            // 清理；失败恢复上一 generation，计划 §25.4/§25.5）
+            // Phase 5: Clean Legacy Paths（清理旧版 runtime 目录与 per-app activation 文件）
             // -----------------------------------------------------------------
-            let receipt_result: Result<(), AppError> = (|| {
-                for module in &prepared {
-                    app_activation::write_activation_projection(
-                        self.app_root(),
-                        &module.app_id,
-                        &module.projection,
-                    )?;
-                    // 清理旧版 legacy 目录与旧 manifest
-                    let _ = std::fs::remove_dir_all(
-                        self.app_root().join(&module.app_id).join("runtime"),
-                    );
-                    app_activation::clean_legacy_runtime_hosts(&manifest_dir, &[&module.app_id]);
-                }
-                Ok(())
-            })();
-            if let Err(error) = receipt_result {
-                // 恢复上一 generation 的产品 meta，使 DB 与未写完的文件证据一致
-                // （下一次同源 configure 可完整重试）。
-                let restore_meta: Result<(), AppError> = self.with_conn(|conn| {
-                    let tx = conn.unchecked_transaction()?;
-                    for (key, value) in [
-                        ("product_generation", configured_generation.to_string()),
-                        ("product_version", configured_version.clone()),
-                        (
-                            "product_manifest_sha256",
-                            previous_manifest_sha.clone().unwrap_or_default(),
-                        ),
-                    ] {
-                        tx.execute(
-                            "INSERT INTO app_meta (key, value, revision) VALUES (?1, ?2, 0)
-                             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-                            params![key, value],
-                        )
-                        .map_err(AppError::Sql)?;
-                    }
-                    bump_revision(&tx)?;
-                    tx.commit()?;
-                    Ok(())
-                });
-                if let Err(restore_error) = restore_meta {
-                    eprintln!(
-                        "configure_product: failed to restore previous product meta after receipt failure: {restore_error}"
-                    );
-                }
-                return Err(error);
+            for module in &prepared {
+                let _ =
+                    std::fs::remove_dir_all(self.app_root().join(&module.app_id).join("runtime"));
+                // v3 成功后删除旧 v2 per-app activation.json，防止继续读取
+                let _ = std::fs::remove_file(
+                    self.app_root().join(&module.app_id).join("activation.json"),
+                );
+                app_activation::clean_legacy_runtime_hosts(&manifest_dir, &[&module.app_id]);
             }
 
             // -----------------------------------------------------------------
-            // Phase 5: Mark Product Ready（appliedVersion/appliedGeneration 已
-            // 随 Phase 3 提交，文件证据随 Phase 4 落地；返回当前状态）
+            // Phase 6: Mark Product Ready（appliedVersion/appliedGeneration 随
+            // Phase 4 提交，v3 Receipt 随 Phase 3 落地；返回当前状态）
             // -----------------------------------------------------------------
             self.product_status()
         } else {

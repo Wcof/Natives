@@ -1,22 +1,18 @@
 /* App Center (settings-level surface, ADR-0025 D40/D41).
-   Reuses the same CSS tokens as files.css / space.css; no new palette. */
+   基础角色由 theme.css（产品单源）定义；此处仅别名投影（DES 02），
+   不复制品牌 HEX。--radius 属 Apps 布局，保留本地值。 */
 :root {
-  --text:#f2f2ea; --muted:#9b9d8c; --surface:#0b0c0a; --surface-2:#131410;
-  --line:#2a2b24; --hover:#ffffff12; --selected:#cdf24b1f; --accent:#cdf24b;
-  --accent-strong:#ddff69; --on-accent:#0b0c0a; --danger:#ff7f8f;
-  --warning:#e6c07b; --backdrop:#000a; --shadow:0 10px 40px #0009;
-  --radius:4px; --font:-apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI",sans-serif;
-}
-[data-theme="archive"] {
-  --text:#1a1a18; --muted:#6b6355; --surface:#f5f0e8; --surface-2:#faf6ef;
-  --line:#e2d9c8; --hover:#00000010; --selected:#cc785c22; --accent:#cc785c;
-  --accent-strong:#b8664d; --on-accent:#fffaf3; --danger:#a72e2e;
-  --warning:#c2893a; --backdrop:#2b241d80; --shadow:0 14px 44px #5a422a2e;
-  --radius:9px;
+  --bg:var(--natives-bg); --text:var(--natives-text-primary); --muted:var(--natives-text-muted);
+  --surface:var(--natives-surface); --surface-2:var(--natives-surface-2); --surface-3:var(--natives-surface-3);
+  --line:var(--natives-border); --hover:var(--natives-surface-3); --selected:var(--natives-selected);
+  --accent:var(--natives-accent); --accent-strong:var(--natives-accent-strong); --on-accent:var(--natives-on-accent);
+  --danger:var(--natives-danger); --on-danger:var(--natives-on-danger); --success:var(--natives-ok); --warning:var(--natives-warning);
+  --backdrop:var(--natives-backdrop); --shadow:var(--natives-shadow);
+  --radius:4px; --font:var(--natives-font);
 }
 html, body { height:100%; }
 body {
-  margin:0; overflow:hidden; display:flex; background:var(--surface);
+  margin:0; overflow:hidden; display:flex; background:var(--bg);
   color:var(--text); font-family:var(--font); font-size:13px; line-height:1.5;
 }
 .icon { width:16px; height:16px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; flex:none; }
@@ -308,7 +304,7 @@ body.apps-sidebar-collapsed .apps-expand-btn { display:flex; }
 .abl-progress-shimmer {
   position: absolute;
   inset: 0;
-  background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.45) 50%, transparent 100%);
+  background: linear-gradient(90deg, transparent 0%, color-mix(in srgb, var(--on-accent) 45%, transparent) 50%, transparent 100%);
   animation: abl-shimmer 2.2s linear infinite;
   pointer-events: none;
 }
@@ -478,3 +474,6 @@ button.action.danger:hover { border-color:var(--danger); color:var(--danger); }
   .app-card .actions .status { width:100%; }
   .apps-notice { flex-wrap:wrap; }
 }
+
+/* Module settings belong to the active embedded surface. */
+body:has(#app-stage[hidden]) #app-module-settings { display: none; }

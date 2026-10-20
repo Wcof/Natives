@@ -1,6 +1,6 @@
 use super::Controller;
 use crate::http::{write_error, write_json_response};
-use crate::{CONTROLLER_STATE, ControllerState};
+use crate::{ControllerState, CONTROLLER_STATE};
 use app_runtime_core::error::AppErrorCode;
 use app_runtime_core::protocol::AppRequest;
 use std::sync::atomic::Ordering;
@@ -8,15 +8,20 @@ use std::sync::atomic::Ordering;
 impl Controller {
     pub(super) fn handle_session(&self, req: &AppRequest) {
         let op = req.params.get("op").and_then(|v| v.as_str()).unwrap_or("");
+        let surface_id = req
+            .params
+            .get("surfaceId")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         let challenge = req
             .params
             .get("challenge")
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        let sessions = {
+        let (sessions, service) = {
             let state = CONTROLLER_STATE.lock().unwrap();
             match &*state {
-                ControllerState::Ready(ready) => ready.sessions.clone(),
+                ControllerState::Ready(ready) => (ready.sessions.clone(), ready.service.clone()),
                 _ => {
                     drop(state);
                     write_error(
@@ -42,7 +47,7 @@ impl Controller {
             }
         };
         match op {
-            "issue" => match sessions_guard.issue(challenge) {
+            "issue" => match sessions_guard.issue_for_surface(surface_id, challenge) {
                 Ok(res) => write_json_response(
                     &req.id,
                     true,
@@ -57,21 +62,30 @@ impl Controller {
                     write_json_response::<serde_json::Value>(&req.id, false, None, Some(err))
                 }
             },
-            "rotate" => match sessions_guard.rotate() {
-                Ok(gen) => write_json_response(
-                    &req.id,
-                    true,
-                    Some(serde_json::json!({
-                        "generation": gen
-                    })),
-                    None,
-                ),
-                Err(err) => {
-                    write_json_response::<serde_json::Value>(&req.id, false, None, Some(err))
+            "rotate" => {
+                let result = sessions_guard.rotate_surface(surface_id);
+                drop(sessions_guard);
+                if result.is_ok() {
+                    service.release_surface(surface_id);
                 }
-            },
-            "revoke" => {
-                sessions_guard.revoke();
+                match result {
+                    Ok(gen) => write_json_response(
+                        &req.id,
+                        true,
+                        Some(serde_json::json!({
+                            "generation": gen
+                        })),
+                        None,
+                    ),
+                    Err(err) => {
+                        write_json_response::<serde_json::Value>(&req.id, false, None, Some(err))
+                    }
+                }
+            }
+            "revoke" | "revoke_surface" => {
+                sessions_guard.revoke_surface(surface_id);
+                drop(sessions_guard);
+                service.release_surface(surface_id);
                 write_json_response(
                     &req.id,
                     true,

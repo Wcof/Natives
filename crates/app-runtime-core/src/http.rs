@@ -56,7 +56,27 @@ impl HttpRequest {
                     "invalid HTTP header",
                 ));
             };
-            headers.insert(name.trim().to_ascii_lowercase(), value.trim().to_string());
+            if name.is_empty()
+                || !name
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b"!#$%&'*+-.^_`|~".contains(&b))
+                || value.bytes().any(|b| b < 32 && b != b'\t' || b == 127)
+                || headers
+                    .insert(name.to_ascii_lowercase(), value.trim().to_string())
+                    .is_some()
+            {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "ambiguous HTTP header",
+                ));
+            }
+        }
+        // These bounded, connection-closing servers only support Content-Length framing.
+        if headers.contains_key("transfer-encoding") {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "unsupported transfer encoding",
+            ));
         }
         let content_length = headers
             .get("content-length")
@@ -116,7 +136,7 @@ pub fn write_response(
     body: &[u8],
     csp: &str,
 ) -> io::Result<()> {
-    let cors = "Access-Control-Allow-Origin: null\r\nAccess-Control-Allow-Methods: GET, POST\r\nAccess-Control-Allow-Headers: Authorization, Content-Type\r\n";
+    let cors = "Access-Control-Allow-Origin: null\r\nAccess-Control-Allow-Methods: GET, POST, PUT, DELETE\r\nAccess-Control-Allow-Headers: Authorization, Content-Type\r\n";
     write!(writer, "HTTP/1.1 {code} {reason}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nCache-Control: no-store\r\nContent-Security-Policy: {csp}\r\n{cors}Connection: close\r\n\r\n", body.len())?;
     writer.write_all(body)?;
     writer.flush()
@@ -126,7 +146,7 @@ pub fn write_preflight(writer: &mut impl Write, request: &HttpRequest) -> io::Re
     if !request.sandbox_origin()
         || !request
             .header("access-control-request-method")
-            .is_some_and(|method| method == "GET" || method == "POST")
+            .is_some_and(|method| matches!(method, "GET" | "POST" | "PUT" | "DELETE"))
         || !request
             .header("access-control-request-headers")
             .is_some_and(|headers| {
@@ -145,13 +165,58 @@ pub fn write_preflight(writer: &mut impl Write, request: &HttpRequest) -> io::Re
             "invalid CORS preflight",
         ));
     }
-    writer.write_all(b"HTTP/1.1 204 No Content\r\nAccess-Control-Allow-Origin: null\r\nAccess-Control-Allow-Methods: GET, POST\r\nAccess-Control-Allow-Headers: Authorization, Content-Type\r\nAccess-Control-Max-Age: 600\r\nConnection: close\r\n\r\n")?;
+    writer.write_all(b"HTTP/1.1 204 No Content\r\nAccess-Control-Allow-Origin: null\r\nAccess-Control-Allow-Methods: GET, POST, PUT, DELETE\r\nAccess-Control-Allow-Headers: Authorization, Content-Type\r\nAccess-Control-Max-Age: 600\r\nConnection: close\r\n\r\n")?;
     writer.flush()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ambiguous_headers_and_transfer_encoding_are_rejected() {
+        for headers in [
+            "Host: attacker.test\r\nhOsT: 127.0.0.1:8123\r\n",
+            "Origin: https://attacker.test\r\nOrigin: null\r\n",
+            "Content-Length: 1\r\nContent-Length: 0\r\n",
+            "Transfer-Encoding: chunked\r\nContent-Length: 0\r\n",
+            "Host : 127.0.0.1:8123\r\n",
+            " Bad: folded\r\n",
+        ] {
+            let raw = format!("POST /api/value HTTP/1.1\r\n{headers}\r\n");
+            assert!(HttpRequest::read(&mut raw.as_bytes()).is_err(), "{headers}");
+        }
+    }
+
+    #[test]
+    fn declared_put_preflight_requires_sandbox_origin_and_authorization() {
+        let raw=b"OPTIONS /api/home/group-plan HTTP/1.1\r\nHost: 127.0.0.1:8123\r\nOrigin: null\r\nAccess-Control-Request-Method: PUT\r\nAccess-Control-Request-Headers: authorization,content-type\r\n\r\n";
+        let mut req = HttpRequest::read(&mut raw.as_slice()).unwrap();
+        let mut out = vec![];
+        write_preflight(&mut out, &req).unwrap();
+        assert!(String::from_utf8(out)
+            .unwrap()
+            .contains("GET, POST, PUT, DELETE"));
+        req.headers
+            .insert("access-control-request-method".into(), "DELETE".into());
+        write_preflight(&mut vec![], &req).unwrap();
+        for method in ["PATCH", "*"] {
+            req.headers
+                .insert("access-control-request-method".into(), method.into());
+            assert!(write_preflight(&mut vec![], &req).is_err());
+        }
+        req.headers
+            .insert("access-control-request-method".into(), "PUT".into());
+        req.headers
+            .insert("origin".into(), "https://example.com".into());
+        assert!(write_preflight(&mut vec![], &req).is_err());
+        req.headers.insert("origin".into(), "null".into());
+        req.headers.insert(
+            "access-control-request-headers".into(),
+            "content-type".into(),
+        );
+        assert!(write_preflight(&mut vec![], &req).is_err());
+    }
 
     #[test]
     fn request_is_bounded_and_checks_host_and_origin() {

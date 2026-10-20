@@ -20,6 +20,7 @@ pub struct AppStore {
 #[derive(Serialize)]
 pub struct AppDetail {
     pub app: App,
+    pub runtime_host: String,
 }
 
 impl AppStore {
@@ -105,7 +106,25 @@ impl AppStore {
     pub fn app_detail(&self, app_id: &str) -> Result<AppDetail, AppError> {
         Ok(AppDetail {
             app: self.app(app_id)?,
+            runtime_host: crate::app_activation::app_runtime_host_name(),
         })
+    }
+    /// activation 回执里密封的 allowedOrigins（无回执或读取失败返回空）。
+    pub fn product_activation_origins(&self) -> Result<Vec<String>, AppError> {
+        let receipt = crate::app_activation::read_product_activation_receipt(self.app_root())?;
+        Ok(receipt
+            .and_then(|value| {
+                value
+                    .get("allowedOrigins")
+                    .and_then(serde_json::Value::as_array)
+                    .map(|items| {
+                        items
+                            .iter()
+                            .filter_map(|item| item.as_str().map(str::to_string))
+                            .collect::<Vec<_>>()
+                    })
+            })
+            .unwrap_or_default())
     }
     pub fn global_revision(&self) -> Result<i64, AppError> {
         self.with_conn(query::global_revision)
@@ -113,7 +132,7 @@ impl AppStore {
 
     pub fn set_enabled(&self, app_id: &str, enabled: bool) -> Result<App, AppError> {
         let _operation = self.operation.lock().map_err(lock_error)?;
-        let current = self.app(app_id)?;
+        self.app(app_id)?;
         // Keep the runtime lock through the activation update and DB commit so a
         // concurrent module request cannot race a disable operation.
         let _runtime = if !enabled {
@@ -121,23 +140,20 @@ impl AppStore {
         } else {
             None
         };
-        crate::app_activation::update_activation_enabled(self.app_root(), app_id, enabled)?;
-        let result = self.with_conn(|conn| {
+        self.with_conn(|conn| {
             let tx = conn.unchecked_transaction()?;
-            if tx.execute("UPDATE apps SET enabled = ?2, updated_at = ?3, revision = revision + 1 WHERE app_id = ?1", params![app_id, enabled, now_millis()])? == 0 { return Err(AppError::NotFound(app_id.into())); }
+            let now = now_millis();
+            let _ = tx.execute(
+                "INSERT INTO builtin_app_preferences (app_id, enabled, show_in_sidebar, sidebar_order, updated_at, revision)
+                 VALUES (?1, ?2, 1, 0, ?3, 1)
+                 ON CONFLICT(app_id) DO UPDATE SET enabled = excluded.enabled, updated_at = excluded.updated_at, revision = builtin_app_preferences.revision + 1",
+                params![app_id, enabled, now],
+            );
             bump_revision(&tx)?;
             let app = query::app(&tx, app_id, Some(self.app_root()))?;
             tx.commit()?;
             Ok(app)
-        });
-        if result.is_err() {
-            let _ = crate::app_activation::update_activation_enabled(
-                self.app_root(),
-                app_id,
-                current.enabled,
-            );
-        }
-        result
+        })
     }
 
     pub fn set_sidebar(
@@ -149,7 +165,13 @@ impl AppStore {
         let _operation = self.operation.lock().map_err(lock_error)?;
         self.with_conn(|conn| {
             let tx = conn.unchecked_transaction()?;
-            if tx.execute("UPDATE apps SET show_in_sidebar = ?2, sidebar_order = COALESCE(?3, sidebar_order), updated_at = ?4, revision = revision + 1 WHERE app_id = ?1", params![app_id, show, order, now_millis()])? == 0 { return Err(AppError::NotFound(app_id.into())); }
+            let now = now_millis();
+            let _ = tx.execute(
+                "INSERT INTO builtin_app_preferences (app_id, enabled, show_in_sidebar, sidebar_order, updated_at, revision)
+                 VALUES (?1, 1, ?2, COALESCE(?3, 0), ?4, 1)
+                 ON CONFLICT(app_id) DO UPDATE SET show_in_sidebar = excluded.show_in_sidebar, sidebar_order = COALESCE(?3, builtin_app_preferences.sidebar_order), updated_at = excluded.updated_at, revision = builtin_app_preferences.revision + 1",
+                params![app_id, show, order, now],
+            );
             bump_revision(&tx)?;
             let app = query::app(&tx, app_id, Some(self.app_root()))?;
             tx.commit()?;

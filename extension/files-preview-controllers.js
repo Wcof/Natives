@@ -127,21 +127,15 @@ export function createPreviewControllers({ $, call, t, session, setStatus, toast
     const body = $('preview-body'); body.append(previewMeta(item)); const loading = document.createElement('p'); loading.className = 'muted'; loading.textContent = t('loading', '加载中…'); body.append(loading);
     const requestId = crypto.randomUUID(); session.activePreviewId = requestId;
     try {
+      if (navigator.pdfViewerEnabled === false) throw new Error(t('pdfPreviewUnavailable', 'PDF 预览暂不可用'));
       const result = await call('pdf_preview', { path: item.path }, requestId);
       if (generation !== session.previewGeneration || session.activePreviewId !== requestId) return;
       const binary = atob(result.data || ''); const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
-      if (bytes.length < 5 || new TextDecoder().decode(bytes.slice(0, 5)) !== '%PDF-') throw new Error(t('pdfPreviewUnavailable', 'PDF 预览暂不可用'));
-      const pdfText = new TextDecoder('latin1').decode(bytes); const pageMatches = pdfText.match(/\/Type\s*\/Page(?!s)\b/g); const totalPages = Math.min(10_000, pageMatches?.length || 0);
+      if (result.mimeType !== 'application/pdf' || bytes.length < 5 || new TextDecoder().decode(bytes.slice(0, 5)) !== '%PDF-') throw new Error(t('pdfPreviewUnavailable', 'PDF 预览暂不可用'));
       if (session.previewObjectUrl) URL.revokeObjectURL(session.previewObjectUrl); session.previewObjectUrl = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' })); loading.remove();
-      let page = 1; const pageLabel = document.createElement('span'); pageLabel.className = 'pdf-page-label';
-      const previewObjectUrl = session.previewObjectUrl;
-      const frame = document.createElement('iframe'); frame.className = 'pdf-preview'; frame.dataset.totalPages = String(totalPages); frame.title = item.name; frame.setAttribute('aria-label', `${item.name} · ${t('pdfViewerHint', 'PDF viewer')}`); frame.setAttribute('sandbox', 'allow-same-origin'); frame.src = `${previewObjectUrl}#page=1&zoom=page-width`; body.append(frame);
-      const setPage = (next) => { page = Math.max(1, Math.min(totalPages || Number.MAX_SAFE_INTEGER, next)); frame.src = `${previewObjectUrl}#page=${page}&zoom=page-width`; previous.disabled = page <= 1; nextButton.disabled = totalPages > 0 && page >= totalPages; pageLabel.textContent = `${t('pdfPage', '当前页')} ${page}${totalPages ? ` / ${totalPages}` : ''}`; };
-      const previous = previewButton(t('pdfPrevious', '上一页'), () => setPage(page - 1)); previous.dataset.action = 'pdfPrevious';
-      const nextButton = previewButton(t('pdfNext', '下一页'), () => setPage(page + 1)); nextButton.dataset.action = 'pdfNext';
-      pageLabel.setAttribute('aria-live', 'polite');
-      const findButton = previewButton(t('search', '搜索'), () => { frame.focus(); setStatus(`${t('pdfViewerHint', 'PDF viewer')} · ${t('search', '搜索')} ⌘/Ctrl+F`); }); findButton.dataset.action = 'pdf-find'; findButton.title = `${t('search', '搜索')} (⌘/Ctrl+F)`; findButton.setAttribute('aria-label', findButton.title);
-      const pageActions = document.createElement('div'); pageActions.className = 'preview-actions pdf-page-actions'; pageActions.append(findButton, previous, pageLabel, nextButton); body.append(pageActions); setPage(1);
+      // ADR-0043: only this validated PDF uses Chrome's reader; HTML/App sandboxes stay intact.
+      const frame = document.createElement('iframe'); frame.className = 'pdf-preview'; frame.title = item.name; frame.setAttribute('aria-label', `${item.name} · ${t('pdfViewerHint', 'PDF viewer')}`); frame.src = `${session.previewObjectUrl}#page=1&view=FitH&toolbar=1`;
+      frame.onerror = () => { if (generation !== session.previewGeneration) return; URL.revokeObjectURL(session.previewObjectUrl); session.previewObjectUrl = undefined; body.replaceChildren(previewMeta(item)); renderPreviewError(item, t('pdfPreviewUnavailable', 'PDF 预览暂不可用')); }; body.append(frame);
       const actions = document.createElement('div'); actions.className = 'preview-actions'; actions.append(previewButton(t('open', '打开'), () => link.openItem(item)), previewButton(t('reveal', '显示'), () => revealPath(item.path))); appendCopyPathAction(actions, item); body.append(actions);
     } catch (error) { if (generation !== session.previewGeneration) return; loading.remove(); renderPreviewError(item, `${t('pdfPreviewUnavailable', 'PDF 预览暂不可用')}：${error.message}`); }
     finally { if (session.activePreviewId === requestId) session.activePreviewId = undefined; }
@@ -394,7 +388,7 @@ export function createPreviewControllers({ $, call, t, session, setStatus, toast
   function resetPreview() { if (editorState?.dirty) { guardDirty(() => resetPreviewNow()); return; } resetPreviewNow(); }
   function resetPreviewNow() { rememberEditorViewState(); if (session.activePreviewId && isHostConnected()) call('preview_cancel', { requestId: session.activePreviewId }).catch(() => {}); session.activePreviewId = undefined; if (session.previewObjectUrl) { URL.revokeObjectURL(session.previewObjectUrl); session.previewObjectUrl = undefined; } $('image-lightbox')?.close(); session.previewGeneration++; editorState = undefined; imageEditorState = undefined; session.selectedPaths.clear(); renderSelection(); clearPreviewBody(); const note = document.createElement('p'); note.className = 'muted'; note.textContent = t('selectPreview', '选择文件查看预览'); $('preview-body').append(note); }
 
-  function scheduleEditorSave() { if (!editorState?.dirty) return; clearTimeout(editorState.saveTimer); editorState.saveTimer = setTimeout(() => queueEditorSave(false), 800); }
+  function scheduleEditorSave() { if (!editorState?.dirty || editorState.pauseAutosave) return; clearTimeout(editorState.saveTimer); editorState.saveTimer = setTimeout(() => queueEditorSave(false), 800); }
   function queueEditorSave(manual = false) { if (!editorState?.dirty) return Promise.resolve(true); const target = editorState; saveQueue = saveQueue.catch(() => {}).then(() => saveEditorNow(target, manual)); return saveQueue; }
   async function saveEditorNow(state, manual = false, force = false) {
     if (!state || state !== editorState || state.readOnly || !state.dirty) return true; const editor = $('preview-body').querySelector('.file-editor'); if (!editor) return false; const content = editor.value; const { parent, name } = parentAndName(state.path);
@@ -402,9 +396,36 @@ export function createPreviewControllers({ $, call, t, session, setStatus, toast
     try { const result = await call('write_file', { parent, name, data: encodeBase64(content), ...(force ? {} : { expectedMtime: state.mtime }) }); if (state !== editorState) return false; if (result?.conflict && !force) { state.conflict = true; setStatus(t('editConflict', '文件已被外部修改'), 'error'); const choice = await askConflict(); if (choice === 'overwrite') return saveEditorNow(state, manual, true); if (choice === 'reload') { await reloadEditor(state); return true; } return false; } state.mtime = Number(result?.mtime) || state.mtime; state.savedContent = content; state.dirty = editor.value !== content; state.conflict = false; const save = $('preview-body').querySelector('.editor-toolbar button'); if (save) save.disabled = !state.dirty; if (label) label.textContent = state.dirty ? t('unsaved', '未保存') : t('saved', '已保存'); setStatus(state.dirty ? t('unsaved', '未保存') : t('saved', '已保存'), state.dirty ? '' : 'success'); if (state.dirty) scheduleEditorSave(); else if (manual) toast(t('saved', '已保存'), 'success'); return !state.dirty; } catch (error) { if (state === editorState) { if (label) label.textContent = t('unsaved', '未保存'); setStatus(`${t('saveFailed', '保存失败')}：${error.message}`, 'error'); } return false; }
   }
   async function reloadEditor(state) { const result = await call('read_file', { path: state.path }, crypto.randomUUID()); if (state !== editorState) return false; state.mtime = Number(result.mtime) || state.mtime; state.savedContent = result.content || ''; state.dirty = false; state.conflict = false; const editor = $('preview-body').querySelector('.file-editor'); if (editor) editor.value = state.savedContent; const save = $('preview-body').querySelector('.editor-toolbar button'); if (save) save.disabled = true; const label = $('preview-body').querySelector('.editor-toolbar .muted'); if (label) label.textContent = t('saved', '已保存'); toast(t('reloaded', '已重新加载')); return true; }
-  function askConflict() { return new Promise((resolve) => { const dialog = $('conflict-modal'); const finish = () => { dialog.onclose = null; resolve(dialog.returnValue || 'cancel'); }; dialog.onclose = finish; dialog.showModal(); }); }
-  function askDirty() { return new Promise((resolve) => { const dialog = $('dirty-modal'); const finish = () => { dialog.onclose = null; resolve(dialog.returnValue || 'cancel'); }; dialog.onclose = finish; dialog.showModal(); }); }
-  async function guardDirty(action) { if (imageEditorState?.dirty) { const choice = await askDirty(); if (choice === 'save') { if (!await imageEditorState.save()) return false; } else if (choice === 'discard') imageEditorState = undefined; else return false; } if (!editorState?.dirty) return action(); const choice = await askDirty(); if (choice === 'save') { if (!await queueEditorSave(true)) return false; } else if (choice === 'discard') { clearTimeout(editorState.saveTimer); editorState = undefined; } else return false; return action(); }
+  function askConflict() { return askEditorDecision('conflict-modal'); }
+  function askDirty() { return askEditorDecision('dirty-modal'); }
+  function askEditorDecision(id) { return new Promise((resolve) => { const dialog = $(id); dialog.returnValue = 'cancel'; dialog.onclose = () => { dialog.onclose = null; resolve(dialog.returnValue || 'cancel'); }; dialog.showModal(); }); }
+  async function guardDirty(action) {
+    if (imageEditorState?.dirty) {
+      const choice = await askDirty();
+      if (choice === 'save') { if (!await imageEditorState.save()) return false; }
+      else if (choice === 'discard') imageEditorState = undefined;
+      else return false;
+    }
+    const state = editorState;
+    if (!state?.dirty) return action();
+    if (state.pauseAutosave) return false;
+    state.pauseAutosave = true;
+    clearTimeout(state.saveTimer);
+    try {
+      await saveQueue;
+      if (state !== editorState) return false;
+      if (state.dirty) {
+        const choice = await askDirty();
+        if (choice === 'save') { if (!await queueEditorSave(true)) return false; }
+        else if (choice === 'discard') editorState = undefined;
+        else return false;
+      }
+      return action();
+    } finally {
+      state.pauseAutosave = false;
+      if (state === editorState) scheduleEditorSave();
+    }
+  }
   async function refreshEditorAfterExternalChange(path) { if (!editorState || editorState.path !== path) return; const state = editorState; const refreshToken = ++editorRefreshToken; const editor = $('preview-body').querySelector('.file-editor'); const scrollTop = editor?.scrollTop || 0; const selectionStart = editor?.selectionStart || 0; const selectionEnd = editor?.selectionEnd || 0; try { const result = await call('read_file', { path }, crypto.randomUUID()); if (refreshToken !== editorRefreshToken || state !== editorState || state.path !== path) return; if (state.htmlPreview) { const frame = $('preview-body').querySelector('.html-preview'); if (!frame) return; if (session.previewObjectUrl) URL.revokeObjectURL(session.previewObjectUrl); const policy = '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; img-src data: blob:; style-src \'unsafe-inline\'">'; session.previewObjectUrl = URL.createObjectURL(new Blob([policy, result.content || ''], { type: 'text/html' })); frame.src = session.previewObjectUrl; state.mtime = Number(result.mtime) || state.mtime; state.savedContent = result.content || ''; return; } if (state.dirty) { state.conflict = true; setStatus(t('editConflict', '文件已被外部修改'), 'error'); return; } state.mtime = Number(result.mtime) || state.mtime; state.savedContent = result.content || ''; if (editor) { editor.value = state.savedContent; editor.scrollTop = scrollTop; editor.setSelectionRange(Math.min(selectionStart, editor.value.length), Math.min(selectionEnd, editor.value.length)); } } catch { /* directory refresh reports inaccessible files */ } }
 
   return { renderPreviewSelection, resetPreview, resetPreviewNow, guardDirty, refreshEditorAfterExternalChange, migrateEditorViewPath, getEditorState, getImageEditorState, hasDirtyEditor, showImageLightbox };

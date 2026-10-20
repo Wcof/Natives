@@ -1,53 +1,235 @@
-  :root {
-    color-scheme: dark;
-    --natives-bg: #000000;
-    --natives-surface: #0a0a0a;
-    --natives-surface-2: #121212;
-    --natives-surface-3: #181818;
-    --natives-text-primary: #f2f2ea;
-    --natives-text-muted: #888888;
-    --natives-border: #222222;
-    --natives-accent: #cdf24b;
-    --natives-accent-strong: #ddff69;
-    --natives-on-accent: #0b0c0a;
-    --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-    /* 源项目专业金融配色：红涨绿跌 */
-    --color-up: #ff2d2d;
-    --color-down: #00b35c;
-    --natives-danger: #ff2d2d;
-    --natives-warning: #ff9800;
-    --natives-ok: #00b35c;
-    --natives-radius: 6px;
-    --natives-glass: rgba(18, 18, 18, 0.85);
-    --natives-glass-hover: rgba(26, 26, 26, 0.95);
+/* composed by scripts/modules/build-ui.mjs — do not edit (source: extension/theme.css + modules/<appId>/ui/src/styles/theme.css) */
+/*
+ * Natives 产品通用基础主题（唯一可编辑源，DES V2.1 / 02-design-system）。
+ *
+ * 本文件只包含 Archive / Volt 两个主题的产品基础角色：文字、表面、
+ * 装饰与控件边界、强调、hover/selected、状态前景与浅底、遮罩、阴影、
+ * 玻璃浮层和字体栈。不含文件管理布局，不含投资业务语义（涨跌、
+ * 指标系列、绘图默认样式由 modules/fund/ui/src/styles/theme.css 拥有）。
+ *
+ * 规则：
+ * - 缺偏好 / 非法偏好回 Archive（:root 即 Archive；Volt 经 data-theme 覆盖）。
+ * - 系统明暗（prefers-color-scheme）不在此处出现，不覆盖明确产品偏好。
+ * - 宿主各 Surface（files/apps/app/space/screenshot/model-settings/
+ *   module-secret）通过既有 --text/--surface/--accent 等别名消费这里的
+ *   角色，不得复制品牌 HEX。
+ * - 模块侧由 scripts/modules/build-ui.mjs 在构建期将本文件与 Fund
+ *   源主题确定性组合为 ui/dist/styles/theme.css；运行时不跨域读取。
+ * - 图表取色入口 themeColor/themeRgba 依赖 6 位 HEX 角色；新增角色时
+ *   保持可解析格式，不使用 color-mix 表达基础角色。
+ */
+
+/* ===== Archive（默认：冷中性底色 / 白色内容表面 / 蓝色强调） ===== */
+:root {
+  color-scheme: light;
+  /* 底色与表面 */
+  --natives-bg: #f5f6f8;
+  --natives-surface: #ffffff;
+  --natives-surface-2: #f8f9fb;
+  --natives-surface-3: #eef1f5;
+  /* 文字 */
+  --natives-text-primary: #202733;
+  --natives-text-muted: #5b6677;
+  /* 边界 */
+  --natives-border: #e5e9ef;
+  --natives-control: #737f90;
+  /* 强调 */
+  --natives-accent: #345780;
+  --natives-accent-strong: #29476b;
+  --natives-on-accent: #ffffff;
+  /* hover / selected（selected 为蓝色 8% 浅底，基底集中于此） */
+  --natives-selected: rgba(52, 87, 128, 0.08);
+  /* 状态：前景与浅底（danger 独立于金融涨跌） */
+  --natives-danger: #b13642;
+  --natives-danger-soft: rgba(177, 54, 66, 0.1);
+  --natives-on-danger: #ffffff;
+  --natives-warning: #805a18;
+  --natives-warning-soft: rgba(128, 90, 24, 0.12);
+  --natives-ok: #217052;
+  --natives-ok-soft: rgba(33, 112, 82, 0.1);
+  /* 正文 / 搜索命中（代码浅色取 surface-2） */
+  --natives-code: #f8f9fb;
+  --natives-match: #dfeaf8;
+  /* 遮罩 / 阴影 / 玻璃浮层（仅既有浮层使用，不给正文加 blur） */
+  --natives-backdrop: rgba(32, 39, 51, 0.4);
+  --natives-shadow: 0 12px 36px rgba(32, 39, 51, 0.12);
+  --natives-glass: rgba(255, 255, 255, 0.96);
+  --natives-glass-hover: rgba(255, 255, 255, 0.99);
+  /* 禁用态（透明度角色）与焦点环宽度 */
+  --natives-disabled: 0.45;
+  --natives-focus-width: 2px;
+  /* 字体栈 */
+  --natives-font: -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", Roboto, sans-serif;
+  --natives-font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+/* ===== Volt（深色 / 荧光强调，保留现有方向） ===== */
+:root[data-theme="volt"] {
+  color-scheme: dark;
+  --natives-bg: #0b0c0a;
+  --natives-surface: #0b0c0a;
+  --natives-surface-2: #131410;
+  --natives-surface-3: #1c1e17;
+  --natives-text-primary: #f2f2ea;
+  --natives-text-muted: #9fa190;
+  --natives-border: #262920;
+  --natives-control: #7c836d;
+  --natives-accent: #cdf24b;
+  --natives-accent-strong: #ddff69;
+  --natives-on-accent: #0b0c0a;
+  --natives-selected: rgba(205, 242, 75, 0.12);
+  --natives-danger: #ff7f8f;
+  --natives-danger-soft: rgba(255, 127, 143, 0.12);
+  --natives-on-danger: #0b0c0a;
+  --natives-warning: #e6c07b;
+  --natives-warning-soft: rgba(230, 192, 123, 0.12);
+  --natives-ok: #cdf24b;
+  --natives-ok-soft: rgba(205, 242, 75, 0.12);
+  --natives-code: #0e0f0c;
+  --natives-match: #554416;
+  --natives-backdrop: rgba(0, 0, 0, 0.67);
+  --natives-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
+  --natives-glass: rgba(19, 20, 16, 0.96);
+  --natives-glass-hover: rgba(19, 20, 16, 0.99);
+}
+
+#natives-pairing-modal :focus-visible {
+  outline: var(--natives-focus-width) solid var(--natives-accent);
+  outline-offset: 2px;
+}
+
+.shared-preferences-dialog { color: var(--natives-text-primary); background: var(--natives-surface); border: 1px solid var(--natives-border); border-radius: 12px; padding: 24px; max-width: min(640px, calc(100vw - 32px)); max-height: 80vh; }
+.shared-preferences-dialog::backdrop { background: var(--natives-backdrop); }
+.shared-preferences-diff { overflow: auto; max-height: 40vh; overflow-wrap: anywhere; }
+.shared-preferences-dialog button { min-height: 32px; padding: 6px 12px; }
+.shared-preference-error { color: var(--natives-text-primary); background: var(--natives-surface); border: 1px solid var(--natives-border); padding: 12px; position: fixed; bottom: 16px; left: 16px; right: 16px; z-index: var(--z-toast, 1000); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation: none !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
-  :root[data-color-mode="intl"] {
-    /* 国际配色反转：绿涨红跌 */
-    --color-up: #00b35c;
-    --color-down: #ff2d2d;
-  }
-  :root[data-theme="archive"] {
-    color-scheme: light;
-    --natives-bg: #f5f0e8;
-    --natives-surface: #f5f0e8;
-    --natives-surface-2: #faf6ef;
-    --natives-surface-3: #ece2d2;
-    --natives-text-primary: #1a1a18;
-    --natives-text-muted: #6b6355;
-    --natives-border: #e3d9c8;
-    --natives-accent: #cc785c;
-    --natives-accent-strong: #b8664d;
-    --natives-on-accent: #fffaf3;
-    --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-    --natives-radius: 6px;
-    --natives-glass: rgba(250, 246, 239, 0.85);
-    --natives-glass-hover: rgba(250, 246, 239, 0.95);
-  }
-  * { box-sizing: border-box; }
-  body {
-    font: 13px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "PingFang SC", sans-serif;
-    margin: 0; padding: 0; background: var(--natives-bg); color: var(--natives-text-primary);
-    overflow-x: hidden;
-  }
-  .app-container { display: flex; flex-direction: column; height: 100vh; }
-  
+}
+
+/* ===== module theme roles ===== */
+/*
+ * Fund 模块主题（DES 02 单源体系）：
+ * 产品基础角色由 extension/theme.css 唯一维护，经 build-ui 在构建期组合到
+ * dist/styles/theme.css 前部。本文件只拥有投资专属语义：
+ *   1. 金融涨跌（cn/intl）、指标系列、绘图默认样式；
+ *   2. 投资字号、间距、圆角、动效密度角色；
+ *   3. 模块基础元素样式（body 等）。
+ * 不得重复声明基础角色（--natives-bg/surface/accent/text/border/状态色等，
+ * check-ui 会失败）；金融语义不搬入宿主，宿主布局不进入本文件。
+ */
+
+:root {
+  /* 密度：圆角 / 字号 / 间距（8px 基线）/ 动效（集中定义，组件消费） */
+  --natives-radius: 7px;
+  --fund-card-radius: 14px;
+  --fund-card-padding: 22px;
+  --fund-allocation-height: 480px;
+  --fund-content-width: 1280px;
+  --fund-content-inset: 28px;
+  --fund-section-gap: 22px;
+  --fund-allocation-2: #617ea3;
+  --fund-allocation-3: #a58a57;
+  --fund-allocation-4: #8e779f;
+  --fund-allocation-5: #66928b;
+  --fund-holding-card-radius: 16px;
+  --fund-holding-card-min-width: 300px;
+  --natives-fs-secondary: 12px;
+  --natives-fs-body: 14px;
+  --natives-fs-table-amount: 14px;
+  --natives-fs-metric: 20px;
+  --natives-fs-amount: 24px;
+  --natives-space-1: 8px;
+  --natives-space-2: 12px;
+  --natives-space-3: 16px;
+  --natives-space-4: 24px;
+  --natives-space-5: 32px;
+  --fund-research-main-height: clamp(360px, 52vh, 600px);
+  --fund-research-volume-height: 90px;
+  --fund-research-indicator-height: 160px;
+  --fund-research-flow-height: 120px;
+  --natives-dur-fast: 120ms;
+  --natives-dur-base: 200ms;
+  --natives-dur-panel: 300ms;
+  /* 保留既有别名消费面 */
+  --font-mono: var(--natives-font-mono);
+}
+
+/* 主体基础元素样式（模块内唯一 body 定义，随主题消费基础角色） */
+* { box-sizing: border-box; }
+body {
+  font: var(--natives-fs-body)/1.6 var(--natives-font);
+  margin: 0; padding: 0; background: var(--natives-bg); color: var(--natives-text-primary);
+  overflow-x: hidden;
+}
+.app-container { display: flex; flex-direction: column; height: 100vh; }
+
+/* ===== 图表 / 系列 / 绘图角色：Archive（默认） ===== */
+:root {
+  /* 图表语义角色（themeColor/themeRgba 直接读取；保持 6 位 HEX 可解析，
+     tooltip 背景为 rgba 值由图表直接消费）。 */
+  --chart-grid: #e5e9ef;
+  --chart-axis: #c3cbd6;
+  --chart-text: #202733;
+  --chart-text-dim: #5b6677;
+  --chart-pre-close: #8a94a3;
+  --chart-tooltip-bg: rgba(255, 255, 255, 0.95);
+  --chart-tooltip-border: #e5e9ef;
+  /* 金融涨跌（cn：红涨绿跌） */
+  --color-up: #b13642;
+  --color-down: #217052;
+  /* 指标系列（MA / MACD / KDJ / BOLL / WR 等共享调色板，按序取用） */
+  --series-1: #345780;
+  --series-2: #b13642;
+  --series-3: #217052;
+  --series-4: #805a18;
+  --series-5: #5b3f73;
+  --series-6: #3d7ea6;
+  /* 绘图默认样式（options.color 缺省时消费；显式用户色不由这里覆盖） */
+  --draw-line: #345780;
+  --draw-anchor: #345780;
+  --draw-selected: #b13642;
+  --draw-fill: rgba(52, 87, 128, 0.12);
+}
+
+/* ===== Volt：保留深色方向，涨跌对齐产品通用表 ===== */
+:root[data-theme="volt"] {
+  --fund-allocation-2:#7fc4d8;
+  --fund-allocation-3:#e6c07b;
+  --fund-allocation-4:#b8a7e0;
+  --fund-allocation-5:#8cd6b3;
+  --chart-grid: #262920;
+  --chart-axis: #3d4133;
+  --chart-text: #f2f2ea;
+  --chart-text-dim: #9fa190;
+  --chart-pre-close: #6d7360;
+  --chart-tooltip-bg: rgba(19, 20, 16, 0.96);
+  --chart-tooltip-border: #262920;
+  --color-up: #ff9a9f;
+  --color-down: #8cd6b3;
+  --series-1: #cdf24b;
+  --series-2: #ff9a9f;
+  --series-3: #8cd6b3;
+  --series-4: #e6c07b;
+  --series-5: #b8a7e0;
+  --series-6: #7fc4d8;
+  --draw-line: #cdf24b;
+  --draw-anchor: #cdf24b;
+  --draw-selected: #ff9a9f;
+  --draw-fill: rgba(205, 242, 75, 0.14);
+}
+
+/* ===== 国际配色反转：绿涨红跌（显式值，避免主题叠加歧义） ===== */
+:root[data-color-mode="intl"] {
+  --color-up: #217052;
+  --color-down: #b13642;
+}
+:root[data-theme="volt"][data-color-mode="intl"] {
+  --color-up: #8cd6b3;
+  --color-down: #ff9a9f;
+}

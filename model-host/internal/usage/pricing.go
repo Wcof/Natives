@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
+	"math/big"
 	"net/http"
 	"strings"
 	"sync"
@@ -69,16 +71,47 @@ func (c *Calculator) CalculateCost(provider, model string, input, output, cacheR
 		return 0
 	}
 
-	// Cost in millionths of USD ($ / 1M tokens)
-	cost := (input*p.InputPriceMicro +
-		output*p.OutputPriceMicro +
-		cacheRead*p.CacheReadPriceMicro +
-		cacheWrite*p.CacheWritePriceMicro) / 1000000
-
+	cost, _ := costWithPrice(p, input, output, cacheRead, cacheWrite)
 	return cost
 }
 
+// thinkingSuffixes 为 CLIProxyAPI 生态常见的推理档位后缀：档位只影响思考预算
+// （如 Gemini 的 -high/-low），不改变 token 单价，价格目录通常只收基础款。
+var thinkingSuffixes = []string{"-high", "-low", "-minimal", "-safety-le", "-safety"}
+
+// stripThinkingSuffix 剥离模型名尾部的推理档位后缀（最多两层，
+// 如 gemini-3.7-flash-safety-le → gemini-3.7-flash），无后缀时原样返回。
+func stripThinkingSuffix(model string) string {
+	for attempts := 0; attempts < 2; attempts++ {
+		lower := strings.ToLower(model)
+		stripped := false
+		for _, suffix := range thinkingSuffixes {
+			if strings.HasSuffix(lower, suffix) && len(model) > len(suffix) {
+				model = model[:len(model)-len(suffix)]
+				stripped = true
+				break
+			}
+		}
+		if !stripped {
+			break
+		}
+	}
+	return model
+}
+
 func (c *Calculator) FindPrice(provider, model string) *Price {
+	if p := c.findPriceExact(provider, model); p != nil {
+		return p
+	}
+	// 精确匹配失败：按推理档位变体归一化后再匹配一次（gemini-3.8-flash-high
+	// → gemini-3.8-flash）。仍无结果返回 nil，调用方按未计价诚实显示 0。
+	if normalized := stripThinkingSuffix(model); !strings.EqualFold(normalized, model) {
+		return c.findPriceExact(provider, normalized)
+	}
+	return nil
+}
+
+func (c *Calculator) findPriceExact(provider, model string) *Price {
 	prices, err := c.store.GetPrices()
 	if err == nil {
 		// 1. Specific Provider Manual
@@ -194,6 +227,82 @@ func (c *Calculator) GetPricingCatalog() (*PricingResult, error) {
 func (c *Calculator) SyncRemoteCatalog(ctx context.Context) error {
 	_, err := syncRemotePrices(ctx, c.store, DefaultPriceSyncURL)
 	return err
+}
+
+// zeroCostRow 聚合了 cost_micro=0 事件的 token 分量（按 provider+model 分组）。
+// 本地采集的用量事件不携带计费（cost_micro=0），金额在查询层按价格目录动态估算。
+// Key 标识聚合行归属（byModel=模型显示名、sessions=会话三元键、空=全局）。
+type zeroCostRow struct {
+	Key      string
+	Provider string
+	Model    string
+	In       int64
+	Out      int64
+	CR       int64
+	CW       int64
+}
+
+// zeroCostEstimate 为一个聚合组的估算结果：金额与可计价标记。目录缺该模型
+// 时 Priced=false，消费方必须显示未知（--）而不是 $0.00（严禁把取不到渲染成 0）。
+type zeroCostEstimate struct {
+	Micro  int64
+	Priced bool
+}
+
+// costWithPrice 按已解析价格计算（micro-USD），避免重复 FindPrice。
+func costWithPrice(p *Price, in, out, cr, cw int64) (int64, error) {
+	if p == nil {
+		return 0, nil
+	}
+	// 先精确累加再缩放，避免可表示的微美元结果在中间乘法处溢出。
+	var total, term big.Int
+	for _, part := range [][2]int64{{in, p.InputPriceMicro}, {out, p.OutputPriceMicro}, {cr, p.CacheReadPriceMicro}, {cw, p.CacheWritePriceMicro}} {
+		if part[0] < 0 || part[1] < 0 {
+			return 0, errors.New("invalid cost input")
+		}
+		term.Mul(big.NewInt(part[0]), big.NewInt(part[1]))
+		total.Add(&total, &term)
+	}
+	total.Quo(&total, big.NewInt(1000000))
+	if !total.IsInt64() {
+		return 0, errors.New("estimated cost exceeds micro-USD range")
+	}
+	return total.Int64(), nil
+}
+
+// estimateZeroCostByGroup 在 Store 锁外对零成本聚合行做动态计价，
+// 返回 Key → 估算结果。严禁在持有 store.mu 时调用：
+// Calculator.FindPrice 内部会再取读锁，非重入（与 GetPricingCatalog 同一纪律）。
+func estimateZeroCostByGroup(store *Store, rows []zeroCostRow) (map[string]zeroCostEstimate, error) {
+	if len(rows) == 0 {
+		return nil, nil
+	}
+	if _, err := store.GetPrices(); err != nil {
+		return nil, err
+	}
+	calc := &Calculator{store: store}
+	out := make(map[string]zeroCostEstimate, len(rows))
+	for _, r := range rows {
+		e, exists := out[r.Key]
+		if !exists {
+			e.Priced = true
+		}
+		price := calc.FindPrice(r.Provider, r.Model)
+		if price == nil {
+			e.Priced = false
+		} else {
+			cost, err := costWithPrice(price, r.In, r.Out, r.CR, r.CW)
+			if err != nil {
+				return nil, err
+			}
+			if cost > math.MaxInt64-e.Micro {
+				return nil, errors.New("estimated cost exceeds micro-USD range")
+			}
+			e.Micro += cost
+		}
+		out[r.Key] = e
+	}
+	return out, nil
 }
 
 func SyncRemotePrices(store *Store, syncURL string) (int, error) {

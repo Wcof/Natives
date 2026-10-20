@@ -8,9 +8,8 @@ import (
 	"sort"
 	"strings"
 
+	clipadapter "github.com/ldh/natives/model-host/internal/cliproxy"
 	"github.com/ldh/natives/model-host/internal/domain"
-	clipcore "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy"
-	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 )
 
 type accountModel struct {
@@ -37,14 +36,14 @@ func (e *Engine) accountModels(raw json.RawMessage) (map[string]any, error) {
 		account, _ = findAccount(&snapshot, input.AccountID)
 	}
 	if account != nil {
-		credential, err := e.accountCredential(context.Background(), account.ID)
+		view, err := e.accountView(context.Background(), account.ID)
 		if err != nil {
 			return nil, err
 		}
-		rules := credentialExcludedModels(credential)
+		rules := view.ExcludedModels
 		models := make(map[string]accountModel)
-		for _, model := range clipcore.StaticModelDefinitions(account.Provider) {
-			if model != nil && strings.TrimSpace(model.ID) != "" {
+		for _, model := range clipadapter.StaticModelDefinitions(account.Provider) {
+			if strings.TrimSpace(model.ID) != "" {
 				models[model.ID] = accountModel{ID: model.ID, DisplayName: model.DisplayName, Enabled: !matchesAnyRule(model.ID, rules)}
 			}
 		}
@@ -92,8 +91,8 @@ func (e *Engine) accountModels(raw json.RawMessage) (map[string]any, error) {
 		provider = normalizeAuthProvider(targetName)
 	}
 	models := make(map[string]accountModel)
-	for _, model := range clipcore.StaticModelDefinitions(provider) {
-		if model != nil && strings.TrimSpace(model.ID) != "" {
+	for _, model := range clipadapter.StaticModelDefinitions(provider) {
+		if strings.TrimSpace(model.ID) != "" {
 			models[model.ID] = accountModel{ID: model.ID, DisplayName: model.DisplayName, Enabled: !matchesAnyRule(model.ID, rules)}
 		}
 	}
@@ -145,7 +144,7 @@ func (e *Engine) updateAccountModels(raw json.RawMessage) (map[string]any, error
 		if snapshot.Revision != *input.ExpectedRevision {
 			return nil, errors.New("revision_conflict")
 		}
-		credential, err := e.accountCredential(context.Background(), account.ID)
+		view, err := e.accountView(context.Background(), account.ID)
 		if err != nil {
 			return nil, err
 		}
@@ -158,28 +157,21 @@ func (e *Engine) updateAccountModels(raw json.RawMessage) (map[string]any, error
 			return nil, err
 		}
 		allModels := definitions["models"].([]accountModel)
-		rules := exclusionsForEnabled(credentialExcludedModels(credential), allModels, input.EnabledModelIDs)
-		credential = credential.Clone()
-		previous := credential.Clone()
-		if credential.Metadata == nil {
-			credential.Metadata = make(map[string]any)
+		rules := exclusionsForEnabled(view.ExcludedModels, allModels, input.EnabledModelIDs)
+		// mode/T07：克隆/元数据变更/持久化/补偿在适配层（SwapAccountExcludedModels）。
+		rollback, swapErr := e.authStore.SwapAccountExcludedModels(context.Background(), account.ID, rules)
+		if swapErr == nil {
+			if syncErr := e.runtime.SyncAccount(context.Background(), e.authStore, account.ID); syncErr != nil {
+				_ = rollback(context.Background())
+				swapErr = syncErr
+			}
 		}
-		credential.Metadata["excluded_models"] = rules
-		if credential.Attributes == nil {
-			credential.Attributes = make(map[string]string)
-		}
-		if len(rules) == 0 {
-			delete(credential.Attributes, "excluded_models")
-		} else {
-			credential.Attributes["excluded_models"] = strings.Join(rules, ",")
-		}
-		if _, err = e.authStore.Save(context.Background(), credential); err == nil {
-			err = e.runtime.SyncAuth(context.Background(), credential)
-		}
-		if err != nil {
-			_, _ = e.authStore.Save(context.Background(), previous)
-			_ = e.runtime.SyncAuth(context.Background(), previous)
-			return nil, err
+		if swapErr != nil {
+			if rollback != nil {
+				_ = rollback(context.Background())
+				_ = e.runtime.SyncAccount(context.Background(), e.authStore, account.ID)
+			}
+			return nil, swapErr
 		}
 		return e.accountModels(raw)
 	}
@@ -221,37 +213,18 @@ func (e *Engine) updateAccountModels(raw json.RawMessage) (map[string]any, error
 	return e.accountModels(definitionInput)
 }
 
-func (e *Engine) accountCredential(ctx context.Context, accountID string) (*coreauth.Auth, error) {
-	credentials, err := e.authStore.List(ctx)
+// accountView 返回账户凭据的项目侧视图（mode/T07：不再取 SDK 对象）。
+func (e *Engine) accountView(ctx context.Context, accountID string) (clipadapter.AccountView, error) {
+	views, err := e.authStore.AccountViews(ctx)
 	if err != nil {
-		return nil, err
+		return clipadapter.AccountView{}, err
 	}
-	for _, credential := range credentials {
-		if credential.ID == accountID {
-			return credential, nil
+	for _, view := range views {
+		if view.ID == accountID {
+			return view, nil
 		}
 	}
-	return nil, &SafeError{Code: "secret_not_configured", Message: "账户凭证不存在，请重新授权"}
-}
-
-func credentialExcludedModels(credential *coreauth.Auth) []string {
-	if credential == nil {
-		return nil
-	}
-	if value := credential.Attributes["excluded_models"]; strings.TrimSpace(value) != "" {
-		return strings.Split(value, ",")
-	}
-	raw, _ := credential.Metadata["excluded_models"].([]any)
-	result := make([]string, 0, len(raw))
-	for _, value := range raw {
-		if model, ok := value.(string); ok {
-			result = append(result, model)
-		}
-	}
-	if typed, ok := credential.Metadata["excluded_models"].([]string); ok {
-		result = append(result, typed...)
-	}
-	return result
+	return clipadapter.AccountView{}, &SafeError{Code: "secret_not_configured", Message: "账户凭证不存在，请重新授权"}
 }
 
 func exclusionsForEnabled(current []string, models []accountModel, enabledIDs []string) []string {

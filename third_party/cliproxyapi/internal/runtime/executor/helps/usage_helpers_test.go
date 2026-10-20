@@ -6,17 +6,22 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/clienterror"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/logging"
-	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
-	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
-	"github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/clienterror"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/logging"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/thinking"
+	_ "github.com/router-for-me/CLIProxyAPI/v8/internal/thinking/provider/codex"
+	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
+	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/usage"
 )
 
 func TestParseOpenAIUsageChatCompletions(t *testing.T) {
@@ -866,6 +871,39 @@ func TestUsageReporterSetTranslatedReasoningEffortCodexConfigurationUpdate(t *te
 	}
 }
 
+func TestUsageReporterSetTranslatedReasoningEffortConfigurationUpdateAfterCleanup(t *testing.T) {
+	const source = `{"reasoning":{"effort":"xhigh"},"input":[{"type":"configuration_update","reasoning":{"effort":"medium"}},{"type":"configuration_update","reasoning":{"effort":"low"}},{"role":"user","content":"ok"}]}`
+	for _, tc := range []struct {
+		name      string
+		supported bool
+		want      string
+	}{
+		{name: "supported target reports effective update", supported: true, want: "low"},
+		{name: "unsupported target reports cleaned suffix", want: "high"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			model := "opaque-route(high)"
+			requestEffort := thinking.ExtractReasoningEffort([]byte(source), "openai-response", model)
+			if requestEffort != "low" {
+				t.Fatalf("request effort = %q, want low", requestEffort)
+			}
+			info := &registry.ModelInfo{
+				ID: "opaque-route", Type: "codex", SupportConfigurationUpdate: tc.supported,
+				Thinking: &registry.ThinkingSupport{Levels: []string{"low", "medium", "high", "xhigh"}},
+			}
+			body, err := thinking.ApplyThinkingWithModelInfoAndSummary([]byte(source), []byte(source), model, "openai-response", "codex", "codex", info, thinking.SummaryConfig{})
+			if err != nil {
+				t.Fatalf("ApplyThinkingWithModelInfoAndSummary() error = %v", err)
+			}
+			reporter := NewUsageReporter(usage.WithReasoningEffort(context.Background(), requestEffort), "codex", model, nil)
+			reporter.SetTranslatedReasoningEffort(body, "codex")
+			if got := reporter.buildRecord(usage.Detail{TotalTokens: 10}, false).ReasoningEffort; got != tc.want {
+				t.Fatalf("final usage effort = %q, want %q; body=%s", got, tc.want, body)
+			}
+		})
+	}
+}
+
 func TestUsageReporterBuildAdditionalModelRecordSkipsZeroTokens(t *testing.T) {
 	reporter := &UsageReporter{
 		provider:    "codex",
@@ -1231,4 +1269,73 @@ func TestUsageReporter_ExplicitTraceIDPrecedenceOverLogRequestID(t *testing.T) {
 	if record.TraceID != "explicit-trace-1" {
 		t.Fatalf("record.TraceID = %q, want explicit-trace-1", record.TraceID)
 	}
+}
+
+func TestUsageReporter_DistinguishesNativeKey(t *testing.T) {
+	t.Run("native_key_via_gin", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		ginCtx, _ := gin.CreateTestContext(w)
+		ginCtx.Set("userApiKey", "sk-native-key")
+		ginCtx.Set("accessProvider", "config-inline")
+
+		ctx := context.WithValue(context.Background(), "gin", ginCtx)
+		reporter := NewUsageReporter(ctx, "openai", "gpt-5.4", nil)
+		if !reporter.IsNativeKey() {
+			t.Fatalf("reporter.IsNativeKey() = false, want true")
+		}
+		if reporter.AccessProvider() != "config-inline" {
+			t.Fatalf("reporter.AccessProvider() = %q, want %q", reporter.AccessProvider(), "config-inline")
+		}
+
+		record := reporter.buildRecord(usage.Detail{TotalTokens: 10}, false, usage.Failure{})
+		if !record.IsNativeKey {
+			t.Fatalf("record.IsNativeKey = false, want true")
+		}
+		if record.AccessProvider != "config-inline" {
+			t.Fatalf("record.AccessProvider = %q, want %q", record.AccessProvider, "config-inline")
+		}
+	})
+
+	t.Run("plugin_key_via_gin", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		ginCtx, _ := gin.CreateTestContext(w)
+		ginCtx.Set("userApiKey", "plugin-principal")
+		ginCtx.Set("accessProvider", "custom-auth-plugin")
+
+		ctx := context.WithValue(context.Background(), "gin", ginCtx)
+		reporter := NewUsageReporter(ctx, "openai", "gpt-5.4", nil)
+		if reporter.IsNativeKey() {
+			t.Fatalf("reporter.IsNativeKey() = true, want false")
+		}
+		if reporter.AccessProvider() != "custom-auth-plugin" {
+			t.Fatalf("reporter.AccessProvider() = %q, want %q", reporter.AccessProvider(), "custom-auth-plugin")
+		}
+
+		record := reporter.buildRecord(usage.Detail{TotalTokens: 10}, false, usage.Failure{})
+		if record.IsNativeKey {
+			t.Fatalf("record.IsNativeKey = true, want false")
+		}
+		if record.AccessProvider != "custom-auth-plugin" {
+			t.Fatalf("record.AccessProvider = %q, want %q", record.AccessProvider, "custom-auth-plugin")
+		}
+	})
+
+	t.Run("native_key_via_context", func(t *testing.T) {
+		ctx := usage.WithAccessProvider(context.Background(), "config-api-key")
+		reporter := NewUsageReporter(ctx, "openai", "gpt-5.4", nil)
+		if !reporter.IsNativeKey() {
+			t.Fatalf("reporter.IsNativeKey() = false, want true")
+		}
+		if reporter.AccessProvider() != "config-api-key" {
+			t.Fatalf("reporter.AccessProvider() = %q, want %q", reporter.AccessProvider(), "config-api-key")
+		}
+
+		record := reporter.buildRecord(usage.Detail{TotalTokens: 10}, false, usage.Failure{})
+		if !record.IsNativeKey {
+			t.Fatalf("record.IsNativeKey = false, want true")
+		}
+		if record.AccessProvider != "config-api-key" {
+			t.Fatalf("record.AccessProvider = %q, want %q", record.AccessProvider, "config-api-key")
+		}
+	})
 }

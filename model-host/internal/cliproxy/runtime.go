@@ -1,12 +1,10 @@
 package cliproxy
 
 import (
-	"bytes"
 	"context"
 	"crypto/subtle"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -21,10 +19,10 @@ import (
 	"github.com/ldh/natives/model-host/internal/domain"
 	"github.com/ldh/natives/model-host/internal/netpolicy"
 	"github.com/ldh/natives/model-host/internal/secrets"
-	sdkauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/auth"
-	core "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy"
-	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
-	clipconfig "github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
+	sdkauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/auth"
+	core "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy"
+	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
+	clipconfig "github.com/router-for-me/CLIProxyAPI/v8/sdk/config"
 	"gopkg.in/yaml.v3"
 )
 
@@ -68,9 +66,6 @@ func (r *Runtime) Start(ctx context.Context, snapshot domain.Snapshot, secretSto
 		return 0, err
 	}
 	authDir := filepath.Join(filepath.Dir(configPath), "auth")
-	if defaultDir, err := defaultAuthDirectory(); err == nil && defaultDir != "" {
-		authDir = defaultDir
-	}
 	cfg, err := runtimeConfig(snapshot, secretStore, gatewayKeys, internalPort, authDir)
 	if err != nil {
 		_ = listener.Close()
@@ -117,29 +112,6 @@ func (r *Runtime) Start(ctx context.Context, snapshot domain.Snapshot, secretSto
 	proxy := httputil.NewSingleHostReverseProxy(target)
 	// Critical for SSE/streaming LLM responses: ensure immediate flush to client
 	proxy.FlushInterval = 20 * time.Millisecond
-	originalDirector := proxy.Director
-	proxy.Director = func(req *http.Request) {
-		originalDirector(req)
-		if strings.Contains(req.URL.Path, "natives-gateway/") {
-			req.URL.Path = strings.ReplaceAll(req.URL.Path, "natives-gateway/", "")
-		}
-		// Normalize incoming model name by stripping "natives-gateway/" prefix if present
-		if req.Body != nil && req.Method == http.MethodPost {
-			bodyBytes, err := io.ReadAll(req.Body)
-			_ = req.Body.Close()
-			if err == nil {
-				if bytes.Contains(bodyBytes, []byte(`"natives-gateway/`)) {
-					bodyBytes = bytes.ReplaceAll(bodyBytes, []byte(`"natives-gateway/`), []byte(`"`))
-				}
-				req.Body = io.NopCloser(bytes.NewReader(bodyBytes))
-				req.GetBody = func() (io.ReadCloser, error) {
-					return io.NopCloser(bytes.NewReader(bodyBytes)), nil
-				}
-				req.ContentLength = int64(len(bodyBytes))
-				req.Header.Set("Content-Length", strconv.Itoa(len(bodyBytes)))
-			}
-		}
-	}
 	front := &http.Server{
 		Handler:           gatewayHandler(proxy),
 		ReadHeaderTimeout: 5 * time.Second,
@@ -358,6 +330,15 @@ func gatewayHandler(proxy http.Handler) http.Handler {
 			return
 		}
 		request.Body = http.MaxBytesReader(writer, request.Body, 32<<20)
+		if err := normalizeGatewayModel(request); err != nil {
+			status := http.StatusBadRequest
+			var tooLarge *http.MaxBytesError
+			if errors.As(err, &tooLarge) {
+				status = http.StatusRequestEntityTooLarge
+			}
+			http.Error(writer, "invalid model request", status)
+			return
+		}
 		proxy.ServeHTTP(writer, request)
 	})
 }
@@ -410,31 +391,6 @@ func allowedGatewayPath(path string) bool {
 		p == "/embeddings"
 }
 
-func defaultAuthDirectory() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	dir := filepath.Join(home, ".natives", "auth")
-	_ = os.MkdirAll(dir, 0755)
-
-	// Also sync any credentials from ~/.cli-proxy-api if they exist and are not yet in ~/.natives/auth
-	legacyDir := filepath.Join(home, ".cli-proxy-api")
-	if entries, err := os.ReadDir(legacyDir); err == nil {
-		for _, entry := range entries {
-			if !entry.IsDir() && strings.HasSuffix(strings.ToLower(entry.Name()), ".json") {
-				target := filepath.Join(dir, entry.Name())
-				if _, statErr := os.Stat(target); os.IsNotExist(statErr) {
-					if data, readErr := os.ReadFile(filepath.Join(legacyDir, entry.Name())); readErr == nil {
-						_ = os.WriteFile(target, data, 0644)
-					}
-				}
-			}
-		}
-	}
-	return dir, nil
-}
-
 func enabledGatewayKeys(snapshot domain.Snapshot, secretStore secrets.Store) ([]string, error) {
 	keys := make([]string, 0, len(snapshot.Gateway.AccessKeys))
 	for _, record := range snapshot.Gateway.AccessKeys {
@@ -442,19 +398,25 @@ func enabledGatewayKeys(snapshot domain.Snapshot, secretStore secrets.Store) ([]
 			continue
 		}
 		key, err := secretStore.Get(record.SecretRef)
-		if err == nil {
-			if key = strings.TrimSpace(key); key != "" {
-				keys = append(keys, key)
-			}
+		if err != nil {
+			return nil, err
+		}
+		if key = strings.TrimSpace(key); key == "" {
+			return nil, errors.New("gateway access key is empty")
+		}
+		keys = append(keys, key)
+	}
+	if len(snapshot.Gateway.AccessKeys) == 0 {
+		legacyKey, err := secretStore.Get("gateway:access-key")
+		if err != nil {
+			return nil, err
+		}
+		if legacyKey = strings.TrimSpace(legacyKey); legacyKey != "" {
+			keys = append(keys, legacyKey)
 		}
 	}
 	if len(keys) == 0 {
-		if legacyKey, err := secretStore.Get("gateway:access-key"); err == nil && strings.TrimSpace(legacyKey) != "" {
-			keys = append(keys, strings.TrimSpace(legacyKey))
-		}
-	}
-	if len(keys) == 0 {
-		keys = append(keys, "123456")
+		return nil, errors.New("gateway has no enabled access key")
 	}
 	return keys, nil
 }

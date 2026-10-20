@@ -1,6 +1,6 @@
 # ADR-0032：App Runtime 固定默认端口与本地服务端口注册表（Fixed Default Port and Local Service Port Registry）
 
-- 状态：已接受（accepted，2026-09-20）
+- 状态：部分被替代。固定 App Runtime 端口及免 Bearer 路由由 [ADR-0035](0035-retire-fixed-app-runtime-port.md) 退役；端口登记台账要求继续有效。以下正文保留 2026-09-20 的历史决策，不作为恢复固定端口的实施依据。
 - 决策者：产品方（用户）
 - 关联文档：ADR-0031（被本 ADR 部分修订）、ADR-0020、ADR-0029、`docs/standards/technical/02-security.md`
 

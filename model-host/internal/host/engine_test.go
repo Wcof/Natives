@@ -523,7 +523,7 @@ func TestCheckAndPerformKernelUpdate(t *testing.T) {
 	t.Cleanup(engine.Close)
 
 	// 单元测试不拉网、不真实构建：固定上游版本并用桩替换升级管线
-	engine.kernelFetchLatest = func(ctx context.Context) (string, error) { return "v9.9.9", nil }
+	engine.kernelFetchLatest = func(ctx context.Context) (string, error) { return "v8.999.999", nil }
 	updated := make(chan string, 1)
 	engine.kernelRunUpdate = func(job *kernelUpdateJob, target string) {
 		job.set("done", "stub updated")
@@ -535,13 +535,16 @@ func TestCheckAndPerformKernelUpdate(t *testing.T) {
 		t.Fatalf("model_kernel_check_update failed: %v", err)
 	}
 	checkMap := checkRes.(map[string]any)
-	if checkMap["latestVersion"] != "v9.9.9" {
+	if checkMap["latestVersion"] != "v8.999.999" {
 		t.Fatalf("expected fixed latestVersion, got: %#v", checkMap)
 	}
 	if checkMap["hasUpdate"] != true {
-		t.Fatalf("expected hasUpdate for %s -> v9.9.9, got: %#v", checkMap["currentVersion"], checkMap)
+		t.Fatalf("expected hasUpdate for %s -> v8.999.999, got: %#v", checkMap["currentVersion"], checkMap)
 	}
 
+	// 本用例测试更新管线启动（身份守卫本体由 TestKernelUpdate* 身份专项覆盖），
+	// 测试二进制不位于 target 布局，注入身份通过——不弱化守卫本身。
+	engine.kernelIdentityCheck = func() error { return nil }
 	updateRes, err := engine.dispatch(context.Background(), "model_kernel_update", nil)
 	if err != nil {
 		t.Fatalf("model_kernel_update failed: %v", err)
@@ -553,8 +556,8 @@ func TestCheckAndPerformKernelUpdate(t *testing.T) {
 
 	select {
 	case target := <-updated:
-		if target != "v9.9.9" {
-			t.Fatalf("expected pipeline target v9.9.9, got %s", target)
+		if target != "v8.999.999" {
+			t.Fatalf("expected pipeline target v8.999.999, got %s", target)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("kernel update pipeline did not run")
@@ -598,6 +601,9 @@ func TestKernelUpdateSkipsWhenUpToDate(t *testing.T) {
 	engine.kernelRunUpdate = func(job *kernelUpdateJob, target string) {
 		t.Fatal("pipeline must not run when already up to date")
 	}
+	// 本用例测试 up-to-date 跳过（身份守卫本体由 TestKernelUpdate* 身份专项覆盖），
+	// 测试二进制不位于 target 布局，故注入身份通过——不弱化守卫本身。
+	engine.kernelIdentityCheck = func() error { return nil }
 
 	updateRes, err := engine.dispatch(context.Background(), "model_kernel_update", nil)
 	if err != nil {
@@ -606,5 +612,27 @@ func TestKernelUpdateSkipsWhenUpToDate(t *testing.T) {
 	updateMap := updateRes.(map[string]any)
 	if updateMap["status"] != "up_to_date" {
 		t.Fatalf("expected up_to_date, got: %#v", updateMap)
+	}
+}
+
+func TestModelCollectStatusIsReadOnlyAndPhaseAware(t *testing.T) {
+	repo := domain.NewRepository(filepath.Join(t.TempDir(), "state.json"))
+	engine, err := NewEngine(repo, secrets.NewMemoryStore(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(engine.Close)
+
+	res, err := engine.dispatch(context.Background(), "model_collect_status", nil)
+	if err != nil {
+		t.Fatalf("model_collect_status failed: %v", err)
+	}
+	status := res.(map[string]any)
+	// 未触发任何采集时必须是明确的稳态：collecting=false 且无 lastCollectAt。
+	if status["collecting"] != false {
+		t.Fatalf("expected collecting=false before any collect, got: %#v", status)
+	}
+	if _, has := status["lastCollectAt"]; has {
+		t.Fatalf("lastCollectAt must be absent before any collect, got: %#v", status)
 	}
 }

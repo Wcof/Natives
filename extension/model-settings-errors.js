@@ -5,6 +5,7 @@ const MESSAGES = {
   upstream_response_too_large: ['modelErrorUpstreamTooLarge', '供应商响应超过大小限制。'], gateway_start_failed: ['modelErrorGatewayStart', '本地模型代理启动失败。'], gateway_stop_failed: ['modelErrorGatewayStop', '本地模型代理停止失败。'],
   gateway_restart_failed: ['modelErrorGatewayRestart', '配置已保存，但代理重启失败，请重试。'], oauth_in_progress: ['modelErrorOAuthInProgress', '已有 OAuth 授权正在进行。'], internal_error: ['modelErrorInternal', '模型设置操作失败。'],
   host_disconnected: ['modelHostDisconnected', '模型 Host 已断开'], request_timeout: ['modelErrorTimeout', '请求超时，请重试。'],
+  kernel_migration_required: ['modelKernelMigrationRequired', '上游内核需要 SDK 与本地补丁迁移，请更新完整 Natives 产品。'],
 };
 
 export function localizedModelError(error, t) {

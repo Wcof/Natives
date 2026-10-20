@@ -1,0 +1,20 @@
+      <!-- 6. 公募基金净值模块（DES-P11：本地最近 30 条 + 有界查看更多） -->
+      <section id="view-nav" hidden>
+        <header class="investment-page-head"><div><h2 data-i18n="fundLedgerNavNav">公募净值</h2><p data-i18n="fundLedgerNavScope">场外基金历史净值管理；「同步历史」来自数据源，不是盘中估值或交易确认。</p></div></header>
+        <section class="card nav-data-card"><div class="search-box">
+          <input type="text" id="nav-code-input" placeholder="输入 6 位公募基金代码 (如 161725)">
+          <button class="btn btn-accent" id="nav-sync-btn" data-i18n="fundLedgerSyncNav">一键同步历史净值</button>
+        </div>
+        <div id="nav-msg" role="status" aria-live="polite"></div>
+        <p id="nav-scope" class="pos-tab-meta" role="status"></p>
+        <div class="home-table-scroll" tabindex="0"><table class="data-table" id="nav-table">
+          <thead><tr><th data-i18n="fundLedgerThCode">基金代码</th><th data-i18n="fundLedgerThNavDate">净值日期</th><th class="num" data-i18n="fundLedgerThUnitNav">单位净值</th><th data-i18n="fundLedgerThSource">数据来源</th><th data-i18n="fundLedgerThFetchedAt">获取时间</th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+        <div class="nav-more-row">
+          <button class="btn" id="nav-more-btn" hidden data-i18n="fundLedgerNavMore">查看更多</button>
+          <span id="nav-more-end" class="pos-tab-meta" hidden data-i18n="fundLedgerNavHistoryStart">已到本地历史起点</span>
+        </div>
+        <button type="button" id="nav-return-positions" data-i18n="fundLedgerPagePositions"></button></section>
+      </section>
+    </div>

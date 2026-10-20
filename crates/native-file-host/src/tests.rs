@@ -241,12 +241,15 @@ fn locate_rejects_unsafe_queries() {
         params: json!({"query": "../secret"}),
     };
     assert_eq!(validate_request(&request), Ok(()));
-    assert_eq!(run_locate(&request).unwrap(), json!({"entries": []}));
+    assert_eq!(run_locate(&request, None).unwrap(), json!({"entries": []}));
     let option_like = Request {
         params: json!({"query": "-name"}),
         ..request
     };
-    assert_eq!(run_locate(&option_like).unwrap(), json!({"entries": []}));
+    assert_eq!(
+        run_locate(&option_like, None).unwrap(),
+        json!({"entries": []})
+    );
 }
 
 #[test]
@@ -280,7 +283,7 @@ fn batch_honors_cancellation_token_and_schema() {
     };
     assert_eq!(validate_request(&request), Ok(()));
     let token = AtomicBool::new(true);
-    let result = run_batch(&request, &token, None).expect("cancelled batch response");
+    let result = run_batch(&request, &token, None, None).expect("cancelled batch response");
     assert_eq!(result["cancelled"], true);
     assert_eq!(result["count"], 0);
     assert_eq!(result["copied"].as_array().map(Vec::len), Some(0));
@@ -313,7 +316,7 @@ fn batch_copy_preserves_destination_directory_semantics() {
         params: json!({"paths": [source.to_string_lossy()], "dest": destination.to_string_lossy()}),
     };
     let token = AtomicBool::new(false);
-    let result = run_batch(&request, &token, None).expect("batch copy");
+    let result = run_batch(&request, &token, None, None).expect("batch copy");
     assert_eq!(result["count"], 1);
     assert!(destination.join("source.txt").is_file());
     let _ = std::fs::remove_dir_all(base);
@@ -339,7 +342,7 @@ fn duplicate_batch_reports_progress_shape_and_result() {
     };
     assert_eq!(validate_request(&request), Ok(()));
     let token = AtomicBool::new(false);
-    let result = run_batch(&request, &token, None).expect("duplicate batch");
+    let result = run_batch(&request, &token, None, None).expect("duplicate batch");
     assert_eq!(result["count"], 1);
     assert_eq!(result["duplicated"].as_array().map(Vec::len), Some(1));
     let duplicate = result["duplicated"][0].as_str().expect("duplicate path");

@@ -93,14 +93,14 @@ function renderIndicator(ind) {
       charts.klineChart.setOption({
         series: [
           {}, {}, {}, {}, {},
-          { name: 'BOLL上轨', type: 'line', data: r.upper, symbol: 'none', lineStyle: { color: '#4fc3f7', width: 1, type: 'dashed' } },
-          { name: 'BOLL中轨', type: 'line', data: r.mid, symbol: 'none', lineStyle: { color: '#ffeb3b', width: 1 } },
-          { name: 'BOLL下轨', type: 'line', data: r.lower, symbol: 'none', lineStyle: { color: '#4fc3f7', width: 1, type: 'dashed' } },
+          { name: 'BOLL上轨', type: 'line', data: r.upper, symbol: 'none', lineStyle: { color: trends.C.ma20, width: 1, type: 'dashed' } },
+          { name: 'BOLL中轨', type: 'line', data: r.mid, symbol: 'none', lineStyle: { color: trends.C.ma5, width: 1 } },
+          { name: 'BOLL下轨', type: 'line', data: r.lower, symbol: 'none', lineStyle: { color: trends.C.ma20, width: 1, type: 'dashed' } },
         ]
       });
     }
     charts.indicatorChart.setOption({
-      title: { text: 'BOLL已叠加到主图', left: 'center', top: 'center', textStyle: { color: '#666', fontSize: 13 } }
+      title: { text: 'BOLL已叠加到主图', left: 'center', top: 'center', textStyle: { color: C.textDim, fontSize: 13 } }
     }, true);
     return;
   } else if (ind === 'wr') {
@@ -117,7 +117,7 @@ function renderIndicator(ind) {
   charts.indicatorChart.setOption({
     backgroundColor: C.bg,
     animation: false,
-    legend: { data: legend, textStyle: { color: C.textDim, fontSize: 10 }, top: 2, itemWidth: 12, itemHeight: 8 },
+    legend: { data: legend, textStyle: { color: C.textDim, fontSize: parseFloat(Fund.themeColor('--natives-fs-secondary')) }, top: 2, itemWidth: 12, itemHeight: 8 },
     xAxis: { type: 'category', data: dates, show: false },
     yAxis: {
       type: 'value',
@@ -128,10 +128,10 @@ function renderIndicator(ind) {
     grid: { left: 60, right: 50, top: 20, bottom: 5 },
     series: series,
     tooltip: {
-      trigger: 'axis', axisPointer: { type: 'cross', lineStyle: { color: '#666' } },
+      trigger: 'axis', axisPointer: { type: 'cross', lineStyle: { color: C.textDim } },
       formatter: (params) => {
         if (!params || !params.length) return '';
-        let html = `<div style="font-size:11px">${params[0].axisValue}</div>`;
+        let html = `<div style="font-size:var(--natives-fs-secondary)">${params[0].axisValue}</div>`;
         for (const p of params) {
           if (p.value != null) html += `<div><span style="color:${p.color}">●</span> ${p.seriesName}: ${(+p.value).toFixed(3)}</div>`;
         }

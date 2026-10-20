@@ -1,5 +1,21 @@
 # 空间 AI 效能组件实施方案：独立组件、多 Agent 统计、空间可视化规范
 
+## 2026-10-03 查询链修复契约
+
+- 扩展继续经 Native Messaging 共享客户端消费 Model Host；不绕经 tokenusage
+  Runtime，不增加第二份统计权威。
+- 共享客户端把 Host 的 `{ok, event, result}` 推送归一为消费端的 `type`，
+  保留原字段；不能用仅含 `type` 的测试消息代替真实 Native 帧验证刷新。
+- 同参数查询按请求发起时的 revision 合并；失效后的旧响应不得写入新缓存，
+  也不得清除新请求。全部用量卡（含会话）与固定视图响应 Host 更新，销毁后
+  不再渲染；自定义时间范围必须传递到 Host。
+- `model_quota_cached` 是既有 `/ai/quota` 缓存读取的 Native Messaging 门面，
+  参数为空，复用同一 `{status, generatedAt, entries}` 响应，不探测上游、不读取
+  Keychain。额度卡展示最近探测时间／缓存属性；真实零余额与缺数据分开。
+  `model_quota_query` 仍只用于用户显式刷新。额度缓存变更以
+  `model_quota_updated` 失效；用量、预算、提醒和建议变更沿用 `model_usage_updated`。
+
+
 修订：2026-09-11，本轮按用户三项要求重新收口。状态：**更新后的引擎执行方案；工作区已有部分实现，本轮仅修订方案，未验收实现**。ADR-0030 在当前工作区已标记 accepted，开发时复用已接受边界，不重新把全部工作视作从零开始。
 
 面向用户：个人开发者，多工具并用，优先解决用量、费用、归因和任务提醒。完整首版强制覆盖用户明确指定的 AtomCode、Claude Code、Codex、ZCode、Pi、Cursor、Harness，以及当前 `model-host/internal/agentclients/registry.go` 与 `BuildChangesWithModels` 已支持配置注入的全部工具：Claude Desktop、DeepSeek Harness（注册 ID `deepseek-harness`）、OpenCode、Grok Build、Kimi Code、OpenClaw、Hermes。工具名单是“用户明确名单 ∪ 源码注册表”的并集；新增注册工具自动进入覆盖矩阵。首个完整验收平台为当前 macOS + Chromium；CLI、IDE、桌面端和网页端必须逐项标注兼容性，不能沿用另一形态的验收结论。

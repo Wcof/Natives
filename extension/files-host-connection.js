@@ -1,4 +1,4 @@
-import { createNativeClient } from './native-client.js';
+import { createPlatformClient } from './platform/transport.js';
 
 export function createFilesHostConnection({
   host, writeMethods, t, onMessage, onDisconnect, onVisible,
@@ -7,7 +7,7 @@ export function createFilesHostConnection({
   let pageClosing = false;
   let idleDisconnectTimer;
 
-  const client = createNativeClient({
+  const client = createPlatformClient({
     host,
     writeMethods,
     // Launcher 引导流：首包 version 握手上报扩展版本，Host 据此写
@@ -17,7 +17,7 @@ export function createFilesHostConnection({
       method: 'version',
       params: { extensionVersion: globalThis.chrome?.runtime?.getManifest?.().version || '' },
     },
-    onMessage,
+    onEvent: onMessage,
     onDisconnect: (error, wasIntentional) => {
       onDisconnect(error, wasIntentional);
       if (!wasIntentional) scheduleReconnect();
@@ -73,10 +73,18 @@ export function createFilesHostConnection({
       if (!client.connected) onVisible();
     }
   });
-  window.addEventListener('pagehide', () => {
+  window.addEventListener('pagehide', (event) => {
+    if (event.persisted) return;
     pageClosing = true;
     if (client.writesInFlight === 0) disconnect();
     else scheduleIdleDisconnect();
+  });
+  window.addEventListener('pageshow', (event) => {
+    if (!event.persisted) return;
+    // BFCache restore: reconnect lazily from the authoritative snapshot.
+    pageClosing = false;
+    clearTimeout(idleDisconnectTimer);
+    if (!client.connected) onVisible();
   });
   window.addEventListener('beforeunload', (event) => {
     if (!hasDirtyEditor()) return;

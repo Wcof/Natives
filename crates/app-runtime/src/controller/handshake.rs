@@ -1,6 +1,6 @@
 use super::Controller;
 use crate::http::{write_error, write_json_response};
-use crate::{BoundRuntime, CONTROLLER_STATE, ControllerState};
+use crate::{BoundRuntime, ControllerState, CONTROLLER_STATE};
 use app_runtime_core::error::AppErrorCode;
 use app_runtime_core::lock::{acquire_runtime, RuntimeUnavailable};
 use app_runtime_core::module::{ModuleContext, ModuleRegistry};
@@ -58,30 +58,6 @@ impl Controller {
             return;
         }
 
-        // 状态机预检（计划 §11/§41）：本进程已绑定（或正在停止/已停止）时，
-        // 重复握手一律 APP_RUNTIME_*，不得先去抢运行锁返回误导性错误。
-        {
-            let state = CONTROLLER_STATE.lock().unwrap();
-            let code = match &*state {
-                ControllerState::Bound(_) | ControllerState::Ready(_) => {
-                    Some(AppErrorCode::AlreadyBound)
-                }
-                ControllerState::Stopping => Some(AppErrorCode::Stopping),
-                ControllerState::Stopped => Some(AppErrorCode::Stopped),
-                ControllerState::Booting => None,
-            };
-            if let Some(code) = code {
-                drop(state);
-                write_error(
-                    &req.id,
-                    code,
-                    format!("runtime already bound to another handshake (app '{app_id}')"),
-                    false,
-                );
-                return;
-            }
-        }
-
         // 校验激活投影
         let product_version = params.product_version.as_deref().unwrap_or("0.1.0");
         let activation = match app_runtime_core::verify_activation_with_generation(
@@ -98,6 +74,84 @@ impl Controller {
                 return;
             }
         };
+
+        // 状态机预检与多 Surface 握手支持（ADR-0042 / F04）：
+        // 若本进程已处于 Bound 或 Ready 状态且 appId 一致，直接复用既有模块实例返回当前状态；
+        // 跨模块混用或进程处于停止状态时才严格拒绝。
+        {
+            let state = CONTROLLER_STATE.lock().unwrap();
+            let bound_generation = match &*state {
+                ControllerState::Bound(bound) => Some(bound.activation_generation),
+                ControllerState::Ready(ready) => Some(ready.bound.activation_generation),
+                _ => None,
+            };
+            if bound_generation.is_some_and(|generation| generation != activation.generation) {
+                drop(state);
+                write_error(
+                    &req.id,
+                    AppErrorCode::InstallationChanged,
+                    "product generation changed; reopen the module",
+                    false,
+                );
+                return;
+            }
+            match &*state {
+                ControllerState::Bound(bound) if bound.app_id == *app_id => {
+                    let descriptor = bound.module.lock().unwrap().descriptor();
+                    let res = HandshakeResultV2 {
+                        protocol_version: APP_PROTOCOL_VERSION_V2,
+                        app_id: app_id.clone(),
+                        module_api_version: descriptor.module_api_version,
+                        data_schema_version: descriptor.data_schema_version,
+                        capability_version: descriptor.capability_version,
+                        state: "initialized".into(),
+                    };
+                    drop(state);
+                    write_json_response(&req.id, true, Some(res), None);
+                    return;
+                }
+                ControllerState::Ready(ready) if ready.bound.app_id == *app_id => {
+                    let descriptor = ready.bound.module.lock().unwrap().descriptor();
+                    let res = HandshakeResultV2 {
+                        protocol_version: APP_PROTOCOL_VERSION_V2,
+                        app_id: app_id.clone(),
+                        module_api_version: descriptor.module_api_version,
+                        data_schema_version: descriptor.data_schema_version,
+                        capability_version: descriptor.capability_version,
+                        state: "initialized".into(),
+                    };
+                    drop(state);
+                    write_json_response(&req.id, true, Some(res), None);
+                    return;
+                }
+                ControllerState::Bound(_) | ControllerState::Ready(_) => {
+                    drop(state);
+                    write_error(
+                        &req.id,
+                        AppErrorCode::AlreadyBound,
+                        format!("runtime already bound to another handshake (app '{app_id}')"),
+                        false,
+                    );
+                    return;
+                }
+                ControllerState::Stopping => {
+                    drop(state);
+                    write_error(
+                        &req.id,
+                        AppErrorCode::Stopping,
+                        "runtime is stopping",
+                        false,
+                    );
+                    return;
+                }
+                ControllerState::Stopped => {
+                    drop(state);
+                    write_error(&req.id, AppErrorCode::Stopped, "runtime stopped", false);
+                    return;
+                }
+                ControllerState::Booting => {}
+            }
+        }
 
         // 获取运行时独占锁
         let lease = match acquire_runtime(apps_root, app_id) {
@@ -178,8 +232,11 @@ impl Controller {
                 ControllerState::Booting => {
                     *state = ControllerState::Bound(BoundRuntime {
                         app_id: app_id.to_string(),
+                        activation_generation: activation.generation,
                         instance_id: instance_id.clone(),
                         module: Arc::new(Mutex::new(module)),
+                        capabilities: activation.capabilities.clone(),
+                        secrets: Arc::new(app_runtime_core::secrets::SecretStore::for_app(app_id)),
                         _lease: lease,
                     });
                 }

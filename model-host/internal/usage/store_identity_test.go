@@ -7,6 +7,7 @@ package usage
 //   - legacy 身份迁移：旧记录迁移为可识别 legacy-default。
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -253,7 +254,7 @@ func TestCollectorPartialFileError(t *testing.T) {
 	}
 	defer os.Chmod(bad, 0o600)
 
-	summary, err := s.CollectSources()
+	summary, err := s.CollectSources(context.Background())
 	if err != nil {
 		t.Fatalf("CollectSources: %v", err)
 	}
@@ -295,7 +296,7 @@ func TestCollectorPartialFileError(t *testing.T) {
 
 	// 修复后重扫：ready 且 lastSuccessAt 更新。
 	os.Chmod(bad, 0o600)
-	summary2, err := s.CollectSources()
+	summary2, err := s.CollectSources(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -330,7 +331,7 @@ func TestCollectorSymlinkRefused(t *testing.T) {
 	if err := os.WriteFile(good, []byte(goodLine+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	summary, err := s.CollectSources()
+	summary, err := s.CollectSources(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -380,14 +381,14 @@ func TestCollectorTruncationRereads(t *testing.T) {
 	if err := os.WriteFile(fp, []byte(line("r1")+"\n"+line("r2")+"\n"+line("r4")+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.CollectSources(); err != nil {
+	if _, err := s.CollectSources(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	// 模拟轮转：同名文件被替换为更短内容（含一条已见 + 一条新请求）。
 	if err := os.WriteFile(fp, []byte(line("r1")+"\n"+line("r3")+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.CollectSources(); err != nil {
+	if _, err := s.CollectSources(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	// r1/r2/r4 不重复计量；r3 通过重读补齐导入（billing_atom 幂等验证）。

@@ -3,6 +3,7 @@ package usage
 // 逐来源与单文件采集实现（collector.go 的注册表/状态机拆分；整改 E1/E2）。
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -14,8 +15,9 @@ import (
 )
 
 // --- 逐来源实现 -----------------------------------------------------------
+// （collector.go：nativeSources 注册表与 CollectSources 主循环）
 
-func collectClaudeSource(s *Store, root string, now time.Time) collectResult {
+func collectClaudeSource(ctx context.Context, s *Store, root string, now time.Time) collectResult {
 	var res collectResult
 	info, err := os.Stat(root)
 	if err != nil || !info.IsDir() {
@@ -24,8 +26,8 @@ func collectClaudeSource(s *Store, root string, now time.Time) collectResult {
 	res.present = true
 	instance := deriveInstanceID("claude-code", root)
 	projectsDir := filepath.Join(root, "projects")
-	files, walkErrs, walkErr := findFilesWithExt(projectsDir, ".jsonl")
-	res.fileErrs = append(res.fileErrs, walkErrs...)
+	files, walkErrs, walkErr := findFilesWithExt(ctx, projectsDir, ".jsonl")
+	res.addFileError(walkErrs...)
 	if walkErr != nil {
 		res.wholeErr = walkErr
 		return res
@@ -38,8 +40,12 @@ func collectClaudeSource(s *Store, root string, now time.Time) collectResult {
 	sortFilesNewestFirst(files)
 	totalBytes := int64(0)
 	for _, fp := range files {
+		if ctx.Err() != nil {
+			res.addCancelled(root)
+			return res
+		}
 		if err := checkSourceBudget(&totalBytes, fp); err != nil {
-			res.fileErrs = append(res.fileErrs, *err)
+			res.addFileError(*err)
 			break
 		}
 		// 单文件内部分块续读：游标未到文件尾且预算未耗尽时继续
@@ -47,7 +53,7 @@ func collectClaudeSource(s *Store, root string, now time.Time) collectResult {
 		for {
 			imported, bytes, err := s.collectClaudeFile(fp, now, instance)
 			if err != nil {
-				res.fileErrs = append(res.fileErrs, fileReadError(root, fp, err))
+				res.addFileError(fileReadError(root, fp, err))
 				break
 			}
 			if bytes > 0 {
@@ -64,7 +70,7 @@ func collectClaudeSource(s *Store, root string, now time.Time) collectResult {
 	return res
 }
 
-func collectCodexSource(s *Store, root string, now time.Time) collectResult {
+func collectCodexSource(ctx context.Context, s *Store, root string, now time.Time) collectResult {
 	var res collectResult
 	info, err := os.Stat(root)
 	if err != nil || !info.IsDir() {
@@ -79,8 +85,8 @@ func collectCodexSource(s *Store, root string, now time.Time) collectResult {
 	var files []string
 	for _, dir := range dirs {
 		for _, ext := range exts {
-			found, walkErrs, walkErr := findFilesWithExt(dir, ext)
-			res.fileErrs = append(res.fileErrs, walkErrs...)
+			found, walkErrs, walkErr := findFilesWithExt(ctx, dir, ext)
+			res.addFileError(walkErrs...)
 			if walkErr != nil {
 				res.wholeErr = walkErr
 				return res
@@ -91,21 +97,25 @@ func collectCodexSource(s *Store, root string, now time.Time) collectResult {
 	sortFilesNewestFirst(files)
 	totalBytes := int64(0)
 	for _, fp := range files {
+		if ctx.Err() != nil {
+			res.addCancelled(root)
+			return res
+		}
 		if err := checkSourceBudget(&totalBytes, fp); err != nil {
-			res.fileErrs = append(res.fileErrs, *err)
+			res.addFileError(*err)
 			break
 		}
 		for {
-			imported, bytes, err := s.collectCodexFile(fp, now, instance)
-			if err != nil {
-				res.fileErrs = append(res.fileErrs, fileReadError(root, fp, err))
-				break
-			}
+			imported, bytes, err := s.collectCodexFile(ctx, fp, now, instance)
 			if bytes > 0 {
 				res.files++
 				res.imported += imported
 				res.bytesRead += bytes
 				totalBytes += bytes
+			}
+			if err != nil {
+				res.addFileError(fileReadError(root, fp, err))
+				break
 			}
 			if bytes == 0 || totalBytes >= maxTotalBytesPerSource {
 				break
@@ -115,28 +125,28 @@ func collectCodexSource(s *Store, root string, now time.Time) collectResult {
 	return res
 }
 
-func collectPiSource(s *Store, root string, now time.Time) collectResult {
-	return collectJSONLSessionDir(s, root, "pi", "Pi", s.collectPiFile, now)
+func collectPiSource(ctx context.Context, s *Store, root string, now time.Time) collectResult {
+	return collectJSONLSessionDir(ctx, s, root, "pi", "Pi", s.collectPiFile, now)
 }
 
-func collectKimiSource(s *Store, root string, now time.Time) collectResult {
-	return collectJSONLSessionDir(s, filepath.Join(root, "sessions"), "kimi-code", "Kimi Code", s.collectKimiFile, now)
+func collectKimiSource(ctx context.Context, s *Store, root string, now time.Time) collectResult {
+	return collectJSONLSessionDir(ctx, s, filepath.Join(root, "sessions"), "kimi-code", "Kimi Code", s.collectKimiFile, now)
 }
 
-func collectAtomcodeSource(s *Store, root string, now time.Time) collectResult {
-	return collectJSONLSessionDir(s, filepath.Join(root, "sessions"), "atomcode", "AtomCode", s.collectAtomcodeFile, now)
+func collectAtomcodeSource(ctx context.Context, s *Store, root string, now time.Time) collectResult {
+	return collectJSONLSessionDir(ctx, s, filepath.Join(root, "sessions"), "atomcode", "AtomCode", s.collectAtomcodeFile, now)
 }
 
 // collectJSONLSessionDir 为「目录下每 .jsonl 一个会话」来源的通用扫描。
-func collectJSONLSessionDir(s *Store, dir, toolID, displayName string, collectFile func(string, time.Time, string) (int64, int64, error), now time.Time) collectResult {
+func collectJSONLSessionDir(ctx context.Context, s *Store, dir, toolID, displayName string, collectFile func(string, time.Time, string) (int64, int64, error), now time.Time) collectResult {
 	var res collectResult
 	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
 		return res
 	}
 	res.present = true
 	instance := deriveInstanceID(toolID, dir)
-	files, walkErrs, walkErr := findFilesWithExt(dir, ".jsonl")
-	res.fileErrs = append(res.fileErrs, walkErrs...)
+	files, walkErrs, walkErr := findFilesWithExt(ctx, dir, ".jsonl")
+	res.addFileError(walkErrs...)
 	if walkErr != nil {
 		res.wholeErr = walkErr
 		return res
@@ -144,14 +154,18 @@ func collectJSONLSessionDir(s *Store, dir, toolID, displayName string, collectFi
 	sortFilesNewestFirst(files)
 	totalBytes := int64(0)
 	for _, fp := range files {
+		if ctx.Err() != nil {
+			res.addCancelled(dir)
+			return res
+		}
 		if err := checkSourceBudget(&totalBytes, fp); err != nil {
-			res.fileErrs = append(res.fileErrs, *err)
+			res.addFileError(*err)
 			break
 		}
 		for {
 			imported, bytes, err := collectFile(fp, now, instance)
 			if err != nil {
-				res.fileErrs = append(res.fileErrs, fileReadError(dir, fp, err))
+				res.addFileError(fileReadError(dir, fp, err))
 				break
 			}
 			if bytes > 0 {
@@ -168,8 +182,12 @@ func collectJSONLSessionDir(s *Store, dir, toolID, displayName string, collectFi
 	return res
 }
 
-func collectHermesSource(s *Store, root string, now time.Time) collectResult {
+func collectHermesSource(ctx context.Context, s *Store, root string, now time.Time) collectResult {
 	var res collectResult
+	if ctx.Err() != nil {
+		res.addCancelled(root)
+		return res
+	}
 	dbPath := filepath.Join(root, "state.db")
 	info, err := os.Stat(dbPath)
 	if err != nil || info.IsDir() {
@@ -189,8 +207,12 @@ func collectHermesSource(s *Store, root string, now time.Time) collectResult {
 	return res
 }
 
-func collectOpenCodeSource(s *Store, root string, now time.Time) collectResult {
+func collectOpenCodeSource(ctx context.Context, s *Store, root string, now time.Time) collectResult {
 	var res collectResult
+	if ctx.Err() != nil {
+		res.addCancelled(root)
+		return res
+	}
 	dbPath := filepath.Join(root, "opencode.db")
 	info, err := os.Stat(dbPath)
 	if err != nil || info.IsDir() {
@@ -210,8 +232,12 @@ func collectOpenCodeSource(s *Store, root string, now time.Time) collectResult {
 	return res
 }
 
-func collectZCodeSource(s *Store, root string, now time.Time) collectResult {
+func collectZCodeSource(ctx context.Context, s *Store, root string, now time.Time) collectResult {
 	var res collectResult
+	if ctx.Err() != nil {
+		res.addCancelled(root)
+		return res
+	}
 	dbPath := filepath.Join(root, "cli", "db", "db.sqlite")
 	if info, err := os.Stat(dbPath); err == nil && !info.IsDir() {
 		res.present = true
@@ -521,49 +547,6 @@ func (s *Store) collectClaudeFile(filePath string, now time.Time, instanceID str
 	return imported, int64(len(validBuf)), nil
 }
 
-func (s *Store) collectCodexFile(filePath string, now time.Time, instanceID string) (int64, int64, error) {
-	info, err := os.Stat(filePath)
-	if err != nil || info.Size() == 0 {
-		return 0, 0, nil
-	}
-	fpHash := fileFingerprint(filePath)
-	offset := s.getCursorOffset("codex", fpHash)
-	if offset > info.Size() {
-		// 轮转/截断：文件比游标短——从 0 重读；billingAtom 唯一索引
-		// 幂等去重，已导入部分不会重复计量（§5.1.7 恢复语义）。
-		offset = 0
-	} else if offset == info.Size() {
-		return 0, 0, nil
-	}
-
-	file, err := os.Open(filePath)
-	if err != nil {
-		return 0, 0, err
-	}
-	defer file.Close()
-
-	if offset > 0 {
-		if _, err := file.Seek(offset, io.SeekStart); err != nil {
-			return 0, 0, err
-		}
-	}
-
-	validBuf, newOffset, err := readBoundedLines(file, offset, info.Size())
-	if err != nil {
-		return 0, 0, err
-	}
-	if len(validBuf) == 0 {
-		return 0, 0, nil
-	}
-
-	events, _, _, lastBL := ParseCodexSessionsWithBaseline(validBuf, now, s.getCodexBaseline("codex", fpHash), fpHash)
-	imported := s.insertNativeEvents(events, "codex", "Codex", instanceID)
-	// 累计基线与文件游标同事务持久化（§3.2）：分批续读对上一批求差。
-	s.saveCodexBaseline("codex", fpHash, lastBL)
-	s.saveCursorOffset("codex", fpHash, newOffset, "codex-sessions/1")
-	return imported, int64(len(validBuf)), nil
-}
-
 // readBoundedLines 有界读取（单批至多 10 MiB）并在最后一个换行处截断，
 // 半行不提交（游标不得越过未完成记录，§6.2/§11.1）。
 func readBoundedLines(file *os.File, offset, size int64) ([]byte, int64, error) {
@@ -600,29 +583,4 @@ func (s *Store) commitParsedEvents(events []NativeEvent, toolID, displayName, pa
 	imported := s.insertNativeEvents(events, toolID, displayName, instanceID)
 	s.saveCursorOffset(toolID, fpHash, newOffset, parserVersion)
 	return imported
-}
-
-// getCodexBaseline 读取该文件游标上持久化的 Codex 累计基线。
-func (s *Store) getCodexBaseline(sourceID, fp string) codexCursorBaseline {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	var bl codexCursorBaseline
-	_ = s.db.QueryRow(
-		`SELECT baseline_in, baseline_cache, baseline_out, baseline_epoch
-		 FROM usage_import_cursors WHERE source_id = ? AND file_fingerprint = ?`,
-		sourceID, fp,
-	).Scan(&bl.In, &bl.Cache, &bl.Out, &bl.Epoch)
-	return bl
-}
-
-// saveCodexBaseline 持久化该文件游标上最新累计基线（与游标写入同表）。
-func (s *Store) saveCodexBaseline(sourceID, fp string, bl codexCursorBaseline) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	_, _ = s.db.Exec(
-		`UPDATE usage_import_cursors
-		 SET baseline_in = ?, baseline_cache = ?, baseline_out = ?, baseline_epoch = ?
-		 WHERE source_id = ? AND file_fingerprint = ?`,
-		bl.In, bl.Cache, bl.Out, bl.Epoch, sourceID, fp,
-	)
 }

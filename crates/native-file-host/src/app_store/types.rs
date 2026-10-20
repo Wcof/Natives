@@ -2,32 +2,25 @@
 
 use serde::Serialize;
 
-pub const KIND_MANAGED_LOCAL: &str = "managed_local";
-pub const MANAGED_PAYLOAD_MAX_BYTES: u64 = 128 * 1024 * 1024;
-
 #[derive(Debug, Serialize)]
 pub struct App {
     pub app_id: String,
-    pub kind: String,
     pub name: String,
     pub version: String,
     pub enabled: bool,
     pub show_in_sidebar: bool,
     pub sidebar_order: i64,
-    pub runtime_spec_json: String,
-    pub surface_json: String,
-    pub manifest_json: String,
-    pub installed_at: i64,
     pub updated_at: i64,
     pub revision: i64,
-    pub host_registered: bool,
-    pub runtime_host: Option<String>,
-    pub needs_migration: bool,
-    pub activation_generation: Option<u64>,
+    pub product_generation: Option<u64>,
+    pub capabilities: Vec<String>,
+    pub requires: Vec<String>,
+    pub views: Vec<String>,
 }
 
 #[derive(Debug)]
 pub enum AppError {
+    Busy,
     NotFound(String),
     InvalidState(String),
     PackageInvalid(String),
@@ -39,6 +32,7 @@ pub enum AppError {
 impl AppError {
     pub fn code(&self) -> &'static str {
         match self {
+            Self::Busy => "APP_BUSY",
             Self::NotFound(_) => "APP_NOT_FOUND",
             Self::InvalidState(_) => "APP_INVALID_STATE",
             Self::PackageInvalid(_) => "APP_PACKAGE_INVALID",
@@ -52,6 +46,7 @@ impl AppError {
 impl std::fmt::Display for AppError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Busy => write!(f, "module is in use"),
             Self::NotFound(target) => write!(f, "app not found: {target}"),
             Self::InvalidState(message) => write!(f, "invalid app state: {message}"),
             Self::PackageInvalid(message) => write!(f, "invalid product content: {message}"),

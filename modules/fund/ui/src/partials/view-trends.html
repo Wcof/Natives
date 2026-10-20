@@ -1,0 +1,233 @@
+      <!-- 趋势研究工作台 -->
+      <section id="view-trends" hidden>
+        <div class="trends-workspace">
+          <!-- 顶部搜索与快捷操作 -->
+          <div class="topbar">
+            <div class="topbar-left">
+              <div class="logo"><svg class="svg-icon" aria-hidden="true" style="width:14px;height:14px;margin-right:2px"><use href="#i-bolt" /></svg><span data-i18n="fundTrendsUi1">趋势分析</span></div>
+              <div class="search-wrap">
+                <input type="text" id="search-input" placeholder="代码/名称 如 600519" autocomplete="off">
+                <div class="search-results" id="search-results"></div>
+              </div>
+              <button class="scan-btn" id="scan-btn" onclick="openScan()"><span data-i18n="fundTrendsUi2">扫描买入</span></button>
+            </div>
+            <div class="topbar-right">
+              <button type="button" class="tb-btn" id="trends-ai-review" data-i18n="fundTrendsAiReview">AI 复核</button>
+              <button class="tb-btn" id="btn-focus-mode" data-i18n="fundFocusBadge" data-i18n-title="fundFocusBadge" title="专注模式" aria-label="专注模式"><svg class="svg-icon" aria-hidden="true"><use href="#i-panel" /></svg></button>
+              <div class="mode-toggle">
+                <button class="mt-btn active" id="mt-pro" onclick="setMode('pro')"><span data-i18n="fundTrendsUi3">专业</span></button>
+                <button class="mt-btn" id="mt-simple" onclick="setMode('simple')" data-i18n="fundTrendsSimple">简洁</button>
+              </div>
+              <div class="watch-wrap">
+                <button class="wc-btn wc-star" id="star-btn" title="加入/移除自选">☆</button>
+                <button class="wc-btn" id="watch-btn" style="position:relative"><span data-i18n="fundTrendsUi4">自选</span><span class="wc-badge" id="watch-count" style="display:none">0</span><span class="wc-change-badge" id="watch-change" style="display:none">0</span></button>
+                <button class="wc-btn" id="history-btn"><span data-i18n="fundTrendsUi5">历史</span><span class="wc-badge" id="history-count" style="display:none">0</span></button>
+                <div class="wp-panel" id="wp-panel">
+                  <div class="wp-tabs">
+                    <button class="wp-tab active" data-tab="watch"><span data-i18n="fundTrendsUi6">自选股</span><span class="wp-tab-count" id="wt-count"></span></button>
+                    <button class="wp-tab" data-tab="history"><span data-i18n="fundTrendsUi7">历史记录</span><span class="wp-tab-count" id="ht-count"></span></button>
+                    <button class="wp-tab" data-tab="overview"><span data-i18n="fundTrendsUi8">多股一览</span><span class="wp-tab-count" id="ov-count"></span></button>
+                  </div>
+                  <div class="wp-list" id="wp-content-watch"></div>
+                  <div class="wp-list" id="wp-content-history" style="display:none"></div>
+                  <div class="wp-list" id="wp-content-overview" style="display:none"></div>
+                  <div class="wp-footer" id="wp-footer" style="display:none">
+                    <span class="wp-footer-info" id="wp-footer-info"></span>
+                    <button class="wp-clear" id="wp-clear-btn"><span data-i18n="fundTrendsUi9">清空</span></button>
+                  </div>
+                </div>
+              </div>
+
+            </div>
+              <div class="quote-bar" id="quote-bar">
+                <span class="qb-name flat"><span data-i18n="fundTrendsUi10">输入代码开始分析</span></span>
+              </div>
+          </div>
+
+          <!-- 双栏主体：左侧 ECharts 大图区 + 右侧 AI 决策卡片面板（1:1 复刻原始 dashboard） -->
+          <div class="main">
+            <!-- ===== 左侧：图表 ===== -->
+            <div class="left-panel">
+              <div class="chart-toolbar" id="trends-chart-toolbar">
+                <div class="chart-query-tools">
+                <button class="tb-btn active" id="view-dayk"><span data-i18n="fundTrendsUi11">日K</span></button>
+                <button class="tb-btn" id="view-week"><span data-i18n="fundTrendsUi12">周K</span></button>
+                <button class="tb-btn" id="view-month"><span data-i18n="fundTrendsUi13">月K</span></button>
+                <button class="tb-btn" id="view-minute"><span data-i18n="fundTrendsUi14">分时</span></button>
+                <label id="trends-fq-group"><span data-i18n="fundTrendsAdjustment">复权</span><select id="trends-fq"><option value="qfq" data-i18n="fundTrendsQfq">前复权</option><option value="hfq" data-i18n="fundTrendsHfq">后复权</option><option value="bf" data-i18n="fundTrendsBf">不复权</option></select></label>
+                <div class="tb-sep" id="sep-range"></div>
+                <button class="tb-btn" data-range="20"><span data-i18n="fundTrendsUi15">1月</span></button>
+                <button class="tb-btn active" data-range="60"><span data-i18n="fundTrendsUi16">3月</span></button>
+                <button class="tb-btn" data-range="120"><span data-i18n="fundTrendsUi17">半年</span></button>
+                <button class="tb-btn" data-range="250"><span data-i18n="fundTrendsUi18">1年</span></button>
+                <button class="tb-btn" data-range="0"><span data-i18n="fundTrendsUi19">全部</span></button>
+                <div class="tb-sep"></div>
+                </div>
+                <div class="chart-drawing-tools">
+                <!-- 划线工具：复用 tb-btn 样式；trendline=趋势线 horizontal=水平线(止损价) rectangle=矩形 channel=通道 -->
+                <button class="tb-btn td-btn" data-tool="cursor" title="光标（选中/拖拽已画线条，Delete 删除选中）"><span data-i18n="fundTrendsUi20">光标</span></button>
+                <button class="tb-btn td-btn" data-tool="trendline" title="趋势线：按下拖动绘制"><span data-i18n="fundTrendsUi21">趋势线</span></button>
+                <button class="tb-btn td-btn" data-tool="horizontal" title="水平线（止损/支撑/压力价）：单击放置"><span data-i18n="fundTrendsUi22">水平线</span></button>
+                <button class="tb-btn td-btn" data-tool="rectangle" title="矩形区域：按下拖动绘制"><span data-i18n="fundTrendsUi23">矩形</span></button>
+                <button class="tb-btn td-btn" data-tool="channel" title="通道：先拖出基线，再拖动定平行线宽度"><span data-i18n="fundTrendsUi24">通道</span></button>
+                <button type="button" class="tb-btn td-btn" data-tool="polyline" data-i18n="fundChartToolpolyline">折线</button>
+                <button type="button" class="tb-btn td-btn" data-tool="circle" data-i18n="fundChartToolcircle">椭圆</button>
+                <button type="button" class="tb-btn td-btn" data-tool="fibonacci" data-i18n="fundChartToolfibonacci">斐波那契</button>
+                <button type="button" class="tb-btn td-btn" data-tool="measure" data-i18n="fundChartToolmeasure">测距</button>
+                <button type="button" class="tb-btn td-btn" data-tool="text" data-i18n="fundChartTooltext">文字</button>
+                <button class="tb-btn td-btn" id="btn-draw-clear" title="删除当前选中的划线"><span data-i18n="fundTrendsUi25">删除</span></button>
+                <div class="tb-sep"></div>
+                <span class="tb-label" id="zoom-info"></span>
+                </div>
+              </div>
+
+              <div class="chart-container">
+                <p id="trends-empty" class="research-empty" role="status" data-i18n="fundTrendsEmpty">搜索并选择证券后，查看真实行情与规则分析。</p>
+                <div id="kline-chart" tabindex="0" data-i18n-aria-label="fundChartKeyboard" aria-label="K 线图，方向键逐根读取"></div>
+                <p id="trends-query-status" class="chart-readout" role="status"></p>
+                <p id="trends-chart-readout" role="status" class="chart-readout"></p>
+                <div class="chart-access-controls">
+                  <button type="button" data-chart-action="in" data-i18n="fundChartZoomIn">放大</button>
+                  <button type="button" data-chart-action="out" data-i18n="fundChartZoomOut">缩小</button>
+                  <button type="button" data-chart-action="left" data-i18n="fundChartEarlier">向前</button>
+                  <button type="button" data-chart-action="right" data-i18n="fundChartLater">向后</button>
+                  <button type="button" data-chart-action="reset" data-i18n="fundChartReset">重置视口</button>
+                  <button type="button" data-chart-action="table" data-i18n="fundChartData">数据表</button>
+                </div>
+                <dialog id="trends-data-dialog" aria-labelledby="trends-data-title">
+                  <h3 id="trends-data-title" data-i18n="fundChartData">数据表</h3>
+                  <button type="button" data-chart-action="close" data-i18n="fundHomeClose">关闭</button>
+                  <div class="home-table-scroll" tabindex="0"><table><thead id="trends-data-head"></thead><tbody id="trends-data-body"></tbody></table></div>
+                  <p id="trends-data-page" role="status"></p>
+                  <button type="button" data-chart-action="prev" data-i18n="fundChartPrev">上一页</button>
+                  <button type="button" data-chart-action="next" data-i18n="fundChartNext">下一页</button>
+                </dialog>
+                <div id="volume-chart"></div>
+                <div class="indicator-toolbar" id="indicator-toolbar" style="display:none">
+                  <button class="it-btn active" data-ind="none" onclick="switchIndicator('none')"><span data-i18n="fundMarketUiIndicator">副图</span></button>
+                  <button class="it-btn" data-ind="macd" onclick="switchIndicator('macd')">MACD</button>
+                  <button class="it-btn" data-ind="rsi" onclick="switchIndicator('rsi')">RSI</button>
+                  <button class="it-btn" data-ind="kdj" onclick="switchIndicator('kdj')">KDJ</button>
+                  <button class="it-btn" data-ind="boll" onclick="switchIndicator('boll')">BOLL</button>
+                  <button class="it-btn" data-ind="wr" onclick="switchIndicator('wr')">WR</button>
+                </div>
+                <div id="indicator-chart"></div>
+                <div id="minute-chart"></div>
+                <div id="minute-vol"></div>
+                <div class="flow-section">
+                  <div class="fs-title">
+                    <span style="color:var(--natives-accent)"><span data-i18n="fundTrendsUi26">资金流向</span></span>
+                    <span id="flow-summary"></span>
+                    <span class="flow-toggle">
+                      <button class="ft-btn ft-active" id="ft-rt" onclick="switchFlowMode('realtime')"><span data-i18n="fundTrendsUi27">今日实时</span></button>
+                      <button class="ft-btn" id="ft-daily" onclick="switchFlowMode('daily')"><span data-i18n="fundTrendsUi28">近30日</span></button>
+                    </span>
+                  </div>
+                  <div id="flow-chart"></div>
+                </div>
+                <div class="loading-overlay" id="loading"><div class="spinner"></div></div>
+                <div id="signal-tooltip"></div>
+              </div>
+            </div>
+
+            <!-- ===== 右侧：AI 决策卡片流（工作台内部右栏，随本页签显示；
+                 独立于外层通用看板的折叠状态） ===== -->
+            <div class="right-panel" id="trends-right-panel">
+              <!-- 一句话总结（小白第一眼看的） -->
+              <div class="summary-card" id="summary-card">
+                <button type="button" aria-expanded="true" class="sc-header" onclick="toggleCard(this)"><span data-i18n="fundTrendsRuleSummary">规则分析结论</span><span class="sc-arrow">▼</span></button>
+                <div class="sum-body" id="sum-body">
+                  <div class="sum-action-row">
+                    <span class="sum-badge sum-badge-watch"><span data-i18n="fundTrendsUi29">等待分析</span></span>
+                    <span class="sum-strength">--</span>
+                    <span class="sum-score-big flat">--</span>
+                  </div>
+                  <div class="sum-text" style="color:var(--natives-text-muted)"><span data-i18n="fundTrendsUi30">输入股票代码或点击上方热门股票开始分析</span></div>
+                </div>
+              </div>
+
+              <!-- 操作计划（具体怎么操作） -->
+              <div class="plan-card" id="plan-card" style="display:none">
+                <button type="button" aria-expanded="true" class="sc-header" style="color:var(--natives-accent)" onclick="toggleCard(this)"><span data-i18n="fundTrendsUi31">操作计划</span><span class="sc-arrow">▼</span></button>
+                <div class="plan-body" id="plan-body"></div>
+              </div>
+
+              <!-- 关键价位 -->
+              <div class="signal-card" data-card="levels">
+                <button type="button" aria-expanded="true" class="sc-header" onclick="toggleCard(this)"><span data-i18n="fundTrendsUi36">关键阻力与支撑价位</span><span class="sc-arrow">▼</span></button>
+                <div class="kl-grid" id="kl-grid"></div>
+                <div class="panel-empty-hint" id="kl-empty-hint"><span data-i18n="fundTrendsUi40">分析标的后计算关键阻力支撑位</span></div>
+              </div>
+
+              <details class="research-diagnostics"><summary data-i18n="fundTrendsDiagnostics"></summary>
+              <!-- 大盘环境 -->
+              <div class="signal-card" id="market-card" style="display:none">
+                <button type="button" aria-expanded="true" class="sc-header" style="color:var(--series-6)" onclick="toggleCard(this)"><span data-i18n="fundTrendsUi32">大盘环境</span><span class="sc-arrow">▼</span></button>
+                <div id="market-body" style="padding:8px 12px;font-size:12px;line-height:1.6"></div>
+              </div>
+
+              <!-- 模块评分 -->
+              <div class="signal-card" data-card="module">
+                <button type="button" aria-expanded="true" class="sc-header" onclick="toggleCard(this)"><span data-i18n="fundTrendsUi33">模块评分</span><span class="sc-arrow">▼</span></button>
+                <div class="module-list" id="module-list">
+                  <div class="panel-empty-hint"><span data-i18n="fundTrendsUi37">分析标的后展示5大模块量化评分</span></div>
+                </div>
+              </div>
+
+              <!-- 买卖信号 -->
+              <div class="signal-card" data-card="signals">
+                <button type="button" aria-expanded="true" class="sc-header" onclick="toggleCard(this)"><span data-i18n="fundTrendsUi34">买卖信号</span><span class="sc-arrow">▼</span></button>
+                <div class="sig-list" id="sig-list">
+                  <div class="panel-empty-hint"><span data-i18n="fundTrendsUi38">分析标的后展示核心买卖点与提示</span></div>
+                </div>
+              </div>
+
+              <!-- CANSLIM -->
+              <div class="signal-card" data-card="canslim">
+                <button type="button" aria-expanded="true" class="sc-header" onclick="toggleCard(this)"><span data-i18n="fundTrendsUi35">CAN SLIM 基本面</span><span class="sc-arrow">▼</span></button>
+                <div class="cs-grid" id="cs-grid"></div>
+                <div id="cs-simple"></div>
+                <div class="panel-empty-hint" id="cs-empty-hint"><span data-i18n="fundTrendsUi39">分析标的后展示7维度基本面打分</span></div>
+              </div>
+
+              <!-- 缠论日线/周线分析 -->
+              <div class="chanlun-card" id="chanlun-daily-card" data-card="chanlun-daily" style="display:none">
+                <button type="button" aria-expanded="true" class="sc-header" style="color:var(--series-5)" id="chanlun-daily-title" onclick="toggleCard(this)"><span id="chanlun-daily-label"><span data-i18n="fundMarketUiDailyChanAnalysis">缠论日线分析</span></span><span class="sc-arrow">▼</span></button>
+                <div class="cl-body" id="chanlun-daily-body"></div>
+              </div>
+
+              <!-- 缠论分时分析 -->
+              <div class="chanlun-card" id="chanlun-card" data-card="chanlun-minute" style="display:none">
+                <button type="button" aria-expanded="true" class="sc-header" style="color:var(--natives-accent)" onclick="toggleCard(this)"><span data-i18n="fundMarketUiIntradayChanAnalysis">缠论分时分析</span><span class="sc-arrow">▼</span></button>
+                <div class="cl-body" id="chanlun-body"></div>
+              </div>
+
+              <!-- 信号准确率 -->
+              <div class="signal-card signal-accuracy-card" id="accuracy-card" data-card="accuracy" style="display:none">
+                <button type="button" aria-expanded="true" class="sc-header" onclick="toggleCard(this)"><span data-i18n="fundMarketUiSignalObservations">信号准确率</span><span class="sc-arrow">▼</span></button>
+                <div class="sa-stats" id="sa-stats"></div>
+                <div class="sa-detail" id="sa-detail"></div>
+              </div>
+
+              <!-- 风险提示 -->
+              <div class="signal-card" id="risk-card" data-card="risk" style="display:none">
+                <button type="button" aria-expanded="true" class="sc-header" style="color:var(--natives-warning)" onclick="toggleCard(this)"><span data-i18n="fundMarketUiRiskNotes">风险提示</span><span class="sc-arrow">▼</span></button>
+                <div class="sig-list" id="risk-list"></div>
+              </div></details>
+            </div>
+          </div>
+        </div>
+
+        <!-- 全市场扫描买入弹窗 -->
+        <dialog class="scan-overlay" id="scan-overlay" aria-labelledby="scan-title">
+          <div class="scan-modal" onclick="event.stopPropagation()">
+            <div class="scan-header">
+              <span class="scan-title" id="scan-title" data-i18n="fundScanTitle">全市场扫描</span>
+              <button class="scan-close" data-i18n-aria-label="fundHomeClose" onclick="closeScan()">&times;</button>
+            </div>
+            <div class="scan-body" id="scan-body">
+              <div id="scan-content"></div>
+            </div>
+          </div>
+        </dialog>
+      </section>

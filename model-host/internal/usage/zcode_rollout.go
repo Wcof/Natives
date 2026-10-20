@@ -220,6 +220,39 @@ func ParseZCodeDB(dbPath string, afterMS int64, limit int) ([]NativeEvent, int64
 	return events, maxMS, nil
 }
 
+// syncZCodeSessionTitles 同步 ZCode 会话标题到 usage_subjects（kind=session）。
+// 独立于用量事件采集：即使无新用量，标题生成/改名也应持续反映。表缺失或
+// 读失败静默跳过——标题是增强信息，不允许拖垮采集主链路。
+func (s *Store) syncZCodeSessionTitles(dbPath string) {
+	db, err := sql.Open("sqlite", fmt.Sprintf("file:%s?mode=ro", dbPath))
+	if err != nil {
+		return
+	}
+	defer db.Close()
+
+	var hasTable int
+	if err := db.QueryRow(
+		"SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='session'",
+	).Scan(&hasTable); err != nil || hasTable == 0 {
+		return
+	}
+	rows, err := db.Query(`SELECT id, title FROM session WHERE id != '' AND title != '' LIMIT 5000`)
+	if err != nil {
+		return
+	}
+	defer rows.Close()
+
+	var subjects [][3]string
+	for rows.Next() {
+		var id, title string
+		if err := rows.Scan(&id, &title); err != nil {
+			continue
+		}
+		subjects = append(subjects, [3]string{id, "session", title})
+	}
+	_ = s.RegisterSubjects(subjects)
+}
+
 // collectZCodeDB 增量采集 ZCode 本地 SQLite 库（幂等：zcode:<id>）。
 func (s *Store) collectZCodeDB(dbPath string) (int64, int64, error) {
 	info, err := os.Stat(dbPath)
@@ -228,6 +261,9 @@ func (s *Store) collectZCodeDB(dbPath string) (int64, int64, error) {
 	}
 	fpHash := fileFingerprint(dbPath)
 	lastMS := s.getCursorOffset("zcode", fpHash)
+
+	// 会话标题与用量同源（ZCode 权威库），同步先行且不依赖是否有新事件
+	s.syncZCodeSessionTitles(dbPath)
 
 	// 单批采集最多 20000 条，足额覆盖历史数据
 	events, newMaxMS, err := ParseZCodeDB(dbPath, lastMS, 20000)

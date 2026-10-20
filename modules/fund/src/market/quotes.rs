@@ -1,7 +1,6 @@
 //! 行情实时拉取（拆分自 market.rs，仅移动，无逻辑变更）。
 
 use super::util::{json_string, num_or_null};
-use std::time::Duration;
 
 pub(crate) const TENCENT_QT: &str = "https://qt.gtimg.cn/q=";
 
@@ -89,18 +88,13 @@ pub(crate) const CORE_ETFS: &[(&str, &str)] = &[
 /// 全局共享上游 Agent：进程级连接池（Keep-Alive）。此前每次调用新建
 /// Agent，每个上游请求都要重建 TCP+TLS（实测占单次延迟 ~76%）；共享后
 /// 复用连接，warm 请求延迟降至几十毫秒。ureq Agent 可跨线程共享。
-pub(crate) fn agent() -> &'static ureq::Agent {
-    static AGENT: std::sync::OnceLock<ureq::Agent> = std::sync::OnceLock::new();
-    AGENT.get_or_init(|| {
-        ureq::AgentBuilder::new()
-            .timeout(Duration::from_secs(10))
-            .user_agent("natives-fund/1.0")
-            .build()
-    })
+pub(crate) fn agent() -> &'static crate::network::Client {
+    crate::network::client()
 }
 
 /// 上游响应里的一个行情条目（统一 JSON 输出形状）。
 pub(crate) struct Quote {
+    pub(crate) as_of: Option<String>,
     pub(crate) code: String,
     pub(crate) name: String,
     pub(crate) price: Option<f64>,
@@ -117,7 +111,7 @@ pub(crate) fn quote_json(quotes: &[Quote]) -> String {
         .iter()
         .map(|q| {
             format!(
-                "{{\"code\":{},\"name\":{},\"price\":{},\"changePct\":{},\"change\":{},\"volume\":{},\"turnover\":{},\"amplitude\":{},\"volumeRatio\":{}}}",
+                "{{\"code\":{},\"name\":{},\"price\":{},\"changePct\":{},\"change\":{},\"volume\":{},\"turnover\":{},\"amplitude\":{},\"volumeRatio\":{},\"asOf\":{}}}",
                 json_string(&q.code),
                 json_string(&q.name),
                 num_or_null(q.price),
@@ -127,6 +121,7 @@ pub(crate) fn quote_json(quotes: &[Quote]) -> String {
                 num_or_null(q.turnover),
                 num_or_null(q.amplitude),
                 num_or_null(q.volume_ratio),
+                q.as_of.as_ref().map(|s|json_string(s)).unwrap_or_else(||"null".into()),
             )
         })
         .collect();
@@ -151,6 +146,9 @@ pub(crate) fn fetch_tencent_quotes(
     reader
         .read_to_end(&mut bytes)
         .map_err(|e| format!("tencent quotes read: {e}"))?;
+    if bytes.len() > 2 * 1024 * 1024 {
+        return Err("response_too_large".into());
+    }
     let (decoded, _, _) = encoding_rs::GBK.decode(&bytes);
     let raw = decoded.into_owned();
 
@@ -173,7 +171,22 @@ pub(crate) fn fetch_tencent_quotes(
                     codes.get(index).unwrap_or(&"").to_string()
                 }
             });
+        let as_of = fields
+            .get(30)
+            .filter(|s| s.len() == 14 && s.bytes().all(|b| b.is_ascii_digit()))
+            .map(|s| {
+                format!(
+                    "{}-{}-{} {}:{}:{}",
+                    &s[..4],
+                    &s[4..6],
+                    &s[6..8],
+                    &s[8..10],
+                    &s[10..12],
+                    &s[12..14]
+                )
+            });
         quotes.push(Quote {
+            as_of,
             code: codes.get(index).map(|c| c.to_string()).unwrap_or_default(),
             name,
             price: parse(3),

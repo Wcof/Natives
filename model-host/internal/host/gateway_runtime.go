@@ -12,11 +12,16 @@ import (
 )
 
 func (e *Engine) reconfigureGateway(snapshot domain.Snapshot, mutationErr error) (domain.Snapshot, error) {
+	e.gatewayMu.Lock()
+	defer e.gatewayMu.Unlock()
+	return e.reconfigureGatewayLocked(snapshot, mutationErr)
+}
+
+// Caller owns gatewayMu through the metadata mutation and runtime restart.
+func (e *Engine) reconfigureGatewayLocked(snapshot domain.Snapshot, mutationErr error) (domain.Snapshot, error) {
 	if mutationErr != nil || snapshot.Gateway.State != "running" {
 		return snapshot, mutationErr
 	}
-	e.gatewayMu.Lock()
-	defer e.gatewayMu.Unlock()
 	restarting, err := e.repo.Update(nil, func(current *domain.Snapshot) error {
 		current.Gateway.State = "restarting"
 		current.Gateway.ErrorCode = ""

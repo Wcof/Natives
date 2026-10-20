@@ -1,11 +1,247 @@
 package usage
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
 	"os"
 	"strings"
 	"testing"
 	"time"
 )
+
+func TestCodexRealResponseReplay(t *testing.T) {
+	path := os.Getenv("CODEX_USAGE_REPLAY")
+	if path == "" {
+		t.Skip("optional sanitized real usage replay")
+	}
+	content, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	events, _, skipped := ParseCodexSessions(content, time.Now())
+	var total int64
+	seen := map[string]bool{}
+	for _, e := range events {
+		if !seen[e.BillingAtom] {
+			total += e.TotalTokens
+			seen[e.BillingAtom] = true
+		}
+	}
+	var expected int64
+	responseIDs := map[string]bool{}
+	for _, line := range strings.Split(string(content), "\n") {
+		var rec codexUnifiedLine
+		if json.Unmarshal([]byte(line), &rec) == nil && rec.Type == "token_usage_record" && rec.Payload != nil && rec.Payload.Usage != nil && !responseIDs[rec.Payload.ResponseID] {
+			expected += rec.Payload.Usage.InputTokens + rec.Payload.Usage.OutputTokens
+			responseIDs[rec.Payload.ResponseID] = true
+		}
+	}
+	if expected == 0 || skipped != 0 || total != expected {
+		t.Fatalf("real replay: tokens=%d want=%d invalid=%d", total, expected, skipped)
+	}
+}
+
+func TestCollectCodexResponseModeSurvivesRestart(t *testing.T) {
+	s, dbPath := tempStore(t)
+	defer func() { s.Close() }()
+	path := t.TempDir() + "/rollout.jsonl"
+	first := `{"type":"session_meta","payload":{"id":"modern-session"}}` + "\n" +
+		`{"type":"turn_context","payload":{"model":"gpt-6.1-sol"}}` + "\n" +
+		`{"timestamp":"2026-10-12T10:00:00Z","type":"token_usage_record","payload":{"response_id":"modern-r1","usage":{"input_tokens":100,"cached_input_tokens":40,"output_tokens":20},"thread_token_usage":{"input_tokens":500000100,"output_tokens":1000020}}}` + "\n"
+	if err := os.WriteFile(path, []byte(first), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if n, _, err := s.collectCodexFile(context.Background(), path, time.Now(), "inst-test"); err != nil || n != 1 {
+		t.Fatalf("first: %d %v", n, err)
+	}
+	// 升级前游标已有会话／模型但尚未区分计量器，必须从已提交前缀恢复模式。
+	if _, err := s.db.Exec("UPDATE usage_import_cursors SET parser_version='codex-sessions/1', baseline_in=500000100, baseline_out=1000020"); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	var err error
+	s, err = OpenStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := `{"timestamp":"2026-10-12T10:00:00Z","type":"event_msg","payload":{"info":{"total_token_usage":{"input_tokens":490000100,"output_tokens":900020}}}}` + "\n"
+	if err := os.WriteFile(path, []byte(first+legacy), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if n, _, err := s.collectCodexFile(context.Background(), path, time.Now(), "inst-test"); err != nil || n != 0 {
+		t.Fatalf("legacy after restart: %d %v", n, err)
+	}
+	// 归档副本与重试仍按同一响应 ID 去重。
+	copyPath := t.TempDir() + "/archive.jsonl"
+	if err := os.WriteFile(copyPath, []byte(first+legacy), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if n, _, err := s.collectCodexFile(context.Background(), copyPath, time.Now(), "inst-test"); err != nil || n != 0 {
+		t.Fatalf("archive: %d %v", n, err)
+	}
+	var tokens, count int64
+	if err := s.db.QueryRow("SELECT COALESCE(SUM(total_tokens),0),COUNT(*) FROM usage_events").Scan(&tokens, &count); err != nil {
+		t.Fatal(err)
+	}
+	if tokens != 120 || count != 1 {
+		t.Fatalf("tokens=%d rows=%d", tokens, count)
+	}
+}
+
+func TestCodexInvalidUsageIsNotToday(t *testing.T) {
+	for _, record := range []string{
+		`{"timestamp":"2026-10-12T10:00:00Z","type":"token_usage_record","payload":{"session_id":"s","usage":{"input_tokens":100}}}`,
+		`{"session_id":"s","info":{"token_usage":{"input_tokens":100}}}`,
+		`{"timestamp":"invalid","session_id":"s","info":{"token_usage":{"input_tokens":100}}}`,
+		`{"timestamp":"2026-10-12T10:00:00Z","session_id":"s","info":{"token_usage":{"input_tokens":-1}}}`,
+		`{"timestamp":"2026-10-12T10:00:00Z","session_id":"s","info":{"token_usage":{"input_tokens":1,"cached_input_tokens":2}}}`,
+		`{"timestamp":"2026-10-12T10:00:00Z","session_id":"s","info":{"token_usage":{"input_tokens":9223372036854775807,"output_tokens":1}}}`,
+	} {
+		events, _, skipped := ParseCodexSessions([]byte(record), time.Now())
+		if len(events) != 0 || skipped != 1 {
+			t.Fatalf("invalid usage accepted: events=%+v skipped=%d", events, skipped)
+		}
+	}
+	s, _ := tempStore(t)
+	defer s.Close()
+	path := t.TempDir() + "/rollout.jsonl"
+	if err := os.WriteFile(path, []byte(`{"session_id":"s","info":{"token_usage":{"input_tokens":100}}}`+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if imported, _, err := s.collectCodexFile(context.Background(), path, time.Now(), "inst-test"); imported != 0 || err == nil {
+		t.Fatalf("invalid source must report an error: imported=%d err=%v", imported, err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, _, err := s.collectCodexFile(ctx, path, time.Now(), "inst-test"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled collection: %v", err)
+	}
+}
+
+func TestCodexRolloutModelAndResponseUsage(t *testing.T) {
+	content := strings.Join([]string{
+		`{"type":"session_meta","payload":{"id":"real-session"}}`,
+		`{"type":"turn_context","payload":{"model":"gpt-6.1-sol"}}`,
+		`{"timestamp":"2026-10-12T10:00:00Z","type":"token_usage_record","payload":{"session_id":"real-session","response_id":"r1","usage":{"input_tokens":100,"cached_input_tokens":40,"output_tokens":20},"thread_token_usage":{"input_tokens":500000100,"cached_input_tokens":400000040,"output_tokens":1000020}}}`,
+		`{"timestamp":"2026-10-12T10:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":40,"output_tokens":20}}}}`,
+		`{"type":"turn_context","payload":{"model":"gpt-6-astra"}}`,
+		`{"timestamp":"2026-10-12T10:00:00Z","type":"token_usage_record","payload":{"session_id":"real-session","response_id":"r2","usage":{"input_tokens":60,"cached_input_tokens":20,"output_tokens":10},"thread_token_usage":{"input_tokens":160,"cached_input_tokens":60,"output_tokens":30}}}`,
+	}, "\n")
+	events, _, _, bl := ParseCodexSessionsWithBaseline([]byte(content), time.Now(), codexCursorBaseline{}, "fixture")
+	var total int64
+	for _, event := range events {
+		total += event.TotalTokens
+	}
+	if len(events) == 0 || events[0].Model != "gpt-6.1-sol" || total != 190 {
+		t.Fatalf("model and distinct response usage: events=%+v total=%d", events, total)
+	}
+	next := `{"timestamp":"2026-10-12T10:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":200,"cached_input_tokens":70,"output_tokens":40}}}}`
+	events, _, _, _ = ParseCodexSessionsWithBaseline([]byte(next), time.Now(), bl, "fixture")
+	if len(events) != 0 || !bl.Responses {
+		t.Fatalf("legacy meter must remain ignored across batches: %+v baseline=%+v", events, bl)
+	}
+	next = `{"timestamp":"2026-10-12T10:00:01Z","type":"token_usage_record","payload":{"response_id":"r3","usage":{"input_tokens":30,"output_tokens":5}}}`
+	events, _, _, _ = ParseCodexSessionsWithBaseline([]byte(next), time.Now(), bl, "fixture")
+	if len(events) != 1 || events[0].TotalTokens != 35 || events[0].Model != "gpt-6-astra" || events[0].SessionID != "real-session" {
+		t.Fatalf("response context: %+v", events)
+	}
+}
+
+func TestCollectCodexAppendPreservesBaseline(t *testing.T) {
+	s, dbPath := tempStore(t)
+	defer func() { s.Close() }()
+	path := t.TempDir() + "/rollout.jsonl"
+	first := `{"type":"session_meta","payload":{"id":"append-session"}}` + "\n" +
+		`{"type":"turn_context","payload":{"model":"gpt-6.1-sol"}}` + "\n" +
+		`{"timestamp":"2026-10-12T10:00:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"output_tokens":20}}}}` + "\n"
+	if err := os.WriteFile(path, []byte(first), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.collectCodexFile(context.Background(), path, time.Now(), "inst-test"); err != nil {
+		t.Fatal(err)
+	}
+	_, bl, baselineErr := s.getCodexBaseline("codex", fileFingerprint(path))
+	if baselineErr != nil {
+		t.Fatal(baselineErr)
+	}
+	if bl.Session != "append-session" || bl.Model != "gpt-6.1-sol" || bl.In != 100 {
+		t.Fatalf("saved baseline: %+v", bl)
+	}
+	// 模拟旧库：两列不存在，首次采集的累计基线尚未持久化。
+	legacyAtom := "codex:append-session:e0:snap-" + fileFingerprint(path) + "-0"
+	if _, err := s.db.Exec("UPDATE usage_events SET billing_atom=?, id=?", legacyAtom, "nat-"+legacyAtom); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(`UPDATE usage_import_cursors SET baseline_in=0, baseline_out=0;
+		ALTER TABLE usage_import_cursors DROP COLUMN baseline_session;
+		ALTER TABLE usage_import_cursors DROP COLUMN baseline_model;`); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	var err error
+	s, err = OpenStore(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := `{"timestamp":"2026-10-12T10:01:00Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":160,"output_tokens":30}}}}` + "\n"
+	if err := os.WriteFile(path, []byte(first+next), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.collectCodexFile(context.Background(), path, time.Now(), "inst-test"); err != nil {
+		t.Fatal(err)
+	}
+	var total int64
+	if err := s.db.QueryRow("SELECT SUM(total_tokens) FROM usage_events").Scan(&total); err != nil {
+		t.Fatal(err)
+	}
+	if total != 190 {
+		t.Fatalf("appended total=%d, want 190", total)
+	}
+	archive := path + ".archived"
+	if err := os.WriteFile(archive, []byte(first+next), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.collectCodexFile(context.Background(), archive, time.Now(), "inst-test"); err != nil {
+		t.Fatal(err)
+	}
+	overview, err := s.GetOverview(Filter{Range: "all"})
+	if err != nil || overview.Metrics.TotalTokens != 190 {
+		t.Fatalf("archive overview=%+v err=%v", overview, err)
+	}
+	analysis, err := s.GetAnalytics(Filter{Range: "all"})
+	if err != nil || len(analysis.ByModel) != 1 || analysis.ByModel[0].Name != "gpt-6.1-sol" {
+		t.Fatalf("model projection=%+v err=%v", analysis, err)
+	}
+	sessions, err := s.GetSessions(Filter{Range: "all"})
+	if err != nil || sessions.TotalSessions != 1 || sessions.Sessions[0].Tokens != 190 {
+		t.Fatalf("session projection=%+v err=%v", sessions, err)
+	}
+}
+
+func TestCollectCodexCursorFailureRollsBackEvents(t *testing.T) {
+	s, _ := tempStore(t)
+	defer s.Close()
+	if _, err := s.db.Exec(`CREATE TRIGGER reject_cursor BEFORE INSERT ON usage_import_cursors BEGIN SELECT RAISE(ABORT, 'fixture failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	path := t.TempDir() + "/rollout.jsonl"
+	content := `{"timestamp":"2026-10-12T10:00:00Z","session_id":"rollback","info":{"token_usage":{"input_tokens":100,"output_tokens":20}}}` + "\n"
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+		t.Fatal(err)
+	}
+	imported, _, err := s.collectCodexFile(context.Background(), path, time.Now(), "inst-test")
+	if err == nil || imported != 0 {
+		t.Fatalf("failed cursor imported=%d err=%v", imported, err)
+	}
+	var count int
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM usage_events").Scan(&count); err != nil {
+		t.Fatal(err)
+	}
+	if count != 0 || s.getCursorOffset("codex", fileFingerprint(path)) != 0 {
+		t.Fatal("events and cursor must roll back together")
+	}
+}
 
 // 脱敏 fixture（T4 source contract）：合成、非敏感的最小行集，
 // 冻结期望值；真实工具 fixture 后续按同 schema 冻结替换。
@@ -181,11 +417,11 @@ func TestCollectCodexArchivedFileNoDoubleCount(t *testing.T) {
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	imported1, bytes1, err := s.collectCodexFile(path, time.Now().UTC(), "inst-test")
+	imported1, bytes1, err := s.collectCodexFile(context.Background(), path, time.Now().UTC(), "inst-test")
 	if err != nil || imported1 != 2 || bytes1 == 0 {
 		t.Fatalf("first import: imported=%d bytes=%d err=%v, want 2/>0/nil", imported1, bytes1, err)
 	}
-	imported2, _, err := s.collectCodexFile(path, time.Now().UTC(), "inst-test")
+	imported2, _, err := s.collectCodexFile(context.Background(), path, time.Now().UTC(), "inst-test")
 	if err != nil {
 		t.Fatal(err)
 	}

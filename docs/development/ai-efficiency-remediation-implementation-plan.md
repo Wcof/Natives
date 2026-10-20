@@ -77,6 +77,13 @@ native_session_id       工具原生 session/thread ID
 
 区间会话数、每日会话数、会话详情、工具排行使用同一键。无 `native_session_id` 的记录进入 `unattributedRequests`，保留 Token 和成本，不制造会话。
 
+Tokenusage 会话下钻使用 Model Host 返回的完整 `SessionStat.key`，作为只读事件
+Filter 的 `sessionKey`，在 Native／HTTP 查询面保持同义，不能用裸 session ID
+跨工具或实例匹配。非法键返回参数错误，未知键返回空记录，不能静默退回全量。
+Tokenusage `/api/sessions/detail?id=<key>&offset=<n>` 每页 50 条，响应含
+`hasMore`／`nextOffset`；页面显式加载更多，关闭取消在途请求。会话与事件的
+未计价金额保持 `null`，合法已计价零值仍为 0，所有消费者显示同一口径。
+
 ### 4.2 用户时区
 
 - 所有事件继续以 UTC 保存。
@@ -84,10 +91,26 @@ native_session_id       工具原生 session/thread ID
 - 活跃天数和日热力图在 Model Host 内按该时区分桶。
 - 不识别的时区返回参数错误，不静默退回 UTC。
 - 同一 filter 的数字、趋势、热力图、表格与详情必须使用同一时区。
+- macOS 顶栏的 overview／analysis／sessions 查询携带系统 IANA 时区；离线库查询使用同一本地日界。7d／30d 是滚动区间，不能标为日历“本周／本月”；空周期不能回填其他周期的模型或会话。
 
 ### 4.3 事件与收费原子
 
 每次可计量调用必须拥有稳定 `billingAtom`。同一调用由 Proxy、原生日志、OTel 或账单重复观察时只保留一个收费原子；来源证据可以追加，金额不得重复。
+
+Codex rollout 使用 `session_meta` 的会话 ID 与最近 `turn_context.model`；缺模型保留 `unknown`。新版 `token_usage_record` 以稳定 `response_id` 和单响应 `usage` 为权威，输入扣除缓存后分桶；`thread_token_usage` 可能包含继承的历史，不能计入今日。新版伴随的旧版 `token_count.info.total_token_usage` 属于另一套累计计数器，不能混算；只有纯旧版日志使用累计求差。解析模式使用已有游标 `parser_version` 保存，跨批／重启仍忽略新版伴随快照。游标的会话／模型与累计基线、事件同事务提交；旧游标首次续读可在既有来源字节上限内只解析已提交前缀恢复上下文，不重复入库。历史错误事件不在此过程中重写；重算历史是另一个需授权的数据修复操作。专项入口：`rtk go test ./internal/usage`（在 model-host 目录）与 `rtk node scripts/statusbar-browser.test.mjs`（仓库根）。真实脱敏日志回放通过 `CODEX_USAGE_REPLAY` 指向本机白名单元数据，原始日志与用户数据不进入 Git。
+
+顶栏相关投影保持以下验收对应，实施状态仍由 ROADMAP 汇总：
+
+| 要求 | 实现入口 | 验收入口与预期 |
+| --- | --- | --- |
+| 自动轮询与面板使用同一时区／displayText／缺价语义 | NativesStatusBarData.h 的共享 summary 与 compact 查询 | statusbar-owner.test.m：实际 NSStatusItem 更新；未知费用不变成 $0 |
+| 完整费用覆盖、精确缩放与供应商价格优先级 | usage/pricing.go、store_panel_cost.go、只读库价格联接 | panel_cost_test.go／statusbar-data.test.m：部分计价标未知；大数不在中间乘法溢出；小费用先汇总再缩放；别名不作为价格键 |
+| 空周期、近 7 个本地日历日趋势及到达顺序正确 | NativesStatusBarData.h／NativesStatusBarPanel.h | statusbar-browser.test.mjs：模型、会话、趋势日期和费用行；额度先到不阻塞后到的用量；刷新结束只由原生完成通知驱动 |
+| 额度只读不冒充上游活跃状态 | 共用 quota parser 与 8766 查询 | 非刷新读取标缓存，成功空响应不回填旧磁盘结果；重复窗口保留最紧约束；启动不探测上游；刷新失败保留明确反馈 |
+| 异步资源归属与安全动作 | NativesStatusBar.m／NativesStatusBar.h／launcher-main.m | owner 用例：重复查询合并；旧面板／旧 worker 回调不清新状态；未知跳转拒绝；保留已注册 tokenusage 入口；退出不清扫后来启动的实例 |
+| 无效来源与持久基线失败不伪装成成功 | usage/native_log.go／collector_codex.go | native_log_test.go：时间缺失、负数、缓存越界、Token 加法溢出和缺累计字段报来源错误；取消不继续入库；SQL 失败显式传播 |
+
+`priced` 表示有用量的记录全部有存储计费或价格覆盖；已知小计保留在数值字段，但覆盖不完整时顶栏显示未知。金额属于用量费用估算，不等同实际订阅扣款。Native owner 用例使用隔离投影驱动真实 NSStatusItem／WKWebView owner，不替代已安装版本、真实用户用量库或上游账户的验收。
 
 新增或补齐事件与归因的关联表：
 

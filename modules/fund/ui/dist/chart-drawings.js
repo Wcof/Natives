@@ -23,13 +23,12 @@ function getInteractiveColors() {
   };
 }
 
-function loadDrawings() {
-  if (!state.currentSymbol) return;
-  api("GET", "/api/drawings?symbol=" + state.currentSymbol + "&period=" + state.currentPeriod).then(function(res) {
-    state.drawings = res.drawings || [];
-    redrawInteractive();
-  });
-}
+const persistence = Fund.createDrawingSession({
+  scope: () => ({ symbol: state.currentSymbol, period: state.currentPeriod, viewContext: { fq: state.currentPeriod === 'minute' ? 'bf' : (state.fqType || 'qfq'), seriesKind: state.currentPeriod === 'minute' ? 'minute' : 'OHLC' } }),
+  replace: rows => { state.drawings = rows; redrawInteractive(); },
+  statusRoot: () => chartContainer,
+});
+function loadDrawings() { return persistence.load(); }
 actions.loadDrawings = loadDrawings;
 
 // ---------- 划线层渲染与交互（严格在 K 线主图层生效） ----------
@@ -135,7 +134,9 @@ function drawAnchor(x, y, strokeColor) {
 
 function pricePointToScreen(pt) {
   const total = (state.currentKlineData && state.currentKlineData.length) || (state.currentMinuteData && state.currentMinuteData.length) || 1;
-  const x = actions.timeIndexToX ? actions.timeIndexToX(pt.timeIndex || 0, total) : 10;
+  const data = state.currentKlineData || state.currentMinuteData || [];
+  const index = data.findIndex(row => (row.date || row.time) === pt.date);
+  const x = actions.timeIndexToX ? actions.timeIndexToX(index, total) : 10;
   const y = actions.priceToY ? actions.priceToY(pt.price) : 50;
   return { x: x, y: y };
 }
@@ -191,7 +192,7 @@ const clearDrawBtn = document.getElementById("btn-clear-draw");
 if (clearDrawBtn) {
   clearDrawBtn.addEventListener("click", function() {
     if (state.selectedDrawing) {
-      api("DELETE", "/api/drawings?id=" + state.selectedDrawing.id).then(function() {
+      persistence.remove(state.selectedDrawing.id).then(function() {
         state.drawings = state.drawings.filter(function(d) { return d.id !== state.selectedDrawing.id; });
         state.selectedDrawing = null;
         redrawInteractive();
@@ -202,6 +203,7 @@ if (clearDrawBtn) {
 
 if (interCanvas) {
   interCanvas.addEventListener("mousedown", function(e) {
+    if (!persistence.canEdit()) return;
     const rect = (klineArea || chartContainer || interCanvas).getBoundingClientRect();
     const mx = e.clientX - rect.left;
     const my = e.clientY - rect.top;
@@ -229,10 +231,10 @@ if (interCanvas) {
       period: state.currentPeriod,
       toolType: state.currentTool,
       points: [
-        { price: snap.price, timeIndex: timeIdx },
-        { price: snap.price, timeIndex: timeIdx }
+        { price: snap.price, date: (state.currentKlineData || state.currentMinuteData || [])[timeIdx]?.date || (state.currentKlineData || state.currentMinuteData || [])[timeIdx]?.time },
+        { price: snap.price, date: (state.currentKlineData || state.currentMinuteData || [])[timeIdx]?.date || (state.currentKlineData || state.currentMinuteData || [])[timeIdx]?.time }
       ],
-      options: { color: colors.lineDefault }
+      options: {}
     };
     redrawInteractive();
   });
@@ -247,13 +249,13 @@ if (interCanvas) {
     currentCursor = { x: snap.x, y: snap.y };
 
     if (state.isDrawing && state.tempDrawing) {
-      state.tempDrawing.points[1] = { price: snap.price, timeIndex: actions.xToTimeIndex ? actions.xToTimeIndex(snap.x, total) : 0 };
+      state.tempDrawing.points[1] = { price: snap.price, date: (state.currentKlineData || state.currentMinuteData || [])[actions.xToTimeIndex ? actions.xToTimeIndex(snap.x, total) : 0]?.date || (state.currentKlineData || state.currentMinuteData || [])[actions.xToTimeIndex ? actions.xToTimeIndex(snap.x, total) : 0]?.time };
       redrawInteractive();
       return;
     }
 
     if (state.selectedDrawing && state.isDraggingAnchor >= 0) {
-      state.selectedDrawing.points[state.isDraggingAnchor] = { price: snap.price, timeIndex: actions.xToTimeIndex ? actions.xToTimeIndex(snap.x, total) : 0 };
+      state.selectedDrawing.points[state.isDraggingAnchor] = { price: snap.price, date: (state.currentKlineData || state.currentMinuteData || [])[actions.xToTimeIndex ? actions.xToTimeIndex(snap.x, total) : 0]?.date || (state.currentKlineData || state.currentMinuteData || [])[actions.xToTimeIndex ? actions.xToTimeIndex(snap.x, total) : 0]?.time };
       redrawInteractive();
       return;
     }
@@ -275,7 +277,7 @@ window.addEventListener("mouseup", function() {
     state.isDrawing = false;
     state.drawings.push(state.tempDrawing);
     state.selectedDrawing = state.tempDrawing;
-    api("POST", "/api/drawings", state.tempDrawing);
+    persistence.save(state.tempDrawing);
     state.tempDrawing = null;
     state.currentTool = "cursor";
     document.querySelectorAll(".tool-btn").forEach(function(b) {
@@ -283,6 +285,7 @@ window.addEventListener("mouseup", function() {
     });
     redrawInteractive();
   }
+  if (!state.isDrawing && state.isDraggingAnchor >= 0 && state.selectedDrawing) persistence.save(state.selectedDrawing);
   state.isDraggingAnchor = -1;
 });
 

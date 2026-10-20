@@ -19,8 +19,6 @@ export function bindFilesShortcuts({
   closeQuickFilter,
   applyQuickFilter,
   openSearchDialog,
-  setStatus,
-  t,
   call,
   openLanguageSettings,
   openEditorSelected,
@@ -129,9 +127,11 @@ export function bindFilesShortcuts({
       trashSelected();
     } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault();
-      const next = Math.max(0, Math.min(session.entries.length - 1, index + (event.key === 'ArrowDown' ? 1 : -1)));
-      selectEntry(next, event);
-      document.querySelector(`[data-index="${next}"]`)?.focus();
+      const rows = [...document.querySelectorAll('#entries .entry:not([hidden])')];
+      const position = rows.indexOf(row);
+      const next = rows[Math.max(0, Math.min(rows.length - 1, position + (event.key === 'ArrowDown' ? 1 : -1)))];
+      selectEntry(Number(next.dataset.index), event);
+      next.focus();
     }
   }
 
@@ -169,10 +169,4 @@ export function bindFilesShortcuts({
     }
   });
 
-  document.addEventListener('keydown', (event) => {
-    if (event.key === 'Tab' && !event.shiftKey && event.target === $('search')) {
-      event.preventDefault();
-      searchController.toggleSearchScope();
-    }
-  });
 }

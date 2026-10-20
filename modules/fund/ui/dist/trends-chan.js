@@ -53,10 +53,10 @@ function renderChanlun(data) {
   }
 
   html += `<div class="cl-stats">
-    <span>5分K线: <b style="color:#ddd">${data.kline_count}</b></span>
-    <span>分型: <b style="color:#ddd">${data.fractal_count}</b></span>
-    <span>笔: <b style="color:#ddd">${data.stroke_count}</b></span>
-    <span>信号: <b style="color:#ddd">${signals.length}</b></span>
+    <span>5分K线: <b style="color:var(--natives-text-primary)">${data.kline_count}</b></span>
+    <span>分型: <b style="color:var(--natives-text-primary)">${data.fractal_count}</b></span>
+    <span>笔: <b style="color:var(--natives-text-primary)">${data.stroke_count}</b></span>
+    <span>信号: <b style="color:var(--natives-text-primary)">${signals.length}</b></span>
   </div>`;
 
   el.innerHTML = html;
@@ -104,7 +104,7 @@ function renderChanlunDaily(data) {
   html += `<div class="cl-plain-summary"><b>白话总结：</b>${plainSummary}</div>`;
 
   if (stateText) {
-    html += `<div class="cl-state" style="border-left-color:#7F77DD">${stateText}</div>`;
+    html += `<div class="cl-state" style="border-left-color:var(--series-5)">${stateText}</div>`;
   }
 
   if (signals.length > 0) {
@@ -121,7 +121,7 @@ function renderChanlunDaily(data) {
     }
     html += '</div>';
   } else {
-    html += '<div style="color:#555;font-size:12px;padding:6px 0">暂无买卖信号，等待背驰/中枢突破</div>';
+    html += '<div style="color:var(--natives-text-muted);font-size:12px;padding:6px 0">暂无买卖信号，等待背驰/中枢突破</div>';
   }
 
   let currentZs = null;
@@ -136,9 +136,9 @@ function renderChanlunDaily(data) {
   }
 
   if (zhongshus.length > 0) {
-    html += '<div style="margin-top:6px;font-size:11px;color:#666;border-top:1px solid #0d0d0d;padding-top:4px">中枢列表</div>';
+    html += '<div style="margin-top:6px;font-size:var(--natives-fs-secondary);color:var(--natives-text-muted);border-top:1px solid var(--natives-border);padding-top:4px">中枢列表</div>';
     if (currentZs) {
-      html += `<div style="margin:4px 0;padding:5px 8px;background:rgba(205,242,75,0.08);border:1px solid rgba(205,242,75,0.3);border-radius:4px;font-size:11px;color:#cdf24b">
+      html += `<div style="margin:4px 0;padding:5px 8px;background:var(--natives-selected);border:1px solid color-mix(in srgb, var(--natives-accent) 30%, transparent);border-radius:4px;font-size:var(--natives-fs-secondary);color:var(--natives-accent)">
         当前价格 <b>${currentPrice.toFixed(2)}</b> 处于中枢 <b>[${currentZs.zd} - ${currentZs.zg}]</b> 内，区间上沿压力 ${currentZs.zg}，下沿支撑 ${currentZs.zd}
       </div>`;
     } else if (currentPrice != null) {
@@ -146,7 +146,7 @@ function renderChanlunDaily(data) {
       const zd = parseFloat(lastZs.zd), zg = parseFloat(lastZs.zg);
       const pos = currentPrice > zg ? `上沿 ${zg} 之上` : `下沿 ${zd} 之下`;
       const hint = currentPrice > zg ? '已向上突破，关注回踩能否站稳' : '已跌破中枢，关注是否形成第三类卖点';
-      html += `<div style="margin:4px 0;padding:5px 8px;background:#0d1a0d;border:1px solid #00b35c44;border-radius:4px;font-size:11px;color:#aaa">
+      html += `<div style="margin:4px 0;padding:5px 8px;background:color-mix(in srgb, var(--color-down) 8%, var(--natives-surface));border:1px solid color-mix(in srgb, var(--color-down) 27%, transparent);border-radius:4px;font-size:var(--natives-fs-secondary);color:var(--natives-text-muted)">
         当前价格 <b>${currentPrice.toFixed(2)}</b> 位于最新中枢 [${lastZs.zd} - ${lastZs.zg}] ${pos}，${hint}
       </div>`;
     }
@@ -155,7 +155,7 @@ function renderChanlunDaily(data) {
       const brokenCls = zs.is_broken ? 'cl-zhongshu-broken' : '';
       const currentCls = isCurrent ? 'cl-zhongshu-current' : '';
       const dirText = zs.is_broken ? (zs.break_direction === 'up' ? '向上突破' : '向下突破') : '震荡中';
-      const currentTag = isCurrent ? '<span style="color:#cdf24b;font-weight:bold;margin-right:4px">[当前]</span>' : '';
+      const currentTag = isCurrent ? '<span style="color:var(--natives-accent);font-weight:bold;margin-right:4px">[当前]</span>' : '';
       html += `<div class="cl-zhongshu ${brokenCls} ${currentCls}">
         ${currentTag}[${zs.zd} - ${zs.zg}] ${zs.start_date}~${zs.end_date} ${dirText}
       </div>`;
@@ -163,12 +163,12 @@ function renderChanlunDaily(data) {
   }
 
   html += `<div class="cl-stats">
-    <span>${tState.currentView === 'week' ? '周K' : '日K'}: <b style="color:#ddd">${data.kline_count}</b></span>
-    <span>合并: <b style="color:#ddd">${data.merged_count}</b></span>
-    <span>分型: <b style="color:#ddd">${data.fractal_count}</b></span>
-    <span>笔: <b style="color:#ddd">${data.stroke_count}</b></span>
-    <span>中枢: <b style="color:#ddd">${data.zhongshu_count}</b></span>
-    <span>信号: <b style="color:#ddd">${signals.length}</b></span>
+    <span>${tState.currentView === 'week' ? '周K' : '日K'}: <b style="color:var(--natives-text-primary)">${data.kline_count}</b></span>
+    <span>合并: <b style="color:var(--natives-text-primary)">${data.merged_count}</b></span>
+    <span>分型: <b style="color:var(--natives-text-primary)">${data.fractal_count}</b></span>
+    <span>笔: <b style="color:var(--natives-text-primary)">${data.stroke_count}</b></span>
+    <span>中枢: <b style="color:var(--natives-text-primary)">${data.zhongshu_count}</b></span>
+    <span>信号: <b style="color:var(--natives-text-primary)">${signals.length}</b></span>
   </div>`;
 
   el.innerHTML = html;
@@ -218,7 +218,7 @@ function applyChanlunDailyOverlay(data) {
       label: {
         show: true,
         formatter: sig.label?.formatter || (isBuy ? '买' : '卖'),
-        fontSize: 10,
+        fontSize: parseFloat(Fund.themeColor('--natives-fs-secondary')),
         fontWeight: 'bold',
         color: sig.label?.color || (isBuy ? C.up : C.down),
         position: isBuy ? 'bottom' : 'top',

@@ -13,6 +13,7 @@ use std::sync::Mutex;
 
 pub mod import;
 pub mod mutation;
+mod preferences;
 pub mod query;
 pub mod schema;
 pub mod types;
@@ -30,7 +31,8 @@ impl WorkspaceStore {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(WorkspaceError::Io)?;
         }
-        let conn = Connection::open(path).map_err(WorkspaceError::Sql)?;
+        let mut conn = Connection::open(path).map_err(WorkspaceError::Sql)?;
+        crate::sql_diag::instrument(&mut conn);
         conn.pragma_update(None, "journal_mode", "WAL")
             .map_err(WorkspaceError::Sql)?;
         conn.pragma_update(None, "foreign_keys", "ON")
@@ -208,7 +210,7 @@ impl WorkspaceStore {
         template_id: &str,
         name: &str,
     ) -> StoreResult<WorkspaceSnapshot> {
-        let known_builtin = matches!(template_id, "classic" | "blank" | "focus");
+        let known_builtin = matches!(template_id, "classic" | "blank" | "focus" | "investment");
         let payload = if known_builtin {
             import::builtin_template_payload(template_id)?
         } else {
@@ -329,6 +331,7 @@ impl WorkspaceStore {
     }
 
     pub fn settings_set(&self, entries: &Value) -> StoreResult<Value> {
+        preferences::validate_legacy_write(entries)?;
         let conn = self.conn.lock().expect("workspace store mutex");
         let tx = conn.unchecked_transaction()?;
         mutation::mutate_settings_set(&tx, entries)?;

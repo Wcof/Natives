@@ -1,7 +1,9 @@
-// NativesStatusBarData.h: tokenusage.db 只读兜底与账号额度聚合（额度走 8766 查询面，ADR-0033）
+// NativesStatusBarData.h: Model Host 8766 用量与额度只读查询（ADR-0033）
 #import <Foundation/Foundation.h>
 #import <sqlite3.h>
+#import <math.h>
 
+#if 0 // Historical migration reference only; Status Bar must not read module SQLite.
 static inline NSString *LocateTokenUsageDbPath(void) {
     NSString *home = NSHomeDirectory();
     NSString *p1 = [home stringByAppendingPathComponent:@".natives-local/apps/tokenusage/data/tokenusage.db"];
@@ -10,6 +12,7 @@ static inline NSString *LocateTokenUsageDbPath(void) {
     if ([[NSFileManager defaultManager] fileExistsAtPath:p2]) return p2;
     return nil;
 }
+#endif
 
 static inline NSString *FormatCompactTokens(int64_t tokens) {
     if (tokens >= 1000000000LL) return [NSString stringWithFormat:@"%.2fB", (double)tokens / 1000000000.0];
@@ -18,9 +21,194 @@ static inline NSString *FormatCompactTokens(int64_t tokens) {
     return [NSString stringWithFormat:@"%lld", tokens];
 }
 
-// 读取账号额度：仅真实数据。账号身份与启停状态来自 model-host state.json 与
-// ~/.codex/auth.json；窗口余量仅来自 tokenusage.db limits_cache 的真实同步行。
-// 无真实窗口数据时不填充任何占位百分比；Codex 实时额度由 FetchCodexUsageLive 请求。
+static inline const char *UsagePeriodWhere(NSString *range) {
+    if ([range isEqualToString:@"today"]) {
+        return "WHERE datetime(requested_at) >= datetime('now','localtime','start of day','utc')";
+    }
+    if ([range isEqualToString:@"7d"]) {
+        return "WHERE datetime(requested_at) >= datetime('now','-7 days')";
+    }
+    if ([range isEqualToString:@"30d"]) {
+        return "WHERE datetime(requested_at) >= datetime('now','-30 days')";
+    }
+    return "";
+}
+
+// 价格联接：按供应商／模型和来源优先级取完整价格行，别名只用于展示，
+// 金额 = 存储计费 + 零计费事件按目录动态估算（与 model-host 查询层同一口径）。
+// 只读库兜底路径没有 Go 计价器，金额直接在 SQL 内联价格表计算。
+#define STATUSBAR_PRICE_JOIN \
+    "LEFT JOIN model_prices p ON p.rowid = (SELECT rowid FROM model_prices " \
+    "WHERE LOWER(model_id) = LOWER(e.model) AND " \
+    "((source = 'manual' AND provider_id = e.provider) OR " \
+    "(source IN ('manual','manual_global') AND provider_id = '') OR source IN ('synced','imported')) " \
+    "ORDER BY CASE WHEN source = 'manual' AND provider_id != '' THEN 1 " \
+    "WHEN source IN ('manual','manual_global') AND provider_id = '' THEN 2 " \
+    "WHEN source = 'synced' THEN 3 ELSE 4 END, rowid LIMIT 1) "
+
+#define STATUSBAR_COST_EXPR \
+    "(COALESCE(SUM(e.cost_micro),0) + COALESCE(SUM(CASE WHEN e.cost_micro = 0 THEN " \
+    "(e.input_tokens * p.input_price_micro + e.output_tokens * p.output_price_micro + e.cache_read_tokens * p.cache_read_price_micro " \
+    "+ e.cache_write_tokens * p.cache_write_price_micro) ELSE 0 END), 0) / 1000000) "
+
+// 完整计价标记：全部有用量的行都有存储计费或价格覆盖。
+// false 时面板必须显示 "--"（未知），严禁把无价渲染成 $0.00。
+// 该片段总是紧随 STATUSBAR_COST_EXPR 之后，故以前导逗号开头。
+#define STATUSBAR_PRICED_EXPR \
+    ", COALESCE(MIN(CASE WHEN e.total_tokens = 0 OR e.cost_micro != 0 OR p.rowid IS NOT NULL THEN 1 ELSE 0 END),1) "
+
+static inline NSDictionary *ReadUsagePeriod(sqlite3 *db, NSString *range) {
+    NSString *sql = [NSString stringWithFormat:
+        @"SELECT COALESCE(SUM(e.total_tokens),0), " STATUSBAR_COST_EXPR
+         STATUSBAR_PRICED_EXPR "FROM usage_events e " STATUSBAR_PRICE_JOIN "%s",
+        UsagePeriodWhere(range)];
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(db, sql.UTF8String, -1, &stmt, NULL) != SQLITE_OK) return nil;
+    int64_t tokens = 0, costMicro = 0;
+    BOOL priced = NO;
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        tokens = sqlite3_column_int64(stmt, 0);
+        costMicro = sqlite3_column_int64(stmt, 1);
+        priced = sqlite3_column_int(stmt, 2) != 0;
+    } else { sqlite3_finalize(stmt); return nil; }
+    sqlite3_finalize(stmt);
+    return @{@"totalTokens": @(tokens), @"costUsd": @((double)costMicro / 1000000.0),
+             @"priced": @(priced)};
+}
+
+static inline NSArray *ReadUsageModels(sqlite3 *db, NSString *range) {
+    NSString *sql = [NSString stringWithFormat:
+        @"SELECT COALESCE(NULLIF(e.model_alias, ''), e.model) AS name, "
+         "SUM(e.total_tokens), " STATUSBAR_COST_EXPR STATUSBAR_PRICED_EXPR
+         "FROM usage_events e " STATUSBAR_PRICE_JOIN "%s "
+         "GROUP BY name HAVING SUM(e.total_tokens)>0 ORDER BY SUM(e.total_tokens) DESC LIMIT 8",
+        UsagePeriodWhere(range)];
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(db, sql.UTF8String, -1, &stmt, NULL) != SQLITE_OK) return nil;
+    NSMutableArray *items = [NSMutableArray array];
+    int step;
+    while ((step = sqlite3_step(stmt)) == SQLITE_ROW) {
+        const unsigned char *name = sqlite3_column_text(stmt, 0);
+        [items addObject:@{
+            @"name": name ? [NSString stringWithUTF8String:(const char *)name] : @"unknown",
+            @"tokens": @(sqlite3_column_int64(stmt, 1)),
+            @"costUsd": @((double)sqlite3_column_int64(stmt, 2) / 1000000.0),
+            @"priced": @(sqlite3_column_int(stmt, 3) != 0)
+        }];
+    }
+    sqlite3_finalize(stmt);
+    return step == SQLITE_DONE ? items : nil;
+}
+
+static inline NSArray *ReadUsageSessions(sqlite3 *db, NSString *range) {
+    NSString *sql = [NSString stringWithFormat:
+        @"SELECT e.session_id, e.tool_id, COALESCE(MAX(s.label), ''), "
+            "SUM(e.total_tokens), " STATUSBAR_COST_EXPR
+            STATUSBAR_PRICED_EXPR ", MAX(e.requested_at) "
+        "FROM usage_events e " STATUSBAR_PRICE_JOIN
+        "LEFT JOIN usage_subjects s ON s.kind = 'session' AND s.id = e.session_id "
+        "%s %s e.session_id != '' "
+        "GROUP BY e.tool_id, e.source_instance_id, e.session_id "
+        "ORDER BY MAX(e.requested_at) DESC LIMIT 12",
+        UsagePeriodWhere(range), [range isEqualToString:@"all"] ? "WHERE" : "AND"];
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(db, sql.UTF8String, -1, &stmt, NULL) != SQLITE_OK) return nil;
+    NSMutableArray *items = [NSMutableArray array];
+    int step;
+    while ((step = sqlite3_step(stmt)) == SQLITE_ROW) {
+        const unsigned char *sid = sqlite3_column_text(stmt, 0);
+        const unsigned char *tool = sqlite3_column_text(stmt, 1);
+        const unsigned char *title = sqlite3_column_text(stmt, 2);
+        const unsigned char *lastAt = sqlite3_column_text(stmt, 6);
+        NSString *toolName = tool ? [NSString stringWithUTF8String:(const char *)tool] : @"";
+        NSString *titleName = title ? [NSString stringWithUTF8String:(const char *)title] : @"";
+        NSString *display = titleName.length > 0 ? titleName
+            : (sid ? [NSString stringWithUTF8String:(const char *)sid] : @"");
+        [items addObject:@{
+            @"id": display,
+            @"tool": toolName,
+            @"totalTokens": @(sqlite3_column_int64(stmt, 3)),
+            @"costUsd": @((double)sqlite3_column_int64(stmt, 4) / 1000000.0),
+            @"priced": @(sqlite3_column_int(stmt, 5) != 0),
+            @"lastActive": lastAt ? [NSString stringWithUTF8String:(const char *)lastAt] : @""
+        }];
+    }
+    sqlite3_finalize(stmt);
+    return step == SQLITE_DONE ? items : nil;
+}
+
+static inline NSArray *ReadUsageTrend(sqlite3 *db) {
+    const char *sql =
+        "SELECT date(datetime(requested_at),'localtime'), SUM(total_tokens), SUM(cost_micro) "
+        "FROM usage_events WHERE datetime(requested_at) >= datetime('now','localtime','start of day','-6 days','utc') "
+        "GROUP BY 1 ORDER BY 1 ASC LIMIT 7";
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) return nil;
+    NSMutableArray *items = [NSMutableArray array];
+    int step;
+    while ((step = sqlite3_step(stmt)) == SQLITE_ROW) {
+        const unsigned char *date = sqlite3_column_text(stmt, 0);
+        [items addObject:@{
+            @"date": date ? [NSString stringWithUTF8String:(const char *)date] : @"",
+            @"totalTokens": @(sqlite3_column_int64(stmt, 1)),
+            @"costUsd": @((double)sqlite3_column_int64(stmt, 2) / 1000000.0)
+        }];
+    }
+    sqlite3_finalize(stmt);
+    return step == SQLITE_DONE ? items : nil;
+}
+
+static inline NSDictionary *StatusBarUsageSummary(NSDictionary *today, NSDictionary *all) {
+    BOOL hasToday = [today[@"totalTokens"] longLongValue] > 0;
+    NSDictionary *period = hasToday ? today : all;
+    NSString *cost = [period[@"priced"] boolValue]
+        ? [NSString stringWithFormat:@"$%.2f", [period[@"costUsd"] doubleValue]] : @"--";
+    NSString *display = [NSString stringWithFormat:@"%@ · %@", FormatCompactTokens([period[@"totalTokens"] longLongValue]), cost];
+    return @{@"mode": @"both", @"displayText": display, @"worstLimit": [NSNull null],
+        @"tooltip": [NSString stringWithFormat:@"Natives: %@ (%@；费用估算)", display, hasToday ? @"今日" : @"累计"]};
+}
+
+// ADR-0033 三级降级中的只读库兜底。只读 Model Host 权威 usage.db，
+// 不写库、不迁移、不扫描会话文件，也不读取 Secret。
+static inline NSDictionary *FetchStateFromUsageDbAtPath(NSString *dbPath) {
+    if (dbPath.length == 0 || ![[NSFileManager defaultManager] fileExistsAtPath:dbPath]) return nil;
+    sqlite3 *db = NULL;
+    if (sqlite3_open_v2(dbPath.UTF8String, &db, SQLITE_OPEN_READONLY, NULL) != SQLITE_OK) {
+        if (db) sqlite3_close(db);
+        return nil;
+    }
+    sqlite3_busy_timeout(db, 1000);
+    if (sqlite3_exec(db, "BEGIN", NULL, NULL, NULL) != SQLITE_OK) { sqlite3_close(db); return nil; }
+    NSDictionary *ranges = @{@"today": @"today", @"thisWeek": @"7d", @"thisMonth": @"30d", @"allTime": @"all"};
+    NSMutableDictionary *panel = [NSMutableDictionary dictionary];
+    NSMutableDictionary *models = [NSMutableDictionary dictionary], *sessions = [NSMutableDictionary dictionary];
+    for (NSString *key in ranges) {
+        NSDictionary *period = ReadUsagePeriod(db, ranges[key]);
+        NSArray *modelRows = ReadUsageModels(db, ranges[key]), *sessionRows = ReadUsageSessions(db, ranges[key]);
+        if (!period || !modelRows || !sessionRows) { sqlite3_close(db); return nil; }
+        panel[key] = period; models[key] = modelRows; sessions[key] = sessionRows;
+    }
+    NSArray *trend = ReadUsageTrend(db);
+    BOOL committed = sqlite3_exec(db, "COMMIT", NULL, NULL, NULL) == SQLITE_OK;
+    sqlite3_close(db);
+    if (!trend || !committed) return nil;
+    panel[@"toolsByPeriod"] = models; panel[@"sessionsByPeriod"] = sessions;
+    panel[@"tools"] = models[@"today"]; panel[@"sessions"] = sessions[@"today"]; panel[@"trends"] = trend;
+    NSMutableDictionary *state = [StatusBarUsageSummary(panel[@"today"], panel[@"allTime"]) mutableCopy];
+    state[@"panel"] = panel; state[@"usageSource"] = @"database";
+    return state;
+}
+
+static inline NSDictionary *FetchStateFromUsageDb(void) {
+    NSString *root = [NSProcessInfo processInfo].environment[@"NATIVES_MODEL_HOST_CONFIG_DIR"];
+    if (root.length > 0 && !root.isAbsolutePath) return nil;
+    NSString *path = root.length > 0 && root.isAbsolutePath
+        ? [root stringByAppendingPathComponent:@"usage.db"]
+        : [NSHomeDirectory() stringByAppendingPathComponent:@".natives/usage.db"];
+    return FetchStateFromUsageDbAtPath(path);
+}
+
+// 读取账号额度：仅消费 Model Host 8766 的真实查询结果；无真实窗口数据时不填充占位百分比。
 // Google 额度端点返回英文窗口类型名；中文系统下映射为中文（与面板其余中文文案一致），
 // 其余语言保留原文
 static inline NSString *NativeQuotaWindowTypeLabel(NSString *name) {
@@ -98,235 +286,24 @@ static inline void SortQuotaWindows5HFirst(NSMutableArray *windows) {
 // model-host 额度缓存：扩展「刷新额度」成功时写入的真实结果（各 provider 的
 // QuotaResult JSON）。顶栏读取并按 provider+account 合并进账号窗口；
 // 零假数据：缓存里只有真实成功结果，缺失的账号如实显示无窗口。
+static inline NSArray *ParseAIQueryQuotaAccounts(NSData *data);
+static inline NSDate *NativeParseISO8601(NSString *value);
+static inline NSDictionary *FetchAIQueryJSON(NSString *path);
+
 static inline NSArray *FetchQuotaCacheAccounts(void) {
-    NSString *path = [NSHomeDirectory() stringByAppendingPathComponent:
-        @"Library/Application Support/Natives/model-host/quota-cache.json"];
+    NSString *root = [NSProcessInfo processInfo].environment[@"NATIVES_MODEL_HOST_CONFIG_DIR"];
+    if (root.length > 0 && !root.isAbsolutePath) return @[];
+    NSString *path = root.length > 0 && root.isAbsolutePath
+        ? [root stringByAppendingPathComponent:@"quota-cache.json"]
+        : [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support/Natives/model-host/quota-cache.json"];
     NSData *data = [NSData dataWithContentsOfFile:path];
-    if (!data) return @[];
-    NSDictionary *cache = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-    if (![cache isKindOfClass:[NSDictionary class]]) return @[];
-
-    NSMutableArray *items = [NSMutableArray array];
-    NSISO8601DateFormatter *iso = [[NSISO8601DateFormatter alloc] init];
-    NSDateFormatter *shortFmt = [[NSDateFormatter alloc] init];
-    shortFmt.dateFormat = @"MM-dd HH:mm";
-    for (NSString *key in cache) {
-        NSDictionary *entry = [cache[key] isKindOfClass:[NSDictionary class]] ? cache[key] : nil;
-        if (!entry) continue;
-        NSString *provider = [entry[@"provider"] isKindOfClass:[NSString class]] ? entry[@"provider"] : @"";
-        NSString *account = [entry[@"account"] isKindOfClass:[NSString class]] ? entry[@"account"] : @"";
-        NSArray *windows = [entry[@"windows"] isKindOfClass:[NSArray class]] ? entry[@"windows"] : @[];
-        if (provider.length == 0 || windows.count == 0) continue;
-
-        NSMutableArray *trayWindows = [NSMutableArray array];
-        for (NSDictionary *w in windows) {
-            if (![w isKindOfClass:[NSDictionary class]]) continue;
-            NSNumber *pct = [w[@"remainingPercent"] isKindOfClass:[NSNumber class]] ? w[@"remainingPercent"] : nil;
-            if (!pct) continue;
-            NSMutableDictionary *row = [NSMutableDictionary dictionary];
-            NSString *typeName = [w[@"name"] isKindOfClass:[NSString class]] && [w[@"name"] length] > 0 ? w[@"name"] : @"额度";
-            NSString *group = [w[@"group"] isKindOfClass:[NSString class]] ? w[@"group"] : @"";
-            row[@"label"] = NativeQuotaLocalizedLabel(typeName, group);
-            row[@"pct"] = @(MAX(0.0, MIN(100.0, pct.doubleValue)));
-            NSString *resetISO = [w[@"resetTime"] isKindOfClass:[NSString class]] ? w[@"resetTime"] : @"";
-            if (resetISO.length > 0) {
-                NSDate *resetDate = [iso dateFromString:resetISO];
-                if (resetDate) {
-                    row[@"reset"] = [NSString stringWithFormat:@"%@ 重置", [shortFmt stringFromDate:resetDate]];
-                    row[@"resetEpoch"] = @(resetDate.timeIntervalSince1970); // 顶栏轮播倒计时用
-                }
-            }
-            [trayWindows addObject:row];
-        }
-        // 同名窗口去重（Google 会返回多组同名窗口）：保留约束最紧（剩余最少）的一行
-        if (trayWindows.count > 1) {
-            NSMutableDictionary *collapsed = [NSMutableDictionary dictionary];
-            NSMutableArray *order = [NSMutableArray array];
-            for (NSDictionary *row in trayWindows) {
-                NSString *label = row[@"label"];
-                NSDictionary *prev = collapsed[label];
-                if (!prev) {
-                    collapsed[label] = row;
-                    [order addObject:label];
-                } else if ([row[@"pct"] doubleValue] < [prev[@"pct"] doubleValue]) {
-                    collapsed[label] = row;
-                }
-            }
-            NSMutableArray *finalWindows = [NSMutableArray array];
-            for (NSString *label in order) [finalWindows addObject:collapsed[label]];
-            SortQuotaWindows5HFirst(finalWindows);
-            trayWindows = finalWindows;
-        } else {
-            SortQuotaWindows5HFirst(trayWindows);
-        }
-        if (trayWindows.count == 0) continue;
-        [items addObject:@{
-            @"provider": provider,
-            @"providerId": provider,
-            @"account": account,
-            @"status": @"活跃",
-            @"windows": trayWindows
-        }];
-    }
-    return items;
+    id cache = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+    if (![cache isKindOfClass:NSDictionary.class]) return @[];
+    NSData *wrapped = [NSJSONSerialization dataWithJSONObject:@{@"entries": cache} options:0 error:nil];
+    return ParseAIQueryQuotaAccounts(wrapped);
 }
 
-static inline NSArray *FetchLimitsFromLocalSqlite(void) {
-    NSMutableArray *accounts = [NSMutableArray array];
-    NSMutableDictionary<NSString *, NSMutableDictionary *> *accMap = [NSMutableDictionary dictionary];
-
-    NSString *home = NSHomeDirectory();
-    NSString *proxyPath = [home stringByAppendingPathComponent:@"Library/Application Support/Natives/model-host/state.json"];
-    if ([[NSFileManager defaultManager] fileExistsAtPath:proxyPath]) {
-        NSData *pData = [NSData dataWithContentsOfFile:proxyPath];
-        if (pData) {
-            NSDictionary *pJson = [NSJSONSerialization JSONObjectWithData:pData options:0 error:nil];
-            if ([pJson isKindOfClass:[NSDictionary class]]) {
-                NSArray *accList = pJson[@"accounts"];
-                if ([accList isKindOfClass:[NSArray class]]) {
-                    for (NSDictionary *a in accList) {
-                        if (![a isKindOfClass:[NSDictionary class]]) continue;
-                        NSString *prov = a[@"provider"] ?: @"antigravity";
-                        NSString *email = a[@"label"] ?: a[@"id"] ?: @"";
-                        NSString *key = [NSString stringWithFormat:@"%@_%@", prov, email];
-                        NSString *provDisplay = [prov capitalizedString];
-                        if ([prov isEqualToString:@"antigravity"]) provDisplay = @"Antigravity";
-
-                        // 零假数据：身份与启停状态为真实信息，额度窗口未知时不填占位百分比
-                        NSMutableDictionary *item = [@{
-                            @"provider": provDisplay,
-                            @"providerId": prov,
-                            @"account": email,
-                            @"status": [a[@"enabled"] boolValue] ? @"活跃" : @"未启用",
-                            @"windows": [NSMutableArray array]
-                        } mutableCopy];
-                        accMap[key] = item;
-                    }
-                }
-            }
-        }
-    }
-
-    // 2. 读取 ~/.codex/auth.json (Codex / ChatGPT 账号)
-    NSString *codexAuthPath = [home stringByAppendingPathComponent:@".codex/auth.json"];
-    if ([[NSFileManager defaultManager] fileExistsAtPath:codexAuthPath]) {
-        NSData *cData = [NSData dataWithContentsOfFile:codexAuthPath];
-        if (cData) {
-            NSDictionary *cJson = [NSJSONSerialization JSONObjectWithData:cData options:0 error:nil];
-            if ([cJson isKindOfClass:[NSDictionary class]]) {
-                NSString *email = @"";
-                NSDictionary *tok = cJson[@"tokens"];
-                if ([tok isKindOfClass:[NSDictionary class]]) {
-                    NSString *idToken = tok[@"id_token"];
-                    if ([idToken isKindOfClass:[NSString class]]) {
-                        NSArray *parts = [idToken componentsSeparatedByString:@"."];
-                        if (parts.count >= 2) {
-                            NSString *payloadB64 = parts[1];
-                            while (payloadB64.length % 4 != 0) payloadB64 = [payloadB64 stringByAppendingString:@"="];
-                            payloadB64 = [[payloadB64 stringByReplacingOccurrencesOfString:@"-" withString:@"+"] stringByReplacingOccurrencesOfString:@"_" withString:@"/"];
-                            NSData *jwtData = [[NSData alloc] initWithBase64EncodedString:payloadB64 options:0];
-                            if (jwtData) {
-                                NSDictionary *payloadJson = [NSJSONSerialization JSONObjectWithData:jwtData options:0 error:nil];
-                                if ([payloadJson isKindOfClass:[NSDictionary class]] && payloadJson[@"email"]) {
-                                    email = payloadJson[@"email"];
-                                }
-                            }
-                        }
-                    }
-                }
-                // 零假数据：仅记录凭据存在与邮箱身份（解析失败不伪造邮箱）；真实额度由实时请求获取
-                NSString *key = [NSString stringWithFormat:@"codex_%@", email];
-                if (!accMap[key]) {
-                    accMap[key] = [@{
-                        @"provider": @"Codex (OpenAI)",
-                        @"providerId": @"codex",
-                        @"account": email,
-                        @"status": @"活跃",
-                        @"windows": [NSMutableArray array]
-                    } mutableCopy];
-                }
-            }
-        }
-    }
-
-    // 3. 从 tokenusage.db 的 limits_cache 表更新已同步的具体数据
-    NSString *dbPath = LocateTokenUsageDbPath();
-    if (dbPath) {
-        sqlite3 *db = NULL;
-        if (sqlite3_open_v2([dbPath UTF8String], &db, SQLITE_OPEN_READONLY, NULL) == SQLITE_OK) {
-            sqlite3_stmt *stmt = NULL;
-            const char *q = "SELECT provider_id, account_id, window_kind, remaining_percent, resets_at, label FROM limits_cache WHERE remaining_percent IS NOT NULL";
-            if (sqlite3_prepare_v2(db, q, -1, &stmt, NULL) == SQLITE_OK) {
-                while (sqlite3_step(stmt) == SQLITE_ROW) {
-                    const unsigned char *pChars = sqlite3_column_text(stmt, 0);
-                    const unsigned char *aChars = sqlite3_column_text(stmt, 1);
-                    const unsigned char *wChars = sqlite3_column_text(stmt, 2);
-                    double rem = sqlite3_column_double(stmt, 3);
-                    const unsigned char *rChars = sqlite3_column_text(stmt, 4);
-                    const unsigned char *lChars = sqlite3_column_text(stmt, 5);
-
-                    NSString *prov = pChars ? [NSString stringWithUTF8String:(const char *)pChars] : @"";
-                    NSString *acc = aChars ? [NSString stringWithUTF8String:(const char *)aChars] : @"";
-                    NSString *win = wChars ? [NSString stringWithUTF8String:(const char *)wChars] : @"";
-                    NSString *resets = rChars ? [NSString stringWithUTF8String:(const char *)rChars] : @"";
-                    NSString *lbl = lChars ? [NSString stringWithUTF8String:(const char *)lChars] : @"";
-
-                    NSString *key = [NSString stringWithFormat:@"%@_%@", prov, acc];
-                    NSMutableDictionary *target = accMap[key];
-                    if (!target) {
-                        target = [@{
-                            @"provider": [prov capitalizedString],
-                            @"providerId": prov,
-                            @"account": acc,
-                            @"status": @"活跃",
-                            @"windows": [NSMutableArray array]
-                        } mutableCopy];
-                        accMap[key] = target;
-                    }
-
-                    // 真实同步行：窗口名称按 window_kind 如实标注，余量与重置时间不加工
-                    NSString *winLabel = nil;
-                    if ([win isEqualToString:@"session"] || [win isEqualToString:@"5hour"] || [win isEqualToString:@"hourly"]) winLabel = @"5小时额度";
-                    else if ([win isEqualToString:@"daily"]) winLabel = @"今日额度";
-                    else if ([win isEqualToString:@"weekly"]) winLabel = @"周额度";
-                    else if ([win isEqualToString:@"monthly"]) winLabel = @"月度额度";
-                    else winLabel = @"账户额度";
-                    NSMutableDictionary *row = [@{@"label": winLabel, @"pct": @(MAX(0.0, MIN(100.0, rem)))} mutableCopy];
-                    if (resets.length > 0) row[@"reset"] = resets;
-                    [(NSMutableArray *)target[@"windows"] addObject:row];
-                }
-                sqlite3_finalize(stmt);
-            }
-            sqlite3_close(db);
-        }
-    }
-
-    // model-host 额度缓存（扩展「刷新额度」的真实成功结果）：覆盖匹配账号的窗口，
-    // 让顶栏展示 Antigravity 等经 model-host 查询的真实余额
-    for (NSDictionary *cached in FetchQuotaCacheAccounts()) {
-        // 注意：for-in 遍历字典得到的是键，账号字典必须走 allValues
-        for (NSMutableDictionary *it in [accMap allValues]) {
-            if ([it[@"providerId"] isKindOfClass:[NSString class]] &&
-                [it[@"providerId"] isEqualToString:cached[@"providerId"]] &&
-                [it[@"account"] isKindOfClass:[NSString class]] &&
-                [it[@"account"] isEqualToString:cached[@"account"]]) {
-                it[@"windows"] = cached[@"windows"];
-                break;
-            }
-        }
-    }
-
-    // 零假数据：无任何真实账号时不构造默认账号，返回空列表由面板如实显示空态
-    for (NSMutableDictionary *it in [accMap allValues]) {
-        if ([it[@"windows"] isKindOfClass:[NSMutableArray class]]) {
-            SortQuotaWindows5HFirst(it[@"windows"]);
-        }
-    }
-    [accounts addObjectsFromArray:[accMap allValues]];
-    return accounts;
-}
-
-// ===== AI 数据域查询客户端（ADR-0033 Phase 2 / 审计 B2）=====
+// ===== AI 数据域查询客户端（ADR-0033 Phase 2 / 架构 Wave 2 终态）=====
 // 顶栏不再直连上游额度端点（Codex wham / Google cloudcode-pa）、不再直读
 // Keychain 续期、不再第二写方写 quota-cache.json（B2 退役）。额度数据路径：
 //   手动刷新 → POST 127.0.0.1:8766/ai/quota/refresh（唯一上游触发口，model-host 执行）
@@ -334,18 +311,21 @@ static inline NSArray *FetchLimitsFromLocalSqlite(void) {
 //   8766 不可达 → 读 quota-cache.json（同一 Go 写方的缓存文件，离线兜底，只读）
 //   两者皆空   → 空列表 + 面板显示"模型服务未运行"（零假数据）
 
-// 解析 /ai/quota 响应（QuotaResult 数组）为账号窗口行，形状与
-// FetchQuotaCacheAccounts 一致（provider/providerId/account/status/windows）。
+// 解析 /ai/quota 响应为账号窗口行，形状与 FetchQuotaCacheAccounts 一致
+// （provider/providerId/account/status/windows）。响应合约（aiquery.go
+// serveQuotaCache）：{ status, generatedAt, entries: {credKey: QuotaResult} }，
+// entries 是以凭据为键的字典（不是 results 数组）；空缓存时 status="empty"。
 static inline NSArray *ParseAIQueryQuotaAccounts(NSData *data) {
+    if (![data isKindOfClass:NSData.class] || data.length == 0) return @[];
     id json = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
-    NSArray *results = [json isKindOfClass:[NSDictionary class]] ? json[@"results"] : nil;
-    if (![results isKindOfClass:[NSArray class]]) return @[];
+    NSDictionary *entries = [json isKindOfClass:[NSDictionary class]] ? json[@"entries"] : nil;
+    if (![entries isKindOfClass:[NSDictionary class]]) return @[];
 
-    NSISO8601DateFormatter *iso = [[NSISO8601DateFormatter alloc] init];
     NSDateFormatter *shortFmt = [[NSDateFormatter alloc] init];
     shortFmt.dateFormat = @"MM-dd HH:mm";
     NSMutableArray *items = [NSMutableArray array];
-    for (NSDictionary *entry in results) {
+    for (NSDictionary *entry in entries.allValues) {
+        if (![entry isKindOfClass:NSDictionary.class] || ![entry[@"status"] isEqual:@"success"]) continue;
         if (![entry isKindOfClass:[NSDictionary class]]) continue;
         NSString *provider = [entry[@"provider"] isKindOfClass:[NSString class]] ? entry[@"provider"] : @"";
         NSString *account = [entry[@"account"] isKindOfClass:[NSString class]] ? entry[@"account"] : @"";
@@ -356,7 +336,7 @@ static inline NSArray *ParseAIQueryQuotaAccounts(NSData *data) {
         for (NSDictionary *w in windows) {
             if (![w isKindOfClass:[NSDictionary class]]) continue;
             NSNumber *pct = [w[@"remainingPercent"] isKindOfClass:[NSNumber class]] ? w[@"remainingPercent"] : nil;
-            if (!pct) continue;
+            if (!pct || !isfinite(pct.doubleValue) || pct.doubleValue < 0 || pct.doubleValue > 100) continue;
             NSMutableDictionary *row = [NSMutableDictionary dictionary];
             NSString *typeName = [w[@"name"] isKindOfClass:[NSString class]] && [w[@"name"] length] > 0 ? w[@"name"] : @"额度";
             NSString *group = [w[@"group"] isKindOfClass:[NSString class]] ? w[@"group"] : @"";
@@ -366,7 +346,7 @@ static inline NSArray *ParseAIQueryQuotaAccounts(NSData *data) {
             else if ([group containsString:@"Claude"]) row[@"group"] = @"Claude 与 GPT 模型";
             NSString *resetISO = [w[@"resetTime"] isKindOfClass:[NSString class]] ? w[@"resetTime"] : @"";
             if (resetISO.length > 0) {
-                NSDate *resetDate = [iso dateFromString:resetISO];
+                NSDate *resetDate = NativeParseISO8601(resetISO);
                 if (resetDate) {
                     row[@"reset"] = [NSString stringWithFormat:@"%@ 重置", [shortFmt stringFromDate:resetDate]];
                     row[@"resetEpoch"] = @(resetDate.timeIntervalSince1970);
@@ -375,12 +355,18 @@ static inline NSArray *ParseAIQueryQuotaAccounts(NSData *data) {
             [trayWindows addObject:row];
         }
         if (trayWindows.count == 0) continue;
+        NSMutableDictionary *byLabel = [NSMutableDictionary dictionary];
+        for (NSDictionary *row in trayWindows) {
+            NSDictionary *previous = byLabel[row[@"label"]];
+            if (!previous || [row[@"pct"] doubleValue] < [previous[@"pct"] doubleValue]) byLabel[row[@"label"]] = row;
+        }
+        trayWindows = [byLabel.allValues mutableCopy];
         SortQuotaWindows5HFirst(trayWindows);
         [items addObject:@{
             @"provider": [provider capitalizedString],
             @"providerId": provider,
             @"account": account,
-            @"status": @"活跃",
+            @"status": @"缓存",
             @"windows": trayWindows
         }];
     }
@@ -392,6 +378,7 @@ static inline NSArray *ParseAIQueryQuotaAccounts(NSData *data) {
 // 手动刷新时发生，反封号口径不变）。quotaSource 回填 "8766"/"cache"/"none"。
 static inline NSArray *FetchQuotaAccountsViaAIQuery(BOOL refresh, NSString **quotaSource) {
     NSString *base = @"http://127.0.0.1:8766";
+    __block BOOL refreshSucceeded = !refresh;
     if (refresh) {
         NSMutableURLRequest *post = [NSMutableURLRequest requestWithURL:
             [NSURL URLWithString:[base stringByAppendingString:@"/ai/quota/refresh"]]];
@@ -402,31 +389,22 @@ static inline NSArray *FetchQuotaAccountsViaAIQuery(BOOL refresh, NSString **quo
         dispatch_semaphore_t psem = dispatch_semaphore_create(0);
         NSURLSession *psess = [NSURLSession sessionWithConfiguration:[NSURLSessionConfiguration ephemeralSessionConfiguration]];
         [[psess dataTaskWithRequest:post completionHandler:^(NSData *d, NSURLResponse *r, NSError *e) {
+            id result = d ? [NSJSONSerialization JSONObjectWithData:d options:0 error:nil] : nil;
+            refreshSucceeded = !e && [(NSHTTPURLResponse *)r statusCode] == 200 && [result isKindOfClass:NSDictionary.class];
+            for (NSDictionary *item in [result isKindOfClass:NSDictionary.class] && [result[@"results"] isKindOfClass:NSArray.class] ? result[@"results"] : @[]) {
+                if (![item isKindOfClass:NSDictionary.class] || ![item[@"status"] isEqual:@"success"]) refreshSucceeded = NO;
+            }
             dispatch_semaphore_signal(psem);
         }] resume];
         dispatch_semaphore_wait(psem, dispatch_time(DISPATCH_TIME_NOW, 35 * NSEC_PER_SEC));
-        [psess finishTasksAndInvalidate];
+        [psess invalidateAndCancel];
     }
 
-    NSMutableURLRequest *req = [NSMutableURLRequest requestWithURL:
-        [NSURL URLWithString:[base stringByAppendingString:@"/ai/quota"]]];
-    req.timeoutInterval = 3.0;
-    __block NSData *respData = nil;
-    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
-    NSURLSession *sess = [NSURLSession sessionWithConfiguration:[NSURLSessionConfiguration ephemeralSessionConfiguration]];
-    [[sess dataTaskWithRequest:req completionHandler:^(NSData *d, NSURLResponse *r, NSError *e) {
-        respData = d;
-        dispatch_semaphore_signal(sem);
-    }] resume];
-    dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC));
-    [sess finishTasksAndInvalidate];
-
-    if (respData) {
-        NSArray *accounts = ParseAIQueryQuotaAccounts(respData);
-        if (accounts.count > 0) {
-            if (quotaSource) *quotaSource = @"8766";
-            return accounts;
-        }
+    NSDictionary *response = FetchAIQueryJSON(@"/ai/quota");
+    if ([response[@"entries"] isKindOfClass:NSDictionary.class]) {
+        NSData *body = [NSJSONSerialization dataWithJSONObject:response options:0 error:nil];
+        if (quotaSource) *quotaSource = refreshSucceeded ? @"8766" : @"refreshFailed";
+        return ParseAIQueryQuotaAccounts(body);
     }
     // 8766 不可达（模型服务未运行）：缓存文件兜底（同一 Go 写方，只读）
     NSArray *cached = FetchQuotaCacheAccounts();
@@ -434,6 +412,250 @@ static inline NSArray *FetchQuotaAccountsViaAIQuery(BOOL refresh, NSString **quo
     return cached;
 }
 
+// 8766 只读 GET 通用查询（失败/非 200 返回 nil）
+static inline NSDictionary *FetchAIQueryJSON(NSString *path) {
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:
+        [NSURL URLWithString:[@"http://127.0.0.1:8766" stringByAppendingString:path]]];
+    request.timeoutInterval = 3.0;
+    __block NSData *data = nil;
+    dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
+    NSURLSession *session = [NSURLSession sessionWithConfiguration:[NSURLSessionConfiguration ephemeralSessionConfiguration]];
+    [[session dataTaskWithRequest:request completionHandler:^(NSData *body, NSURLResponse *response, NSError *error) {
+        if (!error && [(NSHTTPURLResponse *)response statusCode] == 200) data = body;
+        dispatch_semaphore_signal(semaphore);
+    }] resume];
+    dispatch_semaphore_wait(semaphore, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC));
+    [session invalidateAndCancel];
+    id value = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+    return [value isKindOfClass:[NSDictionary class]] ? value : nil;
+}
+
+// 8766 存活探测（/ai/healthz）。超时给短，用于拉起前的快速检查与拉起后的就绪等待。
+static inline BOOL AIQueryHealthzAlive(NSTimeInterval timeout) {
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:
+        [NSURL URLWithString:@"http://127.0.0.1:8766/ai/healthz"]];
+    request.timeoutInterval = timeout;
+    __block BOOL alive = NO;
+    dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
+    NSURLSession *session = [NSURLSession sessionWithConfiguration:[NSURLSessionConfiguration ephemeralSessionConfiguration]];
+    [[session dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        alive = !error && [(NSHTTPURLResponse *)response statusCode] == 200;
+        dispatch_semaphore_signal(semaphore);
+    }] resume];
+    dispatch_semaphore_wait(semaphore, dispatch_time(DISPATCH_TIME_NOW, (int64_t)((timeout + 1.0) * NSEC_PER_SEC)));
+    [session invalidateAndCancel];
+    return alive;
+}
+
+// model-host 可执行文件候选（顶栏按需拉起 worker 用）。manifestDir 可注入以便测试。
+// 顺序：顶栏同目录（开发态 target/debug 与 model-host 同级）→ Chrome NM manifest
+//（开发 com.natives.local.model_host / 生产 com.natives.model_host）的 path 字段。
+static inline NSArray *ModelHostExecutableCandidates(NSString *manifestDir) {
+    NSMutableArray *candidates = [NSMutableArray array];
+    NSString *selfPath = [[NSBundle mainBundle] executablePath];
+    if (selfPath.length == 0) selfPath = [NSProcessInfo processInfo].arguments.firstObject;
+    if (selfPath.length > 0) {
+        NSString *dir = selfPath.stringByDeletingLastPathComponent;
+        if (dir.length > 0) [candidates addObject:[dir stringByAppendingPathComponent:@"model-host"]];
+    }
+    NSFileManager *fm = [NSFileManager defaultManager];
+    for (NSString *name in @[@"com.natives.model_host.json", @"com.natives.local.model_host.json"]) {
+        NSString *manifestPath = [manifestDir stringByAppendingPathComponent:name];
+        NSData *data = [NSData dataWithContentsOfFile:manifestPath];
+        NSDictionary *manifest = data ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
+        NSString *path = [manifest isKindOfClass:[NSDictionary class]] ? manifest[@"path"] : nil;
+        if ([path isKindOfClass:[NSString class]] && path.length > 0 &&
+            [fm fileExistsAtPath:path]) {
+            [candidates addObject:path];
+        }
+    }
+    return candidates;
+}
+
+static inline NSString *ModelHostManifestDirectory(void) {
+    return [NSHomeDirectory() stringByAppendingPathComponent:
+        @"Library/Application Support/Google/Chrome/NativeMessagingHosts"];
+}
+
+// 定位可启动的 model-host 二进制；找不到返回 nil（调用方保持既有离线兜底路径）。
+static inline NSString *LocateModelHostExecutable(void) {
+    NSFileManager *fm = [NSFileManager defaultManager];
+    for (NSString *path in ModelHostExecutableCandidates(ModelHostManifestDirectory())) {
+        if (path.length > 0 && [fm isExecutableFileAtPath:path]) return path;
+    }
+    return nil;
+}
+
+// RFC3339/ISO8601 解析：兼容带毫秒（2026-09-29T02:09:07.431Z）与不带毫秒
+// （2026-09-29T02:09:07Z）两种形状。
+static inline NSDate *NativeParseISO8601(NSString *value) {
+    if (value.length == 0) return nil;
+    NSISO8601DateFormatter *fractional = [[NSISO8601DateFormatter alloc] init];
+    fractional.formatOptions = NSISO8601DateFormatWithInternetDateTime |
+                               NSISO8601DateFormatWithFractionalSeconds;
+    NSDate *date = [fractional dateFromString:value];
+    if (date) return date;
+    NSISO8601DateFormatter *plain = [[NSISO8601DateFormatter alloc] init];
+    plain.formatOptions = NSISO8601DateFormatWithInternetDateTime;
+    return [plain dateFromString:value];
+}
+
+// 使用情况（按模型分解）：8766 /ai/usage/analysis?range=… 的 byModel
+// （按 token 降序，取前 8）。range 合约：Model Host 只接受 today/7d/30d/all。
+static inline NSArray *ToolRowsFromResponse(NSDictionary *analysis) {
+    NSMutableArray *tools = [NSMutableArray array];
+    NSArray *byModel = [analysis[@"byModel"] isKindOfClass:[NSArray class]] ? analysis[@"byModel"] : @[];
+    for (NSDictionary *m in byModel) {
+        if (![m isKindOfClass:[NSDictionary class]]) continue;
+        long long tokens = [m[@"tokens"] isKindOfClass:[NSNumber class]] ? [m[@"tokens"] longLongValue] : 0;
+        NSString *name = [m[@"name"] isKindOfClass:[NSString class]] ? m[@"name"] : @"";
+        if (tokens <= 0 || name.length == 0) continue;
+        [tools addObject:@{
+            @"name": name,
+            @"tokens": @(tokens),
+            @"costUsd": [m[@"costUsd"] isKindOfClass:[NSNumber class]] ? m[@"costUsd"] : @0.0,
+            @"priced": [m[@"priced"] isKindOfClass:[NSNumber class]] ? m[@"priced"] : @NO
+        }];
+        if (tools.count >= 8) break;
+    }
+    return tools;
+}
+
+// 会话行映射：8766 /ai/usage/sessions（按 lastAt 倒序；带 title 会话名称与
+// toolId，供面板按工具分组展示）。同一映射复用于全部周期。
+static inline NSArray *SessionRowsFromResponse(NSDictionary *sessionsResp) {
+    NSMutableArray *sessions = [NSMutableArray array];
+    NSArray *sessionList = [sessionsResp[@"sessions"] isKindOfClass:[NSArray class]] ? sessionsResp[@"sessions"] : @[];
+    for (NSDictionary *s in sessionList) {
+        if (![s isKindOfClass:[NSDictionary class]]) continue;
+        NSString *toolId = [s[@"toolId"] isKindOfClass:[NSString class]] ? s[@"toolId"] : @"";
+        NSString *lastAt = [s[@"lastAt"] isKindOfClass:[NSString class]] ? s[@"lastAt"] : @"";
+        NSString *title = [s[@"title"] isKindOfClass:[NSString class]] ? s[@"title"] : @"";
+        if (toolId.length == 0 && lastAt.length == 0) continue;
+        // 显示名：会话名称（真实标题）优先；无标题时回退工具名 + 最后活跃时间。
+        // lastAt 实际形状为 RFC3339 带毫秒（2026-09-29T02:09:07.431Z），需按
+        // ISO8601 解析，再兜底无小数秒形状。
+        NSString *display = title;
+        NSDate *d = lastAt.length > 0 ? NativeParseISO8601(lastAt) : nil;
+        if (display.length == 0) {
+            display = toolId;
+            if (d) {
+                NSDateFormatter *out = [[NSDateFormatter alloc] init];
+                out.dateFormat = @"MM-dd HH:mm";
+                display = [NSString stringWithFormat:@"%@ · %@", toolId, [out stringFromDate:d]];
+            }
+        }
+        [sessions addObject:@{
+            @"id": display,
+            @"tool": toolId,
+            @"totalTokens": [s[@"tokens"] isKindOfClass:[NSNumber class]] ? s[@"tokens"] : @0,
+            @"costUsd": [s[@"costUsd"] isKindOfClass:[NSNumber class]] ? s[@"costUsd"] : @0.0,
+            @"priced": [s[@"priced"] isKindOfClass:[NSNumber class]] ? s[@"priced"] : @NO
+        }];
+    }
+    return sessions;
+}
+
+static inline NSString *AIUsageQueryPath(NSString *path, NSString *timezoneName) {
+    NSMutableCharacterSet *allowed = [NSCharacterSet.URLQueryAllowedCharacterSet mutableCopy];
+    [allowed removeCharactersInString:@"+&=?"];
+    NSString *timezone = [timezoneName stringByAddingPercentEncodingWithAllowedCharacters:allowed];
+    return [path stringByAppendingFormat:@"&timezone=%@", timezone];
+}
+
+static inline NSDictionary *UsagePeriodFromOverview(NSDictionary *overview) {
+    NSDictionary *metrics = [overview[@"metrics"] isKindOfClass:NSDictionary.class] ? overview[@"metrics"] : nil;
+    for (NSString *key in @[@"totalTokens", @"estimatedCostUsd", @"priced"]) {
+        if (![metrics[key] isKindOfClass:NSNumber.class] || !isfinite([metrics[key] doubleValue])) return nil;
+    }
+    if ([metrics[@"totalTokens"] longLongValue] < 0) return nil;
+    return @{@"totalTokens": metrics[@"totalTokens"], @"costUsd": metrics[@"estimatedCostUsd"], @"priced": metrics[@"priced"]};
+}
+
+static inline NSDictionary *FetchCompactStatusBarState(void) {
+    NSDictionary *today = UsagePeriodFromOverview(FetchAIQueryJSON(AIUsageQueryPath(@"/ai/usage/overview?range=today", NSTimeZone.localTimeZone.name)));
+    if (!today) return FetchStateFromUsageDb();
+    NSDictionary *all = [today[@"totalTokens"] longLongValue] > 0 ? today
+        : UsagePeriodFromOverview(FetchAIQueryJSON(AIUsageQueryPath(@"/ai/usage/overview?range=all", NSTimeZone.localTimeZone.name)));
+    return all ? StatusBarUsageSummary(today, all) : FetchStateFromUsageDb();
+}
+
+static inline NSDictionary *FetchStateViaAIQueryWithFetcher(NSDictionary *(^fetch)(NSString *)) {
+    NSDictionary *(^query)(NSString *) = ^NSDictionary *(NSString *path) { return fetch(AIUsageQueryPath(path, NSTimeZone.localTimeZone.name)); };
+    // range 合约（ADR-0033 Usage Query）：Model Host 只接受 today/7d/30d/all；
+    // 旧 day/week/month 不在合法集合内，会按无界范围处理导致今日/周/月显示错误。
+    NSDictionary *all = query(@"/ai/usage/overview?range=all");
+    if (!all) return nil;
+    NSDictionary *today = query(@"/ai/usage/overview?range=today");
+    NSDictionary *week = query(@"/ai/usage/overview?range=7d");
+    NSDictionary *month = query(@"/ai/usage/overview?range=30d");
+    if (!today || !week || !month) return nil;
+    NSDictionary *todayPeriod = UsagePeriodFromOverview(today), *allPeriod = UsagePeriodFromOverview(all);
+    NSDictionary *weekPeriod = UsagePeriodFromOverview(week), *monthPeriod = UsagePeriodFromOverview(month);
+    if (!todayPeriod || !allPeriod || !weekPeriod || !monthPeriod) return nil;
+    NSCalendar *calendar = NSCalendar.currentCalendar;
+    NSDate *now = NSDate.date;
+    NSDate *start = [calendar dateByAddingUnit:NSCalendarUnitDay value:-6 toDate:[calendar startOfDayForDate:now] options:0];
+    NSISO8601DateFormatter *iso = [NSISO8601DateFormatter new];
+    NSDictionary *trendResponse = query([NSString stringWithFormat:@"/ai/usage/overview?range=custom&startTime=%@&endTime=%@", [iso stringFromDate:start], [iso stringFromDate:now]]);
+    if (!UsagePeriodFromOverview(trendResponse)) return nil;
+    NSMutableArray *trend = [NSMutableArray array];
+    for (NSDictionary *point in [trendResponse[@"trend"] isKindOfClass:NSArray.class] ? trendResponse[@"trend"] : @[]) {
+        if (![point isKindOfClass:NSDictionary.class]) return nil;
+        NSString *timestamp = [point[@"timestamp"] isKindOfClass:NSString.class] ? point[@"timestamp"] : nil;
+        if (timestamp.length < 10 || ![point[@"tokens"] isKindOfClass:NSNumber.class]) return nil;
+        [trend addObject:@{@"date": [timestamp substringToIndex:10], @"totalTokens": point[@"tokens"]}];
+    }
+
+    // 周期切换（面板页签）：使用情况与最近会话按所选周期分别查询——
+    // 每个周期独立调 analysis / sessions（range 已由 Model Host 校验），
+    // 不再把全量数据四路复用冒充周期数据。额度与余量不随周期切换。
+    NSDictionary *rangePairs = @{
+        @"today": @"today", @"thisWeek": @"7d", @"thisMonth": @"30d", @"allTime": @"all"
+    };
+    NSMutableDictionary *toolsByPeriod = [NSMutableDictionary dictionary];
+    NSMutableDictionary *sessionsByPeriod = [NSMutableDictionary dictionary];
+    for (NSString *panelKey in rangePairs) {
+        NSString *range = rangePairs[panelKey];
+        NSDictionary *analysis = query([NSString stringWithFormat:@"/ai/usage/analysis?range=%@", range]);
+        NSDictionary *sessionResponse = query([NSString stringWithFormat:@"/ai/usage/sessions?range=%@&limit=12", range]);
+        if (!analysis || !sessionResponse) return nil;
+        toolsByPeriod[panelKey] = ToolRowsFromResponse(analysis);
+        sessionsByPeriod[panelKey] = SessionRowsFromResponse(sessionResponse);
+    }
+    // 空周期保持空，不能拿其他周期的历史数据冒充。
+    NSArray *todaySessions = sessionsByPeriod[@"today"];
+    NSArray *tools = toolsByPeriod[@"today"] ?: @[];
+
+    // 最近会话（默认页签「天」）：供无 sessionsByPeriod 的旧消费方回退。
+    NSArray *sessions = todaySessions;
+
+    NSMutableDictionary *state = [StatusBarUsageSummary(todayPeriod, allPeriod) mutableCopy];
+    state[@"panel"] = @{
+            @"today": todayPeriod, @"thisWeek": weekPeriod,
+            @"thisMonth": monthPeriod, @"allTime": allPeriod,
+            @"tools": tools, @"toolsByPeriod": toolsByPeriod,
+            @"sessions": sessions, @"sessionsByPeriod": sessionsByPeriod,
+            @"trends": trend
+    };
+    return state;
+}
+
+static inline NSDictionary *FetchStateViaAIQuery(void) {
+    return FetchStateViaAIQueryWithFetcher(^NSDictionary *(NSString *path) {
+        return FetchAIQueryJSON(path);
+    });
+}
+
+static inline NSDictionary *FetchStatusBarState(void) {
+    NSDictionary *state = FetchStateViaAIQuery();
+    if (!state) return FetchStateFromUsageDb();
+    NSMutableDictionary *tagged = [state mutableCopy];
+    tagged[@"usageSource"] = @"8766";
+    return tagged;
+}
+
+#if 0 // Historical migration reference only; replaced by FetchStateViaAIQuery.
 // 按日期过滤查询工具分解（dateFilter 传 nil/空表示全量），按 token 降序，最多 8 条；
 // 与 modules/tokenusage/src/api/stats.rs 的 tools_decomposed 口径一致
 static inline NSMutableArray *FetchToolDecomposition(sqlite3 *db, NSString *dateFilter, NSString *dateValue) {
@@ -615,7 +837,7 @@ static inline NSDictionary *FetchStateFromLocalSqlite(void) {
 
     // 8) worstLimit: 从真实额度窗口中提取最紧张余量；无真实数据时保持 nil（不造假）
     NSDictionary *worstLimit = nil;
-    NSArray *accountsList = FetchLimitsFromLocalSqlite();
+    NSArray *accountsList = FetchQuotaCacheAccounts();
     double lowestPct = 101.0;
     for (NSDictionary *acc in accountsList) {
         NSArray *wins = acc[@"windows"];
@@ -691,4 +913,4 @@ static inline NSDictionary *FetchStateFromLocalSqlite(void) {
         @"panel": panel
     };
 }
-
+#endif

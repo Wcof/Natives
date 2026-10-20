@@ -1,5 +1,5 @@
 (() => {
-const { state, actions, api } = globalThis.Fund;
+const { state, actions, api, t } = globalThis.Fund;
 // Fund 领域模块：热门板块与成分股联动表。职责一句话——维护板块分类页签、
 // 板块行情表（排序/选中）与板块成分股表（排序/选中联动标的切换）。
 // 自选分组与自选行情表已按职责拆分至 watchlist-table.js。
@@ -12,6 +12,21 @@ let lastSectorsData = [];
 let lastStocksData = [];
 let sectorSort = { key: "changePct", asc: false };
 let stockSort = { key: "changePct", asc: false };
+let sectorGeneration = 0, stocksGeneration = 0, sectorRequest = null, stocksRequest = null;
+const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function compare(a,b,key,asc) {
+  const av=a[key],bv=b[key];
+  if(av==null)return bv==null?0:1;
+  if(bv==null)return -1;
+  return (typeof av==='string'?av.localeCompare(String(bv)):av-bv)*(asc?1:-1);
+}
+function rowStatus(tbody,key,columns) {
+ const tr=document.createElement('tr'),td=document.createElement('td');
+ td.colSpan=columns;td.className='investment-row-empty';td.textContent=t(key);tr.append(td);tbody.replaceChildren(tr);
+}
+function leaveMarket(){sectorGeneration++;stocksGeneration++;sectorRequest?.abort();stocksRequest?.abort();}
+actions.leaveMarket=leaveMarket;
+window.addEventListener('pagehide',leaveMarket);
 
 const sTabs = document.querySelectorAll("#sector-category-tabs .group-tab");
 sTabs.forEach(function(tab) {
@@ -26,17 +41,26 @@ sTabs.forEach(function(tab) {
 function refreshSectors() {
   const tbody = document.querySelector("#sectors-table tbody");
   if (!tbody) return;
-  tbody.innerHTML = "<tr><td colspan='9' style='text-align:center; padding: 20px;'>加载热门板块数据中…</td></tr>";
+  sectorRequest?.abort();const request=new AbortController(),generation=++sectorGeneration;
+  sectorRequest=request;
+  if(!lastSectorsData.length)rowStatus(tbody,'fundHomeLoading',9);
+  if(!lastSectorsData.length)document.getElementById('market-candidates').textContent=t('fundHomeLoading');
 
-  api("GET", "/api/market/sectors?type=" + currentSectorType).then(function(res) {
+  api("GET", "/api/market/sectors?type=" + currentSectorType,null,{signal:request.signal}).then(function(res) {
+    if(generation!==sectorGeneration)return;
     lastSectorsData = res.sectors || res.quotes || [];
+    document.getElementById('market-status').textContent='';
     renderSectorsTable();
   }).catch(function(err) {
-    tbody.innerHTML = "<tr><td colspan='9' class='err' style='text-align:center; padding: 20px;'>获取板块行情失败：" + err.message + "</td></tr>";
+    if(generation!==sectorGeneration||request.signal.aborted)return;
+    if(!lastSectorsData.length)rowStatus(tbody,'fundMarketReadFailed',9);
+    document.getElementById('market-status').textContent=t('fundMarketReadFailed');
+    if(!lastSectorsData.length)document.getElementById('market-candidates').textContent=t('fundMarketReadFailed');
   });
 }
 actions.refreshSectors = refreshSectors;
 actions.refreshMarket = refreshSectors;
+document.addEventListener('fund:language-changed',()=>{renderSectorsTable();renderSectorStocksTable();if(currentSelectedSector)document.getElementById('sector-stocks-title').textContent=currentSelectedSector.name+' · '+t('fundMarketConstituents',{n:lastStocksData.length});});
 
 function renderSectorsTable() {
   const tbody = document.querySelector("#sectors-table tbody");
@@ -45,15 +69,14 @@ function renderSectorsTable() {
 
   const items = lastSectorsData.slice();
   if (sectorSort.key) {
-    items.sort(function(a, b) {
-      const va = a[sectorSort.key] != null ? a[sectorSort.key] : -999999;
-      const vb = b[sectorSort.key] != null ? b[sectorSort.key] : -999999;
-      return sectorSort.asc ? (va > vb ? 1 : -1) : (va < vb ? 1 : -1);
-    });
+    items.sort((a,b)=>compare(a,b,sectorSort.key,sectorSort.asc));
   }
+  const cards=document.getElementById('market-candidates');
+  cards.innerHTML=items.slice(0,6).map(s=>`<article class="card market-candidate"><div class="between"><h3>${escape(s.name)}</h3><span class="tag">${escape(t('fundMarketResearchObject'))}</span></div><small>${escape(s.asOf||t('fundHomeSourceTimestampUnknown'))}</small><div class="holding-amount ${s.changePct>0?'up':s.changePct<0?'down':''}">${s.changePct==null?'–':(s.changePct>0?'+':'')+s.changePct.toFixed(2)+'%'}</div><dl class="metric-list"><div><dt>${escape(t('fundMarketUiTopGainer'))}</dt><dd>${escape(s.topStockName||'–')}</dd></div><div><dt>${escape(t('fundMarketFiveDay'))}</dt><dd>${s.changePct5==null?'–':s.changePct5.toFixed(2)+'%'}</dd></div><div><dt>${escape(t('fundMarketTwentyDay'))}</dt><dd>${s.changePct20==null?'–':s.changePct20.toFixed(2)+'%'}</dd></div></dl><p class="investment-card-tip">${escape(t('fundMarketResearchScope'))}</p><button type="button" data-sector-code="${escape(s.code)}" aria-pressed="${currentSelectedSector?.code===s.code}">${escape(t('fundMarketConstituentAction'))}</button></article>`).join('')||`<p>${escape(t('fundMarketNoSectors'))}</p>`;
+  cards.querySelectorAll('[data-sector-code]').forEach(button=>button.onclick=()=>{const sector=items.find(s=>s.code===button.dataset.sectorCode);if(sector){selectSector(sector);document.getElementById('sector-stocks-title').scrollIntoView({block:'nearest'});}});
 
   if (items.length === 0) {
-    tbody.innerHTML = "<tr><td colspan='9' style='text-align:center; padding: 20px;'>暂无板块数据</td></tr>";
+    rowStatus(tbody,'fundMarketNoSectors',9);
     return;
   }
 
@@ -78,10 +101,10 @@ function renderSectorsTable() {
     const pct20Cls = s.changePct20 > 0 ? "up" : s.changePct20 < 0 ? "down" : "";
 
     tr.innerHTML = "<td style='color:var(--natives-text-muted);'>" + (idx + 1) + "</td>" +
-                   "<td><b>" + s.name + "</b></td>" +
+                   "<td><button type='button' class='sector-select'>" + escape(s.name) + "</button></td>" +
                    "<td class='num " + pctCls + "'>" + pct + "</td>" +
                    "<td class='num " + speedCls + "'>" + speed + "</td>" +
-                   "<td>" + topName + "</td>" +
+                   "<td>" + escape(topName) + "</td>" +
                    "<td class='num " + topCls + "'>" + topPrice + "</td>" +
                    "<td class='num " + topCls + "'>" + topPct + "</td>" +
                    "<td class='num " + pct5Cls + "'>" + pct5 + "</td>" +
@@ -102,6 +125,7 @@ function renderSectorsTable() {
 
 function selectSector(s) {
   currentSelectedSector = s;
+  document.querySelectorAll('[data-sector-code]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.sectorCode===s.code)));
   document.querySelectorAll("#sectors-table tbody tr").forEach(function(r) {
     r.classList.remove("selected-sector");
   });
@@ -162,10 +186,10 @@ function updateSectorSidebar(sector) {
     lastStocksData.forEach(function(st) {
       if (st.changePct > 0) up++;
       else if (st.changePct < 0) down++;
-      else flat++;
+      else if (st.changePct === 0) flat++;
     });
-    const total = lastStocksData.length;
-    const ratio = total > 0 ? Math.round((up / total) * 100) : 50;
+    const total = up + down + flat;
+    const ratio = total > 0 ? Math.round((up / total) * 100) : null;
 
     const upEl = document.getElementById("side-sector-up-count");
     const downEl = document.getElementById("side-sector-down-count");
@@ -177,8 +201,8 @@ function updateSectorSidebar(sector) {
     if (upEl) upEl.textContent = up;
     if (downEl) downEl.textContent = down;
     if (flatEl) flatEl.textContent = flat;
-    if (ratioEl) ratioEl.textContent = ratio + "%";
-    if (fillEl) fillEl.style.width = ratio + "%";
+    if (ratioEl) ratioEl.textContent = ratio == null ? "–" : ratio + "%";
+    if (fillEl) fillEl.style.width = (ratio || 0) + "%";
     if (totalEl) totalEl.textContent = total;
   }
 }
@@ -198,21 +222,21 @@ function updateSectorStockDetail(symbol, name) {
   container.innerHTML =
     "<div style='display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:8px;'>" +
       "<div>" +
-        "<div style='font-size:14px; font-weight:600;'>" + displayName + " <span style='font-size:11px; color:var(--natives-text-muted);'>" + symbol + "</span></div>" +
+        "<div style='font-size:14px; font-weight:600;'>" + escape(displayName) + " <span style='font-size:var(--natives-fs-secondary); color:var(--natives-text-muted);'>" + escape(symbol) + "</span></div>" +
         "<div style='font-size:18px; font-weight:bold; margin-top:2px;' class='" + (isUp ? "up" : "down") + "'>" + price + " <span style='font-size:12px;'>" + pct + "</span></div>" +
       "</div>" +
-      "<button class='btn " + (!isFav ? "btn-accent" : "") + "' id='btn-sector-stock-fav' style='padding:3px 8px; font-size:11px;'>" +
+      "<button class='btn " + (!isFav ? "btn-accent" : "") + "' id='btn-sector-stock-fav' style='padding:3px 8px; font-size:var(--natives-fs-secondary);'>" +
         (isFav ? "已自选" : "+ 加自选") +
       "</button>" +
     "</div>" +
-    "<div style='display:grid; grid-template-columns:1fr 1fr; gap:6px; font-size:11px; color:var(--natives-text-muted); padding:6px 0; border-top:1px solid var(--natives-border);'>" +
+    "<div style='display:grid; grid-template-columns:1fr 1fr; gap:6px; font-size:var(--natives-fs-secondary); color:var(--natives-text-muted); padding:6px 0; border-top:1px solid var(--natives-border);'>" +
       "<div>成交量: <span class='num' style='color:var(--natives-text-primary);'>" + (st && st.volume ? (st.volume > 10000 ? (st.volume / 10000).toFixed(1) + "万手" : st.volume + "手") : "–") + "</span></div>" +
       "<div>换手率: <span class='num' style='color:var(--natives-text-primary);'>" + (st && st.turnover != null ? st.turnover.toFixed(2) + "%" : "–") + "</span></div>" +
       "<div>振幅: <span class='num' style='color:var(--natives-text-primary);'>" + (st && st.amplitude != null ? st.amplitude.toFixed(2) + "%" : "–") + "</span></div>" +
       "<div>量比: <span class='num' style='color:var(--natives-text-primary);'>" + (st && st.volumeRatio != null ? st.volumeRatio.toFixed(2) : "–") + "</span></div>" +
     "</div>" +
     "<div style='margin-top:8px; text-align:right;'>" +
-      "<button class='btn' id='btn-sector-stock-analyze' style='padding:3px 8px; font-size:11px;'>转到趋势分析 →</button>" +
+      "<button class='btn' id='btn-sector-stock-analyze' style='padding:3px 8px; font-size:var(--natives-fs-secondary);'>转到趋势分析 →</button>" +
     "</div>";
 
   const favBtn = document.getElementById("btn-sector-stock-fav");
@@ -220,17 +244,14 @@ function updateSectorStockDetail(symbol, name) {
     favBtn.addEventListener("click", function() {
       const nowFav = state.watchlistItems.some(function(i) { return i.symbol === symbol; });
       if (nowFav) {
-        api("DELETE", "/api/watchlists/items?watchlistId=" + state.activeGroup + "&symbol=" + symbol).then(function() {
-          actions.refreshWatchlist();
+        actions.setWatchlistMember({symbol},false).then(function() {
           updateSectorStockDetail(symbol, name);
         });
       } else {
-        api("POST", "/api/watchlists/items", {
-          watchlistId: state.activeGroup,
+        actions.setWatchlistMember({
           symbol: symbol,
           name: displayName
-        }).then(function() {
-          actions.refreshWatchlist();
+        },true).then(function() {
           updateSectorStockDetail(symbol, name);
         });
       }
@@ -260,25 +281,29 @@ function renderSectorsTableSelection() {
 function loadSectorStocks(sector) {
   const titleEl = document.getElementById("sector-stocks-title");
   if (titleEl) {
-    titleEl.innerHTML = "<b>" + sector.name + "</b> 板块个股";
+    titleEl.textContent = sector.name;
   }
   const tbody = document.querySelector("#sector-stocks-table tbody");
   if (!tbody) return;
-  tbody.innerHTML = "<tr><td colspan='10' style='text-align:center; padding: 20px;'>加载板块成分股中…</td></tr>";
+  stocksRequest?.abort();const request=new AbortController(),generation=++stocksGeneration;
+  stocksRequest=request;
+  lastStocksData=[];rowStatus(tbody,'fundHomeLoading',10);
 
   const url = "/api/market/sector/stocks?name=" + encodeURIComponent(sector.name) +
               "&code=" + encodeURIComponent(sector.code || "") +
               "&top=" + encodeURIComponent(sector.topStockCode || "");
 
-  api("GET", url).then(function(res) {
+  api("GET", url,null,{signal:request.signal}).then(function(res) {
+    if(generation!==stocksGeneration)return;
     lastStocksData = res.quotes || [];
     if (titleEl) {
-      titleEl.innerHTML = "<b>" + sector.name + "</b> 板块个股（共 " + lastStocksData.length + " 只）";
+      titleEl.textContent = sector.name + " · " + t("fundMarketConstituents",{n:lastStocksData.length});
     }
     renderSectorStocksTable();
     updateSectorSidebar(sector);
   }).catch(function(err) {
-    tbody.innerHTML = "<tr><td colspan='10' class='err' style='text-align:center; padding: 20px;'>获取成分股失败：" + err.message + "</td></tr>";
+    if(generation!==stocksGeneration||request.signal.aborted)return;
+    rowStatus(tbody,'fundMarketReadFailed',10);
   });
 }
 
@@ -289,15 +314,11 @@ function renderSectorStocksTable() {
 
   const items = lastStocksData.slice();
   if (stockSort.key) {
-    items.sort(function(a, b) {
-      const va = a[stockSort.key] != null ? a[stockSort.key] : -999999;
-      const vb = b[stockSort.key] != null ? b[stockSort.key] : -999999;
-      return stockSort.asc ? (va > vb ? 1 : -1) : (va < vb ? 1 : -1);
-    });
+    items.sort((a,b)=>compare(a,b,stockSort.key,stockSort.asc));
   }
 
   if (items.length === 0) {
-    tbody.innerHTML = "<tr><td colspan='10' style='text-align:center; padding: 20px;'>暂无成分股数据</td></tr>";
+    rowStatus(tbody,'fundMarketNoStocks',10);
     return;
   }
 
@@ -320,8 +341,8 @@ function renderSectorStocksTable() {
     tr.dataset.symbol = st.code;
     tr.dataset.name = st.name;
     tr.innerHTML = "<td style='color:var(--natives-text-muted);'>" + (idx + 1) + "</td>" +
-                   "<td><b>" + st.code + "</b></td>" +
-                   "<td>" + st.name + "</td>" +
+                   "<td><b>" + escape(st.code) + "</b></td>" +
+                   "<td><button type='button' class='sector-select' data-stock-open>" + escape(st.name) + "</button></td>" +
                    "<td class='num " + cls + "'>" + price + "</td>" +
                    "<td class='num " + cls + "'>" + pct + "</td>" +
                    "<td class='num " + cls + "'>" + change + "</td>" +
@@ -330,6 +351,7 @@ function renderSectorStocksTable() {
                    "<td class='num'>" + amp + "</td>" +
                    "<td class='num'>" + vratio + "</td>";
 
+    tr.querySelector('[data-stock-open]').onclick=event=>{event.stopPropagation();actions.openStockDetail(st.code,st.name);};
     tr.addEventListener("click", function() {
       document.querySelectorAll("#sector-stocks-table tbody tr").forEach(function(r) { r.classList.remove("selected"); });
       tr.classList.add("selected");
@@ -337,15 +359,18 @@ function renderSectorStocksTable() {
     });
 
     tr.addEventListener("dblclick", function() {
-      if (actions.openStockDetail) {
-        actions.openStockDetail(st.code, st.name);
-      }
+      actions.openStockDetail(st.code, st.name);
     });
 
     tbody.appendChild(tr);
   });
 }
 
+document.querySelectorAll('#sectors-table th.sortable,#sector-stocks-table th.sortable').forEach(th=>{
+ const key=th.querySelector('[data-i18n]')?.dataset.i18n;
+ const button=document.createElement('button');button.type='button';button.className='table-sort';if(key)button.dataset.i18n=key;button.textContent=key?t(key):th.textContent;th.replaceChildren(button);
+ th.setAttribute('aria-sort','none');
+});
 // 表头排序绑定
 document.querySelectorAll("#sectors-table th.sortable").forEach(function(th) {
   th.addEventListener("click", function() {
@@ -354,6 +379,7 @@ document.querySelectorAll("#sectors-table th.sortable").forEach(function(th) {
     else { sectorSort = { key: key, asc: false }; }
     document.querySelectorAll("#sectors-table th.sortable").forEach(function(o) { o.classList.remove("sort-asc", "sort-desc"); });
     th.classList.add(sectorSort.asc ? "sort-asc" : "sort-desc");
+    document.querySelectorAll('#sectors-table th.sortable').forEach(o=>o.setAttribute('aria-sort',o===th?(sectorSort.asc?'ascending':'descending'):'none'));
     renderSectorsTable();
   });
 });
@@ -365,6 +391,7 @@ document.querySelectorAll("#sector-stocks-table th.sortable").forEach(function(t
     else { stockSort = { key: key, asc: false }; }
     document.querySelectorAll("#sector-stocks-table th.sortable").forEach(function(o) { o.classList.remove("sort-asc", "sort-desc"); });
     th.classList.add(stockSort.asc ? "sort-asc" : "sort-desc");
+    document.querySelectorAll('#sector-stocks-table th.sortable').forEach(o=>o.setAttribute('aria-sort',o===th?(stockSort.asc?'ascending':'descending'):'none'));
     renderSectorStocksTable();
   });
 });

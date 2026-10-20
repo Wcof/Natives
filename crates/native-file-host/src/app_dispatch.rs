@@ -11,6 +11,15 @@ pub(crate) fn app_dispatch(
     request: &Request,
     caller_origin: Option<&str>,
 ) -> Result<Value, String> {
+    app_dispatch_with_maintenance(store, request, caller_origin, |_, _| Ok(()))
+}
+
+pub(crate) fn app_dispatch_with_maintenance<G>(
+    store: &AppStore,
+    request: &Request,
+    caller_origin: Option<&str>,
+    acquire: impl Fn(&str, bool) -> Result<G, String>,
+) -> Result<Value, String> {
     let params = &request.params;
     match request.method.as_str() {
         "apps:handshake" => {
@@ -33,7 +42,15 @@ pub(crate) fn app_dispatch(
             // needs_configuration（source 新版本 / manifest 变更 / 未 applied），
             // 不能因为数据库里 configured=true 就跳过 N+1 配置。
             let product = store.product_status().map_err(|error| error.to_string())?;
-            if product.needs_configuration {
+            // 扩展 ID 漂移检测：activation 回执的 allowedOrigins 是 configure 时
+            // 密封的请求方 origin。若当前 origin 不在其中（例如扩展 ID 变更后），
+            // runtime 握手会 APP_SESSION_INVALID 且 product_status 判不出差异
+            // （manifest hash 不含 origin）——必须强制重配置刷新回执。
+            let origin_sealed = store
+                .product_activation_origins()
+                .map(|origins| origins.iter().any(|sealed| sealed == &origin))
+                .unwrap_or(false);
+            if product.needs_configuration || !origin_sealed {
                 store
                     .configure_product(&origin)
                     .map_err(|error| format!("{}: {error}", error.code()))?;
@@ -99,7 +116,16 @@ pub(crate) fn app_dispatch(
             let detail = store
                 .app_detail(app_id)
                 .map_err(|error| error.to_string())?;
-            Ok(serde_json::to_value(detail).map_err(|error| error.to_string())?)
+            let mut result = serde_json::to_value(detail).map_err(|error| error.to_string())?;
+            if let Some(module) = store
+                .module_projections()
+                .map_err(|error| error.to_string())?
+                .into_iter()
+                .find(|module| module.app_id == app_id)
+            {
+                result["displayName"] = module.name;
+            }
+            Ok(result)
         }
         "apps:health" => {
             // Registry health only; module health is owned by the module host.
@@ -141,8 +167,19 @@ pub(crate) fn app_dispatch(
                     .and_then(Value::as_bool)
                     .unwrap_or(false),
             };
+            if request_id.trim().is_empty() || request_id.trim().len() > 128 {
+                return Err("APP_INVALID_STATE: invalid requestId".into());
+            }
             let receipt: crate::app_store::ClearDataReceipt = store
-                .clear_module_data(app_id, request_id, scope)
+                .clear_module_data_with_maintenance(app_id, request_id, scope, || {
+                    acquire(app_id, false).map_err(|error| {
+                        if error == "APP_BUSY" {
+                            crate::app_store::types::AppError::Busy
+                        } else {
+                            crate::app_store::types::AppError::InvalidState(error)
+                        }
+                    })
+                })
                 .map_err(|error| format!("{}: {error}", error.code()))?;
             let revision = store.global_revision().map_err(|error| error.to_string())?;
             Ok(serde_json::json!({ "receipt": receipt, "revision": revision }))
@@ -156,6 +193,11 @@ pub(crate) fn app_dispatch(
                 .get("enabled")
                 .and_then(Value::as_bool)
                 .ok_or("enabled is required")?;
+            let _maintenance = if enabled {
+                None
+            } else {
+                Some(acquire(app_id, true)?)
+            };
             let app = store
                 .set_enabled(app_id, enabled)
                 .map_err(|error| error.to_string())?;
@@ -216,6 +258,8 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         let store = AppStore::open_at(&root.join("test.db"), root.join("apps")).unwrap();
         store.set_manifest_dir(root.join("manifests"));
+        // Origin 边界测试隔离产品源，避免碰到本机旧版本开发包。
+        store.set_product_source(root.join("absent-product-source"));
         let origin = "chrome-extension://abcdefghijklmnopabcdefghijklmnop/";
         let request: Request = serde_json::from_value(serde_json::json!({
             "id": "origin-check", "method": "apps:handshake", "params": { "origin": origin }
@@ -224,10 +268,12 @@ mod tests {
         assert!(app_dispatch(&store, &request, None).is_err());
         assert!(store.caller_origin().is_none());
         store.set_caller_origin(Some(origin));
-        let response = app_dispatch(&store, &request, store.caller_origin().as_deref()).unwrap();
-        assert_eq!(response["origin"], origin);
-        assert!(response["platform"].is_string());
-        assert!(response["arch"].is_string());
+        let valid_origin_error =
+            app_dispatch(&store, &request, store.caller_origin().as_deref()).unwrap_err();
+        assert!(
+            !valid_origin_error.contains("APP_ORIGIN_MISMATCH"),
+            "trusted caller passed origin check: {valid_origin_error}"
+        );
         let spoofed: Request = serde_json::from_value(serde_json::json!({
             "id": "spoof", "method": "apps:handshake",
             "params": { "origin": "chrome-extension://pppppppppppppppppppppppppppppppp/" }
@@ -272,8 +318,8 @@ mod tests {
         store
             .with_conn(|conn| {
                 conn.execute(
-                    "INSERT INTO apps (app_id, kind, name, version, enabled, show_in_sidebar, sidebar_order, runtime_spec_json, surface_json, manifest_json, installed_at, updated_at)
-                     VALUES ('fund', 'managed_local', '基金', '1.0.0', 1, 1, 0, '{}', '{}', '{}', 0, 0)",
+                    "INSERT INTO builtin_app_preferences (app_id, enabled, show_in_sidebar, sidebar_order, updated_at)
+                     VALUES ('fund', 1, 1, 0, 0)",
                     [],
                 )
                 .map_err(AppError::Sql)
@@ -307,21 +353,23 @@ mod tests {
             "activation preserved"
         );
         let apps = store.apps().unwrap();
-        assert_eq!(apps.len(), 1, "app record preserved");
-        assert!(apps[0].enabled, "preferences preserved");
+        assert!(
+            apps.iter().any(|app| app.app_id == "fund" && app.enabled),
+            "preferences preserved"
+        );
 
         // Completed requestId replay returns the original result and must
         // not clear data created after the reset. The same confirmed scope
         // is part of the requestId identity: a different scope conflicts.
         std::fs::create_dir_all(base.join("data")).unwrap();
         std::fs::write(base.join("data/new.json"), b"{}").unwrap();
-        let replay = dispatch_json(
-            &store,
-            serde_json::json!({
+        let replay_request: Request = serde_json::from_value(serde_json::json!({
                 "id": "c2", "method": "apps:clear_data",
                 "params": { "appId": "fund", "requestId": "reset-1", "confirmPurge": true, "deleteImports": true }
-            }),
-        )
+            })).unwrap();
+        let replay = app_dispatch_with_maintenance(&store, &replay_request, None, |_, _| {
+            Err::<(), _>("APP_BUSY".to_string())
+        })
         .unwrap();
         assert_eq!(replay["receipt"]["state"], "completed");
         assert_eq!(replay["receipt"]["cleared"], response["receipt"]["cleared"]);
@@ -349,6 +397,62 @@ mod tests {
         )
         .unwrap_err();
         assert!(error.starts_with("APP_CONFIRMATION_REQUIRED"), "{error}");
+        drop(store);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn confirmed_retry_finishes_covered_pending_reset_without_replaying_deletion() {
+        let (root, store) = temp_store("clear-retry");
+        let data = root.join("apps/fund/data");
+        std::fs::create_dir_all(&data).unwrap();
+        std::fs::write(data.join("before"), "before").unwrap();
+        let scope = || crate::app_store::ClearDataScope {
+            imports: true,
+            cache: true,
+            logs: true,
+            credentials: false,
+        };
+        let first = store.clear_module_data_with_maintenance("fund", "blocked", scope(), || {
+            Err::<(), _>(AppError::Busy)
+        });
+        assert!(matches!(first, Err(AppError::Busy)));
+        assert!(data.join("before").exists());
+        let mut changed_scope = scope();
+        changed_scope.imports = false;
+        assert!(matches!(
+            store.clear_module_data("fund", "blocked", changed_scope),
+            Err(AppError::Conflict(_))
+        ));
+        store
+            .clear_module_data("fund", "confirmed-retry", scope())
+            .unwrap();
+        assert!(
+            store.pending_data_resets().unwrap().is_empty(),
+            "an earlier busy receipt must not permanently block this module"
+        );
+        std::fs::create_dir_all(&data).unwrap();
+        std::fs::write(data.join("new"), "new").unwrap();
+        store.clear_module_data("fund", "blocked", scope()).unwrap();
+        assert!(
+            data.join("new").exists(),
+            "replaying the covered old receipt preserves later data"
+        );
+        let mut credential_scope = scope();
+        credential_scope.credentials = true;
+        assert!(matches!(
+            store.clear_module_data_with_maintenance(
+                "fund",
+                "credentials-pending",
+                credential_scope,
+                || { Err::<(), _>(AppError::Busy) }
+            ),
+            Err(AppError::Busy)
+        ));
+        store
+            .clear_module_data("fund", "data-only-retry", scope())
+            .unwrap();
+        assert_eq!(store.pending_data_resets().unwrap(), vec!["fund"]);
         drop(store);
         std::fs::remove_dir_all(root).unwrap();
     }

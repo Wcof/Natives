@@ -6,7 +6,10 @@ import { dirname, join, resolve } from 'node:path';
 const args = new Map(process.argv.slice(2).flatMap((value, index, values) =>
   value.startsWith('--') ? [[value.slice(2), values[index + 1]]] : []));
 const uninstall = process.argv.includes('--uninstall');
-const extensionId = args.get('extension-id');
+const extensionIds = process.argv.slice(2).flatMap((value, index, values) =>
+  value === '--extension-id' && values[index + 1] ? values[index + 1].split(',') : [])
+  .map(value => value.trim()).filter(Boolean);
+const extensionId = extensionIds[0];
 const hostPath = args.get('host-path');
 const hostName = args.get('host-name') || 'com.natives.file_manager';
 const description = args.get('description');
@@ -15,7 +18,7 @@ if (!/^com\.natives(\.[a-z0-9_]+)+$/.test(hostName)) {
   console.error('Native Host 名称无效。');
   process.exit(1);
 }
-if (!uninstall && (!extensionId || !hostPath || !/^[a-p]{32}$/.test(extensionId))) {
+if (!uninstall && (extensionIds.length === 0 || !hostPath || extensionIds.some(id => !/^[a-p]{32}$/.test(id)))) {
   console.error('用法：node extension/install-native-host.mjs --extension-id <32位ID> --host-path <Host绝对路径> [--host-name com.natives.xxx]');
   process.exit(1);
 }
@@ -24,7 +27,7 @@ const template = JSON.parse(await readFile(new URL('./native-host-manifest.json'
 if (!uninstall) {
   template.name = hostName;
   if (description) template.description = description;
-  template.allowed_origins = [`chrome-extension://${extensionId}/`];
+  template.allowed_origins = [...new Set(extensionIds.map(id => `chrome-extension://${id}/`))];
   template.path = resolve(hostPath);
 }
 const home = homedir();
@@ -34,15 +37,21 @@ const configPath = platform() === 'darwin'
     ? join(process.env.LOCALAPPDATA || join(home, 'AppData/Local'), 'Natives/extension-id')
     : join(home, '.config/natives/extension-id');
 const destinations = platform() === 'darwin'
-  ? ['Google/Chrome', 'Chromium'].map(browser => join(home, `Library/Application Support/${browser}/NativeMessagingHosts/${hostName}.json`))
+  ? [
+    'Google/Chrome',
+    'Google/Chrome for Testing',
+    'Chromium',
+    'BraveSoftware/Brave-Browser',
+    'Microsoft Edge',
+  ].map(browser => join(home, `Library/Application Support/${browser}/NativeMessagingHosts/${hostName}.json`))
   : platform() === 'win32'
     ? [join(process.env.LOCALAPPDATA || join(home, 'AppData/Local'), `Natives/${hostName}.json`)]
-    : ['google-chrome', 'chromium'].map(browser => join(home, `.config/${browser}/NativeMessagingHosts/${hostName}.json`));
+    : ['google-chrome', 'google-chrome-beta', 'chromium', 'brave-browser', 'microsoft-edge'].map(browser => join(home, `.config/${browser}/NativeMessagingHosts/${hostName}.json`));
 if (uninstall) {
   await Promise.all(destinations.map(path => unlink(path).catch(() => {})));
   if (hostName === 'com.natives.file_manager') await unlink(configPath).catch(() => {});
   if (platform() === 'win32') {
-    for (const browser of ['Google\\Chrome', 'Chromium']) {
+    for (const browser of ['Google\\Chrome', 'Google\\Chrome for Testing', 'Chromium', 'BraveSoftware\\Brave-Browser', 'Microsoft\\Edge']) {
       execFileSync('reg.exe', ['DELETE', `HKCU\\Software\\${browser}\\NativeMessagingHosts\\${hostName}`, '/f'], { stdio: 'inherit' });
     }
   }
@@ -56,7 +65,7 @@ for (const destination of destinations) {
 await mkdir(dirname(configPath), { recursive: true });
 await writeFile(configPath, `${extensionId}\n`, 'utf8');
 if (platform() === 'win32') {
-  for (const browser of ['Google\\Chrome', 'Chromium']) {
+  for (const browser of ['Google\\Chrome', 'Google\\Chrome for Testing', 'Chromium', 'BraveSoftware\\Brave-Browser', 'Microsoft\\Edge']) {
     execFileSync('reg.exe', [
       'ADD', `HKCU\\Software\\${browser}\\NativeMessagingHosts\\${hostName}`,
       '/ve', '/t', 'REG_SZ', '/d', destinations[0], '/f',

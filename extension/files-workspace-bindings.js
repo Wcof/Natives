@@ -5,6 +5,7 @@ export function bindFilesWorkspaceInteractions({
 }) {
   const entries = $('entries');
   let dragDepth = 0;
+  window.addEventListener('pagehide', () => searchController.cancelActiveSearches());
 
   entries?.addEventListener('click', (event) => {
     if (event.target !== entries) return;

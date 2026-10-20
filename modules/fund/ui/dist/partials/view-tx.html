@@ -1,21 +1,37 @@
       <!-- 4. 交易流水模块 -->
       <section id="view-tx" hidden>
+        <header class="investment-page-head"><div><h2 data-i18n="fundLedgerPageTransactions">交易流水</h2><p data-i18n="fundLedgerTransactionsScope">展示最近 200 条记录中的筛选结果；交易金额不等于投资收益。</p></div></header>
+        <div id="tx-summary" class="investment-summary"></div>
+        <details id="tx-entry" class="investment-entry"><summary data-i18n="fundLedgerRecordEntry">记一笔</summary>
         <form class="inline-form" id="tx-form">
-          <label>账户<input type="text" name="account" value="默认账户" required></label>
-          <label>标的代码<input type="text" name="fundCode" placeholder="如 sh600519" required></label>
-          <label>类型<select name="type"><option value="BUY">买入 (BUY)</option><option value="SELL">卖出 (SELL)</option></select></label>
-          <label>数量/份额<input type="number" step="0.0001" name="quantity" required></label>
-          <label>成交单价<input type="number" step="0.0001" name="price" required></label>
-          <label>手续费<input type="number" step="0.01" name="fee" value="0.00"></label>
-          <label>交易日期<input type="date" name="tradeDate" required></label>
-          <button type="submit" class="btn btn-accent">记一笔</button>
+          <label><span data-i18n="fundLedgerLabelAccount">账户</span><input type="text" name="account" value="默认账户" required></label>
+          <label><span data-i18n="fundHomeType">类型</span><select name="instrumentKind"><option value="fund" data-i18n="fundHomeFunds">基金</option><option value="stock" data-i18n="fundHomeStocks">股票</option><option value="etf">ETF</option></select></label><label id="tx-market-row"><span data-i18n="fundHomeMarket">市场</span><select name="market"><option value="SSE">SSE</option><option value="SZSE">SZSE</option><option value="BSE">BSE</option></select></label>
+          <label><span data-i18n="fundLedgerLabelCode">标的代码</span><input type="text" name="fundCode" placeholder="600519" pattern="[0-9]{6}" required></label>
+          <label><span data-i18n="fundLedgerTxDirection">交易方向</span><select name="type"><option value="BUY" data-i18n="fundLedgerBuy">买入 (BUY)</option><option value="SELL" data-i18n="fundLedgerSell">卖出 (SELL)</option></select></label>
+          <label><span data-i18n="fundLedgerLabelQuantity">数量/份额</span><input type="number" step="0.0001" min="0.0001" name="quantity" required></label>
+          <label><span data-i18n="fundLedgerLabelPrice">成交单价</span><input type="number" step="0.0001" min="0" name="price" required></label>
+          <label><span data-i18n="fundLedgerLabelFee">手续费</span><input type="number" step="0.01" name="fee" min="0" value="0.00" required></label>
+          <label><span data-i18n="fundLedgerLabelDate">交易日期</span><input type="date" name="tradeDate" required></label>
+          <label id="tx-state-row"><span data-i18n="fundHomeStatus">状态</span><select name="state"><option value="pending" data-i18n="fundLedgerStatePending">待确认</option><option value="confirmed" data-i18n="fundLedgerStateConfirmed">已确认</option></select></label>
+          <p id="tx-otc-hint" class="investment-form-hint" data-i18n="fundLedgerOtcConfirmHint">场外基金按实际成交净值确认；待确认交易不改变持仓。</p>
+          <p class="investment-form-hint" data-i18n="fundLedgerNoMarketNote">只记录交易，不发起市场交易。</p>
+          <button type="submit" class="btn btn-accent" data-i18n="fundLedgerRecordEntry">记一笔</button>
         </form>
-        <div id="tx-msg" style="margin-bottom:8px"></div>
+        </details>
+        <div id="tx-msg" role="status" aria-live="polite"></div>
+        <div class="toolbar-bar">
+        <label><input type="checkbox" id="tx-show-deleted"><span data-i18n="fundHomeShowArchived">包含已删除记录</span></label>
+        <label><span data-i18n="fundHomeStatus">状态</span><select id="tx-state-filter"><option value="" data-i18n="fundHomeAll">全部</option><option value="pending" data-i18n="fundLedgerStatePending">待确认</option><option value="confirmed" data-i18n="fundLedgerStateConfirmed">已确认</option><option value="cancelled" data-i18n="fundLedgerStateCancelled">已取消</option></select></label>
+        <input type="search" id="tx-search" data-i18n-placeholder="fundLedgerSearchTransactions" data-i18n-aria-label="fundLedgerSearchTransactions">
+        <label><input type="checkbox" id="tx-detail-columns"><span data-i18n="fundWatchDetailedColumns"></span></label>
+        <button id="tx-refresh" type="button" data-i18n="fundHomeRefresh">刷新</button></div>
+        <div class="investment-feedback"><p id="tx-load-msg" role="status" aria-live="polite"></p><button id="tx-retry" type="button" hidden data-i18n="fundLedgerRetry">重试</button></div>
+        <div class="home-table-scroll" tabindex="0" data-i18n-aria-label="fundLedgerPageTransactions">
         <table class="data-table" id="tx-table">
           <thead>
-            <tr><th>交易日期</th><th>账户</th><th>标的代码</th><th>类型</th><th class="num">成交数量</th><th class="num">成交价格</th><th class="num">交易金额</th><th class="num">手续费</th></tr>
+            <tr><th data-i18n="fundLedgerThTradeDate">交易日期</th><th data-i18n="fundLedgerThAccount">账户</th><th data-i18n="fundLedgerAssetAction"></th><th data-i18n="fundLedgerThType">类型</th><th class="num" data-i18n="fundLedgerThQuantity">成交数量</th><th class="num" data-i18n="fundLedgerThPrice">成交价格</th><th class="num" data-i18n="fundLedgerThAmount">交易金额</th><th class="num" data-i18n="fundLedgerThFee">手续费</th><th data-i18n="fundHomeStatus">状态</th><th data-i18n="fundHomeActions">操作</th></tr>
           </thead>
           <tbody></tbody>
         </table>
+        </div>
       </section>
-

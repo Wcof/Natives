@@ -15,6 +15,7 @@ package usage
 //     实例 ID 由「工具 ID + 授权根目录规范路径」派生，数据库不保存原始路径。
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -32,12 +33,35 @@ type CollectSummary struct {
 
 // collectResult 为单来源一次采集的结果（错误显式聚合，不吞）。
 type collectResult struct {
-	present   bool // 授权根存在（未安装的来源不产生状态行）
-	imported  int64
-	bytesRead int64
-	files     int // 实际读到内容的文件数
-	fileErrs  []SourceFileError
-	wholeErr  error // 整来源失败（目录/DB 不可读等）
+	present       bool // 授权根存在（未安装的来源不产生状态行）
+	imported      int64
+	bytesRead     int64
+	files         int // 实际读到内容的文件数
+	fileErrs      []SourceFileError
+	errsTruncated int   // 超出错误列表上限后被省略的数量（显式披露，不静默）
+	wholeErr      error // 整来源失败（目录/DB 不可读等）
+}
+
+// addFileError 聚合文件级错误：列表有上限（maxFileErrors），超出的以计数
+// 披露而非无界累积（F8）。
+func (res *collectResult) addFileError(errs ...SourceFileError) {
+	for _, item := range errs {
+		if len(res.fileErrs) >= maxFileErrors {
+			res.errsTruncated++
+			continue
+		}
+		res.fileErrs = append(res.fileErrs, item)
+	}
+}
+
+// addCancelled 在 context 取消时记录显式的 cancelled 状态（已导入数据与
+// 游标保持提交语义，重扫不漏计不重复计费）。
+func (res *collectResult) addCancelled(root string) {
+	res.addFileError(SourceFileError{
+		Path:    filepath.Base(root),
+		Code:    "cancelled",
+		Message: "collection cancelled before completion",
+	})
 }
 
 // nativeSource 为一个真实采集来源：toolID 即矩阵 ID，parserVersion 是
@@ -47,7 +71,7 @@ type nativeSource struct {
 	displayName   string
 	parserVersion string
 	rootParts     []string
-	collect       func(s *Store, root string, now time.Time) collectResult
+	collect       func(ctx context.Context, s *Store, root string, now time.Time) collectResult
 }
 
 // nativeSources 为采集来源注册表（E0 真源）。HistoricalUsage=implemented
@@ -84,8 +108,9 @@ func NativeCollectorToolIDs() []string {
 
 // CollectSources 扫描本机所有已授权已知工具的日志并增量入库。
 // 采集只由显式 model_usage_collect 触发；来源注册表 nativeSources 是
-// HistoricalUsage=implemented 声明的唯一真源。
-func (s *Store) CollectSources() (*CollectSummary, error) {
+// HistoricalUsage=implemented 声明的唯一真源。ctx 贯穿遍历与文件读取：
+// Engine 收口取消后，已提交的记录与游标保持完整，重扫不漏计不重复计费。
+func (s *Store) CollectSources(ctx context.Context) (*CollectSummary, error) {
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return nil, err
@@ -95,8 +120,11 @@ func (s *Store) CollectSources() (*CollectSummary, error) {
 	now := time.Now().UTC()
 
 	for _, src := range nativeSources {
+		if ctx.Err() != nil {
+			break
+		}
 		root := filepath.Join(home, filepath.Join(src.rootParts...))
-		res := src.collect(s, root, now)
+		res := src.collect(ctx, s, root, now)
 		if !res.present {
 			continue // 未安装：不产生运行状态行（矩阵声明为 unavailable）
 		}
@@ -118,6 +146,7 @@ func (s *Store) recordSourceRun(summary *CollectSummary, src nativeSource, root 
 		RecordsImported: res.imported,
 		BytesRead:       res.bytesRead,
 		SchemaVersion:   src.parserVersion,
+		ErrorsTruncated: res.errsTruncated,
 	}
 	switch availability {
 	case SrcReady:

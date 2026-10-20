@@ -4,6 +4,7 @@ import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { performance } from 'node:perf_hooks';
+import { childProcessIDs, totalCPUTime, sampleCPUWindow, validateCollectStatusResponse } from './cpu-probe.mjs';
 
 const root = resolve(new URL('../..', import.meta.url).pathname);
 const binary = join(root, 'target', 'debug', process.platform === 'win32' ? 'model-host.exe' : 'model-host');
@@ -20,25 +21,41 @@ function frame(value) {
   return Buffer.concat([header, payload]);
 }
 
+const client = framedClient(child);
 const startedAt = performance.now();
-child.stdin.write(frame({ id: 'perf-snapshot', method: 'model_snapshot', params: {} }));
-let buffered = Buffer.alloc(0);
 const response = await withTimeout(
-  new Promise((resolvePromise, reject) => child.stdout.on('data', (chunk) => {
-    buffered = Buffer.concat([buffered, chunk]);
-    if (buffered.length < 4 || buffered.length < 4 + buffered.readUInt32LE(0)) return;
-    try { resolvePromise(JSON.parse(buffered.subarray(4, 4 + buffered.readUInt32LE(0)))); } catch (error) { reject(error); }
-  })), 3000, 'model-host snapshot timed out');
+  client.call({ id: 'perf-snapshot', method: 'model_snapshot', params: {} }),
+  3000, 'model-host snapshot timed out');
 const snapshotMs = performance.now() - startedAt;
+
+// Native Messaging 连接建立会触发一次事件驱动的日志采集（TriggerCollectAsync，
+// 产品要求的行为，不可移除）。采集期间 CPU 升高是预期工作负载，不冒充空闲；
+// 空闲门禁只对“采集完成后的稳态”生效。时序：先查 collecting，若正在采集则
+// 立即采样采集阶段，再等 collecting=false，最后测稳态空闲。
+// model_collect_status 查询失败/响应非法时 fail closed（抛错终止门禁），
+// 绝不静默当作 collecting=false 放行。
+
 let rssKB = null;
 let idleCPU = null;
+let collectPhaseCPU = null;
+let collectPhaseObserved = false;
 if (process.platform !== 'win32') {
   const pids = [child.pid, ...childProcessIDs(child.pid)];
-  const cpuStart = totalCPUTime(pids);
-  const idleStartedAt = performance.now();
-  await new Promise((resolvePromise) => setTimeout(resolvePromise, 1000));
-  const cpuEnd = totalCPUTime(pids);
-  if (cpuStart !== null && cpuEnd !== null) idleCPU = Math.max(0, (cpuEnd - cpuStart) / (performance.now() - idleStartedAt) * 100);
+
+  // 阶段一：查询采集状态；正在采集则立即采样，单独记录，不参与门禁判定。
+  const firstStatus = await queryCollecting(client);
+  if (firstStatus.collecting === true) {
+    collectPhaseObserved = true;
+    const phase = await sampleCPUWindow(pids, 1000);
+    collectPhaseCPU = phase.cpuPercent;
+  }
+
+  // 阶段二：等待采集结束（collecting=false），fail closed：非法响应直接抛错。
+  await waitForCollectQuiescence(client, 30000);
+
+  // 阶段三：稳态空闲测量（采集已确认结束），参与 5% 预算判定。
+  const idle = await sampleCPUWindow(pids, 1000);
+  idleCPU = idle.cpuPercent;
   const result = spawnSync('ps', ['-o', 'rss=', '-p', pids.join(',')], { encoding: 'utf8' });
   rssKB = result.stdout.trim().split(/\s+/).reduce((total, value) => total + Number(value), 0) || null;
 }
@@ -49,15 +66,21 @@ const eofMs = performance.now() - exitStartedAt;
 const resident = await checkResidentLifecycle(configDir);
 await rm(configDir, { recursive: true, force: true });
 
+// 门禁判定只约束稳态空闲阶段；采集阶段单独报告，不让工作负载伪装成空闲，
+// 也不把工作负载计入空闲预算（R-P12：门禁不能自欺，两个方向都不许）。
 const report = {
   ok: response?.ok === true && snapshotMs <= 1500 && (rssKB === null || rssKB <= 262144) && (idleCPU === null || idleCPU <= 5) && exit.code === 0 && eofMs <= 1000 && resident.ok,
   binary,
   snapshotMs: Math.round(snapshotMs * 100) / 100,
   snapshotBudgetMs: 1500,
+  collectPhase: collectPhaseObserved
+    ? { observed: true, collectPhaseCPUPercent: collectPhaseCPU === null ? null : Math.round(collectPhaseCPU * 100) / 100 }
+    : { observed: false, note: 'collect finished before first status probe (empty config dir, expected)' },
   idleRssKB: rssKB,
   idleRssBudgetKB: 262144,
   idleCPUPercent: idleCPU === null ? null : Math.round(idleCPU * 100) / 100,
   idleCPUBudgetPercent: 5,
+  idlePhase: 'measured after collect quiescence (model_collect_status collecting=false)',
   eofMs: Math.round(eofMs * 100) / 100,
   eofBudgetMs: 1000,
   exit,
@@ -66,17 +89,31 @@ const report = {
 console.log(JSON.stringify(report, null, 2));
 if (!report.ok) process.exit(1);
 
+// 轮询 model_collect_status 直到一次采集结束（collecting=false）。
+// 超时抛错，不静默放宽；非法响应由 queryCollecting 直接抛错（fail closed）。
+async function waitForCollectQuiescence(clientHandle, timeoutMs = 30000) {
+  const deadline = performance.now() + timeoutMs;
+  while (performance.now() < deadline) {
+    const status = await queryCollecting(clientHandle);
+    if (status.collecting === false) return;
+    await new Promise((resolvePromise) => setTimeout(resolvePromise, 200));
+  }
+  throw new Error('model usage collection did not reach quiescence within timeout');
+}
+
+// 发送一次只读 model_collect_status 询问并严格验证响应。
+// fail closed：ok!==true、字段缺失、类型非 boolean 一律抛错，
+// 绝不静默当作 collecting=false 放行（R-P12：门禁不能自欺）。
+// 校验逻辑在 validateCollectStatusResponse（cpu-probe.mjs），与测试共用同一实现。
+async function queryCollecting(clientHandle) {
+  const res = await withTimeout(clientHandle.call({ id: 'collect-status-' + Math.random().toString(36).slice(2), method: 'model_collect_status', params: {} }), 2000, 'collect status timed out');
+  return validateCollectStatusResponse(res);
+}
+
 function withTimeout(promise, milliseconds, message, onTimeout) {
   let timer;
   const timeout = new Promise((_, reject) => { timer = setTimeout(() => { onTimeout?.(); reject(new Error(message)); }, milliseconds); });
   return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
-}
-
-function processCPUTime(pid) {
-  const result = spawnSync('ps', ['-o', 'time=', '-p', String(pid)], { encoding: 'utf8' });
-  const match = result.stdout.trim().match(/(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+(?:\.\d+)?)/);
-  if (!match) return null;
-  return (((Number(match[1] || 0) * 24 + Number(match[2] || 0)) * 60 + Number(match[3])) * 60 + Number(match[4])) * 1000;
 }
 
 async function checkResidentLifecycle(directory) {
@@ -107,18 +144,6 @@ async function checkResidentLifecycle(directory) {
     relay?.kill('SIGKILL');
     if (workerPID && processRunning(workerPID)) process.kill(workerPID, 'SIGKILL');
   }
-}
-
-function childProcessIDs(parentPID) {
-  const result = spawnSync('ps', ['-axo', 'pid=,ppid='], { encoding: 'utf8' });
-  if (result.status !== 0) throw new Error('could not inspect model host process tree');
-  return result.stdout.trim().split('\n').map((line) => line.trim().split(/\s+/).map(Number))
-    .filter(([, ppid]) => ppid === parentPID).map(([pid]) => pid);
-}
-
-function totalCPUTime(pids) {
-  const values = pids.map(processCPUTime);
-  return values.some((value) => value === null) ? null : values.reduce((total, value) => total + value, 0);
 }
 
 function processRunning(pid) {

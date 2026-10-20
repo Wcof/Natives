@@ -4,6 +4,19 @@ import { WIDGET_KEYS, pluginName, widgetPlugins } from './space-plugins.js';
 
 export const WIDGET_CATEGORIES = [
   {
+    id: 'investment',
+    nameKey: 'catInvestment',
+    fallback: '投资',
+    keys: [
+      // 投资卡（ADR-0036）：显示已登记的基金持仓数量、账户和成本状态。
+      'widget/investmentHoldings',
+      'widget/investmentAssets',
+      'widget/investmentGoal',
+      'widget/investmentAllocation',
+      'widget/investmentAllocationCheck',
+    ],
+  },
+  {
     id: 'ai',
     nameKey: 'catAiPerformance',
     fallback: 'AI 效能',
@@ -231,5 +244,5 @@ export function createSpaceCatalog({
     container.append(header, searchWrap, listContainer);
   }
 
-  return { render };
+  return { render, setLanguage(next){language=next;} };
 }

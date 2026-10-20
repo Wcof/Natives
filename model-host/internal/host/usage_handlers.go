@@ -111,6 +111,12 @@ func (e *Engine) getUsageEvents(raw json.RawMessage) (*usage.EventsResult, error
 }
 
 func validateUsageFilter(filter usage.Filter) error {
+	if filter.SessionKey != "" {
+		parts := strings.SplitN(filter.SessionKey, "|", 3)
+		if len(filter.SessionKey) > 1024 || len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
+			return invalid("会话标识无效")
+		}
+	}
 	switch filter.Range {
 	case "", "4h", "24h", "72h", "today", "7d", "30d", "all":
 	case "custom":

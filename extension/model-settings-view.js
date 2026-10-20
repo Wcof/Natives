@@ -13,6 +13,7 @@ export function createModelSettingsView({ t, onAction }) {
   let activeAdvancedTab = 'basic';
   let toastTimer = null;
   let noticeTimer = null;
+  let loadingFocus = null;
 
   const dialog = document.createElement('dialog');
   dialog.className = 'model-settings-dialog';
@@ -85,7 +86,7 @@ export function createModelSettingsView({ t, onAction }) {
             </div>
           </section>
           <section class="model-settings-page" data-page-panel="custom">
-            <header class="model-page-heading"><div><h3 data-role="customTitle"></h3><p class="muted" data-role="customDescription"></p></div><button type="button" class="model-add-provider" data-action="new-provider"></button></header>
+            <header class="model-page-heading"><div><h3 data-role="customTitle"></h3><p class="muted" data-role="customDescription"></p></div><button type="button" class="model-add-provider" data-action="new-provider" disabled></button></header>
             <div class="model-settings-layout"><aside class="model-provider-pane"><div class="model-provider-scroll" data-role="providerList"></div></aside><div class="model-provider-detail" data-role="detail"></div></div>
           </section>
           <section class="model-settings-page" data-page-panel="oauth" hidden>
@@ -198,7 +199,18 @@ export function createModelSettingsView({ t, onAction }) {
     get activePage() { return activePage; },
     get activeUsageTab() { return activeUsageTab; },
     get activeAdvancedTab() { return activeAdvancedTab; },
-    setLoading(loading) { roles.loading.hidden = !loading; dialog.setAttribute('aria-busy', String(loading)); },
+    setLoading(loading) {
+      const pages=dialog.querySelector('.model-settings-pages');
+      const controls=()=>Array.from(pages.querySelectorAll('button,input,select,textarea'));
+      if(loading&&pages.contains(document.activeElement))loadingFocus={node:document.activeElement,index:controls().indexOf(document.activeElement)};
+      roles.loading.hidden = !loading; dialog.setAttribute('aria-busy', String(loading)); pages.inert=loading;
+      if(!loading&&loadingFocus){
+        const {node,index}=loadingFocus;loadingFocus=null;
+        if(document.activeElement===document.body||document.activeElement===dialog){
+          (node.isConnected?node:controls()[index])?.focus();
+        }
+      }
+    },
     showError(message) {
       clearTimeout(noticeTimer);
       roles.error.hidden = !message;
@@ -225,6 +237,7 @@ export function createModelSettingsView({ t, onAction }) {
       roles.loading.textContent = t('modelLoading', '正在加载模型设置…');
       roles.error.querySelector('button').textContent = t('retry', '重试');
       dialog.querySelector('.model-add-provider').textContent = `＋ ${t('modelAddProvider', '添加自定义供应商')}`;
+      dialog.querySelector('.model-add-provider').disabled = false;
       roles.close.textContent = `← ${t('modelBackToWorkspace', '返回工作区')}`;
       roles.appsNavGroup.textContent = t('appsCenter', '应用中心');
       roles.appsListNav.textContent = t('appsList', '应用列表');
@@ -409,7 +422,7 @@ function renderCustomDetail(container, provider, snapshot, t) {
     const edit = button('edit-model', t('edit', '编辑')); edit.dataset.modelId = model.id;
     const toggle = button('toggle-model', model.enabled ? t('disable', '禁用') : t('enable', '启用')); toggle.dataset.modelId = model.id; toggle.dataset.enabled = String(!model.enabled);
     const remove = button('delete-model', t('delete', '删除'), 'danger'); remove.dataset.modelId = model.id;
-    actions.append(setDefault, edit, toggle, remove); row.append(actions); list.append(row);
+    actions.append(edit, toggle, remove); row.append(actions); list.append(row);
   }
   if (!provider.models.length) list.append(emptyState(t('modelNoModels', '暂无模型'), t('modelNoModelsHint', '自动获取，或使用下面的表单手动添加。')));
   list.append(modelForm(t)); container.append(list);

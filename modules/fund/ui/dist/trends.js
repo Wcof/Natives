@@ -5,143 +5,225 @@ const tState = trends.state;
 const charts = trends.charts;
 const C = trends.C;
 
-let _refreshTimer = null;
+let analyzeController = null;
+let quotePending = false;
+let minuteController = null, minuteGeneration = 0;
 
 // ===== 行情显示 =====
 function updateQuote(q) {
   const qb = document.getElementById('quote-bar');
   if (!qb) return;
   if (!q || q.error) {
-    qb.innerHTML = '<span class="qb-name flat">获取行情失败</span>';
+    qb.textContent=Fund.t('fundTrendsMinuteUnavailable');
     return;
   }
   if (q.name) tState.currentStockName = q.name;
-  const isUp = (q.change || 0) >= 0;
-  const c = isUp ? 'up' : 'down';
-  const sign = isUp ? '+' : '';
-  const price = q.price != null ? q.price.toFixed(2) : '--';
-  const change = q.change != null ? `${sign}${q.change.toFixed(2)}` : '';
-  const pct = q.pct != null ? `${sign}${q.pct.toFixed(2)}%` : '';
-  const time = q.time || '';
+  const direction=q.change==null||q.change===0?'flat':q.change>0?'up':'down';
+  const number=value=>Number.isFinite(value)?value.toFixed(2):'–';
+  const signed=value=>Number.isFinite(value)?(value>0?'+':'')+value.toFixed(2):'–';
+  qb.replaceChildren();
+  const add=(className,text)=>{const span=document.createElement('span');span.className=className;span.textContent=text;qb.append(span);};
+  add('qb-name',q.name||q.symbol||'–');
+  add('qb-price '+direction,number(q.price));
+  add('qb-change '+direction,`${signed(q.change)} (${signed(q.pct)}%)`);
+  for(const [key,value] of [['high',number(q.high)],['low',number(q.low)],['volume',fmtVol(q.volume)]])add('qb-detail',`${Fund.t('fundChart'+key)} ${value}`);
+  add('qb-time',q.time||'–');
 
-  qb.innerHTML = `
-    <span class="qb-name">${q.name || q.symbol}</span>
-    <span class="qb-price ${c}">${price}</span>
-    <span class="qb-change ${c}">${change} (${pct})</span>
-    <span class="qb-detail">高 <b class="up">${q.high ? q.high.toFixed(2) : '--'}</b></span>
-    <span class="qb-detail">低 <b class="down">${q.low ? q.low.toFixed(2) : '--'}</b></span>
-    <span class="qb-detail">量 <b>${fmtVol(q.volume)}</b></span>
-    <span class="qb-detail">额 <b>${fmtVol(q.amount)}</b></span>
-    <span class="qb-detail">换手 <b>${q.turnover ? q.turnover.toFixed(1) + '%' : '--'}</b></span>
-    <span class="qb-detail">PE <b>${q.pe ? q.pe.toFixed(1) : '--'}</b></span>
-    <span class="qb-time">${time}</span>
-  `;
 }
 
-function fmtVol(n) {
-  if (n == null) return '--';
-  if (n >= 1e8) return (n / 1e8).toFixed(2) + '亿';
-  if (n >= 1e4) return (n / 1e4).toFixed(1) + '万';
-  return String(n);
-}
+function fmtVol(n) { return trends.chart.fmtVol(n); }
 
-// ===== 搜索 =====
+// Search owns its draft and cancels stale responses. Selecting never writes a watchlist.
 const searchInput = document.getElementById('search-input');
 const searchResults = document.getElementById('search-results');
-let searchTimer = null;
-
+let searchTimer = null, searchRequest = null, searchGeneration = 0, searchHits = [], searchIndex = -1;
+function closeSearch() {
+  clearTimeout(searchTimer);
+  searchRequest?.abort(); searchRequest = null; searchGeneration++;
+  searchHits = []; searchIndex = -1;
+  searchResults.replaceChildren(); searchResults.style.display = 'none';
+  searchInput.setAttribute('aria-expanded', 'false');
+  searchInput.removeAttribute('aria-activedescendant');
+}
+function showSearchStatus(key) {
+  searchResults.replaceChildren();
+  const hint = document.createElement('p');
+  hint.className = 'evidence-hint'; hint.textContent = Fund.t(key);
+  searchResults.append(hint); searchResults.style.display = 'block';
+  searchInput.setAttribute('aria-expanded', 'true');
+}
+function highlightSearch(index) {
+  searchIndex = index;
+  [...searchResults.querySelectorAll('button')].forEach((row, i) => {
+    row.classList.toggle('active', i === index);
+    row.setAttribute('aria-selected', String(i === index));
+    if (i === index) searchInput.setAttribute('aria-activedescendant', row.id);
+  });
+}
+async function doSuggest(keyword) {
+  searchRequest?.abort();
+  const request = new AbortController(), generation = ++searchGeneration;
+  searchRequest = request; searchHits = []; searchIndex = -1;
+  searchInput.removeAttribute('aria-activedescendant');
+  showSearchStatus('fundFocusSearchLoading');
+  try {
+    const response = await authFetch('/api/trends/search?keyword=' + encodeURIComponent(keyword), { signal: request.signal });
+    if (!response.ok) throw new Error('SEARCH_FAILED');
+    const data = await response.json();
+    if (generation !== searchGeneration || searchInput.value.trim() !== keyword) return;
+    searchHits = (data.results || []).slice(0, 50);
+    searchResults.replaceChildren();
+    if (!searchHits.length) { showSearchStatus('fundLedgerNoResults'); return; }
+    searchHits.forEach((hit, index) => {
+      const row = document.createElement('button');
+      row.type = 'button'; row.className = 'sr-item'; row.id = 'research-result-' + index;
+      row.setAttribute('role', 'option'); row.setAttribute('aria-selected', 'false');
+      row.textContent = [hit.name, hit.code, hit.market || hit.venue].filter(Boolean).join(' · ');
+      row.addEventListener('click', () => selectStock(hit.symbol || hit.code, hit.name, hit.market));
+      searchResults.append(row);
+    });
+  } catch (error) {
+    if (generation === searchGeneration && !request.signal.aborted) showSearchStatus('fundFocusSearchFailed');
+  } finally { if (searchRequest === request) searchRequest = null; }
+}
 if (searchInput && searchResults) {
+  searchInput.setAttribute('role', 'combobox');
+  searchInput.setAttribute('aria-controls', 'search-results');
+  searchInput.setAttribute('aria-autocomplete', 'list');
+  searchInput.setAttribute('aria-expanded', 'false');
+  searchInput.setAttribute('aria-label', Fund.t('fundFocusSearchLabel'));
+  searchInput.placeholder = Fund.t('fundFocusSearchLabel');
+  searchResults.setAttribute('role', 'listbox');
   searchInput.addEventListener('input', () => {
-    clearTimeout(searchTimer);
-    const kw = searchInput.value.trim();
-    if (!kw) { searchResults.style.display = 'none'; return; }
-    searchTimer = setTimeout(() => doSuggest(kw), 250);
+    closeSearch();
+    const keyword = searchInput.value.trim();
+    if (keyword) searchTimer = setTimeout(() => doSuggest(keyword), 250);
   });
-
   searchInput.addEventListener('keydown', e => {
-    if (e.key === 'Enter') {
-      searchResults.style.display = 'none';
-      const kw = searchInput.value.trim();
-      if (/^\d{6}$/.test(kw)) analyze(kw);
-      else doSearch();
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); closeSearch(); }
+    else if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      if (!searchHits.length) return;
+      e.preventDefault();
+      highlightSearch(searchIndex < 0 ? (e.key === 'ArrowDown' ? 0 : searchHits.length - 1) : (searchIndex + (e.key === 'ArrowDown' ? 1 : searchHits.length - 1)) % searchHits.length);
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      const hit = searchHits[searchIndex];
+      if (hit) selectStock(hit.symbol || hit.code, hit.name, hit.market);
+      else if (searchInput.value.trim()) { clearTimeout(searchTimer); doSuggest(searchInput.value.trim()); }
     }
   });
-
-  document.addEventListener('click', e => {
-    if (!e.target.closest('.search-wrap')) searchResults.style.display = 'none';
+  document.addEventListener('click', e => { if (!e.target.closest('.search-wrap')) closeSearch(); });
+  document.addEventListener('fund:language-changed', () => {
+    searchInput.setAttribute('aria-label', Fund.t('fundFocusSearchLabel'));
+    searchInput.placeholder = Fund.t('fundFocusSearchLabel');
+    closeSearch();
   });
+  window.addEventListener('pagehide', closeSearch);
+}
+function selectStock(code, name, market, instrumentKind) {
+  closeSearch();
+  if (!code) { tState.currentSymbol = ''; tState.currentStockName = ''; return; }
+  if (searchInput) searchInput.value = [code, name].filter(Boolean).join(' ');
+  tState.currentStockName = name || code;
+  tState.instrumentKind = Fund.researchSeries.kind(code, market, instrumentKind);
+  if (tState.instrumentKind === 'fund' && tState.currentView === 'minute') {
+    tState.currentView = 'dayk';
+    document.getElementById('view-minute').classList.remove('active');
+    document.getElementById('view-dayk').classList.add('active');
+    document.getElementById('kline-chart').style.display = 'block';
+    document.getElementById('minute-chart').style.display = 'none';
+    document.getElementById('minute-vol').style.display = 'none';
+  }
+  if(document.getElementById('view-trends').hidden){tState.currentSymbol=code;return;}
+  return analyze(code);
 }
 
-async function doSuggest(kw) {
-  try {
-    const r = await authFetch(`/api/trends/search?keyword=${encodeURIComponent(kw)}`);
-    const data = await r.json();
-    if (data.results && data.results.length) {
-      searchResults.innerHTML = data.results.map(s =>
-        `<div class="sr-item" onclick="selectStock('${s.code}','${s.name}')">
-          <span class="code">${s.code}</span><span class="name">${s.name}</span>
-        </div>`
-      ).join('');
-      searchResults.style.display = 'block';
-    } else searchResults.style.display = 'none';
-  } catch(e) {}
+function renderNav() {
+  tState.navVisible = Fund.researchSeries.navRows(tState.navData || [], tState.currentView);
+  charts.klineChart?.setOption(Fund.researchSeries.navOption(tState.navVisible), true);
 }
-
-async function doSearch() {
-  const kw = searchInput.value.trim();
-  if (!kw) return;
-  try {
-    const r = await authFetch(`/api/trends/search?keyword=${encodeURIComponent(kw)}`);
-    const data = await r.json();
-    if (data.results && data.results.length) {
-      const first = data.results[0];
-      selectStock(first.code, first.name);
-    }
-  } catch(e) {}
-}
-
-function selectStock(code, name) {
-  if (searchInput) searchInput.value = `${code} ${name}`;
-  if (searchResults) searchResults.style.display = 'none';
-  analyze(code);
-}
-
 // ===== 主分析流水线 =====
 // 请求令牌：连续搜索/切换标的时，旧请求的晚到响应不得覆盖新图表（否则K线在
 // 两个标的数据之间来回跳、出现"一闪一闪"的假大阳线）。
 let _analyzeSeq = 0;
 async function analyze(symbol) {
   tState.currentSymbol = symbol;
-  clearInterval(_refreshTimer);
+  minuteController?.abort(); ++minuteGeneration; trends.chart.pauseMinute?.();
+  document.getElementById('trends-empty').hidden = true;
+  document.dispatchEvent(new Event('fund:research-selection-changed'));
+  analyzeController?.abort();
+  analyzeController = new AbortController();
+  const signal = analyzeController.signal;
   const seq = ++_analyzeSeq;
+
+  try {
+    await Fund.ensureEcharts();
+    if (seq !== _analyzeSeq || signal.aborted) return;
+    if (!trends.chart.initCharts()) throw new Error('CHART_INIT_FAILED');
+  } catch (error) {
+    if (seq === _analyzeSeq && !signal.aborted) document.getElementById('quote-bar').textContent = Fund.localizeApiError(500, error.code);
+    return;
+  }
 
   const loadingEl = document.getElementById('loading');
   if (loadingEl) loadingEl.style.display = 'flex';
 
   const qb = document.getElementById('quote-bar');
-  if (qb) qb.innerHTML = '<span class="qb-name flat">正在分析中...</span>';
+  if (qb) qb.textContent = Fund.t('fundHomeLoading');
+  for (const chart of Object.values(charts)) chart?.clear();
+  tState.navData = []; tState.navVisible = []; tState.klineData = []; tState.lastSignalData = null; tState.minuteData = null; tState.dailyChanlun = null;
   const sb = document.getElementById('sum-body');
-  if (sb) sb.innerHTML = '<div style="color:#666;font-size:13px;padding:12px 0">正在综合分析...</div>';
+  if (sb) sb.textContent = Fund.t('fundHomeLoading');
+  for(const id of ['plan-card','market-card','chanlun-daily-card','chanlun-card','accuracy-card','risk-card']) {const card=document.getElementById(id);if(card)card.style.display='none';}
+  for(const id of ['module-list','sig-list','canslim-body','levels-body']) {const node=document.getElementById(id);if(node)node.textContent=Fund.t('fundHomeLoading');}
 
+  const navMode = tState.instrumentKind === 'fund';
+  document.getElementById('trends-fq-group').hidden = navMode || tState.currentView === 'minute';
+  document.querySelectorAll('.td-btn, #view-minute').forEach(button => { button.disabled = navMode; button.title = navMode ? Fund.t('fundTrendsNavCapability') : ''; });
+  document.querySelectorAll('#view-trends [data-card]').forEach(card => card.hidden = navMode || (tState.instrumentKind === 'etf' && card.dataset.card === 'canslim'));
+  if (navMode) {
+    try {
+      const rows = await Fund.researchSeries.nav(symbol, signal);
+      if (seq !== _analyzeSeq) return;
+      tState.navData = rows;
+      const latest = rows.at(-1);
+      qb.textContent = latest ? `${tState.currentStockName} · NAV ${latest.unitNav} · ${latest.navDate}` : Fund.t('fundTrendsNavEmpty');
+      sb.textContent = Fund.t('fundTrendsNavCapability');
+      document.getElementById('trends-query-status').textContent = [...new Set(rows.map(r => r.source))].join(' · ') + (latest ? ' · ' + rows[0].navDate + ' – ' + latest.navDate : '');
+      charts.volumeChart?.clear(); charts.indicatorChart?.clear();
+      document.getElementById('volume-chart').style.display = 'none';
+      document.getElementById('indicator-chart').style.display = 'none';
+      renderNav();
+    } catch(e) { if (seq === _analyzeSeq && !signal.aborted) { qb.textContent = Fund.localizeApiError(e.status || 500, e.code); sb.textContent = Fund.t('fundTrendsNavEmpty'); } }
+    finally { if (seq === _analyzeSeq && loadingEl) loadingEl.style.display = 'none'; }
+    return;
+  }
+  document.getElementById('volume-chart').style.display = tState.currentView === 'minute' ? 'none' : '';
   try {
     const isWeek = tState.currentView === 'week';
     const isMonth = tState.currentView === 'month';
     const periodParam = isWeek ? '&period=week' : (isMonth ? '&period=month' : '');
-    const analyzeUrl = `/api/trends/analyze?symbol=${symbol}${periodParam}`;
-    const chanlunUrl = `/api/trends/chanlun_daily?symbol=${symbol}${periodParam}`;
+    const fq = tState.fq || 'qfq';
+    const analyzeUrl = `/api/trends/analyze?symbol=${encodeURIComponent(symbol)}${periodParam}&fq=${fq}`;
+    const chanlunUrl = `/api/trends/chanlun_daily?symbol=${encodeURIComponent(symbol)}${periodParam}&fq=${fq}`;
 
     const [analyzeRes, chanlunRes] = await Promise.all([
-      authFetch(analyzeUrl),
-      authFetch(chanlunUrl),
+      authFetch(analyzeUrl, { signal }),
+      authFetch(chanlunUrl, { signal }),
     ]);
 
     const data = await analyzeRes.json();
     if (seq !== _analyzeSeq) return; // 已有更新的分析请求，丢弃旧响应
     if (data.error) {
-      if (qb) qb.innerHTML = `<span class="qb-name" style="color:#ff2d2d">${data.error}</span>`;
+      if (qb) qb.textContent = Fund.localizeApiError(analyzeRes.status, data.error, data.message);
       return;
     }
+    if (!analyzeRes.ok || !Array.isArray(data.klines)) throw new Error('SERIES_INVALID');
 
+    const query = data.queryIdentity;
+    if (query && (query.fq !== fq || query.period !== (isWeek ? 'week' : isMonth ? 'month' : 'day'))) throw new Error('QUERY_IDENTITY');
+    tState.queryIdentity = query || null;
+    document.getElementById('trends-query-status').textContent = query ? [query.source, query.fq, query.from, query.to, query.count].filter(v => v != null).join(' · ') : Fund.t('fundTrendsSourceUnknown');
     updateQuote(data.quote);
     if (trends.chart?.renderKline) {
       trends.chart.renderKline(data.klines, data.signal);
@@ -173,15 +255,7 @@ async function analyze(symbol) {
         trends.watch.recordSignal(data.symbol, data.name, _sAction, _sScore, _sPrice);
       }
       trends.watch.renderSignalAccuracy(data.symbol);
-      // 同步更新自选股中的最新评级与得分，保证多股一览实时准确
-      const _wl = trends.watch.getWatchlist ? trends.watch.getWatchlist() : [];
-      const _wi = _wl.findIndex(s => s.code === symbol);
-      if (_wi >= 0) {
-        _wl[_wi].action = _sAction;
-        _wl[_wi].score = _sScore;
-        _wl[_wi].name = data.name;
-        if (trends.watch.saveWatchlist) trends.watch.saveWatchlist(_wl);
-      }
+
     }
 
     const clDailyLabel = document.getElementById('chanlun-daily-label');
@@ -192,6 +266,7 @@ async function analyze(symbol) {
     let chanlunData = null;
     try {
       chanlunData = await chanlunRes.json();
+      if (seq !== _analyzeSeq) return;
       tState.dailyChanlun = chanlunData;
     } catch(e) {
       chanlunData = null;
@@ -208,15 +283,17 @@ async function analyze(symbol) {
     }
 
     if (seq !== _analyzeSeq) return; // 不为旧标的启动行情轮询
-    _refreshTimer = setInterval(() => refreshQuote(symbol), 2000);
+
   } catch(e) {
-    if (qb) qb.innerHTML = `<span class="qb-name" style="color:#ff2d2d">分析失败: ${e.message}</span>`;
+    if (seq === _analyzeSeq && e.name !== 'AbortError' && qb) qb.textContent = Fund.localizeApiError(500, e.code);
   } finally {
-    if (loadingEl) loadingEl.style.display = 'none';
+    if (seq === _analyzeSeq && loadingEl) loadingEl.style.display = 'none';
   }
 }
 
 async function refreshQuote(symbol) {
+  if (tState.instrumentKind === 'fund' || quotePending || document.hidden || document.getElementById('view-trends')?.hidden) return;
+  quotePending = true;
   try {
     // 只处理当前标的的行情，切换标的后的在途旧响应直接丢弃
     if (symbol !== tState.currentSymbol) return;
@@ -236,33 +313,40 @@ async function refreshQuote(symbol) {
       }
     }
   } catch(e) {}
+  finally { quotePending = false; }
 }
 
 async function loadMinute(symbol) {
+  minuteController?.abort(); minuteController = new AbortController();
+  const signal = minuteController.signal, generation = ++minuteGeneration;
+  const current = () => generation === minuteGeneration && tState.currentSymbol === symbol && tState.currentView === 'minute';
   try {
     if (charts.minuteChart) charts.minuteChart.resize();
     if (charts.minuteVolChart) charts.minuteVolChart.resize();
     tState.minuteYRange = null;
 
     const [minuteRes, chanlunRes] = await Promise.all([
-      authFetch(`/api/trends/minute?symbol=${symbol}`),
-      authFetch(`/api/trends/chanlun_minute?symbol=${symbol}`),
+      authFetch(`/api/trends/minute?symbol=${encodeURIComponent(symbol)}`, { signal }),
+      authFetch(`/api/trends/chanlun_minute?symbol=${encodeURIComponent(symbol)}`, { signal }),
     ]);
     // 切换标的后的在途分时响应直接丢弃，避免旧分时覆盖新标的图表
     if (tState.currentSymbol !== symbol) return;
-    const data = await minuteRes.json();
-    if (data.error) {
+    const raw = await minuteRes.json();
+    if (!current()) return;
+    if (!minuteRes.ok || raw.error) {
       if (charts.minuteChart) {
-        charts.minuteChart.setOption({ title: { text: data.error, left: 'center', top: 'center', textStyle: { color: C.down, fontSize: 14 } } }, true);
+        charts.minuteChart.setOption({ title: { text: Fund.t('fundTrendsMinuteUnavailable'), left: 'center', top: 'center', textStyle: { color: C.down, fontSize: 14 } } }, true);
       }
       const cc = document.getElementById('chanlun-card');
       if (cc) cc.style.display = 'none';
       return;
     }
+    const data = Fund.researchSeries.minute(raw);
     tState.minuteData = data;
     let chanlunData = null;
     try {
       chanlunData = await chanlunRes.json();
+      if (!current()) return;
       tState.minuteChanlun = chanlunData;
     } catch(e) { chanlunData = null; }
 
@@ -273,12 +357,25 @@ async function loadMinute(symbol) {
       trends.chan.renderChanlun(chanlunData);
     }
   } catch(e) {
+    if (!current() || signal.aborted) return;
     if (charts.minuteChart) {
-      charts.minuteChart.setOption({ title: { text: '分时数据获取失败', left: 'center', top: 'center', textStyle: { color: C.down, fontSize: 14 } } }, true);
+      charts.minuteChart.setOption({ title: { text: Fund.t('fundTrendsMinuteUnavailable'), left: 'center', top: 'center', textStyle: { color: C.down, fontSize: 14 } } }, true);
     }
   }
 }
 
+document.getElementById('trends-fq').addEventListener('change', event => {
+  trends.drawings?.cancelDraft(); tState.fq = event.target.value;
+  if (tState.currentSymbol) analyze(tState.currentSymbol);
+});
+document.getElementById('trends-ai-review').addEventListener('click',()=>{
+  const identity=()=>JSON.stringify({symbol:tState.currentSymbol,period:tState.currentView,fq:tState.fq,range:(tState.currentView==='minute'?charts.minuteChart:charts.klineChart)?.getOption().dataZoom?.[0]});
+  Fund.home.openAI({research:{identity,capture:()=>{
+    const nav=tState.instrumentKind==='fund',minute=tState.currentView==='minute';
+    const rows=nav?(tState.navVisible || []).map(row=>({date:row.navDate,unitNav:row.unitNav})):minute?(tState.minuteData?.times || []).map((time,index)=>({date:[tState.minuteData.date,time].filter(Boolean).join(' '),price:tState.minuteData.prices[index],volume:tState.minuteData.volumes[index]})):tState.klineData;
+    return Fund.researchSeries.capture({symbol:tState.currentSymbol,period:tState.currentView,fq:nav?'not-applicable':minute?'bf':tState.fq,seriesKind:nav?'NAV':minute?'minute':'OHLC'},rows,minute?charts.minuteChart:charts.klineChart,nav?tState.navVisible?.at(-1)?.source:minute?tState.minuteData?.source:tState.queryIdentity?.source);
+  }}});
+});
 // 暴露全局方法与内联兼容
 window.selectStock = selectStock;
 window.analyze = analyze;
@@ -287,15 +384,13 @@ window.analyze = analyze;
 actions.initTrends = function() {
   try {
     const hist = trends.watch?.getHistory ? trends.watch.getHistory() : [];
-    const lastSymbol = (hist.length > 0) ? hist[0].code : '600519';
-    analyze(lastSymbol);
+    const lastSymbol = tState.currentSymbol || state.currentSymbol || hist[0]?.code;
+    if (lastSymbol) selectStock(lastSymbol, tState.currentStockName || hist[0]?.name, '', tState.instrumentKind);
   } catch(e) {}
 };
 
-actions.loadTrendsStock = function(code) {
-  if (code) {
-    analyze(code);
-  }
+actions.loadTrendsStock = function(code, name, instrumentKind) {
+  if (code) selectStock(code, name, '', instrumentKind);
 };
 
 // 启动入口
@@ -310,9 +405,12 @@ try {
   }, 100);
 } catch(e) {}
 
+actions.pauseTrends = function() { closeSearch(); trends.watch?.closePanel(); trends.chart.pauseMinute?.(); minuteController?.abort(); ++minuteGeneration; analyzeController?.abort(); ++_analyzeSeq; trends.drawings?.pause(); };
+window.addEventListener('pagehide', actions.pauseTrends);
+
 actions.refreshTrends = function() {
-  const sym = state.currentSymbol || "600519";
-  const cleanCode = sym.replace(/^(sh|sz|bj)/i, "");
+  const sym = tState.currentSymbol || state.currentSymbol;
+  if (!sym) return;
   if (trends.chart?.initCharts) {
     trends.chart.initCharts();
   }
@@ -324,11 +422,13 @@ actions.refreshTrends = function() {
     if (charts.minuteVolChart) charts.minuteVolChart.resize();
     if (charts.indicatorChart) charts.indicatorChart.resize();
   }, 50);
-  analyze(cleanCode);
+  analyze(sym);
 };
 
 trends.coordinator = {
+  selection: () => ({ symbol: tState.currentSymbol, name: tState.currentStockName, instrumentKind: tState.instrumentKind }),
   analyze,
+  renderNav,
   refreshQuote,
   loadMinute,
   selectStock,

@@ -426,8 +426,8 @@ mod system;
 mod trash;
 
 pub use archive::{
-    create_zip, create_zip_with_cancel, extract_archive, list_archive, ArchiveCreateResult,
-    ArchiveEntry, ArchiveExtractResult, ArchiveListResult,
+    create_zip, create_zip_with_cancel, extract_archive, extract_archive_with_cancel, list_archive,
+    ArchiveCreateResult, ArchiveEntry, ArchiveExtractResult, ArchiveListResult,
 };
 pub use detect::{detect_file_kind, natural_cmp};
 pub(crate) use detect::{detect_project_badge, meta_btime_ms, meta_mtime_ms};

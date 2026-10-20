@@ -34,6 +34,10 @@ pub fn tree_sha256(root: &Path) -> std::io::Result<Option<String>> {
         if !file_type.is_file() {
             continue;
         }
+        if entry.file_name().to_string_lossy().starts_with("._") || entry.file_name() == ".DS_Store"
+        {
+            continue;
+        }
         let relative = entry
             .path()
             .strip_prefix(root)

@@ -4,7 +4,10 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title data-i18n="appName">Natives</title>
+    <link rel="stylesheet" href="theme.css" />
     <link rel="stylesheet" href="app.css" />
+    <link rel="stylesheet" href="model-settings.css" />
+    <link rel="stylesheet" href="module-secret.css" />
   </head>
   <body>
     <svg class="svg-sprite" aria-hidden="true" style="display:none">
@@ -15,12 +18,13 @@
     </svg>
 
     <nav class="app-shell-nav">
-      <div class="brand"><svg class="icon"><use href="#i-bolt" /></svg><span data-i18n="appName">Natives</span></div>
+      <div class="brand"><svg class="icon"><use href="#i-bolt" /></svg><span>Natives</span></div>
       <a class="app-shell-nav-item" href="space.html"><svg class="icon"><use href="#i-grid" /></svg><span data-i18n="navSpace">空间</span></a>
       <a class="app-shell-nav-item" href="files.html"><svg class="icon"><use href="#i-box" /></svg><span data-i18n="navFiles">文件</span></a>
       <a class="app-shell-nav-item" href="apps.html"><svg class="icon"><use href="#i-grid" /></svg><span data-i18n="appsCenter">应用中心</span></a>
       <div class="app-menu-apps-wrap" id="app-menu-apps"></div>
       <div class="spacer"></div>
+      <button id="app-module-settings" class="app-shell-nav-item" type="button" hidden><svg class="icon"><use href="#i-box" /></svg><span data-i18n="moduleSettings">应用设置</span></button>
       <button id="app-back" class="app-shell-nav-item back" type="button"><svg class="icon"><use href="#i-back" /></svg><span data-i18n="backToSpace">返回</span></button>
     </nav>
 
@@ -33,6 +37,6 @@
     </main>
 
     <div id="app-toast" class="app-toast" role="status" hidden></div>
-    <script type="module" src="app.js"></script>
+    <script type="module" src="app-boot.js"></script>
   </body>
 </html>

@@ -25,14 +25,18 @@ function renderRuntime(gateway, running, busy, t) {
   heading.append(state);
 
   const latestVer = gateway.latestKernelVersion || gateway.kernelVersion || '—';
-  const hasUpdate = Boolean(gateway.latestKernelVersion && gateway.kernelVersion && isNewerVersion(gateway.latestKernelVersion, gateway.kernelVersion));
+  const newer = Boolean(gateway.latestKernelVersion && gateway.kernelVersion && isNewerVersion(gateway.latestKernelVersion, gateway.kernelVersion));
+  const currentMajor = gateway.kernelVersion?.match(/^v?(\d+)\./)?.[1];
+  const latestMajor = gateway.latestKernelVersion?.match(/^v?(\d+)\./)?.[1];
+  const migrationRequired = newer && currentMajor && latestMajor && Number(latestMajor) > Number(currentMajor);
+  const hasUpdate = newer && !migrationRequired;
 
   const latestRow = element('div', 'model-settings-row');
   const latestLabel = element('span', '', t('modelLatestKernelVersion', '最新版本'));
   const latestVal = element('div', 'model-kernel-latest-val');
   latestVal.innerHTML = `
     <span class="font-mono">${escapeText(latestVer)}</span>
-    ${!hasUpdate && latestVer !== '—'
+    ${!newer && latestVer !== '—'
       ? `<span class="badge-up-to-date" style="font-size:11px;padding:1px 6px;border-radius:999px;background:rgba(34,197,94,0.12);color:#22c55e;margin:0 4px;">${escapeText(t('modelKernelUpToDate', '已是最新'))}</span>`
       : ''}
     ${hasUpdate
@@ -40,6 +44,11 @@ function renderRuntime(gateway, running, busy, t) {
       : `<button type="button" class="btn-af-tool btn-kernel-check" data-action="check-kernel-update" title="${escapeText(t('checkUpdate', '检查更新'))}"><svg class="icon" aria-hidden="true" style="width:12px;height:12px;"><use href="#i-refresh" /></svg><span>${escapeText(t('checkUpdate', '检查更新'))}</span></button>`}
   `;
   latestRow.append(latestLabel, latestVal);
+  if (migrationRequired) {
+    const migration = element('p', 'model-section-description', t('modelKernelMigrationAvailable', '上游新版需要完整产品迁移，当前内核仍可使用；此处不能直接升级主版本。'));
+    migration.setAttribute('role', 'status');
+    latestVal.append(migration);
+  }
 
   const details = element('div', 'model-settings-rows');
   details.append(

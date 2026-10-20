@@ -6,34 +6,31 @@
   <div class="focus-workspace" id="focus-workspace" hidden>
     <aside class="focus-left" id="focus-left">
       <div class="focus-left-head">
-        <select id="focus-source" title="数据源">
-          <option value="watchlist">自选股</option>
-          <option value="market">行情排行</option>
+        <select id="focus-source" data-i18n-title="fundFocusContext">
+          <option value="watchlist" data-i18n="fundLedgerNavWatchlist">自选股</option>
+          <option value="history" data-i18n="fundFocusHistory">研究历史</option>
         </select>
-        <button class="btn" id="focus-add-btn" title="添加标的">+</button>
       </div>
       <div class="focus-asset-list" id="focus-asset-list" role="listbox" aria-label="标的列表"></div>
-      <div class="focus-left-foot">
-        <button class="btn btn-accent" id="focus-add-row-btn">+ 添加股票</button>
-      </div>
     </aside>
-    <div class="focus-resizer" id="focus-resizer" role="separator" aria-orientation="vertical" tabindex="0" title="拖动调整左栏宽度"></div>
+    <div class="focus-resizer" id="focus-resizer" role="separator" aria-orientation="vertical" aria-valuemin="180" aria-valuemax="360" tabindex="0" data-i18n-title="fundFocusResize" data-i18n-aria-label="fundFocusResize"></div>
     <section class="focus-center" id="focus-center">
       <div class="focus-exit-row">
-        <button class="btn" id="focus-exit-btn">退出专注模式</button>
+        <button class="btn" id="focus-exit-btn" data-i18n="fundFocusExit">退出专注模式</button>
+        <button class="btn" id="focus-list-btn" data-i18n="fundFocusContext">标的列表</button>
+        <button class="btn" id="focus-evidence-btn" data-i18n="fundFocusEvidence">研究信息</button>
         <span class="focus-badge" id="focus-badge">专注模式</span>
       </div>
     </section>
     <aside class="focus-right" id="focus-right"></aside>
   </div>
 
-  <!-- 全局检索弹窗 -->
-  <div class="focus-search-backdrop" id="focus-search-backdrop" hidden>
-    <div class="focus-search" role="dialog" aria-label="搜索标的">
-      <input type="text" id="focus-search-input" placeholder="输入代码 / 名称 / 拼音搜索…" autocomplete="off" />
-      <div class="focus-search-results" id="focus-search-results"></div>
-    </div>
-  </div>
+  <dialog id="focus-list-dialog" class="focus-list-dialog" data-i18n-aria-label="fundFocusContext">
+    <button class="btn" id="focus-list-close" data-i18n="fundHomeClose">关闭</button>
+  </dialog>
+  <dialog id="focus-evidence-dialog" class="focus-list-dialog" data-i18n-aria-label="fundFocusEvidence">
+    <button class="btn" id="focus-evidence-close" data-i18n="fundHomeClose">关闭</button>
+  </dialog>
   <!-- 信号变更提醒浮层 -->
   <div class="toast-container" id="toast-container"></div>
 <!-- 源文件按能力域拆分于 ui/dist/*.js；此处单次加载由 Host 编译期拼接的 bundle -->

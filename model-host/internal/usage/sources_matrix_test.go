@@ -13,6 +13,7 @@ package usage
 //      "列了工具"不算统计。
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -95,7 +96,7 @@ func TestImplementedSourcesHaveCollectorPath(t *testing.T) {
 		collectorCovered[id] = true
 	}
 	// 用一次空 home 的 Collect 调用验证不 panic 且返回结构化状态。
-	if _, err := s.CollectSources(); err != nil {
+	if _, err := s.CollectSources(context.Background()); err != nil {
 		t.Fatalf("CollectSources: %v", err)
 	}
 	for id := range implemented {

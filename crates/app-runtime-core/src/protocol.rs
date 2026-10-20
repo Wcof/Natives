@@ -127,9 +127,17 @@ pub struct StatusResult {
     pub instance_id: String,
     pub state: String,
     pub operation: Option<Operation>,
+    pub active_requests: usize,
+    pub active_tasks: usize,
 }
 
 /// app:data_status 结果：数据 schema 与迁移 journal 摘要；不返回业务记录。
+///
+/// `readiness`（ADR-0036）：模块对实际数据文件、只读连接、schema 与 journal 的
+/// 可判别状态，取值 `ready | uninitialized | migration_required |
+/// recovery_required | incompatible | unreadable`。缺库、打不开库或解析失败
+/// 不得回退为「当前 schema 即 ready」；旧模块未实现时为 None（卡片按
+/// unsupported 处理）。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DataStatusResult {
@@ -138,7 +146,24 @@ pub struct DataStatusResult {
     pub last_data_writer_version: String,
     pub has_committed_new_writes: bool,
     pub previous_version_compatible: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub readiness: Option<String>,
 }
+
+/// app:card_snapshot 结果（ADR-0036）：模块白名单只读投影，schema 版本化。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CardSnapshotResult {
+    /// 投影协议版本（如 "fund.cards.v1"）。
+    pub schema: String,
+    /// 投影生成时刻（RFC3339，北京时间口径）。
+    pub generated_at: String,
+    /// 业务负载（各聚合自带 quality/reasonCodes）。
+    pub payload: serde_json::Value,
+}
+
+/// 卡片投影响应上限（窄于 Native 帧 512 KiB；ADR-0036）。
+pub const MAX_CARD_SNAPSHOT_BYTES: usize = 64 * 1024;
 
 /// app:session issue 结果。
 #[derive(Debug, Clone, Serialize, Deserialize)]

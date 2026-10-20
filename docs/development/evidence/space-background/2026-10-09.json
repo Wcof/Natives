@@ -1,0 +1,47 @@
+{
+  "date": "2026-10-09 14:49",
+  "source": "extension/space.css:10",
+  "sourceSha256": "a9199896d19793930a28bb061eaa29d1bc0e287fb28380bc0eb44c0a90c9cc61",
+  "rootCause": "Toolbar occupied a flex row plus margins; the actual background started at y=68 rather than y=0.",
+  "change": "Toolbar floats at top/right 12px; no reserved row. Overlay opacity 0.55 keeps icons above 3:1 over white backgrounds.",
+  "checks": {
+    "space_background_chrome": 0,
+    "apps_check": 0,
+    "perf_check_final": 0,
+    "extension_package": 0,
+    "dev_self_test": 0
+  },
+  "browserCoverage": {
+    "renderer": "actual createSpaceDashboard and built-in colour/online backgrounds",
+    "combinations": 24,
+    "themes": [
+      "archive",
+      "volt"
+    ],
+    "widths": [
+      320,
+      640,
+      1280
+    ],
+    "sidebar": [
+      "expanded",
+      "collapsed"
+    ],
+    "geometry": "background y=0, full height; collapsed sidebar gives full viewport width",
+    "keyboard": "settings button focus/Enter and actual hit target",
+    "contrast": "white wallpaper toolbar icon contrast >=3:1"
+  },
+  "earlierFailures": {
+    "before_fix": "background y=68; test assertion failed",
+    "perf_directory_p95_ms": [
+      64.60258399999998,
+      50.213250000000244
+    ],
+    "budget_ms": 50
+  },
+  "limits": [
+    "Synthetic local image; no real image provider or user workspace used.",
+    "No long-soak or platform/fullscreen browser chrome validation.",
+    "Previous directory performance failures retained; final pass is not a root-cause or performance-improvement claim."
+  ]
+}

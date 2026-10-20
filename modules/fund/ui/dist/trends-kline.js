@@ -23,7 +23,7 @@ function calcMA(data, period) {
 }
 
 // ===== K线图 =====
-function renderKline(klines, signal) {
+function renderKline(klines, signal = {}, reloadDrawings = true) {
   tState.klineData = klines;
   tState.lastSignalData = signal;
   const dates = klines.map(k => k.date);
@@ -48,8 +48,8 @@ function renderKline(klines, signal) {
         markPoints.push({
           coord: [dateStr, markerY],
           symbol: 'triangle', symbolSize: 20, symbolRotate: 0,
-          itemStyle: { color: C.up, borderWidth: 2, borderColor: '#fff' },
-          label: { show: true, formatter: '买入', fontSize: 11, fontWeight: 'bold', color: '#fff',
+          itemStyle: { color: C.up, borderWidth: 2, borderColor: Fund.themeColor('--natives-surface') },
+          label: { show: true, formatter: '买入', fontSize: parseFloat(Fund.themeColor('--natives-fs-secondary')), fontWeight: 'bold', color: Fund.themeColor('--natives-on-accent'),
                    backgroundColor: C.up, padding: [2,4], borderRadius: 3, position: 'bottom' },
         });
         tState.signalPoints.push({
@@ -67,8 +67,8 @@ function renderKline(klines, signal) {
         markPoints.push({
           coord: [dates[idx], markerY],
           symbol: 'triangle', symbolSize: 20, symbolRotate: 180,
-          itemStyle: { color: C.down, borderWidth: 2, borderColor: '#fff' },
-          label: { show: true, formatter: '卖出', fontSize: 11, fontWeight: 'bold', color: '#fff',
+          itemStyle: { color: C.down, borderWidth: 2, borderColor: Fund.themeColor('--natives-surface') },
+          label: { show: true, formatter: '卖出', fontSize: parseFloat(Fund.themeColor('--natives-fs-secondary')), fontWeight: 'bold', color: Fund.themeColor('--natives-on-accent'),
                    backgroundColor: C.down, padding: [2,4], borderRadius: 3, position: 'top' },
         });
         tState.signalPoints.push({
@@ -105,7 +105,7 @@ function renderKline(klines, signal) {
           ? `止损 ${b.stop_loss.toFixed(2)}\n涨到这里就止损`
           : `止损 ${b.stop_loss.toFixed(2)}\n跌到这里就卖`;
         markLines.push({ yAxis: b.stop_loss, lineStyle: { color: C.down, type: 'dashed', width: 2 },
-          label: { formatter: slLabel, color: '#fff', fontSize: 11, fontWeight: 'bold',
+          label: { formatter: slLabel, color: Fund.themeColor('--natives-on-accent'), fontSize: parseFloat(Fund.themeColor('--natives-fs-secondary')), fontWeight: 'bold',
             backgroundColor: C.down, padding: [3,6], borderRadius: 3, position: 'insideStartTop' } });
         const nVal = b.current_n || '?';
         tState.signalLines.push({
@@ -123,7 +123,7 @@ function renderKline(klines, signal) {
         const entryColor = isBearish ? C.down : C.up;
         const entryText = isBearish ? `做空 ${b.entry_price.toFixed(2)}` : `入场 ${b.entry_price.toFixed(2)}`;
         markLines.push({ yAxis: b.entry_price, lineStyle: { color: entryColor, type: 'solid', width: 2 },
-          label: { formatter: entryText, color: '#fff', fontSize: 11, fontWeight: 'bold',
+          label: { formatter: entryText, color: Fund.themeColor('--natives-on-accent'), fontSize: parseFloat(Fund.themeColor('--natives-fs-secondary')), fontWeight: 'bold',
             backgroundColor: entryColor, padding: [3,6], borderRadius: 3, position: 'insideStartTop' } });
         tState.signalLines.push({
           value: b.entry_price,
@@ -145,9 +145,9 @@ function renderKline(klines, signal) {
         const targetLabel = isBearish
           ? `目标 ${p.target_price.toFixed(2)}\n跌到这里就止盈`
           : `目标 ${p.target_price.toFixed(2)}\n涨到这里就卖`;
-        markLines.push({ yAxis: p.target_price, lineStyle: { color: '#cdf24b', type: 'dashed', width: 2 },
-          label: { formatter: targetLabel, color: '#0b0c0a', fontSize: 11, fontWeight: 'bold',
-            backgroundColor: '#cdf24b', padding: [3,6], borderRadius: 3, position: 'insideStartTop' } });
+        markLines.push({ yAxis: p.target_price, lineStyle: { color: C.avgLine, type: 'dashed', width: 2 },
+          label: { formatter: targetLabel, color: Fund.themeColor('--natives-on-accent'), fontSize: parseFloat(Fund.themeColor('--natives-fs-secondary')), fontWeight: 'bold',
+            backgroundColor: C.avgLine, padding: [3,6], borderRadius: 3, position: 'insideStartTop' } });
         tState.signalLines.push({
           value: p.target_price,
           title: `${p.name} 目标价`,
@@ -180,20 +180,20 @@ function renderKline(klines, signal) {
     xAxis: {
       type: 'category', data: dates,
       axisLine: { lineStyle: { color: C.axis } },
-      axisLabel: { color: C.textDim, fontSize: 10 },
+      axisLabel: { color: C.textDim, fontSize: parseFloat(Fund.themeColor('--natives-fs-secondary')) },
       splitLine: { show: false },
     },
     yAxis: {
       scale: true,
       axisLine: { show: false },
-      axisLabel: { color: C.textDim, fontSize: 11 },
+      axisLabel: { color: C.textDim, fontSize: parseFloat(Fund.themeColor('--natives-fs-secondary')) },
       splitLine: { lineStyle: { color: C.grid } },
     },
     grid: { left: 60, right: 50, top: 30, bottom: 50 },
     legend: {
       data: ['MA5','MA10','MA20','MA60'],
       top: 4, left: 60,
-      textStyle: { color: C.textDim, fontSize: 10 },
+      textStyle: { color: C.textDim, fontSize: parseFloat(Fund.themeColor('--natives-fs-secondary')) },
       itemWidth: 14, itemHeight: 2,
     },
     series: [
@@ -240,13 +240,13 @@ function renderKline(klines, signal) {
     dataZoom: [
       { type: 'inside', start: ds, end: de, zoomOnMouseWheel: true, moveOnMouseMove: true, moveOnMouseWheel: false },
       { type: 'slider', start: ds, end: de, height: 28, bottom: 8,
-        borderColor: '#222', backgroundColor: '#0a0a0a',
-        fillerColor: 'rgba(205,242,75,0.1)',
-        selectedDataBackground: { lineStyle: { color: '#cdf24b' }, areaStyle: { color: 'rgba(205,242,75,0.15)' } },
-        dataBackground: { lineStyle: { color: '#222' }, areaStyle: { color: '#111' } },
-        handleStyle: { color: '#cdf24b', borderColor: '#cdf24b' },
-        moveHandleStyle: { color: '#cdf24b' },
-        textStyle: { color: C.textDim, fontSize: 10 },
+        borderColor: C.axis, backgroundColor: 'transparent',
+        fillerColor: 'rgba(150,150,150,0.15)',
+        selectedDataBackground: { lineStyle: { color: C.avgLine }, areaStyle: { color: 'rgba(150,150,150,0.12)' } },
+        dataBackground: { lineStyle: { color: C.axis }, areaStyle: { color: 'rgba(150,150,150,0.08)' } },
+        handleStyle: { color: C.avgLine, borderColor: C.avgLine },
+        moveHandleStyle: { color: C.avgLine },
+        textStyle: { color: C.textDim, fontSize: parseFloat(Fund.themeColor('--natives-fs-secondary')) },
         brushSelect: false,
       },
     ],
@@ -265,7 +265,7 @@ function renderKline(klines, signal) {
         itemStyle: { color: k.close >= k.open ? C.up + '88' : C.down + '88' }
       })),
     }],
-    tooltip: { trigger: 'axis', formatter: p => p[0] ? `<div style="font-size:11px">${p[0].axisValue}<br/>量 ${fmtVol(p[0].value)}</div>` : '' },
+    tooltip: { trigger: 'axis', formatter: p => p[0] ? `<div style="font-size:var(--natives-fs-secondary)">${p[0].axisValue}<br/>量 ${fmtVol(p[0].value)}</div>` : '' },
     dataZoom: [
       { type: 'inside', start: ds, end: de, zoomOnMouseWheel: true, moveOnMouseMove: true },
       { type: 'slider', start: ds, end: de, show: false },
@@ -283,7 +283,7 @@ function renderKline(klines, signal) {
     trends.chart.updateZoomInfo(ds, de);
   }
   // 划线层联动：标的/周期变化后重新加载该 symbol+period 的划线并重绘
-  if (trends.drawings) {
+  if (reloadDrawings && trends.drawings) {
     trends.drawings.reload();
   }
   if (trends.indicator?.renderIndicator) {

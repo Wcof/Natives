@@ -1,5 +1,5 @@
-
-
+import { isExtension } from './platform/env.js';
+import { openPreferencesImport } from './preferences-import.js';
 export function createSettingsMenu({
   anchorButton,
   initialLanguage = 'zh_CN',
@@ -8,6 +8,7 @@ export function createSettingsMenu({
   onThemeChange,
   onModelSettings,
   onAppsCenter,
+  onModuleSettings,
   t = (k, f) => f || k,
 }) {
   let language = initialLanguage;
@@ -31,6 +32,12 @@ export function createSettingsMenu({
     onModelSettings?.(anchorButton);
   };
   const appsRow = _menuRow('i-grid', 'appsCenter', '应用中心');
+  const moduleRows = document.createElement('div');
+  const importRow = _menuRow('i-box', 'sharedPreferencesImport', '导入当前扩展偏好');
+  importRow.removeAttribute('aria-haspopup');
+  importRow.querySelector('.chev')?.remove();
+  importRow.hidden = !isExtension;
+  importRow.onclick = () => { toggle(false); void openPreferencesImport({t,returnFocus:anchorButton}); };
   appsRow.querySelector('.chev')?.remove();
   appsRow.removeAttribute('aria-haspopup');
   appsRow.onclick = () => {
@@ -45,7 +52,7 @@ export function createSettingsMenu({
 
   const langSub = _buildSubmenu('lang');
   const themeSub = _buildSubmenu('theme');
-  menu.append(appsRow, modelRow, langRow, themeRow);
+  menu.append(appsRow, modelRow, moduleRows, langRow, themeRow, importRow);
   document.body.append(menu, langSub, themeSub);
 
   if (anchorButton) {
@@ -76,15 +83,16 @@ export function createSettingsMenu({
       const item = event.target.closest('.submenu-item');
       if (!item) return;
       const value = item.dataset.value;
+      const save = kind === 'lang' ? onLanguageChange : onThemeChange;
+      Promise.resolve(save?.(value)).then(() => {
       if (kind === 'lang') {
         language = value;
-        onLanguageChange?.(value);
       } else {
         theme = value;
-        onThemeChange?.(value);
       }
       _syncSubmenus();
       toggle(false);
+      }).catch(() => { _syncSubmenus(); });
     });
     return sub;
   }
@@ -107,6 +115,7 @@ export function createSettingsMenu({
     themeRow.querySelector('span').textContent = t('interfaceTheme', '界面主题');
     modelRow.querySelector('span').textContent = t('modelSettings', '模型与服务');
     appsRow.querySelector('span').textContent = t('appsCenter', '应用中心');
+    importRow.querySelector('span').textContent = t('sharedPreferencesImport', '导入当前扩展偏好');
     _syncSubmenus();
   }
 
@@ -221,6 +230,16 @@ export function createSettingsMenu({
     toggle,
     open,
     setPreferences,
+    setModules(items) {
+      moduleRows.replaceChildren(...items.filter(i=>i.settingsView==='settings').map(item=>{
+        const row=_menuRow('i-box','moduleSettings','应用设置');
+        row.querySelector('span').textContent=t('moduleSettings','应用设置');
+        row.title=item.label;row.dataset.moduleSettingsApp=item.appId;
+        row.querySelector('.chev')?.remove();row.removeAttribute('aria-haspopup');
+        row.onclick=()=>{toggle(false);onModuleSettings?.(item.appId,item.settingsView);};
+        return row;
+      }));
+    },
     destroy() {
       document.removeEventListener('click', onGlobalClick);
       document.removeEventListener('keydown', onGlobalKeydown);

@@ -135,6 +135,36 @@ fn create_session_snapshot_and_soft_delete() {
 }
 
 #[test]
+fn investment_template_seeds_five_cards_without_sample_amounts() {
+    let (store, path) = temp_store("investment-template");
+    let created = store
+        .create("Invest", Some("investment"))
+        .expect("create investment workspace");
+    let keys: Vec<&str> = created.widgets.iter().map(|w| w.key.as_str()).collect();
+    assert_eq!(
+        keys,
+        vec![
+            "widget/investmentHoldings",
+            "widget/investmentAssets",
+            "widget/investmentGoal",
+            "widget/investmentAllocation",
+            "widget/investmentAllocationCheck",
+        ]
+    );
+    // P3：模板只含布局，不带金额样例——config 必须为空对象。
+    for widget in &created.widgets {
+        assert_eq!(widget.config_json, serde_json::json!({}));
+        assert!(widget.enabled);
+    }
+    // instantiate_template 同样可实例化 investment（重置/新建共用 payload）。
+    let instantiated = store
+        .instantiate_template("investment", "InvestCopy")
+        .expect("instantiate investment template");
+    assert_eq!(instantiated.widgets.len(), 5);
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
 fn revision_conflicts_are_rejected() {
     let (store, path) = temp_store("revision");
     let created = store.create("Rev", None).expect("create");

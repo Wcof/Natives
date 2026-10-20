@@ -79,7 +79,9 @@ pub fn find_peaks(values: &[f64], window: usize) -> Vec<usize> {
     for i in window..(n - window) {
         let lo = i - window;
         let hi = i + window;
-        let is_max = (lo..=hi).filter(|&j| j != i).all(|j| values[i] >= values[j]);
+        let is_max = (lo..=hi)
+            .filter(|&j| j != i)
+            .all(|j| values[i] >= values[j]);
         if is_max {
             let all_equal = (lo..=hi).all(|j| values[j] == values[i]);
             if !all_equal {
@@ -100,7 +102,9 @@ pub fn find_troughs(values: &[f64], window: usize) -> Vec<usize> {
     for i in window..(n - window) {
         let lo = i - window;
         let hi = i + window;
-        let is_min = (lo..=hi).filter(|&j| j != i).all(|j| values[i] <= values[j]);
+        let is_min = (lo..=hi)
+            .filter(|&j| j != i)
+            .all(|j| values[i] <= values[j]);
         if is_min {
             let all_equal = (lo..=hi).all(|j| values[j] == values[i]);
             if !all_equal {
@@ -157,7 +161,11 @@ pub fn macd_series(
         .collect();
     let dea_raw = ema_series(&dif, signal);
     let dea: Vec<f64> = dea_raw.into_iter().map(|d| d.unwrap_or(0.0)).collect();
-    let bar: Vec<f64> = dif.iter().zip(dea.iter()).map(|(&d, &e)| 2.0 * (d - e)).collect();
+    let bar: Vec<f64> = dif
+        .iter()
+        .zip(dea.iter())
+        .map(|(&d, &e)| 2.0 * (d - e))
+        .collect();
     (dif, dea, bar)
 }
 

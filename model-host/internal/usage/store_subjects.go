@@ -133,6 +133,29 @@ func (s *Store) RegisterSubject(id, kind, label string) error {
 	return err
 }
 
+// RegisterSubjects 批量注册 subject（来源适配器一次同步多行，减少锁往返）。
+// 单行失败不阻断整批；rows 每项为 [id, kind, label]。
+func (s *Store) RegisterSubjects(rows [][3]string) error {
+	if len(rows) == 0 {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, row := range rows {
+		id, kind, label := row[0], row[1], row[2]
+		if id == "" || !subjectKinds[kind] {
+			continue
+		}
+		if _, err := s.db.Exec(`
+			INSERT INTO usage_subjects (id, kind, label) VALUES (?, ?, ?)
+			ON CONFLICT(id) DO UPDATE SET kind = excluded.kind, label = excluded.label`,
+			id, kind, label); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // SubjectBreakdown 为单个 subject 的归因视图（§8.2）。
 type SubjectBreakdown struct {
 	SubjectID     string  `json:"subjectId"`

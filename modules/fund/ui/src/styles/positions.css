@@ -1,0 +1,250 @@
+/* ===== 持仓页（R2 T04：供体 Stocks 复刻；复用项目令牌） ===== */
+#view-positions {
+  height:100%; overflow-y:auto; padding:20px 20px 32px; box-sizing:border-box;
+  display: flex; flex-direction: column; gap: 12px;
+}
+#view-positions[hidden] { display: none !important; }
+#view-positions .up { color: var(--color-up); }
+#view-positions .down { color: var(--color-down); }
+
+.pos-toolbar {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 10px 16px;
+  border: 1px solid var(--natives-border); border-radius: var(--natives-radius);
+  background: var(--natives-surface-2); padding: 8px 12px;
+}
+.pos-tabs { display: inline-flex; flex-wrap:wrap; max-width:100%; min-width:0; gap:2px; }
+.pos-tab {
+  min-height: 32px; padding: 4px 14px; font-size: var(--natives-fs-body); cursor: pointer;
+  color: var(--natives-text-muted); background: transparent;
+  border:1px solid var(--natives-border); border-radius:6px;
+}
+.pos-tab[aria-selected="true"] {
+  color: var(--natives-accent); border-color: var(--natives-accent);
+  background: color-mix(in srgb, var(--natives-accent) 10%, transparent);
+}
+.pos-summary { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: var(--natives-fs-secondary); color: var(--natives-text-muted); }
+.pos-summary b { color: var(--natives-text-primary); }
+.pos-tools { display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
+.pos-tools button {
+  min-height: 32px; padding: 3px 10px; font-size: var(--natives-fs-secondary); cursor: pointer;
+  color: var(--natives-text-primary); background: var(--natives-surface-3);
+  border: 1px solid var(--natives-border); border-radius: var(--natives-radius);
+}
+.pos-tools button:hover { border-color: var(--natives-accent); color: var(--natives-accent); }
+/* 显示开关 ON 态（金额可见）：accent 描边提示当前处于明文显示 */
+.pos-tools button.pos-display-on {
+  color: var(--natives-accent);
+  border-color: var(--natives-accent);
+  background: color-mix(in srgb, var(--natives-accent) 10%, transparent);
+}
+
+.pos-order-hint { margin: 0; font-size: var(--natives-fs-secondary); color: var(--natives-text-muted); }
+
+.financial-settings { padding: 16px; max-width: 1080px; margin: 0 auto; }
+.financial-settings > header { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+#financial-settings-body { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 320px), 1fr)); gap: 16px; }
+#financial-settings-body > section { background: var(--natives-surface-2); border: 1px solid var(--natives-border); border-radius: var(--natives-radius); padding: 16px; min-width: 0; }
+.financial-settings label { display: grid; gap: 6px; margin: 10px 0; }
+.financial-settings input, .financial-settings select { min-height: 32px; max-width: 100%; color: var(--natives-text-primary); background: var(--natives-surface-3); border: 1px solid var(--natives-border); border-radius: var(--natives-radius); }
+.financial-settings p, .financial-settings h4 { overflow-wrap: anywhere; }
+.financial-settings button { margin: 4px; min-height: 32px; }
+
+.pos-account {
+  border: 1px solid var(--natives-border); border-radius: var(--natives-radius);
+  background: var(--natives-surface-2); overflow: hidden;
+}
+.pos-account-head {
+  display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px;
+  padding: 8px 12px; cursor: grab;
+  border-bottom: 1px solid var(--natives-border);
+}
+.pos-account-head button {
+  min-height: 32px; padding: 2px 8px; font-size: var(--natives-fs-secondary); cursor: pointer;
+  color: var(--natives-text-primary); background: var(--natives-surface-3);
+  border: 1px solid var(--natives-border); border-radius: 5px;
+}
+.pos-account-head button:hover:not(:disabled) { border-color: var(--natives-accent); }
+.pos-account-head button:disabled { opacity: .4; cursor: default; }
+.pos-account-name { font-size: var(--natives-fs-body); }
+.pos-account-sum { font-size: var(--natives-fs-secondary); color: var(--natives-text-muted); }
+.pos-account-move { margin-left: auto; display: inline-flex; gap: 4px; }
+
+.pos-venue {
+  display: block; font-size: var(--natives-fs-secondary); color: var(--natives-text-muted); font-weight: normal;
+}
+.pos-actions { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; }
+.pos-actions > button {
+  min-height: 32px; padding: 2px 8px; font-size: var(--natives-fs-secondary); cursor: pointer;
+  color: var(--natives-text-primary); background: var(--natives-surface-3);
+  border: 1px solid var(--natives-border); border-radius: 5px;
+}
+.pos-actions > button:hover { border-color: var(--natives-accent); color: var(--natives-accent); }
+.pos-more { display: inline-block; }
+.pos-more > summary {
+  cursor: pointer; list-style: none; padding: 6px 10px; font-size: var(--natives-fs-secondary);
+  box-sizing: border-box; min-height: 32px; white-space: nowrap;
+  color: var(--natives-text-primary); border: 1px solid var(--natives-border); border-radius: 5px;
+}
+.pos-more > summary::-webkit-details-marker { display: none; }
+.pos-more > summary:hover { border-color: var(--natives-accent); color: var(--natives-accent); }
+.pos-more > summary:focus-visible, .pos-action-menu button:focus-visible {
+  outline: 2px solid var(--natives-accent); outline-offset: -2px;
+}
+.pos-action-menu {
+  position: fixed; inset: auto; margin: 0; padding: 8px; box-sizing: border-box;
+  width: min(256px, calc(100vw - 16px)); max-height: calc(100dvh - 16px); overflow: auto;
+  color: var(--natives-text-primary); background: var(--natives-surface-2);
+  border: 1px solid var(--natives-border); border-radius: var(--natives-radius);
+  white-space: normal; overflow-wrap: anywhere;
+}
+.pos-menu-name { margin: 0; padding: 4px 8px 8px; font-size: var(--natives-fs-secondary); font-weight: 600; }
+.pos-action-menu > [role="group"] { border-top: 1px solid var(--natives-border); padding: 4px 0; }
+.pos-menu-group { margin: 0; padding: 4px 8px; font-size: var(--natives-fs-secondary); color: var(--natives-text-muted); }
+.pos-action-menu button {
+  display: block; width: 100%; min-height: 32px; padding: 6px 8px; font-size: var(--natives-fs-secondary); cursor: pointer;
+  text-align: left; font-family: inherit;
+  color: var(--natives-text-primary); background: transparent;
+  border: 0; border-radius: 5px;
+}
+.pos-action-menu button:hover { background: color-mix(in srgb, var(--natives-accent) 10%, transparent); color: var(--natives-accent); }
+.pos-acct-row { display: grid; grid-template-columns: minmax(0,1fr) auto auto; gap: 10px 16px; align-items: center; padding: 12px 14px; border: 1px solid var(--natives-border); border-radius: var(--natives-radius); background: var(--natives-surface); margin-bottom: 10px; }
+.pos-acct-row.is-archived { opacity: .72; background: var(--natives-surface-2); }
+.pos-acct-id { display: flex; align-items: center; gap: 10px; min-width: 0; flex-wrap: wrap; }
+.pos-acct-id b { font-size: var(--natives-fs-body); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pos-acct-badges { display: inline-flex; gap: 6px; }
+.pos-acct-cash { text-align: right; display: grid; gap: 2px; }
+.pos-acct-cash small { color: var(--natives-text-muted); font-size: var(--natives-fs-secondary); }
+.pos-acct-cash b { font-variant-numeric: tabular-nums; }
+.pos-acct-ops { display: flex; gap: 8px; }
+.pos-acct-ops button { border: 1px solid var(--natives-border); background: transparent; color: var(--natives-text-primary); border-radius: var(--natives-radius); padding: 5px 12px; cursor: pointer; font-size: var(--natives-fs-body); min-height: 32px; }
+.pos-acct-ops button:hover { border-color: var(--natives-accent); color: var(--natives-accent); }
+.pos-acct-ops .pos-acct-danger:hover { border-color: var(--natives-danger); color: var(--natives-danger); }
+.pos-acct-head-note { margin: 0 0 12px; font-size: var(--natives-fs-secondary); color: var(--natives-text-muted); }
+.pos-acct-list { margin-bottom: 14px; }
+.pos-acct-create { width: 100%; }
+.pos-acct-pager { display: flex; gap: 10px; justify-content: flex-end; margin-top: 12px; }
+.pos-acct-pager button { border: 1px solid var(--natives-border); background: transparent; color: var(--natives-text-primary); border-radius: var(--natives-radius); padding: 5px 12px; cursor: pointer; }
+.pos-acct-pager button:disabled { opacity: .45; cursor: not-allowed; }
+@media(max-width:640px) { .pos-acct-row { grid-template-columns: minmax(0,1fr); } .pos-acct-cash { text-align: left; } }
+.pos-info-coverage { font-size: var(--natives-fs-secondary); color: var(--natives-text-muted); }
+/* 缺净值／币种未确认的修复入口（内联小按钮，点击打开估值对话框） */
+.pos-quality-btn {
+  font-size: var(--natives-fs-secondary); min-height:32px; padding:3px 6px; cursor:pointer;
+  color: var(--natives-text-muted); background: transparent;
+  border: 1px dashed var(--natives-border); border-radius: 4px;
+}
+.pos-quality-btn:hover { color: var(--natives-accent); border-color: var(--natives-accent); }
+
+/* Archive 主题降饱和（与 home.css 同模式） */
+:root[data-theme="archive"] #view-positions .up { color: color-mix(in srgb, var(--color-up) 65%, var(--natives-text-primary)); }
+:root[data-theme="archive"] #view-positions .down { color: color-mix(in srgb, var(--color-down) 65%, var(--natives-text-primary)); }
+:root[data-theme="archive"] .pos-tab[aria-selected="true"] { color: color-mix(in srgb, var(--natives-accent) 65%, var(--natives-text-primary)); }
+
+.pos-summary { width:100%; padding:12px 0 4px; border-top:1px solid var(--natives-border); order:3; gap:12px 24px; }
+.pos-summary b { font-size:18px; margin-left:6px; }
+.pos-account-head { padding:12px; }
+#positions-status:empty { display:none; }
+@media(max-width:640px) { #view-positions { padding:16px 8px 24px; } .pos-tools { margin-left:0; } .pos-summary { flex-direction:column; } }
+
+.pos-income { min-width:100px; }
+.pos-income small { display:block; line-height:1.5; font-size: var(--natives-fs-secondary); }
+.pos-income-meta, .pos-income-gap { color:var(--natives-text-muted); white-space:normal; }
+.pos-income-gap { max-width:140px; }
+.pos-actions > button { min-height:32px; margin-right:6px; }
+.pos-records-list { display:grid; gap:12px; }
+.pos-records-list article { padding:12px; border:1px solid var(--natives-border); border-radius:var(--natives-radius); }
+.pos-records-list p { overflow-wrap:anywhere; }
+
+/* 每条账户持仓一张卡片；只消费现有主题角色。 */
+#positions-groups { display:grid; gap:16px; }
+.pos-account { background:transparent; border:0; overflow:visible; }
+.pos-account-head { padding:12px 0; }
+.pos-account-sum { min-width:0; overflow-wrap:anywhere; }
+.pos-card-grid { display:grid; align-items:stretch; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; padding-top:16px; }
+.pos-holding-card { min-width:0; display:flex; flex-direction:column; padding:var(--natives-space-4); border:1px solid var(--natives-border); border-radius:var(--fund-holding-card-radius); background:var(--natives-surface); overflow-wrap:anywhere; font-variant-numeric:tabular-nums; }
+.pos-card-head { display:flex; align-items:center; gap:12px; margin-bottom:24px; }
+.pos-card-avatar { width:40px; height:40px; flex-shrink:0; display:grid; place-items:center; border-radius:var(--natives-radius); background:color-mix(in srgb,var(--natives-accent) 10%,var(--natives-surface)); color:var(--natives-accent); font-size:var(--natives-fs-metric); font-weight:600; }
+.pos-card-head .pos-identity { flex:1; }
+.pos-identity { display:grid; gap:4px; min-width:0; }
+.pos-identity h3 { margin:0; font-size:var(--natives-fs-body); line-height:1.5; color:var(--natives-text-primary); }
+.holding-detail-link { width:100%; min-height:var(--natives-space-5); min-width:var(--natives-space-5); padding:0; border:0; background:transparent; color:inherit; font:inherit; text-align:start; cursor:pointer; }
+.holding-detail-link:hover { color:var(--natives-accent); }
+.holding-detail-link:focus-visible { outline:2px solid var(--natives-accent); outline-offset:2px; border-radius:var(--natives-radius); }
+.pos-identity span { font-family:var(--font-mono); font-size:var(--natives-fs-secondary); color:var(--natives-text-muted); }
+.pos-venue { flex-shrink:0; max-width:38%; padding:3px 6px; border:1px solid var(--natives-border); border-radius:var(--natives-radius); }
+.pos-value { display:grid; gap:4px; }
+.pos-value strong { font-size:var(--natives-fs-amount); line-height:1.4; font-weight:650; color:var(--natives-text-primary); }
+.pos-value small { font-size:var(--natives-fs-secondary); color:var(--natives-text-muted); }
+.pos-card-holding { margin:20px 0 0; padding:12px; border-radius:var(--natives-radius); background:var(--natives-surface-2); }
+.pos-card-holding .pos-income { display:flex; flex-wrap:wrap; align-items:baseline; gap:4px 12px; }
+.pos-card-holding .pos-income > span { font-weight:600; }
+.pos-card-holding .pos-income > small:first-child { width:100%; }
+.pos-card-holding .pos-income-meta, .pos-card-holding .pos-income-gap { width:100%; }
+.pos-card-daily { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px; padding:16px 0; border-bottom:1px solid var(--natives-border); }
+.pos-income { min-width:0; }
+.pos-income > small:first-child { color:var(--natives-text-muted); margin-bottom:6px; }
+.pos-income > span { display:block; font-size:var(--natives-fs-body); font-weight:600; }
+.pos-income-gap { max-width:none; }
+.pos-card-status { margin-top:12px; }
+.pos-card-details { margin:8px 0 16px; }
+.pos-card-details > summary { min-height:32px; display:list-item; align-content:center; cursor:pointer; font-size:var(--natives-fs-secondary); color:var(--natives-text-muted); }
+.pos-card-details > summary:focus-visible { outline:2px solid var(--natives-accent); outline-offset:2px; }
+.pos-metrics { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; padding:12px 0 4px; font-size:var(--natives-fs-secondary); }
+.pos-metric { display:grid; gap:4px; min-width:0; align-content:start; }
+.pos-metric small { color:var(--natives-text-muted); font-size:var(--natives-fs-secondary); }
+.pos-metric b > small { display:block; font-weight:400; }
+.pos-metric b { font-family:var(--font-mono); font-weight:600; }
+.pos-metric .up, .pos-metric .down { font-weight:600; }
+.pos-holding-card .pos-actions { margin-top:auto; gap:8px; padding-top:12px; }
+.pos-holding-card .pos-actions > button { margin:0; }
+.pos-holding-card .pos-actions > button:first-child { color:var(--natives-accent); border-color:color-mix(in srgb,var(--natives-accent) 35%,var(--natives-border)); background:color-mix(in srgb,var(--natives-accent) 8%,var(--natives-surface)); }
+.pos-holding-card .pos-more { margin-left:auto; }
+@media(max-width:1280px) { .pos-card-grid { grid-template-columns:repeat(3,minmax(0,1fr)); } }
+@media(max-width:900px) { .pos-card-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+@media(max-width:480px) { .pos-card-grid { grid-template-columns:minmax(0,1fr); gap:12px; } .pos-holding-card { padding:16px; } }
+/* 新增入口共享持仓卡材质，同排拉伸但不改变数据卡详情高度。 */
+.pos-add-card { align-self:start; align-items:flex-start; gap:var(--natives-space-4); color:var(--natives-text-primary); cursor:pointer; min-height:300px; text-align:left; font-family:inherit; font-size:var(--natives-fs-body); border-color:color-mix(in srgb,var(--natives-accent) 35%,var(--natives-border)); background:color-mix(in srgb,var(--natives-accent) 3%,var(--natives-surface)); }
+.pos-add-card:hover { border-color:var(--natives-accent); background:color-mix(in srgb,var(--natives-accent) 7%,var(--natives-surface)); }
+.pos-add-card:focus-visible { outline:2px solid var(--natives-accent); outline-offset:3px; }
+.pos-add-description { color:var(--natives-text-muted); line-height:1.5; font-size:var(--natives-fs-secondary); }
+.pos-add-action { margin-top:auto; padding-top:var(--natives-space-4); width:100%; border-top:1px solid var(--natives-border); color:var(--natives-accent); font-weight:600; }
+/* 能力范围 icon（pos-summary 末尾） */
+.pos-cap-icon { display:inline-flex; align-items:center; justify-content:center; width:var(--natives-space-5); height:var(--natives-space-5); border:1px solid var(--natives-border); border-radius:50%; background:transparent; color:var(--natives-text-muted); cursor:help; padding:0; }
+.pos-cap-icon:hover { color:var(--natives-accent); border-color:var(--natives-accent); }
+.pos-cap-icon .svg-icon { width:12px; height:12px; }
+/* 排序控件 */
+.pos-sort-label { display:inline-flex; align-items:center; gap:6px; font-size:var(--natives-fs-secondary); color:var(--natives-text-muted); }
+.pos-sort-label select { border:1px solid var(--natives-border); background:var(--natives-surface-3); color:var(--natives-text-primary); border-radius:var(--natives-radius); padding:4px 8px; font-size:var(--natives-fs-secondary); min-height:32px; }
+.pos-tab-meta { margin:4px 0 0; font-size: var(--natives-fs-secondary); color:var(--natives-text-muted); }
+.pos-tab-meta[hidden] { display:none; }
+
+/* ===== N09 场外基金操作 ===== */
+.otc-cutoff { display:flex; gap:12px; align-items:center; border:1px solid var(--natives-border); border-radius:var(--natives-radius); padding:6px 10px; margin:0 0 8px; }
+.otc-cutoff legend { font-size:var(--natives-fs-secondary); color:var(--natives-text-muted); padding:0 4px; }
+.otc-cutoff label { display:inline-flex; gap:4px; align-items:center; font-size:var(--natives-fs-body); }
+.otc-check { display:flex; gap:6px; align-items:center; font-size:var(--natives-fs-secondary); color:var(--natives-text-muted); }
+.otc-hint { font-size:var(--natives-fs-secondary); color:var(--natives-text-muted); margin:6px 0; }
+.otc-preview { border:1px dashed var(--natives-border); border-radius:var(--natives-radius); padding:6px 10px; margin:8px 0; }
+.otc-preview-row { display:flex; justify-content:space-between; gap:12px; margin:2px 0; font-size:var(--natives-fs-body); }
+.otc-preview-row span { color:var(--natives-text-muted); }
+.otc-preview-row b { font-variant-numeric:tabular-nums; }
+.otc-quick { display:flex; gap:6px; margin:6px 0; flex-wrap:wrap; }
+.otc-quick button { border:1px solid var(--natives-border); background:transparent; color:var(--natives-text-primary); border-radius:var(--natives-radius); padding:4px 10px; cursor:pointer; font-size:var(--natives-fs-body); }
+.otc-quick button:hover { border-color:var(--natives-accent); color:var(--natives-accent); }
+.otc-orders, .otc-runs { list-style:none; margin:6px 0; padding:0; display:grid; gap:6px; }
+.otc-order, .otc-plan { border:1px solid var(--natives-border); border-radius:var(--natives-radius); padding:6px 10px; font-size:var(--natives-fs-body); }
+.otc-order-meta { margin:2px 0; font-size:var(--natives-fs-secondary); color:var(--natives-text-muted); }
+.otc-order-ops { display:flex; gap:6px; flex-wrap:wrap; }
+.otc-order-ops button { border:1px solid var(--natives-border); background:transparent; color:var(--natives-text-primary); border-radius:var(--natives-radius); padding:2px 8px; cursor:pointer; font-size:var(--natives-fs-secondary); }
+.otc-order-ops button:hover { border-color:var(--natives-accent); color:var(--natives-accent); }
+.otc-badge { display:inline-block; border-radius:4px; padding:1px 6px; font-size:var(--natives-fs-secondary); border:1px solid var(--natives-border); }
+.otc-badge-pending, .otc-badge-active { color:var(--natives-accent); border-color:var(--natives-accent); }
+.otc-badge-confirmed { color:var(--color-up); }
+.otc-badge-cancelled, .otc-badge-paused { color:var(--natives-text-muted); }
+.otc-badge-failed, .otc-badge-ended { color:var(--natives-danger); }
+.otc-empty { color:var(--natives-text-muted); font-size:var(--natives-fs-secondary); }
+.otc-pending-metric b { color:var(--natives-accent); }
+@media(max-width:640px) {
+  .otc-cutoff { flex-wrap:wrap; }
+  .otc-order-ops { gap:4px; }
+}

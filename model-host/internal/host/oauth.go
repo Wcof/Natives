@@ -9,10 +9,9 @@ import (
 	"strings"
 	"time"
 
+	clipadapter "github.com/ldh/natives/model-host/internal/cliproxy"
 	"github.com/ldh/natives/model-host/internal/domain"
 	"github.com/ldh/natives/model-host/internal/nativeio"
-	sdkauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/auth"
-	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 )
 
 func (e *Engine) startOAuth(parent context.Context, raw json.RawMessage) (map[string]string, error) {
@@ -62,11 +61,16 @@ func (e *Engine) startOAuth(parent context.Context, raw json.RawMessage) (map[st
 
 func (e *Engine) runOAuth(ctx context.Context, sessionID, provider, targetAccountID string) {
 	defer func() { e.mu.Lock(); delete(e.sessions, sessionID); e.mu.Unlock() }()
-	record, _, err := e.auth.Login(ctx, provider, e.config, &sdkauth.LoginOptions{NoBrowser: false})
+	// mode/T07：登录、凭据重指与掩码提取在适配层完成；业务只见 AccountView。
+	view, cleanup, err := e.auth.Login(ctx, provider, targetAccountID, maskSecret)
 	if err != nil {
 		state := "failed"
 		code := "oauth_failed"
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		if errors.Is(err, clipadapter.ErrCredentialReplaceFailed) {
+			code = "credential_replace_failed"
+		} else if errors.Is(err, clipadapter.ErrCredentialCleanupFailed) {
+			code = "credential_cleanup_failed"
+		} else if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			state, code = "timeout", "oauth_timeout"
 		} else if ctx.Err() != nil {
 			state, code = "cancelled", "oauth_cancelled"
@@ -76,30 +80,12 @@ func (e *Engine) runOAuth(ctx context.Context, sessionID, provider, targetAccoun
 	}
 	e.secretMu.Lock()
 	defer e.secretMu.Unlock()
-	if targetAccountID != "" && record.ID != targetAccountID {
-		temporaryID := record.ID
-		record = record.Clone()
-		record.ID = targetAccountID
-		if _, saveErr := e.authStore.Save(context.Background(), record); saveErr != nil {
-			_ = e.authStore.Delete(context.Background(), temporaryID)
-			e.emit(nativeio.Response{OK: true, Event: "model_oauth_state_changed", Result: map[string]any{"sessionId": sessionID, "provider": provider, "state": "failed", "errorCode": "credential_replace_failed"}})
-			return
-		}
-		if deleteErr := e.authStore.Delete(context.Background(), temporaryID); deleteErr != nil {
-			e.emit(nativeio.Response{OK: true, Event: "model_oauth_state_changed", Result: map[string]any{"sessionId": sessionID, "provider": provider, "state": "failed", "errorCode": "credential_cleanup_failed"}})
-			return
-		}
-	}
-	mask := ""
-	if token, ok := record.Metadata["access_token"].(string); ok {
-		mask = maskSecret(token)
-	}
 	snapshot, updateErr := e.repo.Update(nil, func(snapshot *domain.Snapshot) error {
 		for index := range snapshot.Accounts {
-			if snapshot.Accounts[index].ID == record.ID {
-				snapshot.Accounts[index].Label = safeLabel(record.Label, provider)
+			if snapshot.Accounts[index].ID == view.ID {
+				snapshot.Accounts[index].Label = safeLabel(view.Label, provider)
 				snapshot.Accounts[index].Status = "active"
-				snapshot.Accounts[index].Mask = mask
+				snapshot.Accounts[index].Mask = view.Mask
 				snapshot.Accounts[index].UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 				return nil
 			}
@@ -107,15 +93,15 @@ func (e *Engine) runOAuth(ctx context.Context, sessionID, provider, targetAccoun
 		if len(snapshot.Accounts) >= 100 {
 			return invalid("OAuth 账户数量已达到上限")
 		}
-		snapshot.Accounts = append(snapshot.Accounts, domain.Account{ID: record.ID, Provider: provider, Label: safeLabel(record.Label, provider), Enabled: true, Status: "active", SecretRef: "oauth:" + record.ID, Mask: mask, UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano)})
+		snapshot.Accounts = append(snapshot.Accounts, domain.Account{ID: view.ID, Provider: provider, Label: safeLabel(view.Label, provider), Enabled: true, Status: "active", SecretRef: "oauth:" + view.ID, Mask: view.Mask, UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano)})
 		return nil
 	})
 	if updateErr != nil {
-		_ = e.authStore.Delete(context.Background(), record.ID)
+		_ = cleanup(context.Background())
 		e.emit(nativeio.Response{OK: true, Event: "model_oauth_state_changed", Result: map[string]any{"sessionId": sessionID, "provider": provider, "state": "failed", "errorCode": "metadata_save_failed"}})
 		return
 	}
-	if syncErr := e.runtime.SyncAuth(context.Background(), record); syncErr != nil {
+	if syncErr := e.runtime.SyncAccount(context.Background(), e.authStore, view.ID); syncErr != nil {
 		e.emit(nativeio.Response{OK: true, Event: "model_oauth_state_changed", Result: map[string]any{"sessionId": sessionID, "provider": provider, "state": "failed", "errorCode": "runtime_sync_failed"}})
 		return
 	}
@@ -173,12 +159,11 @@ func (e *Engine) setAccountEnabled(raw json.RawMessage) (domain.Snapshot, error)
 	if err != nil {
 		return domain.Snapshot{}, err
 	}
-	credentials, err := e.authStore.List(context.Background())
+	views, err := e.authStore.AccountViews(context.Background())
 	if err != nil {
 		return domain.Snapshot{}, err
 	}
-	credentialIndex := slices.IndexFunc(credentials, func(credential *coreauth.Auth) bool { return credential.ID == input.AccountID })
-	if credentialIndex < 0 {
+	if !slices.ContainsFunc(views, func(view clipadapter.AccountView) bool { return view.ID == input.AccountID }) {
 		return domain.Snapshot{}, &SafeError{Code: "secret_not_configured", Message: "账户凭证不存在，请重新授权"}
 	}
 	originalEnabled := account.Enabled
@@ -194,16 +179,15 @@ func (e *Engine) setAccountEnabled(raw json.RawMessage) (domain.Snapshot, error)
 	}); err != nil {
 		return domain.Snapshot{}, err
 	}
-	credential := credentials[credentialIndex].Clone()
-	credential.Disabled = !*input.Enabled
-	credential.Status = coreauth.StatusActive
-	if credential.Disabled {
-		credential.Status = coreauth.StatusDisabled
+	// mode/T07：克隆/状态变更/持久化/补偿在适配层（SwapAccountDisabled）。
+	rollback, swapErr := e.authStore.SwapAccountDisabled(context.Background(), input.AccountID, !*input.Enabled)
+	if swapErr == nil {
+		if syncErr := e.runtime.SyncAccount(context.Background(), e.authStore, input.AccountID); syncErr != nil {
+			_ = rollback(context.Background())
+			swapErr = syncErr
+		}
 	}
-	if _, err = e.authStore.Save(context.Background(), credential); err == nil {
-		err = e.runtime.SyncAuth(context.Background(), credential)
-	}
-	if err != nil {
+	if swapErr != nil {
 		_, _ = e.repo.Update(nil, func(snapshot *domain.Snapshot) error {
 			account, findErr := findAccount(snapshot, input.AccountID)
 			if findErr == nil {
@@ -211,9 +195,11 @@ func (e *Engine) setAccountEnabled(raw json.RawMessage) (domain.Snapshot, error)
 			}
 			return findErr
 		})
-		_, _ = e.authStore.Save(context.Background(), credentials[credentialIndex])
-		_ = e.runtime.SyncAuth(context.Background(), credentials[credentialIndex])
-		return domain.Snapshot{}, err
+		if rollback != nil {
+			_ = rollback(context.Background())
+			_ = e.runtime.SyncAccount(context.Background(), e.authStore, input.AccountID)
+		}
+		return domain.Snapshot{}, swapErr
 	}
 	return e.repo.Load()
 }
@@ -241,13 +227,10 @@ func (e *Engine) deleteAccount(raw json.RawMessage) (domain.Snapshot, error) {
 	if _, err = findAccount(&current, input.AccountID); err != nil {
 		return domain.Snapshot{}, err
 	}
-	credentials, err := e.authStore.List(context.Background())
-	if err != nil {
-		return domain.Snapshot{}, err
-	}
-	credentialIndex := slices.IndexFunc(credentials, func(credential *coreauth.Auth) bool { return credential.ID == input.AccountID })
-	if err = e.authStore.Delete(context.Background(), input.AccountID); err != nil {
-		return domain.Snapshot{}, err
+	// mode/T07：删除与补偿在适配层（DeleteAccount 返回恢复原记录的 undo）。
+	undo, deleteErr := e.authStore.DeleteAccount(context.Background(), input.AccountID)
+	if deleteErr != nil {
+		return domain.Snapshot{}, deleteErr
 	}
 	snapshot, err := e.repo.Update(input.ExpectedRevision, func(snapshot *domain.Snapshot) error {
 		if _, findErr := findAccount(snapshot, input.AccountID); findErr != nil {
@@ -258,8 +241,8 @@ func (e *Engine) deleteAccount(raw json.RawMessage) (domain.Snapshot, error) {
 		return nil
 	})
 	if err != nil {
-		if credentialIndex >= 0 {
-			_, _ = e.authStore.Save(context.Background(), credentials[credentialIndex])
+		if undo != nil {
+			_ = undo(context.Background())
 		}
 		return domain.Snapshot{}, err
 	}
@@ -278,25 +261,27 @@ func safeLabel(label, provider string) string {
 	return label
 }
 
-func syncAccountFromCredential(repo *domain.Repository, emit func(nativeio.Response), credential *coreauth.Auth) error {
+// syncAccountFromView 消费适配层的项目视图（mode/T07）：SDK 状态枚举与
+// 明文令牌不再进入本包；掩码由适配层按注入的 maskSecret 预先计算。
+func syncAccountFromView(repo *domain.Repository, emit func(nativeio.Response), view clipadapter.AccountView) error {
 	current, err := repo.Load()
 	if err != nil {
 		return err
 	}
-	if slices.IndexFunc(current.Accounts, func(account domain.Account) bool { return account.ID == credential.ID }) < 0 {
+	if slices.IndexFunc(current.Accounts, func(account domain.Account) bool { return account.ID == view.ID }) < 0 {
 		return nil
 	}
 	snapshot, err := repo.Update(nil, func(snapshot *domain.Snapshot) error {
-		account, findErr := findAccount(snapshot, credential.ID)
+		account, findErr := findAccount(snapshot, view.ID)
 		if findErr != nil {
 			return findErr
 		}
 		account.Status = "active"
-		if credential.Status == coreauth.StatusError && (credential.LastError == nil || !credential.LastError.Retryable) {
+		if view.Status == clipadapter.AccountStatusError && !view.LastErrorRetryable {
 			account.Status = "needs_reauth"
 		}
-		if token, ok := credential.Metadata["access_token"].(string); ok {
-			account.Mask = maskSecret(token)
+		if view.Mask != "" {
+			account.Mask = view.Mask
 		}
 		account.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 		return nil

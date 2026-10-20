@@ -4,6 +4,7 @@ package host
 // 命名沿用现有 model_* 协议；只返回状态与汇总，不返回原始日志正文和 Secret。
 
 import (
+	"context"
 	"encoding/json"
 	"time"
 
@@ -141,12 +142,12 @@ func (e *Engine) getUsageBilling(raw json.RawMessage) (*usage.BillingResult, err
 	return result, nil
 }
 
-// collectUsage 执行全量增量日志扫描采集。
-func (e *Engine) collectUsage() (*usage.CollectSummary, error) {
+// collectUsage 执行全量增量日志扫描采集（ctx 贯穿遍历与入库）。
+func (e *Engine) collectUsage(ctx context.Context) (*usage.CollectSummary, error) {
 	if e.usageStore == nil {
 		return nil, invalid("使用记录存储未就绪")
 	}
-	return e.usageStore.CollectSources()
+	return e.usageStore.CollectSources(ctx)
 }
 
 // dismissUsageInsight 忽略一条降本建议（按 ruleKey，7 天后到期自动恢复）。

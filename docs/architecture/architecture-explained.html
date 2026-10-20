@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Natives 架构，用简单的话说明</title>
+  <style>
+    :root {
+      --background: #f4f5f7;
+      --surface: #ffffff;
+      --text: #202a39;
+      --secondary: #526071;
+      --border: #dce1e8;
+      --primary: #294fb4;
+      --primary-soft: #edf2ff;
+      --warning: #834315;
+      --warning-soft: #fff5e9;
+      --success: #216348;
+      --success-soft: #edf8f1;
+    }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--background); color: var(--text); font: 16px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif; }
+    main { max-width: 960px; margin: auto; padding: 40px 24px 48px; }
+    h1, h2, h3, p { margin: 0; }
+    h1 { font-size: clamp(28px, 4vw, 40px); line-height: 1.3; letter-spacing: -.03em; margin: 12px 0; }
+    h2 { font-size: 23px; line-height: 1.4; }
+    h3 { font-size: 18px; }
+    p + p { margin-top: 8px; }
+    .eyebrow, .muted { color: var(--secondary); }
+    .eyebrow { font-size: 13px; letter-spacing: .08em; }
+    .lead { font-size: 19px; max-width: 760px; }
+    .tag { display: inline-block; border-radius: 6px; padding: 3px 9px; background: var(--primary-soft); color: var(--primary); font-size: 13px; margin-top: 14px; }
+    nav { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 20px; }
+    a { color: var(--primary); text-underline-offset: 3px; }
+    nav a { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 7px 12px; text-decoration: none; }
+    a:focus-visible, summary:focus-visible { outline: 3px solid var(--primary); outline-offset: 4px; }
+    section { margin-top: 24px; padding: 24px; background: var(--surface); border: 1px solid var(--border); border-radius: 16px; scroll-margin-top: 16px; }
+    .heading { display: flex; align-items: baseline; gap: 12px; margin-bottom: 8px; }
+    .number { color: var(--primary); font-size: 14px; font-weight: 700; }
+    .grid { display: grid; gap: 12px; margin-top: 16px; }
+    .three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .card { padding: 16px; border: 1px solid var(--border); border-radius: 10px; }
+    .card p { color: var(--secondary); margin-top: 5px; }
+    .card small { display: block; color: var(--secondary); margin-top: 8px; }
+    .note { background: var(--primary-soft); border-radius: 8px; padding: 12px 16px; margin-top: 16px; }
+    .before { background: var(--warning-soft); border-color: #ead6bd; }
+    .after { background: var(--success-soft); border-color: #c5dfd1; }
+    .before h3 { color: var(--warning); }
+    .after h3 { color: var(--success); }
+    .flow { display: grid; justify-items: center; gap: 4px; margin: 16px 0; }
+    .node { width: 100%; text-align: center; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px; }
+    .arrow { font-size: 20px; line-height: 1.2; color: var(--secondary); }
+    .roles { list-style: none; padding: 0; margin: 16px 0 0; }
+    .roles li { display: grid; grid-template-columns: 100px 1fr; gap: 12px; padding: 12px 0; border-bottom: 1px solid var(--border); }
+    .roles li:last-child { border-bottom: 0; }
+    .roles span { color: var(--secondary); }
+    .steps { margin: 16px 0 0; padding-left: 24px; }
+    .steps li { padding-left: 5px; margin: 10px 0; }
+    .steps span { color: var(--secondary); }
+    .boundary { margin-top: 16px; display: grid; gap: 8px; }
+    .boundary p { margin: 0; padding: 10px 12px; background: var(--background); border-radius: 8px; }
+    details { margin-top: 16px; border-top: 1px solid var(--border); padding-top: 12px; }
+    summary { cursor: pointer; color: var(--primary); padding: 4px 0; }
+    details p { margin-top: 10px; color: var(--secondary); }
+    footer { font-size: 13px; color: var(--secondary); margin-top: 20px; }
+    @media (max-width: 650px) {
+      main { padding: 24px 16px; }
+      section { padding: 18px; }
+      .three, .two { grid-template-columns: 1fr; }
+      .lead { font-size: 17px; }
+      .roles li { grid-template-columns: 72px 1fr; }
+    }
+    @media print {
+      body { background: var(--surface); }
+      main { padding: 0; }
+      nav { display: none; }
+      section, .card { break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <p class="eyebrow">NATIVES · 架构说明</p>
+      <h1>大结构保留，把里面的分工理清楚。</h1>
+      <p class="lead">可以把项目想成一家公司：部门已经分好了，但有些工作还在互相插手。我要调整的是职责和交接方式。</p>
+      <p class="tag">解释与建议 · 尚未实施这些架构调整</p>
+      <nav aria-label="页面导航">
+        <a href="#current">现在怎么分</a>
+        <a href="#problem">问题在哪里</a>
+        <a href="#change">怎么调整</a>
+        <a href="#example">看一个例子</a>
+      </nav>
+    </header>
+
+    <section id="current" aria-labelledby="current-title">
+      <div class="heading"><span class="number">01</span><h2 id="current-title">现在的大结构，基本合理</h2></div>
+      <p class="muted">你安装的是一个 Natives。背后有三类程序，各管一类事。</p>
+      <div class="grid three">
+        <article class="card"><h3>管文件</h3><p>文件浏览、搜索、修改，以及产品登记。</p><small>代码名称：Files Host</small></article>
+        <article class="card"><h3>管 AI</h3><p>模型连接、凭据、代理、用量和费用。</p><small>代码名称：Model Host</small></article>
+        <article class="card"><h3>运行内置应用</h3><p>打开投资或用量应用时，启动对应实例。</p><small>代码名称：App Runtime</small></article>
+      </div>
+      <p class="note"><strong>这一层保留。</strong>投资内部的记账、估值、通知，可以各自有模块，但不必各自启动一个新程序。</p>
+    </section>
+
+    <section id="problem" aria-labelledby="problem-title">
+      <div class="heading"><span class="number">02</span><h2 id="problem-title">问题：分了文件，还没有完全分清职责</h2></div>
+      <p class="muted">举一个源码中已经看到的例子：后台通知任务，借用了网页接口来发送通知。</p>
+      <div class="grid two">
+        <article class="card before">
+          <h3>当前：后台工作绕到网页接口</h3>
+          <div class="flow" aria-label="当前调用：后台通知任务调用网页接口处理函数，再执行发送业务">
+            <div class="node">后台通知任务</div><span class="arrow" aria-hidden="true">↓</span>
+            <div class="node">网页接口处理函数</div><span class="arrow" aria-hidden="true">↓</span>
+            <div class="node">发送通知</div>
+          </div>
+          <p>后台任务也要理解网页请求格式。网页接口一改，后台可能也要跟着改。</p>
+        </article>
+        <article class="card after">
+          <h3>建议：两种入口，共用通知模块</h3>
+          <div class="flow" aria-label="建议调用：网页接口和后台任务分别调用通知模块，再发送通知">
+            <div class="node">网页接口 ／ 后台任务</div><span class="arrow" aria-hidden="true">↓</span>
+            <div class="node"><strong>通知模块的公开操作</strong></div><span class="arrow" aria-hidden="true">↓</span>
+            <div class="node">发送通知</div>
+          </div>
+          <p>调用方只说“发送这条已确认的通知”，不用知道里面怎么发。</p>
+        </article>
+      </div>
+      <p class="note">前端也有类似问题：持仓编辑直接读取首页内部状态。建议改成公开查询或事件，让首页自己管理状态。</p>
+    </section>
+
+    <section id="change" aria-labelledby="change-title">
+      <div class="heading"><span class="number">03</span><h2 id="change-title">我会怎样调整投资模块</h2></div>
+      <p class="muted">同一个投资应用里，明确下面五类工作。优先整理现有代码，不另造一套系统。</p>
+      <ul class="roles">
+        <li><strong>记账</strong><span>管交易、持仓、成本和现金。钱与数量以这里为准。</span></li>
+        <li><strong>算价值</strong><span>统一计算市值和收益。首页、持仓、卡片共用结果。</span></li>
+        <li><strong>取数据</strong><span>取行情、净值和资讯。取不到就说明缺失，不编数字。</span></li>
+        <li><strong>做分析</strong><span>使用确认的数据做目标、机会和报告，不另算一套账。</span></li>
+        <li><strong>发通知</strong><span>管发送确认、渠道、去重和重试，不接管记账。</span></li>
+      </ul>
+      <p class="note"><strong>“内部 API”就是模块的办事入口。</strong>例如“更正这笔交易”“获取当前估值”。同一程序里直接调用函数即可，不用都变成网络接口。</p>
+    </section>
+
+    <section id="example" aria-labelledby="example-title">
+      <div class="heading"><span class="number">04</span><h2 id="example-title">用“记一笔买入”理解调整后的流程</h2></div>
+      <p class="muted">这是建议的职责分工示意，不是实际交易数据。</p>
+      <ol class="steps">
+        <li><strong>页面收集你的输入。</strong><br><span>把买入数量、价格等交给业务入口。</span></li>
+        <li><strong>记账模块统一保存。</strong><br><span>交易、持仓、现金一起成功，或一起撤销，不能只写一半。</span></li>
+        <li><strong>估值模块计算结果。</strong><br><span>有可信价格就计算；缺价格就明确告诉你。</span></li>
+        <li><strong>首页、持仓、卡片显示同一口径。</strong><br><span>各自负责展示，不各自重算一套金额。</span></li>
+      </ol>
+      <p class="note"><strong>投资仍使用一个权威数据库。</strong>拆分职责，不拆散必须一起成功的记账操作。</p>
+      <div class="boundary">
+        <p><strong>代码要修：</strong>固定创建时间、吞掉读取错误、反向调用、直接访问内部对象。</p>
+        <p><strong>规范要补：</strong>接口文档与代码对齐，明确公共状态、动作注册和检查规则。</p>
+        <p><strong>大结构保留：</strong>一个产品、现有三类程序、应用按需运行。</p>
+      </div>
+      <details>
+        <summary>“做得好”的判断标准是什么？</summary>
+        <p>改通知渠道，不必改账本；改页面布局，不必改收益算法；通知失败，仍能正常记账；升级失败，用户数据仍然保留。</p>
+        <p>这些结果需要通过接口、异常路径、关闭回收和升级测试验证。把文件拆小，不能代替验证。</p>
+      </details>
+    </section>
+    <footer>
+      <p>依据 2026 年 10 月 4 日源码审计整理。此页是独立说明文档，不属于产品 UI，也不替代工程规范或发布验收。</p>
+      <p><a href="ARCHITECTURE.md">现行架构</a> · <a href="../standards/README.md">工程规范</a></p>
+    </footer>
+  </main>
+</body>
+</html>

@@ -1,7 +1,7 @@
 # 前端 01 · Extension 结构与模块边界
 
-> 版本：4.0.0 · 日期：2026-09-14
-> 当前源码：`extension/`
+> 版本：4.1.0 · 日期：2026-10-04
+> 当前源码：`extension/`；通用结构规则也适用于 `modules/<appId>/ui/src`，模块构建与 sandbox 另遵守技术 07。
 
 ## 当前目录角色
 
@@ -48,6 +48,7 @@ page controller → domain controller/renderer → domain client/pure helper
 - client 不 import 页面或 DOM；renderer 不直连 Chrome Native Messaging。
 - Widget/background definition 不反向 import `space-dashboard.js`。
 - 模块业务代码不进入 Extension；`app.js` 保持通用。
+- 依赖分析包含静态 import、字面量动态 import 与 re-export；Broker／client 不能反向加载 controller。通过 controller 注入所需操作，检查所有生产入口，详见 [技术 08](../technical/08-module-boundaries-and-contracts.md)。
 
 #### R-E4 · Native 通信只经领域 client
 

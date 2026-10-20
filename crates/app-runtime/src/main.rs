@@ -17,11 +17,11 @@ use app_runtime_core::origin::chrome_extension_origin;
 use app_runtime_core::protocol::{AppRequest, APP_PROTOCOL_VERSION_V2};
 use app_runtime_core::session::SessionManager;
 use std::sync::atomic::{AtomicBool, AtomicU16, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 #[cfg(feature = "test-fixture")]
 use fixtures::SecondFixtureModule;
-use http::{apps_root};
+use http::apps_root;
 
 // ---------------------------------------------------------------------------
 // Runtime 状态机（计划 §10）：合法迁移
@@ -33,14 +33,20 @@ use http::{apps_root};
 /// 已绑定 appId 的运行时（握手成功，模块已 initialize）。
 pub(crate) struct BoundRuntime {
     pub(crate) app_id: String,
+    pub(crate) activation_generation: u64,
     pub(crate) instance_id: String,
     pub(crate) module: Arc<Mutex<Box<dyn BuiltInAppModule>>>,
+    /// 已核验激活收据声明的能力（ADR-0038 app:secret 能力门）。
+    pub(crate) capabilities: Vec<String>,
+    /// 与注入模块上下文同一 Keychain 命名空间的 Secret 窄能力。
+    pub(crate) secrets: Arc<app_runtime_core::secrets::SecretStore>,
     pub(crate) _lease: RuntimeLease,
 }
 
 /// 就绪运行时：会话管理器与 loopback 监听已提交（端口经 LOOPBACK_PORT 共享）。
 pub(crate) struct ReadyRuntime {
     pub(crate) bound: BoundRuntime,
+    pub(crate) service: Arc<dyn app_runtime_core::module::ModuleService>,
     pub(crate) sessions: Arc<Mutex<SessionManager>>,
 }
 
@@ -79,6 +85,7 @@ pub(crate) static HTTP_LIMITS: app_runtime_core::limits::RuntimeLimits =
 
 /// 全局 Runtime 状态（进程级单实例；HTTP 线程与主循环共享同一状态机）。
 pub(crate) static CONTROLLER_STATE: Mutex<ControllerState> = Mutex::new(ControllerState::Booting);
+pub(crate) static PARENT_ORIGIN: OnceLock<String> = OnceLock::new();
 
 fn create_module_registry() -> ModuleRegistry {
     let mut registry = ModuleRegistry::new();
@@ -89,14 +96,7 @@ fn create_module_registry() -> ModuleRegistry {
 /// 模块静态注入入口：只注册真实官方模块（modules/registry.json，ADR-0031）。
 /// test-fixture feature（计划 §44）仅用于 CI 验证多模块架构，禁止进入 Release Runtime。
 fn register_builtin_modules(registry: &mut ModuleRegistry) {
-    registry.register(
-        "fund",
-        Box::new(|| Box::new(fund_module::FundModule::new())),
-    );
-    registry.register(
-        "tokenusage",
-        Box::new(|| Box::new(tokenusage_module::TokenUsageModule::new())),
-    );
+    include!(concat!(env!("OUT_DIR"), "/module_registry.rs"));
     #[cfg(feature = "test-fixture")]
     registry.register("fixture-second", Box::new(|| Box::new(SecondFixtureModule)));
 }
@@ -126,6 +126,7 @@ fn main() {
             std::process::exit(2);
         }
     };
+    let _ = PARENT_ORIGIN.set(origin.trim_end_matches('/').to_string());
 
     let apps_root = apps_root();
     let controller = Arc::new(Controller::new());

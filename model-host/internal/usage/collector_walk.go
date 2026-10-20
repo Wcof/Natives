@@ -1,8 +1,11 @@
 package usage
 
 // 游标、指纹与目录遍历（collector 的持久化辅助；整改 E1）。
+// F8 收口：遍历有 context 贯穿、访问节点与目录扇出有上限、错误列表有上限；
+// 达到限制以 budget_exceeded/cancelled 显式披露，不静默截断。
 
 import (
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"os"
@@ -70,67 +73,118 @@ func (s *Store) saveSourceRunState(st SourceRunStatus) {
 	)
 }
 
+// walkBudget 为一次遍历的累计预算（节点访问、错误列表）。
+type walkBudget struct {
+	nodes   int
+	errs    []SourceFileError
+	errsCut int // 超出上限被省略的错误数
+}
+
+func (b *walkBudget) addError(err SourceFileError) {
+	if len(b.errs) >= maxFileErrors {
+		b.errsCut++
+		return
+	}
+	b.errs = append(b.errs, err)
+}
+
+func (b *walkBudget) budgetExceeded(path, message string) {
+	b.addError(SourceFileError{Path: filepath.Base(path), Code: "budget_exceeded", Message: message})
+}
+
 // findFilesWithExt 遍历目录收集指定扩展名的普通文件（整改 E1 §5.1.5/§5.1.6）：
-//   - 不吞 filepath.Walk 错误：逐路径错误记入 fileErrs 并继续，根级错误返回 error；
+//   - 不吞遍历错误：逐路径错误记入 errs 并继续，根级错误返回 error；
 //   - 拒绝 symlink 与非普通文件（不越过授权根目录）；
-//   - 文件数量上限 maxFilesPerSource，超限记 budget_exceeded。
-func findFilesWithExt(dir string, ext string) ([]string, []SourceFileError, error) {
-	var files []string
-	var errs []SourceFileError
+//   - 文件数量上限 maxFilesPerSource、访问节点上限 maxWalkNodesPerSource、
+//     单目录扇出上限 maxDirEntriesPerDir、错误列表上限 maxFileErrors，
+//     超限记 budget_exceeded（F8）；
+//   - ctx 取消即刻停止遍历，并以 cancelled 错误显式披露（已收集文件仍返回）。
+func findFilesWithExt(ctx context.Context, dir string, ext string) ([]string, []SourceFileError, error) {
 	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
 		return nil, nil, nil // 目录不存在不是错误（未安装）
 	}
-	walkErr := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+	budget := &walkBudget{}
+	var files []string
+	stopped := false
+
+	var walk func(path string, depth int)
+	walk = func(path string, depth int) {
+		if stopped {
+			return
+		}
+		if err := ctx.Err(); err != nil {
+			budget.addError(SourceFileError{
+				Path:    filepath.Base(path),
+				Code:    "cancelled",
+				Message: "walk cancelled",
+			})
+			stopped = true
+			return
+		}
+		entries, err := os.ReadDir(path)
 		if err != nil {
-			errs = append(errs, SourceFileError{
+			budget.addError(SourceFileError{
 				Path:    filepath.Base(path),
 				Code:    "walk_failed",
 				Message: err.Error(),
 			})
-			return nil // 单路径失败不终止整棵树（partial 语义）
+			return
 		}
-		if info == nil {
-			return nil
+		if len(entries) > maxDirEntriesPerDir {
+			budget.budgetExceeded(path, fmt.Sprintf("directory fan-out limit %d exceeded (%d entries)", maxDirEntriesPerDir, len(entries)))
+			entries = entries[:maxDirEntriesPerDir] // 文件名序截断：确定性且不重复扫描
 		}
-		mode := info.Mode()
-		switch {
-		case mode&os.ModeSymlink != 0:
-			errs = append(errs, SourceFileError{
-				Path:    filepath.Base(path),
-				Code:    "symlink_refused",
-				Message: "symlink refused (would escape authorized root)",
-			})
-			if info.IsDir() {
-				return filepath.SkipDir
+		for _, entry := range entries {
+			if stopped {
+				return
 			}
-			return nil
-		case !mode.IsRegular():
-			if !info.IsDir() {
-				errs = append(errs, SourceFileError{
-					Path:    filepath.Base(path),
+			if budget.nodes++; budget.nodes > maxWalkNodesPerSource {
+				budget.budgetExceeded(path, fmt.Sprintf("walk node limit %d exceeded", maxWalkNodesPerSource))
+				stopped = true
+				return
+			}
+			child := filepath.Join(path, entry.Name())
+			mode := entry.Type()
+			switch {
+			case mode&os.ModeSymlink != 0:
+				budget.addError(SourceFileError{
+					Path:    filepath.Base(child),
+					Code:    "symlink_refused",
+					Message: "symlink refused (would escape authorized root)",
+				})
+				if entry.IsDir() {
+					return // 不递归 symlink 目录
+				}
+			case !mode.IsRegular() && !entry.IsDir():
+				budget.addError(SourceFileError{
+					Path:    filepath.Base(child),
 					Code:    "non_regular_file_refused",
 					Message: "non-regular file refused",
 				})
+			case entry.IsDir():
+				walk(child, depth+1)
+			default:
+				if strings.HasSuffix(child, ext) {
+					if len(files) >= maxFilesPerSource {
+						budget.budgetExceeded(child, fmt.Sprintf("file count limit %d exceeded", maxFilesPerSource))
+						stopped = true
+						return
+					}
+					files = append(files, child)
+				}
 			}
-			return nil
-		case info.IsDir():
-			return nil
 		}
-		if strings.HasSuffix(path, ext) {
-			if len(files) >= maxFilesPerSource {
-				errs = append(errs, SourceFileError{
-					Path:    filepath.Base(path),
-					Code:    "budget_exceeded",
-					Message: fmt.Sprintf("file count limit %d exceeded", maxFilesPerSource),
-				})
-				return filepath.SkipAll
-			}
-			files = append(files, path)
-		}
-		return nil
-	})
-	if walkErr != nil {
-		return files, errs, walkErr
 	}
-	return files, errs, nil
+	walk(dir, 0)
+	if len(budget.errs) > 0 || budget.errsCut > 0 {
+		if budget.errsCut > 0 {
+			budget.addError(SourceFileError{
+				Path:    filepath.Base(dir),
+				Code:    "budget_exceeded",
+				Message: fmt.Sprintf("%d additional errors omitted (error list limit %d)", budget.errsCut, maxFileErrors),
+			})
+		}
+		return files, budget.errs, nil
+	}
+	return files, budget.errs, nil
 }

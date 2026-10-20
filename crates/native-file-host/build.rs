@@ -68,12 +68,18 @@ fn main() {
             "registry appId must match module.json appId"
         );
         rows.push(format!(
-            "    crate::app_product::FixedModule {{\n        app_id: \"{app_id}\",\n        name_zh: \"{}\",\n        name_en: \"{}\",\n        description_zh: \"{}\",\n        description_en: \"{}\",\n        entry_route: \"{}\",\n    }},",
+            "    crate::app_product::FixedModule {{\n        app_id: \"{app_id}\",\n        name_zh: \"{}\",\n        name_en: \"{}\",\n        description_zh: \"{}\",\n        description_en: \"{}\",\n        entry_route: \"{}\",\n        module_api_version: {},\n        data_schema_version: {},\n        capability_version: {},\n        capabilities_json: r#\"{}\"#,\n        requires_json: r#\"{}\"#,\n        views_json: r#\"{}\"#,\n    }},",
             localized(&module, "displayName", "zh_CN"),
             localized(&module, "displayName", "en"),
             localized(&module, "description", "zh_CN"),
             localized(&module, "description", "en"),
             json_str(&module, "entryRoute"),
+            module.get("moduleApiVersion").and_then(serde_json::Value::as_u64).unwrap(),
+            module.get("dataSchemaVersion").and_then(serde_json::Value::as_u64).unwrap(),
+            module.get("capabilityVersion").and_then(serde_json::Value::as_u64).unwrap(),
+            module.get("capabilities").cloned().unwrap_or_else(|| serde_json::json!([])),
+            module.get("requires").cloned().unwrap_or_else(|| serde_json::json!([])),
+            module.get("views").cloned().unwrap_or_else(|| serde_json::json!([])),
         ));
     }
 

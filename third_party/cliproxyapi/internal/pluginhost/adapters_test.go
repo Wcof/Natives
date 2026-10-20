@@ -8,20 +8,21 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
-	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
-	sdkaccess "github.com/router-for-me/CLIProxyAPI/v7/sdk/access"
-	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
-	coreexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
-	coreusage "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
-	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginabi"
-	"github.com/router-for-me/CLIProxyAPI/v7/sdk/pluginapi"
-	sdktranslator "github.com/router-for-me/CLIProxyAPI/v7/sdk/translator"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/config"
+	"github.com/router-for-me/CLIProxyAPI/v8/internal/registry"
+	sdkaccess "github.com/router-for-me/CLIProxyAPI/v8/sdk/access"
+	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
+	coreexecutor "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/executor"
+	coreusage "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/usage"
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginabi"
+	"github.com/router-for-me/CLIProxyAPI/v8/sdk/pluginapi"
+	sdktranslator "github.com/router-for-me/CLIProxyAPI/v8/sdk/translator"
 )
 
 func TestPluginModelInfoToRegistryModelInfoClonesThinkingAndSlices(t *testing.T) {
@@ -1357,6 +1358,79 @@ func TestInterceptRequestAfterAuthPassesTargetFormat(t *testing.T) {
 
 	if string(got.Body) != "body|after" {
 		t.Fatalf("body = %q, want body|after", got.Body)
+	}
+}
+
+func TestInterceptRequestPropagatesPath_Issue6196(t *testing.T) {
+	host := newHostWithRecords(capabilityRecord{
+		id: "path-rewriter",
+		plugin: pluginapi.Plugin{Capabilities: pluginapi.Capabilities{
+			RequestInterceptor: requestInterceptorFunc(func(ctx context.Context, req pluginapi.RequestInterceptRequest) (pluginapi.RequestInterceptResponse, error) {
+				return pluginapi.RequestInterceptResponse{
+					Path: "/v1/images/generations",
+					Body: []byte(`{"model":"gpt-image-2.5"}`),
+				}, nil
+			}),
+		}},
+	})
+
+	got := host.InterceptRequestAfterAuth(context.Background(), pluginapi.RequestInterceptRequest{
+		SourceFormat: "openai-image",
+		Model:        "gpt-image-2.5",
+		Body:         []byte(`{"model":"gpt-image-2.5"}`),
+	})
+
+	if got.Path != "/v1/images/generations" {
+		t.Fatalf("got.Path = %q, want /v1/images/generations", got.Path)
+	}
+	if string(got.Body) != `{"model":"gpt-image-2.5"}` {
+		t.Fatalf("got.Body = %s, want expected body", string(got.Body))
+	}
+}
+
+func TestInterceptRequestPropagatesPathAcrossPluginChain_Issue6196(t *testing.T) {
+	var secondPluginSeenPath any
+	host := newHostWithRecords(
+		capabilityRecord{
+			id:       "first-path-rewriter",
+			priority: 20,
+			plugin: pluginapi.Plugin{Capabilities: pluginapi.Capabilities{
+				RequestInterceptor: requestInterceptorFunc(func(ctx context.Context, req pluginapi.RequestInterceptRequest) (pluginapi.RequestInterceptResponse, error) {
+					return pluginapi.RequestInterceptResponse{
+						Path: "/v1/images/generations",
+						Body: []byte(`{"model":"gpt-image-2.5","rewritten":true}`),
+					}, nil
+				}),
+			}},
+		},
+		capabilityRecord{
+			id:       "second-downstream-observer",
+			priority: 10,
+			plugin: pluginapi.Plugin{Capabilities: pluginapi.Capabilities{
+				RequestInterceptor: requestInterceptorFunc(func(ctx context.Context, req pluginapi.RequestInterceptRequest) (pluginapi.RequestInterceptResponse, error) {
+					if req.Metadata != nil {
+						secondPluginSeenPath = req.Metadata[coreexecutor.RequestPathMetadataKey]
+					}
+					return pluginapi.RequestInterceptResponse{}, nil
+				}),
+			}},
+		},
+	)
+
+	got := host.InterceptRequestAfterAuth(context.Background(), pluginapi.RequestInterceptRequest{
+		SourceFormat: "openai-image",
+		Model:        "gpt-image-2.5",
+		Body:         []byte(`{"model":"gpt-image-2.5"}`),
+		Metadata: map[string]any{
+			coreexecutor.RequestPathMetadataKey: "/v1/images/edits",
+		},
+	})
+
+	if got.Path != "/v1/images/generations" {
+		t.Fatalf("got.Path = %q, want /v1/images/generations", got.Path)
+	}
+	if secondPluginSeenPath != "/v1/images/generations" {
+		t.Fatalf("second plugin saw path = %v, want /v1/images/generations", secondPluginSeenPath)
 	}
 }
 
@@ -2933,6 +3007,37 @@ func TestAccessAdapterAuthenticateFailures(t *testing.T) {
 	}
 }
 
+func TestAccessAdapterAuthenticateMaxBytesErrorReturns413(t *testing.T) {
+	host := New()
+	called := false
+	adapter := newAccessAdapterForTest(host, "auth-plugin", frontendAuthProviderFunc{
+		identifier: "custom-auth",
+		authenticate: func(ctx context.Context, req pluginapi.FrontendAuthRequest) (pluginapi.FrontendAuthResponse, error) {
+			called = true
+			return pluginapi.FrontendAuthResponse{Authenticated: true}, nil
+		},
+	})
+	limitedBody := http.MaxBytesReader(nil, io.NopCloser(strings.NewReader("0123456789")), 4)
+	req, errNewRequest := http.NewRequest(http.MethodPost, "http://example.test/v1/chat", limitedBody)
+	if errNewRequest != nil {
+		t.Fatalf("NewRequest() error = %v", errNewRequest)
+	}
+
+	result, authErr := adapter.Authenticate(context.Background(), req)
+	if result != nil {
+		t.Fatalf("Authenticate() result = %#v, want nil", result)
+	}
+	if authErr == nil {
+		t.Fatal("Authenticate() error = nil, want 413 auth error")
+	}
+	if got := authErr.HTTPStatusCode(); got != http.StatusRequestEntityTooLarge {
+		t.Fatalf("Authenticate() status = %d, want %d (err=%v)", got, http.StatusRequestEntityTooLarge, authErr)
+	}
+	if called {
+		t.Fatal("provider Authenticate() was called despite oversized request body")
+	}
+}
+
 func TestExecutorAdapterMethods(t *testing.T) {
 	streamChunks := make(chan pluginapi.ExecutorStreamChunk, 2)
 	streamErr := errors.New("stream failed")
@@ -4012,5 +4117,71 @@ func BenchmarkHostRequestInterceptors_ReadOnly(b *testing.B) {
 				}
 			}
 		})
+	}
+}
+
+func TestExecutorAdapterRefresh_MergesAttributesAndPreservesPath_Issue6119(t *testing.T) {
+	filePath := filepath.Join(t.TempDir(), "plugin.json")
+	authProvider := fakeAuthProvider{
+		identifier: "plugin-provider",
+		refreshAuth: func(ctx context.Context, req pluginapi.AuthRefreshRequest) (pluginapi.AuthRefreshResponse, error) {
+			return pluginapi.AuthRefreshResponse{
+				Auth: pluginapi.AuthData{
+					Metadata:   map[string]any{"token": "new"},
+					Attributes: map[string]string{"priority": "2"},
+				},
+			}, nil
+		},
+	}
+	executorRecord := normalizeTestCapabilityRecord(capabilityRecord{id: "executor-plugin"})
+	host := newHostWithRecords(
+		capabilityRecord{
+			id: "auth-plugin",
+			plugin: pluginapi.Plugin{
+				Capabilities: pluginapi.Capabilities{
+					AuthProvider: authProvider,
+				},
+			},
+		},
+		executorRecord,
+	)
+
+	exec := &fakeExecutor{identifier: "ignored-by-adapter"}
+	adapter := newExecutorAdapterForRecordForTest(host, executorRecord, exec,
+		[]sdktranslator.Format{sdktranslator.FormatOpenAI},
+		[]sdktranslator.Format{sdktranslator.FormatOpenAI},
+	)
+
+	auth := &coreauth.Auth{
+		ID:       "auth-1",
+		Provider: "plugin-provider",
+		FileName: "plugin.json",
+		Attributes: map[string]string{
+			coreauth.AttributeSourceBackend: coreauth.AuthSourceFile,
+			coreauth.AttributePath:          filePath,
+			coreauth.AttributeSource:        filePath,
+			"custom_env":                    "staging",
+		},
+		Metadata: map[string]any{"token": "old"},
+	}
+
+	refreshed, errRefresh := adapter.Refresh(context.Background(), auth)
+	if errRefresh != nil {
+		t.Fatalf("Refresh() error = %v", errRefresh)
+	}
+	if got := refreshed.Attributes[coreauth.AttributePath]; got != filePath {
+		t.Errorf("refreshed path attribute = %q, want %q", got, filePath)
+	}
+	if got := refreshed.Attributes[coreauth.AttributeSource]; got != filePath {
+		t.Errorf("refreshed source attribute = %q, want %q", got, filePath)
+	}
+	if got := refreshed.Attributes[coreauth.AttributeSourceBackend]; got != coreauth.AuthSourceFile {
+		t.Errorf("refreshed source_backend attribute = %q, want %q", got, coreauth.AuthSourceFile)
+	}
+	if got := refreshed.Attributes["custom_env"]; got != "staging" {
+		t.Errorf("refreshed custom_env attribute = %q, want staging", got)
+	}
+	if got := refreshed.Attributes["priority"]; got != "2" {
+		t.Errorf("refreshed priority attribute = %q, want 2", got)
 	}
 }

@@ -1,0 +1,250 @@
+
+/* ===== 基金持仓详情（方案 P07 / 4.1~4.3 四部分独立视图） ===== */
+#view-fund-detail {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
+  flex: 1;
+}
+#view-fund-detail[hidden] {
+  display: none !important;
+}
+
+.fund-detail-active .workspace-body .main-column {
+  padding: 0 !important;
+  border-right: none !important;
+  overflow: hidden !important;
+  height: 100% !important;
+}
+
+.fund-detail-workspace {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  height: 100%;
+  width: 100%;
+  overflow-y: auto;
+  background: var(--natives-bg);
+  box-sizing: border-box;
+}
+
+.fund-detail-body {
+  max-width: 1360px;
+  width: 100%;
+  margin: 0 auto;
+  padding: 20px 24px 60px;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.fund-detail-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 48px;
+  padding: 0 16px;
+  background: var(--natives-surface);
+  border-bottom: 1px solid var(--natives-border);
+  flex-shrink: 0;
+  gap: 12px;
+}
+
+.fund-detail-topbar-left {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 1;
+  min-width: 0;
+}
+
+.fund-basic-card {
+  border: 1px solid var(--natives-border);
+  background: var(--natives-surface);
+  border-radius: var(--natives-radius);
+  padding: 24px;
+  box-sizing: border-box;
+}
+:root:not([data-theme="archive"]) .fund-basic-card {
+  background: var(--natives-surface-2);
+}
+
+.fund-basic-head {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  padding: 0 0 20px;
+  margin-bottom: 20px;
+  border-bottom: 1px solid var(--natives-border);
+}
+.fund-basic-head > div + div {
+  border-left: 1px solid var(--natives-border);
+  padding-left: 24px;
+}
+.fund-basic-head small {
+  display: block;
+  font-size: 13px;
+  color: var(--natives-text-muted);
+  margin-bottom: 6px;
+}
+.fund-basic-head strong {
+  font-size: 32px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.fund-basic-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px 24px;
+}
+.fund-basic-grid small {
+  display: block;
+  font-size: 12px;
+  color: var(--natives-text-muted);
+  margin-bottom: 4px;
+}
+.fund-basic-grid small span { font-size: 11px; }
+.fund-basic-grid strong {
+  font-size: 19px;
+  font-weight: 700;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.fund-basic-grid strong > span:not(.money) {
+  font-size: 12px;
+  color: var(--natives-text-muted);
+  font-weight: 400;
+}
+
+.fund-sections-card {
+  border: 1px solid var(--natives-border);
+  background: var(--natives-surface);
+  border-radius: var(--natives-radius);
+  padding: 20px 24px;
+  box-sizing: border-box;
+}
+:root:not([data-theme="archive"]) .fund-sections-card {
+  background: var(--natives-surface-2);
+}
+
+.fund-section-tabs {
+  display: flex;
+  gap: 8px;
+  border-bottom: 1px solid var(--natives-border);
+  padding-bottom: 12px;
+  margin-bottom: 18px;
+}
+.fund-section-tab {
+  border: 1px solid var(--natives-border);
+  background: transparent;
+  color: var(--natives-text-muted);
+  padding: 6px 16px;
+  border-radius: var(--natives-radius);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  min-height: 34px;
+}
+.fund-section-tab.active {
+  background: var(--natives-accent);
+  color: var(--natives-on-accent);
+  border-color: var(--natives-accent);
+  font-weight: 600;
+}
+
+.fund-association-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+  gap: 20px;
+  align-items: start;
+}
+.fund-association-grid .table-wrap {
+  border: 1px solid var(--natives-border);
+  border-radius: var(--natives-radius);
+  overflow-y: auto;
+  max-height: 480px;
+}
+.fund-association-grid .table-wrap td,
+.fund-association-grid .table-wrap th {
+  padding: 10px 12px;
+  font-size: 12px;
+}
+.fund-association-grid tr.selected {
+  background: var(--natives-selected);
+}
+
+.fund-chart-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.fund-chart-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.fund-range-tabs {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.fund-range-btn {
+  border: 1px solid var(--natives-border);
+  background: transparent;
+  color: var(--natives-text-muted);
+  padding: 4px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+  min-height: 28px;
+}
+.fund-range-btn.active {
+  color: var(--natives-accent);
+  border-color: var(--natives-accent);
+  background: var(--natives-selected);
+  font-weight: 600;
+}
+.fund-chart-box {
+  width: 100%;
+  height: 340px;
+  border: 1px solid var(--natives-border);
+  border-radius: var(--natives-radius);
+  background: var(--natives-surface);
+  position: relative;
+}
+:root:not([data-theme="archive"]) .fund-chart-box {
+  background: var(--natives-surface-3);
+}
+
+.fund-table-scroll {
+  max-height: 260px;
+  overflow-y: auto;
+  border: 1px solid var(--natives-border);
+  border-radius: var(--natives-radius);
+}
+
+@media (max-width: 900px) {
+  .fund-basic-head { grid-template-columns: 1fr; }
+  .fund-basic-head > div + div { border-left: 0; padding-left: 0; border-top: 1px solid var(--natives-border); padding-top: 16px; }
+  .fund-basic-grid { grid-template-columns: 1fr 1fr; }
+  .fund-association-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 550px) {
+  .fund-detail-body { padding: 12px 12px 32px; gap: 12px; }
+  .fund-basic-card, .fund-sections-card { padding: 16px 12px; }
+  .fund-detail-topbar { height: auto; padding: 12px; flex-wrap: wrap; }
+  .fund-detail-topbar-left { flex-wrap: wrap; flex-basis: 100%; }
+  .fund-detail-topbar .sd-topbar-right { flex: 1 1 100%; min-width: 0; max-width: 100%; flex-wrap: wrap; }
+  .fund-basic-grid { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 16px 12px; }
+  .fund-basic-grid strong { overflow-wrap: anywhere; font-size: 17px; }
+  .fund-section-tabs, .fund-range-tabs { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); width: 100%; }
+  .fund-section-tab, .fund-range-btn { min-width: 0; padding: 6px 4px; overflow-wrap: anywhere; }
+  .fund-chart-box { height: 260px; }
+}

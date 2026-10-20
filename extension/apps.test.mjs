@@ -2,8 +2,9 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { setupTestDomEnvironment } from './test-dom-mock.js';
 import { createAppCenter } from './apps.js';
-import { createAppShell, parseAppId } from './app.js';
+import { createAppShell, parseAppId, validateNotification, isValidViewToken, viewAllowedForModule } from './app.js';
 import { appHostFor } from './native-app-client.js';
+import { acquireCapabilityLeases } from './system-capability-leases.js';
 
 setupTestDomEnvironment();
 globalThis.chrome = { runtime: {
@@ -14,7 +15,7 @@ const messages = JSON.parse(readFileSync(new URL('./_locales/zh_CN/messages.json
 const t = (key, fallback) => messages[key]?.message || fallback || key;
 const tick = () => new Promise((resolve) => setTimeout(resolve, 25));
 const shells = [];
-const makeShell = (options) => { const shell = createAppShell({ t, ...options }); shells.push(shell); return shell; };
+const makeShell = (options) => { const shell = createAppShell({ t, getPreference: async (key,fallback) => fallback, openSettings: async () => {}, ...options }); shells.push(shell); return shell; };
 
 // Fixed built-in module projection as the Host returns it (plan §3.4): the
 // definition comes from the product manifest, never from a catalog.
@@ -74,7 +75,7 @@ function makeDom() {
   const call = client.call.bind(client);
   client.call = (method, params) => method === 'apps:handshake'
     ? Promise.resolve({ version: '0.1.0' }) : call(method, params);
-  const center = createAppCenter({ t, client });
+  const center = createAppCenter({ t, client, openSettings: async () => {} });
   await center.ready;
   assert.equal(center.state.error, 'appsNeedsUpdate', 'incompatible Host error must be preserved');
   assert.ok(dom.list.textContent.includes(t('appsNeedsUpdate')));
@@ -86,7 +87,7 @@ function makeDom() {
   makeDom();
   globalThis.window = new EventTarget();
   const client = clientFixture();
-  const center = createAppCenter({ t, client });
+  const center = createAppCenter({ t, client, openSettings: async () => {} });
   await center.ready;
   window.dispatchEvent(new Event('pagehide'));
   const before = client.calls.length;
@@ -105,7 +106,7 @@ function makeDom() {
 // built-in fund module, with no module distribution semantics.
 {
   const dom = makeDom(), client = clientFixture();
-  const center = createAppCenter({ t, client });
+  const center = createAppCenter({ t, client, openSettings: async () => {} });
   await center.ready;
   assert.equal(dom.list.querySelectorAll('.app-card').length, 1, 'empty preference table still shows fund');
   assert.ok(dom.list.textContent.includes('基金'));
@@ -121,7 +122,7 @@ function makeDom() {
 {
   const dom = makeDom(), client = clientFixture();
   client.apps.push({ app_id: 'fund', name: '基金', version: '0.1.0', enabled: true, show_in_sidebar: true, host_registered: true });
-  const center = createAppCenter({ t, client });
+  const center = createAppCenter({ t, client, openSettings: async () => {} });
   await center.ready;
   const pending = dom.list.querySelector('.app-card .action.danger').onclick();
   await tick();
@@ -156,20 +157,17 @@ function makeDom() {
 // ─── Built-in module owner surface ──────────────────────────────────────────
 
 const MODULE_DETAIL = {
+  runtime_host: 'com.natives.local.app_runtime',
   app: {
     app_id: 'sample',
-    kind: 'managed_local',
     name: 'Sample Module',
     version: '2.0.0',
     enabled: true,
-    host_registered: true,
-    runtime_host: 'com.natives.app.hash',
     show_in_sidebar: true,
     sidebar_order: 0,
-    runtime_spec_json: '{"version":"2.0.0"}',
-    surface_json: '{"icon":"grid","route":"app.html?app=sample"}',
-    manifest_json: '{}',
-    installed_at: 1,
+    capabilities: [],
+    requires: [],
+    product_generation: 1,
     updated_at: 1,
     revision: 1,
   },
@@ -232,8 +230,11 @@ assert.equal(parseAppId('?app=com.natives.app.demo'), 'com.natives.app.demo');
 assert.equal(parseAppId('app=fund'), 'fund');
 assert.equal(parseAppId('?other=x'), '');
 assert.equal(parseAppId(''), '');
-assert.equal(appHostFor(MODULE_DETAIL.app), 'com.natives.app.hash', 'module uses its registered Host');
-assert.throws(() => appHostFor({ app_id: 'fund' }), /runtime host is missing/, 'missing Host has no Core fallback');
+assert.equal(appHostFor(MODULE_DETAIL.runtime_host), 'com.natives.local.app_runtime', 'module uses the product runtime Host');
+assert.throws(() => appHostFor(), /runtime host is missing/, 'missing product Host has no fallback');
+assert.deepEqual(validateNotification({ title: 'T', body: 'B', tag: 'tag', badge: { text: '1', tone: 'info' } }).badge, { text: '1', tone: 'info' });
+assert.equal(validateNotification({ title: '<b>', body: '', tag: '', badge: { text: '', tone: 'info' } }), null, 'notification rejects markup');
+assert.throws(() => acquireCapabilityLeases(['unknown.required']), /unsupported required capability/);
 
 // A6.2 configured + enabled → the generic owner opens the module Host
 {
@@ -251,7 +252,7 @@ assert.throws(() => appHostFor({ app_id: 'fund' }), /runtime host is missing/, '
   const iframe = domA.stage.querySelector('iframe');
   assert.ok(iframe, '通用壳创建应用 sandbox');
   assert.equal(iframe.getAttribute('sandbox'), 'allow-scripts allow-forms');
-  assert.equal(iframe.src, 'http://127.0.0.1:49152/');
+  assert.equal(iframe.src, 'http://127.0.0.1:49152/?theme=archive', '建帧 URL 携带首帧主题直传参数');
   assert.ok(hostA.calls.some((c) => c.method === 'app:start'), '通用壳直属 App Host');
   await shellA.open(); // retry path: idempotent remount must not throw
 }
@@ -304,14 +305,14 @@ assert.throws(() => appHostFor({ app_id: 'fund' }), /runtime host is missing/, '
   assert.ok(domD.toast.textContent.length > 0, '错误必须进 toast');
 }
 
-// A6.6 legacy extension_app placeholders are not a production fallback
+// A6.6 missing product runtime host is not a production fallback
 {
   const domE = makeSurfaceDom();
   let hostCreated = 0;
   const fundDetail = {
     app: {
-      app_id: 'fund', kind: 'extension_app', name: '基金', version: '0.1.0',
-      enabled: true, runtime_spec_json: '{"version":"0.1.0"}',
+      app_id: 'fund', name: '基金', version: '0.1.0', enabled: true,
+      capabilities: [], requires: [], product_generation: 1,
     },
   };
   const shellE = makeShell({
@@ -323,7 +324,7 @@ assert.throws(() => appHostFor({ app_id: 'fund' }), /runtime host is missing/, '
   await shellE.open();
   await tick();
   assert.ok(domE.stage.textContent.includes('无法打开'));
-  assert.equal(hostCreated, 0, 'legacy placeholder must not open a Host port');
+  assert.equal(hostCreated, 0, 'missing product Host must not open a Native Port');
 }
 
 // A6.7 static business registry and modules are gone
@@ -340,7 +341,8 @@ assert.throws(() => appHostFor({ app_id: 'fund' }), /runtime host is missing/, '
   for (const id of ['app-stage', 'app-title', 'app-toast', 'app-back']) {
     assert.ok(appHtml.includes(`id="${id}"`), `app.html 必须声明 #${id}`);
   }
-  assert.ok(appHtml.includes('app.js'), 'app.html 必须加载 app.js');
+  // mode/T06：页面装配入口为 app-boot.js（注入 openSettings），其导入 app.js。
+  assert.ok(appHtml.includes('app-boot.js'), 'app.html 必须加载装配入口 app-boot.js');
 }
 
 // A6.9 locales: A6 keys exist in both languages (sync requirement)
@@ -355,6 +357,32 @@ assert.throws(() => appHostFor({ app_id: 'fund' }), /runtime host is missing/, '
       assert.equal(typeof messages[key]?.message, 'string', `${loc} 缺少 ${key}`);
     }
   }
+}
+
+// A6.10 ADR-0038 深链视图白名单：声明非空 views 的模块严格放行；
+// 未声明的旧模块回退 ADR-0036 短 token 正则；非法 token 无论声明与否拒绝。
+{
+  assert.equal(isValidViewToken('positions'), true);
+  assert.equal(isValidViewToken('Positions'), false);
+  assert.equal(isValidViewToken(''), false);
+  assert.equal(isValidViewToken('a'.repeat(33)), false);
+
+  const fundViews = ['home', 'positions', 'assets', 'trends', 'settings'];
+  assert.equal(viewAllowedForModule('positions', fundViews), true);
+  assert.equal(viewAllowedForModule('settings', fundViews), true);
+  assert.equal(viewAllowedForModule('watchlist', fundViews), false, '未声明视图必须拒绝');
+  assert.equal(viewAllowedForModule('../../etc', fundViews), false, '非法 token 即使在白名单语法外也拒绝');
+  // 旧模块（无声明）回退正则：任意短 token 通过，形状外拒绝。
+  assert.equal(viewAllowedForModule('anything', []), true);
+  assert.equal(viewAllowedForModule('anything', undefined), true);
+  assert.equal(viewAllowedForModule('Bad Token', []), false);
+
+  // 壳接线：apps:get 投影的 views 进入白名单，且视图消费点不再直接用裸正则。
+  const appJs = readFileSync(new URL('./app.js', import.meta.url), 'utf8');
+  assert.ok(appJs.includes('app.views'), '壳必须读取 apps:get 的 views 投影');
+  assert.ok(!appJs.includes('isValidViewToken(initialView)') && !appJs.includes('view: isValidViewToken'),
+    'welcome/navigate 必须走白名单校验，不再直接用裸正则');
+  assert.ok(appJs.includes('viewAllowedForModule(value, declaredViews)'), '白名单由壳统一执行');
 }
 
 console.log('apps: built-in module projection, handshake-stop, data management and App Surface checks passed');

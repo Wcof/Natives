@@ -11,18 +11,25 @@ use rusqlite::Connection;
 use std::path::Path;
 use std::sync::Mutex;
 
-/// 当前业务 schema 版本。
-pub const SCHEMA_VERSION: i64 = 2;
+/// 当前业务 schema 版本（v3 人工资产/币种，v4 目标/配置，v5 投资首页账本，
+/// v6 交易现金待核对/理由归档，v7 首页自定义资金分组，v27 自定义分类说明）。
+pub const SCHEMA_VERSION: i64 = 28;
 
 pub struct Store {
     conn: Mutex<Connection>,
+    pub(crate) information_cache: crate::information::ListCache,
     data_dir: std::path::PathBuf,
     /// 用户 DB writer 版本 = Natives Product Version（计划 §27.2），
     /// 由 Runtime 经 ModuleContext 注入；空值时写 "unknown"。
     writer_version: Mutex<String>,
 }
 
-/// schema v1：账户、基金主档、交易流水、持仓投影、净值、导入收据、元数据。
+/// 新库初始化 DDL：一次性建齐当前 `SCHEMA_VERSION`（v4）的全部表与索引，
+/// 因此全新安装的库直接落在 v4，不经历 v1→v2→v3→v4 阶梯。
+/// 覆盖：账户、基金主档、交易流水、持仓投影、期初快照、净值、导入收据、
+/// 人工资产（v3）、基金币种／分类（v3）、投资目标（v4）、配置目标（v4）、
+/// 元数据、自选与画线（v2）。
+/// 新增表必须同时加进这里和对应版本的 migration SQL，否则新库缺表。
 /// 金额/净值/份额均为定点 raw（i64）；精度语义见 crate::fixed。
 pub const SCHEMA_V1: &str = r#"
 CREATE TABLE IF NOT EXISTS accounts (
@@ -121,6 +128,49 @@ CREATE TABLE IF NOT EXISTS import_runs (
     UNIQUE(source_id, template_version, file_sha256, params_hash)
 );
 
+-- v3（P1）：人工资产当前快照与基金币种／分类补充信息（字段规则见
+-- migration::SCHEMA_V3_SQL；fresh init 与顺序迁移共用同一套约束）。
+CREATE TABLE IF NOT EXISTS manual_assets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id INTEGER NOT NULL REFERENCES accounts(id),
+    product_type TEXT NOT NULL CHECK (product_type IN ('cash','stock','etf','gold')),
+    instrument_key TEXT NOT NULL,
+    name TEXT NOT NULL,
+    risk_class TEXT NOT NULL DEFAULT 'unknown'
+        CHECK (risk_class IN ('equity','gold','fixed_income','cash','other','unknown')),
+    market_value_minor INTEGER NOT NULL CHECK (market_value_minor >= 0),
+    valued_at TEXT NOT NULL,
+    legacy_overlap_distinct INTEGER NOT NULL DEFAULT 0 CHECK (legacy_overlap_distinct IN (0,1)),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (account_id, instrument_key)
+);
+
+CREATE TABLE IF NOT EXISTS fund_asset_metadata (
+    fund_id INTEGER PRIMARY KEY REFERENCES funds(id),
+    nav_currency TEXT NOT NULL DEFAULT 'unknown' CHECK (nav_currency IN ('unknown','CNY','unsupported')),
+    risk_class TEXT NOT NULL DEFAULT 'unknown'
+        CHECK (risk_class IN ('equity','gold','fixed_income','cash','other','unknown')),
+    updated_at TEXT NOT NULL
+);
+
+-- v4（P2）：唯一投资资产目标与 5 类配置目标。
+CREATE TABLE IF NOT EXISTS investment_goals (
+    id INTEGER PRIMARY KEY CHECK (id = 1),
+    target_minor INTEGER NOT NULL CHECK (target_minor > 0),
+    target_date TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS allocation_targets (
+    risk_class TEXT PRIMARY KEY
+        CHECK (risk_class IN ('equity','gold','fixed_income','cash','other')),
+    target_tenths INTEGER NOT NULL CHECK (target_tenths BETWEEN 0 AND 1000),
+    lower_tenths INTEGER NOT NULL CHECK (lower_tenths BETWEEN 0 AND 1000),
+    upper_tenths INTEGER NOT NULL CHECK (upper_tenths BETWEEN 0 AND 1000),
+    updated_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS app_meta (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -157,6 +207,187 @@ CREATE TABLE IF NOT EXISTS chart_drawings (
     updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_drawings_symbol ON chart_drawings(symbol, period);
+
+-- v5（投资首页，方案 02/03）：资金事件账本、现金预留/占用、多财务目标、
+-- 规则与事件、决策记录、信息源与主线。字段语义与 migration::SCHEMA_V5_SQL 一致。
+CREATE TABLE IF NOT EXISTS cash_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id INTEGER NOT NULL REFERENCES accounts(id),
+    event_type TEXT NOT NULL CHECK (event_type IN
+        ('opening','external_in','external_out','internal_transfer',
+         'dividend_cash','dividend_reinvest','fee','reconciliation','correction')),
+    amount_minor INTEGER NOT NULL,
+    occurred_at TEXT NOT NULL,
+    idempotency_key TEXT UNIQUE,
+    related_type TEXT NOT NULL DEFAULT '',
+    related_id TEXT NOT NULL DEFAULT '',
+    note TEXT NOT NULL DEFAULT '',
+    corrected_by INTEGER REFERENCES cash_events(id),
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_cash_events_account
+    ON cash_events(account_id, occurred_at, id);
+
+CREATE TABLE IF NOT EXISTS cash_reserves (
+    account_id INTEGER PRIMARY KEY REFERENCES accounts(id),
+    state TEXT NOT NULL CHECK (state IN ('unconfigured','configured')),
+    amount_minor INTEGER NOT NULL DEFAULT 0 CHECK (amount_minor >= 0),
+    purpose TEXT NOT NULL DEFAULT '',
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS cash_reservations (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id INTEGER NOT NULL REFERENCES accounts(id),
+    symbol TEXT NOT NULL DEFAULT '',
+    amount_minor INTEGER NOT NULL CHECK (amount_minor > 0),
+    status TEXT NOT NULL DEFAULT 'held'
+        CHECK (status IN ('held','released','converted','review')),
+    expected_date TEXT NOT NULL DEFAULT '',
+    tx_ref TEXT NOT NULL DEFAULT '',
+    note TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_cash_reservations_account
+    ON cash_reservations(account_id, status);
+
+CREATE TABLE IF NOT EXISTS finance_goals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    target_minor INTEGER NOT NULL CHECK (target_minor > 0),
+    target_date TEXT NOT NULL,
+    scope_kind TEXT NOT NULL CHECK (scope_kind IN ('A','B','specific')),
+    asset_bindings TEXT NOT NULL DEFAULT '[]',
+    is_primary INTEGER NOT NULL DEFAULT 0 CHECK (is_primary IN (0,1)),
+    archived INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0,1)),
+    monthly_plan_minor INTEGER,
+    version INTEGER NOT NULL DEFAULT 1,
+    note TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_finance_goals_primary
+    ON finance_goals(is_primary) WHERE is_primary = 1 AND archived = 0;
+
+CREATE TABLE IF NOT EXISTS goal_changes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    goal_id INTEGER NOT NULL REFERENCES finance_goals(id),
+    field TEXT NOT NULL,
+    old_value TEXT NOT NULL DEFAULT '',
+    new_value TEXT NOT NULL DEFAULT '',
+    actor TEXT NOT NULL DEFAULT 'user',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_goal_changes_goal ON goal_changes(goal_id, created_at);
+
+CREATE TABLE IF NOT EXISTS watch_rules (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    rule_type TEXT NOT NULL CHECK (rule_type IN
+        ('cash_short','class_unknown','stale_valuation','allocation_drift',
+         'concentration','price_threshold','daily_change','ma_cross',
+         'drawdown','strategy_exit','investment_lag')),
+    object_key TEXT NOT NULL DEFAULT '',
+    params_json TEXT NOT NULL DEFAULT '{}',
+    period TEXT NOT NULL DEFAULT 'quote',
+    enabled INTEGER NOT NULL DEFAULT 0 CHECK (enabled IN (0,1)),
+    notify_channel TEXT NOT NULL DEFAULT 'in_app',
+    version INTEGER NOT NULL DEFAULT 1,
+    archived INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0,1)),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS watch_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    rule_id INTEGER NOT NULL REFERENCES watch_rules(id),
+    rule_version INTEGER NOT NULL,
+    rule_type TEXT NOT NULL,
+    object_key TEXT NOT NULL DEFAULT '',
+    first_triggered_at TEXT NOT NULL,
+    last_checked_at TEXT NOT NULL,
+    trigger_value TEXT NOT NULL DEFAULT '',
+    threshold_value TEXT NOT NULL DEFAULT '',
+    snapshot_id TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'open'
+        CHECK (status IN ('open','acknowledged','snoozed','resolved')),
+    ready_state TEXT NOT NULL DEFAULT 'ready'
+        CHECK (ready_state IN ('ready','unknown','stale','error')),
+    snoozed_until TEXT,
+    resolved_at TEXT,
+    note TEXT NOT NULL DEFAULT '',
+    notify_result TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_watch_events_open
+    ON watch_events(rule_id, object_key) WHERE status != 'resolved';
+CREATE INDEX IF NOT EXISTS idx_watch_events_status ON watch_events(status, updated_at);
+
+CREATE TABLE IF NOT EXISTS decision_records (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id INTEGER NOT NULL REFERENCES watch_events(id),
+    action TEXT NOT NULL CHECK (action IN ('observe','defer','done')),
+    note TEXT NOT NULL DEFAULT '',
+    evidence_json TEXT NOT NULL DEFAULT '[]',
+    snapshot_id TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_decision_records_event
+    ON decision_records(event_id, created_at);
+
+CREATE TABLE IF NOT EXISTS info_sources (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    url TEXT NOT NULL DEFAULT '',
+    kind TEXT NOT NULL CHECK (kind IN ('link','excerpt')),
+    related_symbol TEXT NOT NULL DEFAULT '',
+    thesis_id INTEGER,
+    publisher TEXT NOT NULL DEFAULT '',
+    published_at TEXT,
+    excerpt_text TEXT NOT NULL DEFAULT '',
+    excerpt_fetched_at TEXT,
+    read_status INTEGER NOT NULL DEFAULT 0 CHECK (read_status IN (0,1)),
+    favorite INTEGER NOT NULL DEFAULT 0 CHECK (favorite IN (0,1)),
+    enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0,1)),
+    archived INTEGER NOT NULL DEFAULT 0 CHECK (archived IN (0,1)),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS investment_theses (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    holding_reason TEXT NOT NULL DEFAULT '',
+    horizon TEXT NOT NULL DEFAULT '',
+    verify_metrics TEXT NOT NULL DEFAULT '',
+    invalid_condition TEXT NOT NULL DEFAULT '',
+    related_symbols TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+
+CREATE TABLE IF NOT EXISTS value_snapshots (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    taken_at TEXT NOT NULL,
+    scope TEXT NOT NULL DEFAULT 'A',
+    total_minor INTEGER NOT NULL,
+    cash_minor INTEGER NOT NULL DEFAULT 0,
+    noncash_minor INTEGER NOT NULL DEFAULT 0,
+    breakdown_json TEXT NOT NULL DEFAULT '{}',
+    quality TEXT NOT NULL DEFAULT 'ready',
+    note TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_value_snapshots_time ON value_snapshots(taken_at, id);
+
+-- 旧单目标无损迁移（02 §6.2）：全新库时 investment_goals 为空，本句无操作。
+INSERT INTO finance_goals(name, target_minor, target_date, scope_kind, is_primary, note, created_at, updated_at)
+SELECT '财务目标', g.target_minor, g.target_date, 'A', 1, '由旧单一目标迁移（保留 A 口径）', g.updated_at, g.updated_at
+FROM investment_goals g
+WHERE NOT EXISTS (SELECT 1 FROM finance_goals);
 "#;
 
 impl Store {
@@ -170,19 +401,46 @@ impl Store {
             )
         })?;
         let path = data_dir.join("fund.db");
-        let conn = Connection::open(&path)?;
+        let mut conn = Connection::open(&path)?;
+        crate::sql_diag::instrument(&mut conn);
         conn.busy_timeout(std::time::Duration::from_millis(2000))?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         let store = Self {
             conn: Mutex::new(conn),
+            information_cache: crate::information::ListCache::new(),
             data_dir: data_dir.to_path_buf(),
             writer_version: Mutex::new(String::new()),
         };
         if store.schema_version()? == 0 {
             store.with_write(|conn| -> rusqlite::Result<()> {
                 conn.execute_batch(SCHEMA_V1)?;
+                // v6 增量对象（trade_cash 等）不在 SCHEMA_V1 全量 DDL 内，
+                // 由版本化迁移步骤补齐（与阶梯迁移同源）。
+                conn.execute_batch(crate::migration::SCHEMA_V6_SQL)?;
+                conn.execute_batch(crate::migration::SCHEMA_V7_SQL)?;
+                conn.execute_batch(crate::migration::SCHEMA_V8_SQL)?;
+                conn.execute_batch(crate::migration::SCHEMA_V9_SQL)?;
+                conn.execute_batch(crate::migration::SCHEMA_V10_SQL)?;
+                conn.execute_batch(crate::migration::SCHEMA_V11_SQL)?;
+                conn.execute_batch(crate::migration::SCHEMA_V12_SQL)?;
+                conn.execute_batch(crate::migration::SCHEMA_V13_SQL)?;
+                conn.execute_batch(crate::migration::SCHEMA_V14_SQL)?;
+                conn.execute_batch(crate::migration::SCHEMA_V15_SQL)?;
+                conn.execute_batch(crate::migration::SCHEMA_V16_SQL)?;
+                conn.execute_batch(crate::migration_late::SCHEMA_V17_SQL)?;
+                conn.execute_batch(crate::migration_late::SCHEMA_V18_SQL)?;
+                conn.execute_batch(crate::migration_late::SCHEMA_V19_SQL)?;
+                conn.execute_batch(crate::migration_late::SCHEMA_V20_SQL)?;
+                conn.execute_batch(crate::migration_late::SCHEMA_V21_SQL)?;
+                conn.execute_batch(crate::migration_late::SCHEMA_V22_SQL)?;
+                conn.execute_batch(crate::migration_late::SCHEMA_V23_SQL)?;
+                conn.execute_batch(crate::migration_late::SCHEMA_V24_SQL)?;
+                conn.execute_batch(crate::migration_late::SCHEMA_V25_SQL)?;
+                conn.execute_batch(crate::migration_late::SCHEMA_V26_SQL)?;
+                conn.execute_batch(crate::migration_late::SCHEMA_V27_SQL)?;
+                conn.execute_batch(crate::migration_late::SCHEMA_V28_SQL)?;
                 conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 Ok(())
             })?;
@@ -221,11 +479,35 @@ impl Store {
         let conn = Connection::open_in_memory()?;
         let store = Self {
             conn: Mutex::new(conn),
+            information_cache: crate::information::ListCache::new(),
             data_dir: std::path::PathBuf::new(),
             writer_version: Mutex::new(String::new()),
         };
         store.with_write(|conn| -> rusqlite::Result<()> {
             conn.execute_batch(SCHEMA_V1)?;
+            conn.execute_batch(crate::migration::SCHEMA_V6_SQL)?;
+            conn.execute_batch(crate::migration::SCHEMA_V7_SQL)?;
+            conn.execute_batch(crate::migration::SCHEMA_V8_SQL)?;
+            conn.execute_batch(crate::migration::SCHEMA_V9_SQL)?;
+            conn.execute_batch(crate::migration::SCHEMA_V10_SQL)?;
+            conn.execute_batch(crate::migration::SCHEMA_V11_SQL)?;
+            conn.execute_batch(crate::migration::SCHEMA_V12_SQL)?;
+            conn.execute_batch(crate::migration::SCHEMA_V13_SQL)?;
+            conn.execute_batch(crate::migration::SCHEMA_V14_SQL)?;
+            conn.execute_batch(crate::migration::SCHEMA_V15_SQL)?;
+            conn.execute_batch(crate::migration::SCHEMA_V16_SQL)?;
+            conn.execute_batch(crate::migration_late::SCHEMA_V17_SQL)?;
+            conn.execute_batch(crate::migration_late::SCHEMA_V18_SQL)?;
+            conn.execute_batch(crate::migration_late::SCHEMA_V19_SQL)?;
+            conn.execute_batch(crate::migration_late::SCHEMA_V20_SQL)?;
+            conn.execute_batch(crate::migration_late::SCHEMA_V21_SQL)?;
+            conn.execute_batch(crate::migration_late::SCHEMA_V22_SQL)?;
+            conn.execute_batch(crate::migration_late::SCHEMA_V23_SQL)?;
+            conn.execute_batch(crate::migration_late::SCHEMA_V24_SQL)?;
+            conn.execute_batch(crate::migration_late::SCHEMA_V25_SQL)?;
+            conn.execute_batch(crate::migration_late::SCHEMA_V26_SQL)?;
+            conn.execute_batch(crate::migration_late::SCHEMA_V27_SQL)?;
+            conn.execute_batch(crate::migration_late::SCHEMA_V28_SQL)?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             Ok(())
         })?;
@@ -243,6 +525,25 @@ impl Store {
         f(&guard)
     }
 
+    pub fn with_snapshot<T, E>(&self, f: impl FnOnce(&Connection) -> Result<T, E>) -> Result<T, E>
+    where
+        E: From<rusqlite::Error>,
+    {
+        let guard = self.conn.lock().expect("storage mutex poisoned");
+        let tx = guard.unchecked_transaction()?;
+        let result = f(&tx)?;
+        tx.commit()?;
+        Ok(result)
+    }
+
+    pub fn data_revision(conn: &Connection) -> rusqlite::Result<String> {
+        conn.query_row(
+            "SELECT COALESCE((SELECT value FROM app_meta WHERE key='data_revision'),'0')",
+            [],
+            |r| r.get(0),
+        )
+    }
+
     /// 注入产品版本作为用户 DB writer 版本（计划 §27.2：禁止用模块 Cargo Version）。
     pub fn set_writer_version(&self, version: &str) {
         *self.writer_version.lock().expect("storage mutex poisoned") = version.to_string();
@@ -256,8 +557,18 @@ impl Store {
     {
         let mut guard = self.conn.lock().expect("storage mutex poisoned");
         let tx = guard.transaction()?;
+        let before = tx.total_changes();
         match f(&tx) {
             Ok(value) => {
+                if tx.total_changes() != before {
+                    let revision: i64 = Self::data_revision(&tx)?
+                        .parse()
+                        .map_err(|_| rusqlite::Error::InvalidQuery)?;
+                    let next = revision
+                        .checked_add(1)
+                        .ok_or(rusqlite::Error::InvalidQuery)?;
+                    tx.execute("INSERT INTO app_meta(key,value) VALUES('data_revision',?1) ON CONFLICT(key) DO UPDATE SET value=excluded.value", [next.to_string()])?;
+                }
                 let writer = self
                     .writer_version
                     .lock()

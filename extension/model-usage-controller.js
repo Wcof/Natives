@@ -1,5 +1,5 @@
 import { UsageImporterWizard } from './model-usage-importer.js';
-import { invalidateQueries } from './tokenusage/index.js';
+import { invalidateQueries } from './ai-usage-client/index.js';
 
 export async function handleUsageAction(controller, action, target) {
   if (action === 'select-usage-tab') {

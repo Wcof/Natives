@@ -53,13 +53,18 @@ export function createFilesWatchController({
   }
 
   function handleNativeMessage(message) {
+    if ((message?.type === 'resync' && message.reason !== 'unavailable') || message?.type === 'files_changed') {
+      if (session.currentPath && !hasDirtyEditor()) void loadDirectory(session.currentPath);
+      else if (hasDirtyEditor()) setStatus(t('editConflictMessage', '文件已在外部修改，请核对后保存。'), 'error');
+      return;
+    }
     const messageId = typeof message?.id === 'string' ? message.id : '';
     if ((message?.result?.event === 'batch_progress' || message?.result?.event === 'archive_progress') && getBatch()?.requestId === messageId.replace(/:progress$/, '')) {
       const completed = Number(message.result.completed) || 0;
       const total = Number(message.result.total) || 1;
       updateProgress(completed, total);
       const phase = message.result.event === 'archive_progress'
-        ? (message.result.phase === 'validating' ? t('archiveValidating', '校验中') : t('archiveCompressing', '压缩中'))
+        ? (message.result.phase === 'validating' ? t('archiveValidating', '校验中') : message.result.phase === 'extracting' ? t('archiveExtracting', '解压中') : t('archiveCompressing', '压缩中'))
         : t('processing', '处理中');
       setStatus(`${phase} · ${completed}/${total}`);
       return;

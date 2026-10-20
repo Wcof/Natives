@@ -56,7 +56,8 @@
       "successRate": 50,
       "tps": 4.6537037037037035,
       "cacheHitRate": 80,
-      "estimatedCostUsd": 0
+      "estimatedCostUsd": 0.84,
+      "priced": false
     },
     "trend": [
       {

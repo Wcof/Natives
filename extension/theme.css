@@ -1,0 +1,112 @@
+/*
+ * Natives 产品通用基础主题（唯一可编辑源，DES V2.1 / 02-design-system）。
+ *
+ * 本文件只包含 Archive / Volt 两个主题的产品基础角色：文字、表面、
+ * 装饰与控件边界、强调、hover/selected、状态前景与浅底、遮罩、阴影、
+ * 玻璃浮层和字体栈。不含文件管理布局，不含投资业务语义（涨跌、
+ * 指标系列、绘图默认样式由 modules/fund/ui/src/styles/theme.css 拥有）。
+ *
+ * 规则：
+ * - 缺偏好 / 非法偏好回 Archive（:root 即 Archive；Volt 经 data-theme 覆盖）。
+ * - 系统明暗（prefers-color-scheme）不在此处出现，不覆盖明确产品偏好。
+ * - 宿主各 Surface（files/apps/app/space/screenshot/model-settings/
+ *   module-secret）通过既有 --text/--surface/--accent 等别名消费这里的
+ *   角色，不得复制品牌 HEX。
+ * - 模块侧由 scripts/modules/build-ui.mjs 在构建期将本文件与 Fund
+ *   源主题确定性组合为 ui/dist/styles/theme.css；运行时不跨域读取。
+ * - 图表取色入口 themeColor/themeRgba 依赖 6 位 HEX 角色；新增角色时
+ *   保持可解析格式，不使用 color-mix 表达基础角色。
+ */
+
+/* ===== Archive（默认：冷中性底色 / 白色内容表面 / 蓝色强调） ===== */
+:root {
+  color-scheme: light;
+  /* 底色与表面 */
+  --natives-bg: #f5f6f8;
+  --natives-surface: #ffffff;
+  --natives-surface-2: #f8f9fb;
+  --natives-surface-3: #eef1f5;
+  /* 文字 */
+  --natives-text-primary: #202733;
+  --natives-text-muted: #5b6677;
+  /* 边界 */
+  --natives-border: #e5e9ef;
+  --natives-control: #737f90;
+  /* 强调 */
+  --natives-accent: #345780;
+  --natives-accent-strong: #29476b;
+  --natives-on-accent: #ffffff;
+  /* hover / selected（selected 为蓝色 8% 浅底，基底集中于此） */
+  --natives-selected: rgba(52, 87, 128, 0.08);
+  /* 状态：前景与浅底（danger 独立于金融涨跌） */
+  --natives-danger: #b13642;
+  --natives-danger-soft: rgba(177, 54, 66, 0.1);
+  --natives-on-danger: #ffffff;
+  --natives-warning: #805a18;
+  --natives-warning-soft: rgba(128, 90, 24, 0.12);
+  --natives-ok: #217052;
+  --natives-ok-soft: rgba(33, 112, 82, 0.1);
+  /* 正文 / 搜索命中（代码浅色取 surface-2） */
+  --natives-code: #f8f9fb;
+  --natives-match: #dfeaf8;
+  /* 遮罩 / 阴影 / 玻璃浮层（仅既有浮层使用，不给正文加 blur） */
+  --natives-backdrop: rgba(32, 39, 51, 0.4);
+  --natives-shadow: 0 12px 36px rgba(32, 39, 51, 0.12);
+  --natives-glass: rgba(255, 255, 255, 0.96);
+  --natives-glass-hover: rgba(255, 255, 255, 0.99);
+  /* 禁用态（透明度角色）与焦点环宽度 */
+  --natives-disabled: 0.45;
+  --natives-focus-width: 2px;
+  /* 字体栈 */
+  --natives-font: -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", Roboto, sans-serif;
+  --natives-font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+/* ===== Volt（深色 / 荧光强调，保留现有方向） ===== */
+:root[data-theme="volt"] {
+  color-scheme: dark;
+  --natives-bg: #0b0c0a;
+  --natives-surface: #0b0c0a;
+  --natives-surface-2: #131410;
+  --natives-surface-3: #1c1e17;
+  --natives-text-primary: #f2f2ea;
+  --natives-text-muted: #9fa190;
+  --natives-border: #262920;
+  --natives-control: #7c836d;
+  --natives-accent: #cdf24b;
+  --natives-accent-strong: #ddff69;
+  --natives-on-accent: #0b0c0a;
+  --natives-selected: rgba(205, 242, 75, 0.12);
+  --natives-danger: #ff7f8f;
+  --natives-danger-soft: rgba(255, 127, 143, 0.12);
+  --natives-on-danger: #0b0c0a;
+  --natives-warning: #e6c07b;
+  --natives-warning-soft: rgba(230, 192, 123, 0.12);
+  --natives-ok: #cdf24b;
+  --natives-ok-soft: rgba(205, 242, 75, 0.12);
+  --natives-code: #0e0f0c;
+  --natives-match: #554416;
+  --natives-backdrop: rgba(0, 0, 0, 0.67);
+  --natives-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
+  --natives-glass: rgba(19, 20, 16, 0.96);
+  --natives-glass-hover: rgba(19, 20, 16, 0.99);
+}
+
+#natives-pairing-modal :focus-visible {
+  outline: var(--natives-focus-width) solid var(--natives-accent);
+  outline-offset: 2px;
+}
+
+.shared-preferences-dialog { color: var(--natives-text-primary); background: var(--natives-surface); border: 1px solid var(--natives-border); border-radius: 12px; padding: 24px; max-width: min(640px, calc(100vw - 32px)); max-height: 80vh; }
+.shared-preferences-dialog::backdrop { background: var(--natives-backdrop); }
+.shared-preferences-diff { overflow: auto; max-height: 40vh; overflow-wrap: anywhere; }
+.shared-preferences-dialog button { min-height: 32px; padding: 6px 12px; }
+.shared-preference-error { color: var(--natives-text-primary); background: var(--natives-surface); border: 1px solid var(--natives-border); padding: 12px; position: fixed; bottom: 16px; left: 16px; right: 16px; z-index: var(--z-toast, 1000); }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation: none !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

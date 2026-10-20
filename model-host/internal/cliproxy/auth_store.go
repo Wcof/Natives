@@ -8,7 +8,7 @@ import (
 	"sync"
 
 	"github.com/ldh/natives/model-host/internal/secrets"
-	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
+	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 )
 
 // AuthStore is the sole persistence adapter used by CLIProxyAPI. Auth payloads

@@ -437,6 +437,7 @@ console.log('--- AI Performance Widget Tests ---');
   assert.ok(VIEWS.includes('tools') && VIEWS.includes('limits') && VIEWS.includes('savings'));
 
   const mockApi = {
+    getCachedQuota: async () => ({ status: 'empty', entries: {} }),
     getUsageSources: async () => ({
       status: 'ready',
       sources: [

@@ -1,382 +1,197 @@
 (() => {
-const { state, actions, api, themeColor, themeRgba } = globalThis.Fund;
-// Fund 领域模块：专注模式（Focus Workspace）。职责一句话——三栏工作台的
-// 进入/退出、左栏上下文资产列表（来源切换/Sparkline/轮动）、全局检索弹窗、
-// 左栏拖拽调宽与键盘上下键切换标的。
-// import 方向：core（状态/api/取色）；跨域经 actions（selectSymbol/refreshWatchlist 等）。
+const { actions, state, t } = Fund;
+const workspace = document.getElementById('focus-workspace');
+const center = document.getElementById('focus-center');
+const right = document.getElementById('focus-right');
+const list = document.getElementById('focus-asset-list');
+const source = document.getElementById('focus-source');
+const resizer = document.getElementById('focus-resizer');
+const narrowList = document.getElementById('focus-list-dialog');
+const evidenceDialog = document.getElementById('focus-evidence-dialog');
+let origin = 'trends';
+let active = false, moved = [], returnFocus = null, scrollTop = 0, resizeDraft = null;
+let width = 220;
+try { width = Number(localStorage.getItem('natives-fund-focus-width')) || width; } catch (_) {}
 
-// ---------- 状态 ----------
-let focusActive = false;
-let focusSource = "watchlist"; // watchlist | market
-let focusWidth = 220;
-let focusItems = []; // { symbol, name, price, changePct }
-try {
-  const w = parseInt(localStorage.getItem("natives-fund-focus-width"), 10);
-  if (!isNaN(w)) focusWidth = w;
-} catch (e) {}
-
-// ---------- 节点搬移：进入时把现有图表/盘口区块搬入三栏，退出时搬回 ----------
-// 搬移而非复制：保持 canvas 上下文与事件绑定不失效，DOM 唯一归属。
-const MOVE_TO_CENTER = [
-  ".chart-control-bar", ".chart-canvas-container", ".market-compare-card",
-];
-const MOVE_TO_RIGHT = [
-  ".quote-summary-card", ".depth-card", ".metrics-card", ".alert-card", ".side-header", ".alert-box", ".depth-section", ".metrics-grid",
-];
-
-function safeDecode(str) {
-  if (!str) return '';
-  try {
-    return decodeURIComponent(str);
-  } catch (e) {
-    return str;
-  }
+// Layout only: search, data, drawings and chart instances retain their owners.
+function identity() { return origin === 'detail' ? (actions.stockDetailSelection?.() || {}) : (Fund.trends?.coordinator?.selection?.() || {}); }
+function resizeCharts() { origin === 'detail' ? actions.resizeStockDetailCharts?.() : actions.resizeTrendsCharts?.(); }
+function applyWidth(value, persist = false) {
+  width = Math.max(180, Math.min(360, value));
+  document.documentElement.style.setProperty('--focus-left-width', width + 'px');
+  resizer.setAttribute('aria-valuenow', String(width));
+  if (persist) { try { localStorage.setItem('natives-fund-focus-width', String(width)); } catch (_) {} }
+  resizeCharts();
 }
-
-function openStockDetail(symbol, name) {
-  if (!symbol) return;
-  const decodedName = safeDecode(name || symbol);
-  // 1. 选中该标的
-  actions.selectSymbol(symbol, decodedName, true);
-  // 2. 如果之前在专注模式，先安全退出
-  if (focusActive) {
-    exitFocus();
-  }
-  // 3. 打开全新独立股票详情全宽双栏视口（左侧 ECharts 大图区 + 右侧原始 Dashboard 卡片，无 AI 功能）
-  if (actions.openStockDetailView) {
-    actions.openStockDetailView(symbol, decodedName);
-  }
+function move(node, target) {
+  if (!node || !target) return;
+  moved.push({ node, parent: node.parentNode, next: node.nextSibling });
+  target.append(node);
 }
-actions.openStockDetail = openStockDetail;
-
-function enterFocus() {
-  openStockDetail(state.currentSymbol || "600519", state.currentName || "贵州茅台");
+function restoreNodes() {
+  moved.reverse().forEach(({ node, parent, next }) => parent.insertBefore(node, next?.parentNode === parent ? next : null));
+  moved = [];
 }
-
-function exitFocus() {
-  if (!focusActive) return;
-  focusActive = false;
-  const ws = document.getElementById("focus-workspace");
-  const center = document.getElementById("focus-center");
-  const right = document.getElementById("focus-right");
-  document.body.classList.remove("focus-mode");
-  if (ws) ws.hidden = true;
-  // 搬回原位：主栏区块回到 main-column 内 chart-control-bar 之前的顺序，
-  // 盘口区块回到 side-column 内 side-fund-content 之前的顺序（趋势信号
-  // right-panel 在 side-fund-content 之后，不受影响）。
-  const mainCol = document.querySelector(".main-column");
-  const sideCol = document.getElementById("side-fund-content") || document.getElementById("side-dashboard");
-  const anchorMain = document.querySelector(".main-column .search-box, .main-column section");
-  MOVE_TO_CENTER.forEach((sel) => {
-    const node = center.querySelector(sel);
-    if (node && mainCol) mainCol.insertBefore(node, anchorMain);
-  });
-  MOVE_TO_RIGHT.forEach((sel) => {
-    const node = right.querySelector(sel);
-    if (node && sideCol) sideCol.insertBefore(node, sideCol.firstChild);
-  });
-  actions.redrawChart();
+function items() {
+  return source.value === 'history'
+    ? (Fund.trends?.watch?.getHistory?.() || []).map(i => ({ symbol: i.code, name: i.name }))
+    : state.watchlistItems;
 }
-
-// ---------- 左栏资产列表 ----------
-function renderFocusList() {
-  const list = document.getElementById("focus-asset-list");
-  if (!list) return;
-  const source = focusItems;
+function renderList() {
+  if (!active) return;
+  const selected = identity();
+  const hidden = Fund.home?.displayMode?.() === 'hidden';
+  document.getElementById('focus-badge').textContent = t('fundFocusBadge') + ' · ' + (hidden ? '****' : selected.name || selected.symbol);
   list.replaceChildren();
-  source.forEach(function(item) {
-    const row = document.createElement("div");
-    row.className = "focus-asset-row" + (item.symbol === state.currentSymbol ? " active" : "");
-    row.setAttribute("role", "option");
-    row.setAttribute("aria-selected", String(item.symbol === state.currentSymbol));
+  if (hidden || !items().length) {
+    const hint = document.createElement('p');
+    hint.className = 'evidence-hint';
+    hint.textContent = t(hidden ? 'fundHomeOverviewHistoryHidden' : 'fundFocusContextEmpty');
+    list.append(hint);
+    return;
+  }
+  items().slice(0, 200).forEach(item => {
+    const row = document.createElement('button');
+    row.className = 'focus-asset-row';
+    row.type = 'button';
     row.dataset.symbol = item.symbol;
-
-    const text = document.createElement("div");
-    text.className = "fa-text";
-    const nameEl = document.createElement("div");
-    nameEl.className = "fa-name";
-    nameEl.textContent = item.name;
-    const codeEl = document.createElement("div");
-    codeEl.className = "fa-code";
-    codeEl.textContent = item.symbol;
-    text.append(nameEl, codeEl);
-
-    const spark = document.createElement("canvas");
-    spark.width = 56; spark.height = 20;
-    spark.className = "fa-spark";
-
-    const quote = document.createElement("div");
-    quote.className = "fa-quote";
-    const pctEl = document.createElement("div");
-    pctEl.className = "fa-pct " + (item.changePct > 0 ? "up" : item.changePct < 0 ? "down" : "");
-    pctEl.textContent = (item.changePct > 0 ? "+" : "") + (item.changePct || 0).toFixed(2) + "%";
-    const priceEl = document.createElement("div");
-    priceEl.className = "fa-price";
-    priceEl.textContent = item.price ? item.price.toFixed(2) : "–";
-    quote.append(pctEl, priceEl);
-
-    row.append(text, spark, quote);
-    row.addEventListener("click", function() {
-      actions.selectSymbol(item.symbol, item.name);
+    row.setAttribute('role', 'option');
+    const chosen = item.symbol.replace(/^(sh|sz|bj)/i, '') === selected.symbol?.replace(/^(sh|sz|bj)/i, '');
+    row.classList.toggle('active', chosen);
+    row.setAttribute('aria-selected', String(chosen));
+    row.textContent = (item.name || item.symbol) + ' · ' + item.symbol;
+    row.addEventListener('click', () => {
+      if (origin === 'detail') actions.openStockDetail?.(item.symbol, item.name, item.assetType);
+      else Fund.trends.coordinator.selectStock(item.symbol, item.name, '', item.assetType);
+      renderList();
+      if (narrowList.open) narrowList.close();
     });
-    row.addEventListener("dblclick", function() { enterFocus(); });
-    list.appendChild(row);
-    drawSpark(spark, item);
+    list.append(row);
   });
 }
-
-// 迷你分时微线图：挂机拉 minute 数据太重，用报价走势代理（本地生成基于
-// 涨跌幅的对称折线仅作方向示意不可取）。改为真实分钟数据但限流：
-// 仅对当前可视且激活标的取真数据，其余行画零线占位，WS 更新时重绘当前行。
-let sparkDataCache = {};
-function drawSpark(canvas, item) {
-  const cached = sparkDataCache[item.symbol];
-  if (!cached) { drawFlatSpark(canvas, item); return; }
-  drawSparkFromPoints(canvas, cached, item);
-}
-function drawFlatSpark(canvas, item) {
-  const ctx = canvas.getContext("2d");
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.strokeStyle = themeColor("--natives-border");
-  ctx.lineWidth = 1;
-  ctx.beginPath();
-  ctx.moveTo(0, canvas.height / 2);
-  ctx.lineTo(canvas.width, canvas.height / 2);
-  ctx.stroke();
-}
-function drawSparkFromPoints(canvas, pts, item) {
-  const ctx = canvas.getContext("2d");
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  if (!pts || pts.length < 2) { drawFlatSpark(canvas, item); return; }
-  let min = Infinity, max = -Infinity;
-  pts.forEach(function(p) { min = Math.min(min, p.price); max = Math.max(max, p.price); });
-  const range = (max - min) || 1;
-  ctx.strokeStyle = (item.changePct >= 0) ? themeColor("--color-up") : themeColor("--color-down");
-  ctx.lineWidth = 1.2;
-  ctx.beginPath();
-  pts.forEach(function(p, i) {
-    const x = (i / (pts.length - 1)) * (canvas.width - 2) + 1;
-    const y = canvas.height - 2 - ((p.price - min) / range) * (canvas.height - 4);
-    if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-  });
-  ctx.stroke();
-}
-// 激活标的的真实分时 Sparkline（限流：只拉当前选中标的）
-function refreshActiveSpark() {
-  const sym = state.currentSymbol;
-  if (sparkDataCache["_ts_" + sym] && Date.now() - sparkDataCache["_ts_" + sym] < 60000) return;
-  api("GET", "/api/market/minute?symbol=" + sym).then(function(res) {
-    sparkDataCache[sym] = res.points || [];
-    sparkDataCache["_ts_" + sym] = Date.now();
-    if (focusActive) renderFocusList();
-  }).catch(function() {});
-}
-actions.refreshActiveSpark = refreshActiveSpark;
-
-// ---------- 数据源 ----------
-function loadFocusItems() {
-  if (focusSource === "watchlist") {
-    // 复用 watchlist 状态（app.js 的 refreshWatchlist 已维护）
-    actions.refreshWatchlist();
-    focusItems = state.watchlistItems.map(function(it) {
-      const q = state.lastQuotesMap[it.symbol] || {};
-      return { symbol: it.symbol, name: it.name, price: q.price, changePct: q.changePct };
-    });
-    renderFocusList();
+function enterFocus() {
+  if (active) return;
+  origin = document.getElementById('view-stock-detail')?.hidden === false ? 'detail' : 'trends';
+  if (!identity().symbol) { document.getElementById('search-input')?.focus(); return; }
+  returnFocus = document.activeElement;
+  scrollTop = document.querySelector('.main-column')?.scrollTop || 0;
+  active = true;
+  if (origin === 'detail') {
+    move(document.querySelector('#view-stock-detail .sd-topbar'), center);
+    move(document.querySelector('#view-stock-detail .sd-chart-toolbar-wrap'), center);
+    move(document.querySelector('#view-stock-detail .sd-chart-stage'), center);
+    move(document.querySelector('#view-stock-detail .sd-right-panel'), right);
   } else {
-    api("GET", "/api/market/stocks").then(function(res) {
-      focusItems = (res.quotes || []).slice(0, 50).map(function(q) {
-        return { symbol: q.code || q.symbol, name: q.name, price: q.price, changePct: q.changePct };
-      });
-      renderFocusList();
-    }).catch(function() {});
+    move(document.querySelector('#view-trends .topbar'), center);
+    move(document.querySelector('#view-trends .chart-toolbar'), center);
+    move(document.querySelector('#view-trends .chart-container'), center);
+    move(document.getElementById('trends-right-panel'), right);
   }
+  document.body.classList.add('focus-mode');
+  workspace.hidden = false;
+  renderList();
+  resizeCharts();
+  document.getElementById('focus-exit-btn').focus();
 }
-actions.loadFocusItems = loadFocusItems;
-
-const sourceSel = document.getElementById("focus-source");
-sourceSel.addEventListener("change", function() {
-  focusSource = sourceSel.value;
-  loadFocusItems();
+function finishResize(commit) {
+  if (!resizeDraft) return;
+  const saved = resizeDraft;
+  resizeDraft = null;
+  resizer.classList.remove('dragging');
+  if (resizer.hasPointerCapture(saved.pointerId)) resizer.releasePointerCapture(saved.pointerId);
+  applyWidth(commit ? width : saved.width, commit);
+}
+function closeContext() { if (narrowList.open) narrowList.close(); }
+function exitFocus() {
+  if (!active) return;
+  finishResize(false);
+  closeContext();
+  if (evidenceDialog.open) evidenceDialog.close();
+  if (origin === 'detail') actions.cancelStockDetailDrawing?.();
+  else Fund.trends?.drawings?.cancelDraft?.();
+  active = false;
+  restoreNodes();
+  document.body.classList.remove('focus-mode');
+  workspace.hidden = true;
+  document.querySelector('.main-column').scrollTop = scrollTop;
+  resizeCharts();
+  if (returnFocus?.isConnected) returnFocus.focus({ preventScroll: true });
+  returnFocus = null;
+}
+actions.enterFocusMode = enterFocus;
+actions.exitFocusMode = exitFocus;
+source.addEventListener('change', renderList);
+document.getElementById('btn-focus-mode').addEventListener('click', enterFocus);
+document.getElementById('sd-btn-focus').addEventListener('click', enterFocus);
+document.getElementById('focus-exit-btn').addEventListener('click', exitFocus);
+document.getElementById('focus-list-btn').addEventListener('click', () => {
+  move(document.getElementById('focus-left'), narrowList);
+  narrowList.showModal();
 });
-
-// ---------- 报价联动：刷新左栏报价 ----------
-// 轮询层把报价写入 lastQuotesMap（watchlist-table 刷新时同步触发预警判定）；
-// 这里订阅同一数据源：专注模式激活时低频重绘左栏（节流 1s）。
-let lastListRender = 0;
-setInterval(function() {
-  if (!focusActive) return;
-  if (Date.now() - lastListRender < 1000) return;
-  lastListRender = Date.now();
-  if (focusSource === "watchlist") {
-    let changed = false;
-    focusItems.forEach(function(item) {
-      const q = state.lastQuotesMap[item.symbol];
-      if (q) {
-        item.price = q.price;
-        item.changePct = q.changePct;
-        changed = true;
-      }
-    });
-    if (changed) renderFocusList();
+document.getElementById('focus-list-close').addEventListener('click', closeContext);
+narrowList.addEventListener('close', () => {
+  const entry = moved.findIndex(entry => entry.node.id === 'focus-left');
+  if (entry >= 0) {
+    const { node, parent, next } = moved.splice(entry, 1)[0];
+    parent.insertBefore(node, next?.parentNode === parent ? next : null);
   }
-}, 1000);
-
-// ---------- 键盘：↑/↓ 切换标的，Esc 退出 ----------
-document.addEventListener("keydown", function(e) {
-  if (!focusActive) return;
-  const tag = (document.activeElement && document.activeElement.tagName || "").toLowerCase();
-  if (tag === "input" || tag === "textarea" || tag === "select") return;
-  if (e.key === "Escape") { exitFocus(); return; }
-  if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+  if (active) document.getElementById('focus-list-btn').focus();
+});
+document.getElementById('focus-evidence-btn').addEventListener('click', () => {
+  move(right, evidenceDialog);
+  evidenceDialog.showModal();
+  resizeCharts();
+});
+document.getElementById('focus-evidence-close').addEventListener('click', () => evidenceDialog.close());
+evidenceDialog.addEventListener('close', () => {
+  const index = moved.findIndex(entry => entry.node === right);
+  if (index >= 0) {
+    const { node, parent, next } = moved.splice(index, 1)[0];
+    parent.insertBefore(node, next?.parentNode === parent ? next : null);
+  }
+  if (active) document.getElementById('focus-evidence-btn').focus();
+});
+list.addEventListener('keydown', e => {
+  if (!['ArrowUp', 'ArrowDown', 'Home', 'End'].includes(e.key)) return;
+  const rows = [...list.querySelectorAll('button')];
+  if (!rows.length) return;
   e.preventDefault();
-  if (!focusItems.length) return;
-  const idx = focusItems.findIndex(function(i) { return i.symbol === state.currentSymbol; });
-  const next = e.key === "ArrowUp"
-    ? (idx <= 0 ? focusItems.length - 1 : idx - 1)
-    : (idx < 0 || idx >= focusItems.length - 1 ? 0 : idx + 1);
-  const item = focusItems[next];
-  if (item) actions.selectSymbol(item.symbol, item.name);
+  const index = rows.indexOf(document.activeElement);
+  const next = e.key === 'Home' ? 0 : e.key === 'End' ? rows.length - 1
+    : (index + (e.key === 'ArrowUp' ? rows.length - 1 : 1)) % rows.length;
+  rows[next].focus();
 });
-
-// ---------- 左栏拖拽调宽 ----------
-function applyFocusWidth(w, persist) {
-  focusWidth = Math.max(180, Math.min(360, w));
-  document.documentElement.style.setProperty("--focus-left-width", focusWidth + "px");
-  try { if (persist) localStorage.setItem("natives-fund-focus-width", String(focusWidth)); } catch (e) {}
-  actions.redrawChart();
-}
-const focusResizer = document.getElementById("focus-resizer");
-let focusResizing = false;
-focusResizer.addEventListener("mousedown", function(e) {
-  focusResizing = true;
-  focusResizer.classList.add("dragging");
-  document.body.style.cursor = "col-resize";
-  document.body.style.userSelect = "none";
+resizer.addEventListener('pointerdown', e => {
+  if (e.button !== 0) return;
+  resizeDraft = { pointerId: e.pointerId, width, x: e.clientX };
+  resizer.setPointerCapture(e.pointerId);
+  resizer.classList.add('dragging');
   e.preventDefault();
 });
-document.addEventListener("mousemove", function(e) {
-  if (!focusResizing) return;
-  applyFocusWidth(e.clientX, false); // 左栏靠左：clientX 即宽度
+resizer.addEventListener('pointermove', e => {
+  if (resizeDraft?.pointerId === e.pointerId) applyWidth(resizeDraft.width + e.clientX - resizeDraft.x);
 });
-document.addEventListener("mouseup", function() {
-  if (!focusResizing) return;
-  focusResizing = false;
-  focusResizer.classList.remove("dragging");
-  document.body.style.cursor = "";
-  document.body.style.userSelect = "";
-  applyFocusWidth(focusWidth, true);
+resizer.addEventListener('pointerup', () => finishResize(true));
+resizer.addEventListener('pointercancel', () => finishResize(false));
+resizer.addEventListener('lostpointercapture', () => finishResize(false));
+resizer.addEventListener('keydown', e => {
+  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(e.key)) return;
+  e.preventDefault();
+  applyWidth(e.key === 'Home' ? 180 : e.key === 'End' ? 360 : width + (e.key === 'ArrowLeft' ? -20 : 20), true);
 });
-focusResizer.addEventListener("keydown", function(e) {
-  if (e.key === "ArrowLeft") { applyFocusWidth(focusWidth - 20, true); e.preventDefault(); }
-  else if (e.key === "ArrowRight") { applyFocusWidth(focusWidth + 20, true); e.preventDefault(); }
-  else if (e.key === "Home") { applyFocusWidth(180, true); e.preventDefault(); }
-  else if (e.key === "End") { applyFocusWidth(360, true); e.preventDefault(); }
+document.addEventListener('keydown', e => {
+  if (!active || e.key !== 'Escape' || document.querySelector('dialog[open]') || e.defaultPrevented) return;
+  e.preventDefault();
+  if (resizeDraft) { finishResize(false); return; }
+  if (origin === 'detail' ? actions.cancelStockDetailDrawing?.() : Fund.trends?.drawings?.cancelDraft?.()) return;
+  exitFocus();
 });
-applyFocusWidth(focusWidth, false);
-
-// ---------- 全局检索弹窗 ----------
-const backdrop = document.getElementById("focus-search-backdrop");
-const searchInput = document.getElementById("focus-search-input");
-const searchResults = document.getElementById("focus-search-results");
-let searchTimer = null;
-let searchHits = [];
-
-function openSearch() {
-  backdrop.hidden = false;
-  backdrop.removeAttribute("hidden");
-  searchInput.value = "";
-  searchResults.replaceChildren();
-  searchInput.focus();
-}
-function closeSearch() {
-  backdrop.hidden = true;
-  backdrop.setAttribute("hidden", "");
-  searchInput.value = "";
-  searchResults.replaceChildren();
-}
-
-document.getElementById("focus-add-btn").addEventListener("click", openSearch);
-document.getElementById("focus-add-row-btn").addEventListener("click", openSearch);
-backdrop.addEventListener("click", function(e) { if (e.target === backdrop) closeSearch(); });
-
-searchInput.addEventListener("input", function() {
-  clearTimeout(searchTimer);
-  const q = searchInput.value.trim();
-  if (!q) { searchResults.replaceChildren(); return; }
-  searchTimer = setTimeout(function() {
-    api("GET", "/api/market/suggest?input=" + encodeURIComponent(q)).then(function(res) {
-      searchHits = res.suggestions || [];
-      searchResults.replaceChildren();
-      if (!searchHits.length) {
-        const empty = document.createElement("div");
-        empty.className = "focus-search-empty";
-        empty.textContent = "未找到匹配的标的";
-        searchResults.appendChild(empty);
-        return;
-      }
-      searchHits.forEach(function(hit) {
-        const row = document.createElement("div");
-        row.className = "focus-search-item";
-        const nameSpan = document.createElement("span");
-        nameSpan.textContent = hit.name;
-        const symSpan = document.createElement("span");
-        symSpan.className = "fs-sym";
-        symSpan.textContent = hit.market + " " + hit.symbol;
-        row.append(nameSpan, symSpan);
-        row.addEventListener("click", function() {
-          closeSearch();
-          api("POST", "/api/watchlists/items", {
-            watchlistId: state.activeGroup, symbol: hit.symbol, name: hit.name,
-          }).then(function() {
-            focusSource = "watchlist";
-            if (sourceSel) sourceSel.value = "watchlist";
-            actions.refreshWatchlist();
-            loadFocusItems();
-            actions.selectSymbol(hit.symbol, hit.name);
-          }).catch(function(err) {
-            console.error("Failed to add to watchlist:", err);
-          });
-        });
-        searchResults.appendChild(row);
-      });
-    }).catch(function(err) {
-      searchResults.replaceChildren();
-      const empty = document.createElement("div");
-      empty.className = "focus-search-empty";
-      empty.textContent = "搜索失败：" + (err && err.message ? err.message : "未知错误");
-      searchResults.appendChild(empty);
-    });
-  }, 250);
-});
-searchInput.addEventListener("keydown", function(e) {
-  if (e.key === "Escape") closeSearch();
-  if (e.key === "Enter" && searchHits.length) {
-    searchResults.firstChild && searchResults.firstChild.click();
-  }
-});
-
-// ---------- 入口 ----------
-document.getElementById("focus-exit-btn").addEventListener("click", exitFocus);
-// selectSymbol 编排后同步专注模式状态（badge/列表高亮/激活 Sparkline）
-const origSelect = actions.selectSymbol;
-actions.selectSymbol = function(symbol, name, userTriggered) {
-  origSelect(symbol, name, userTriggered);
-  if (focusActive) {
-    document.getElementById("focus-badge").textContent = "专注模式 · " + (name || symbol);
-    renderFocusList();
-    refreshActiveSpark();
-  }
-};
-// 双击自选表行/成分股行 = 进入该标的的个股详情视口（趋势分析全盘呈现）
-document.addEventListener("dblclick", function(e) {
-  const row = e.target.closest && e.target.closest("#watchlist-table tbody tr, #sector-stocks-table tbody tr, .focus-asset-row");
-  if (!row) return;
-  const symbol = row.dataset.symbol || row.dataset.code || (row.querySelector("td:nth-child(2)")?.textContent?.trim());
-  const name = row.dataset.name || (row.querySelector("td:nth-child(3)")?.textContent?.trim()) || (row.querySelector("td:nth-child(2)")?.textContent?.trim());
-  if (symbol) {
-    openStockDetail(symbol, name);
-  }
-});
-
+document.addEventListener('fund:research-selection-changed', renderList);
+document.addEventListener('fund:detail-selection-changed', renderList);
+document.addEventListener('fund:language-changed', renderList);
+document.addEventListener('fund:display-mode-changed', renderList);
+window.addEventListener('blur', () => finishResize(false));
+document.addEventListener('visibilitychange', () => { if (document.hidden) finishResize(false); });
+window.addEventListener('pagehide', exitFocus);
+applyWidth(width);
 })();

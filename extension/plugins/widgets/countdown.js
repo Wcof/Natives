@@ -1,3 +1,4 @@
+import { subscribeWidgetClock, relativeTimeArgs } from '../widget-clock.js';
 import { escapeHtml } from '../sanitizer.js';
 
 export const countdownWidget = {
@@ -17,7 +18,7 @@ export const countdownWidget = {
       const difference = target - Date.now();
       heading.textContent = difference <= 0
         ? t('countdownComplete', '目标时间已到')
-        : new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' }).format(...relativeArgs(difference));
+        : new Intl.RelativeTimeFormat(undefined, { numeric: 'auto' }).format(...relativeTimeArgs(difference));
       container.append(heading);
       if (data.title) {
         const title = document.createElement('h4');
@@ -26,8 +27,8 @@ export const countdownWidget = {
       }
     };
     update();
-    const intervalId = setInterval(update, 1000);
-    return () => clearInterval(intervalId);
+    const stopClock = subscribeWidgetClock(update, 1000);
+    return () => stopClock();
   },
   renderSettings(container, data = {}, onChange = () => {}, { t = (key, fallback) => fallback || key } = {}) {
     container.innerHTML = `<div class="inspector-field-group">
@@ -43,14 +44,6 @@ export const countdownWidget = {
   },
   styles: '',
 };
-
-function relativeArgs(milliseconds) {
-  const seconds = Math.abs(milliseconds) / 1000;
-  if (seconds >= 86400) return [Math.round(milliseconds / 86400000), 'day'];
-  if (seconds >= 3600) return [Math.round(milliseconds / 3600000), 'hour'];
-  if (seconds >= 60) return [Math.round(milliseconds / 60000), 'minute'];
-  return [Math.round(milliseconds / 1000), 'second'];
-}
 
 function toLocalInput(timestamp) {
   const date = new Date(timestamp - new Date(timestamp).getTimezoneOffset() * 60000);

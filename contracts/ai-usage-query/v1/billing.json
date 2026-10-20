@@ -1,0 +1,12 @@
+{
+  "status": "ready",
+  "generatedAt": "2026-09-28T08:00:00Z",
+  "summaries": [
+    {
+      "currency": "USD",
+      "reportedCost": 1.4852,
+      "reconciledCost": 1.4852,
+      "unpricedCount": 0
+    }
+  ]
+}

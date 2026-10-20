@@ -20,6 +20,7 @@ package usage
 //     结构化 usage，矩阵已随本次核对修订。
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -29,8 +30,8 @@ import (
 	"time"
 )
 
-func collectGrokSource(s *Store, root string, now time.Time) collectResult {
-	return collectJSONLSessionDir(s, filepath.Join(root, "sessions"), "grok-build", "Grok Build", s.collectGrokFile, now)
+func collectGrokSource(ctx context.Context, s *Store, root string, now time.Time) collectResult {
+	return collectJSONLSessionDir(ctx, s, filepath.Join(root, "sessions"), "grok-build", "Grok Build", s.collectGrokFile, now)
 }
 
 func (s *Store) collectGrokFile(filePath string, now time.Time, instanceID string) (int64, int64, error) {

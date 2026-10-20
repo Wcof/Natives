@@ -1,4 +1,5 @@
 {
+  "schemaVersion": 2,
   "appId": "tokenusage",
   "displayName": {
     "zh_CN": "Token 统计",
@@ -10,7 +11,19 @@
   },
   "entryRoute": "app.html?app=tokenusage",
   "moduleApiVersion": 1,
-  "dataSchemaVersion": 1,
-  "capabilityVersion": 1,
-  "permissions": ["local-data", "keychain"]
+  "dataSchemaVersion": 2,
+  "capabilityVersion": 2,
+  "permissions": [
+    "local-data"
+  ],
+  "capabilities": [
+    "local-data"
+  ],
+  "requires": [
+    "ai.usage.read",
+    "ai.quota.read"
+  ],
+  "optionalActions": [
+    "ai.quota.refresh"
+  ]
 }

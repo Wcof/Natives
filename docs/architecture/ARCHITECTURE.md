@@ -1,9 +1,9 @@
 # Natives 当前架构
 
-> 版本：v4.0 · 2026-09-14
+> 版本：v4.1 · 维护日期：2026-10-04
 >
-> 权威约束见 [`docs/standards/`](../standards/README.md)、ADR-0020、ADR-0027 和 ADR-0029。
-> 本文只描述当前可运行产品；历史设计在 [`docs/archive/`](../archive/README.md)。
+> 权威约束见 [`docs/standards/`](../standards/README.md) 与 ADR-0031；动态端口、空间投资卡、模块推理和 Secret 能力分别见 ADR-0035～0038。ADR-0020／0029 按其仍有效的产品与交付范围适用，不恢复旧每模块 Host 链路。
+> 本文描述当前运行架构；已接受、待实施的包内整改目标单列。历史设计在 [`docs/archive/`](../archive/README.md)。
 
 ## 产品边界
 
@@ -44,7 +44,8 @@ App Center 负责列出模块状态、打开、显示/隐藏、启用/停用、�
 ## 安全与数据
 
 - 页面只能访问受限领域方法；Host 不向页面暴露任意路径、进程、SQLite 或 Secret 明文。
-- 模块页面在无 `allow-same-origin` 的 sandbox iframe 中，通过 127.0.0.1 loopback 和短期 bearer session 访问自身 Host。
+- 模块页面在 `allow-scripts allow-forms` 的 sandbox iframe 中，通过动态端口 `127.0.0.1:0` 与短期 Bearer 会话访问统一 App Runtime；不使用 `allow-same-origin`。
+- 模块 AI 请求经 Extension 通用会话代理进入 Model Host；模块 Secret 配置经可信 Shell 与 Runtime 能力接口进入 OS Keychain，明文不进入模块 iframe。
 - Secret 只在 OS Keychain；日志、错误、数据库和扩展存储不得出现明文。
 - 所有用户写入先做路径、来源、大小和状态校验；数据清理只删除明确选择的用户数据并保留代码、注册和偏好。
 - 更新使用 staging、哈希校验、原子 rename 和失败清理；隐式降级拒绝。
@@ -56,3 +57,23 @@ App Center 负责列出模块状态、打开、显示/隐藏、启用/停用、�
 ## 变更规则
 
 修改产品边界先更新 ADR，再同步 Standards 和契约。任何新增模块进入下一版完整 Natives 包，不新增第二套分发链。旧设计只可在归档目录阅读，不可作为实现依据。
+
+## 已接受的模块内部整改目标（源码待实施）
+
+[ADR-0039](../adr/0039-module-boundaries-and-internal-contracts.md) 保留以上产品／进程架构，
+调整的是模块内部的依赖、接口与 owner。Fund 在单一业务库上划分账本、估值／
+收益、外部数据、目标／分析、通知和查询投影；它们通过包内业务操作协作，
+跨领域写入由同一事务 owner 完成，不变成多个服务或独立应用。
+
+```text
+HTTP / Native adapter ─┐
+background task ───────┴→ owned business operation → Store / controlled IO
+module UI → explicit actions / selectors → owned display state / private draft
+Host domain → declared SDK adapter → upstream SDK
+```
+
+领域与任务不得反向调用 HTTP handler；前端私有快照、图表和草稿不能成为公开
+万能状态；SDK 类型止于适配位置。部署隔离、事务、资源回收、安全和精度不因
+拆分而放宽。规则正文见 [技术 08](../standards/technical/08-module-boundaries-and-contracts.md)，
+完整施工与验收见 [Plan](/Users/ldh/Downloads/project/plan/mode/README.md)。
+现有生命周期修复与投资功能作为实际基线保留，源码是否完成按 ROADMAP 与新证据核验。

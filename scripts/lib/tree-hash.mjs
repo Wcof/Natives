@@ -19,6 +19,9 @@ export function treeSha256(root) {
 
   function walk(dir, prefix) {
     for (const name of readdirSync(dir)) {
+      // macOS package metadata is not product content and must not perturb the
+      // signed canonical tree on install.
+      if (name.startsWith('._') || name === '.DS_Store') continue;
       const full = join(dir, name);
       const rel = prefix ? `${prefix}/${name}` : name;
       const stat = lstatSync(full);

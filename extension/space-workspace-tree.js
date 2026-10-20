@@ -44,7 +44,7 @@ export function createSpaceWorkspaceTree({ $, t, activateWorkspace, renameWorksp
   menu.addEventListener('click', (event) => {
     const action = event.target.closest('[data-action]')?.dataset.action;
     const workspace = menuWorkspace;
-    closeMenu();
+    closeMenu({ restoreFocus: true });
     if (!workspace) return;
     if (action === 'rename') renameWorkspace(workspace);
     if (action === 'delete') deleteWorkspace(workspace);
@@ -83,6 +83,7 @@ export function createSpaceWorkspaceTree({ $, t, activateWorkspace, renameWorksp
       };
 
       const more = document.createElement('button');
+      more.id = `workspace-menu-${workspace.id}`;
       more.type = 'button';
       more.className = 'ws-more-btn';
       more.title = t('moreActions', '更多');

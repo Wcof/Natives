@@ -135,20 +135,22 @@ pub fn query_snapshot(conn: &Connection, id: &str) -> StoreResult<WorkspaceSnaps
 }
 
 pub fn query_settings(conn: &Connection, keys: &[String]) -> StoreResult<Value> {
+    if keys.len() > 128 {
+        return Err(super::types::WorkspaceError::InvalidInput(
+            "too many settings keys".into(),
+        ));
+    }
+    let encoded = serde_json::to_string(keys)
+        .map_err(|e| super::types::WorkspaceError::InvalidInput(e.to_string()))?;
+    let mut statement = conn
+        .prepare("SELECT key,value FROM settings WHERE key IN (SELECT value FROM json_each(?1))")?;
+    let rows = statement.query_map([encoded], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
     let mut output = json!({});
-    for key in keys {
-        let value: Option<String> = conn
-            .query_row("SELECT value FROM settings WHERE key = ?1", [key], |row| {
-                row.get(0)
-            })
-            .map(Some)
-            .or_else(|error| match error {
-                rusqlite::Error::QueryReturnedNoRows => Ok(None),
-                other => Err(other),
-            })?;
-        if let Some(value) = value {
-            output[key.as_str()] = serde_json::from_str(&value).unwrap_or(Value::String(value));
-        }
+    for row in rows {
+        let (key, value) = row?;
+        output[key] = serde_json::from_str(&value).unwrap_or(Value::String(value));
     }
     Ok(output)
 }

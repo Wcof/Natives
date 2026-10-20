@@ -1,3 +1,5 @@
+import { storage } from './platform/storage.js';
+import { subscribeCoreEvents } from './platform/events.js';
 // App Center owns its Native Port and projects the fixed built-in modules of
 // the complete Natives product (plan §3.4/§4): open, show/hide, preferences
 // and data management. Modules are shipped in the complete product; the
@@ -5,9 +7,9 @@
 import { createNativeClient } from './native-client.js';
 import { saveAppNavigation, projectionFromApps } from './app-navigation-projection.js';
 import { storageGet, storageSet } from './files-preferences.js';
-import { appLifecycle } from './app-lifecycle.js';
 import { classifyAppError } from './app-errors.js';
 import { createAppShell } from './app.js';
+import { getMessage, initI18n } from './platform/i18n.js';
 
 // AC-11: standalone pages inherit the product appearance preference and
 // follow its changes instead of a hardcoded theme.
@@ -17,7 +19,7 @@ Promise.resolve()
     document.documentElement.dataset.theme = ['volt', 'archive'].includes(theme) ? theme : 'archive';
   })
   .catch(() => {});
-globalThis.chrome?.storage?.onChanged?.addListener((changes, area) => {
+storage.onChanged?.addListener((changes, area) => {
   if (area === 'local' && changes['natives-theme']) {
     const theme = changes['natives-theme'].newValue;
     document.documentElement.dataset.theme = ['volt', 'archive'].includes(theme) ? theme : 'archive';
@@ -25,19 +27,23 @@ globalThis.chrome?.storage?.onChanged?.addListener((changes, area) => {
 });
 
 export function createAppCenter({
-  t = (key, fallback) => globalThis.chrome?.i18n?.getMessage?.(key) || fallback || key,
+  t = (key, fallback) => { const value = getMessage(key); return value === key ? fallback || key : value; },
+  language = 'zh_CN',
   client,
-  storage = globalThis.chrome?.storage,
+  storage: projectionStorage = storage,
   list: customList,
   toast: customToast,
+  openSettings,
 } = {}) {
+  // mode/T06：嵌入 Shell 的设置打开器由装配入口注入（app.html/apps-boot.js/
+  // 设置页各自提供），缺依赖在装配期明确失败。
+  if (typeof openSettings !== 'function') throw new Error('createAppCenter: openSettings is required (inject from the page assembly entry)');
   const list = customList || (typeof document !== 'undefined' ? document.getElementById('apps-list') : null);
   const toast = customToast || (typeof document !== 'undefined' ? document.getElementById('apps-toast') : null);
   const state = { apps: [], modules: [], pendingResets: [], product: null,
     revision: 0, host: null, loading: true, error: null, busy: new Map(), failures: new Map() };
   let toastTimer, idleTimer, disposed = false, suspended = false;
   const dialogs = new Set();
-  let lifecycle = appLifecycle();
   const native = client || createNativeClient({
     host: 'com.natives.file_manager', timeoutMs: 20_000,
     writeMethods: new Set(['apps:clear_data', 'apps:set_enabled', 'apps:set_sidebar', 'apps:open_onboarding']),
@@ -46,6 +52,12 @@ export function createAppCenter({
       if (!intentional && !disposed) { state.error = classifyAppError(error); render(); }
     },
   });
+  let recovering;
+  const stopEvents=subscribeCoreEvents(event=>{
+    if ((event.type==='resync' && event.reason!=='unavailable') || event.type==='apps_changed') {
+      if (!recovering) recovering=refresh().finally(()=>{recovering=undefined;});
+    }
+  }, ['apps']);
 
   function setToast(message, error = false) {
     if (disposed) return;
@@ -68,8 +80,7 @@ export function createAppCenter({
   function localized(value) {
     if (value == null) return '';
     if (typeof value !== 'object') return String(value);
-    const lang = globalThis.chrome?.i18n?.getUILanguage?.() || 'zh_CN';
-    return value[lang.startsWith('en') ? 'en' : 'zh_CN'] || value.zh_CN || value.en || '';
+    return value[language.startsWith('en') ? 'en' : 'zh_CN'] || value.zh_CN || value.en || '';
   }
   function action(icon, label, run, { danger = false, primary = false, disabled = false } = {}) {
     const button = node('button', `action${danger ? ' danger' : ''}${primary ? ' primary' : ''}`);
@@ -115,7 +126,7 @@ export function createAppCenter({
       state.product = snapshot.product || null;
       state.revision = snapshot.revision;
       state.error = state.host ? null : (state.error || 'appsHostOffline');
-      await saveAppNavigation(projectionFromApps(state.apps, state.revision), storage);
+      await saveAppNavigation(projectionFromApps(state.apps, state.revision, state.modules), projectionStorage);
     } catch (error) { if (!disposed) state.error = classifyAppError(error); }
     render();
     scheduleIdle();
@@ -125,19 +136,6 @@ export function createAppCenter({
     try { await handshake(); }
     catch (error) { state.error = classifyAppError(error); render(); return; }
     await refresh();
-  }
-  async function stopOwner(appId) {
-    // Notify same-profile pages immediately, then use the documented runtime
-    // message so the actual app.html owner closes its direct Native Port.
-    lifecycle.notify('stop', appId);
-    try {
-      const result = await globalThis.chrome?.runtime?.sendMessage?.({ type: 'natives-app-stop', appId });
-      return result?.stopped === true;
-    } catch {
-      // No local owner is normal. Core's runtime lock remains the authority
-      // for another browser profile or an uncooperative process.
-      return false;
-    }
   }
   function items() {
     const entries = new Map();
@@ -168,12 +166,9 @@ export function createAppCenter({
         fixed: false,
       };
       Object.assign(entry, {
-        registered: true,
         version: app.version,
         enabled: app.enabled,
         showInSidebar: app.show_in_sidebar,
-        needsMigration: app.needs_migration,
-        hostRegistered: app.host_registered,
         sidebarOrder: app.sidebar_order,
       });
       entries.set(app.app_id, entry);
@@ -249,15 +244,11 @@ export function createAppCenter({
     } else {
       let status;
       if (resetPending) status = 'appsClearing';
-      else if (entry.needsMigration) status = 'appsNeedsMigration';
-      else if (entry.registered && !entry.hostRegistered) status = 'appsRepairRequired';
-      else if (entry.registered) status = entry.enabled ? 'appsReady' : 'appsDisabled';
+      else if (entry.fixed && !entry.enabled) status = 'appsDisabled';
       else if (entry.fixed) status = entry.present && entry.configured ? 'appsReady' : 'appsProductSourceMissing';
       else status = 'appsProductSourceMissing';
       actions.append(node('span', 'status', t(status)));
-      const openable = (entry.registered || (entry.fixed && entry.present))
-        && entry.enabled && !resetPending
-        && !entry.needsMigration;
+      const openable = entry.fixed && entry.present && entry.configured && entry.enabled && !resetPending;
       if (openable) {
         article.classList.add('clickable');
         article.onclick = (e) => {
@@ -266,13 +257,9 @@ export function createAppCenter({
         };
         actions.append(action('open', t('appsOpen'), () => openApp(entry), { primary: true, disabled }));
       }
-      // Preferences only exist once the module is configured (an apps row
-      // exists); a not-yet-configured module has no row to toggle.
-      if (entry.registered) {
+      if (entry.fixed && entry.configured) {
         body.append(toggle(t('appsEnabled'), entry.enabled, async (enabled) => {
-          if (!enabled) { await stopOwner(entry.app_id); lifecycle.notify('maintenance', entry.app_id); }
-          try { await native.call('apps:set_enabled', { appId: entry.app_id, enabled }); }
-          finally { lifecycle.notify('changed', entry.app_id); }
+          await native.call('apps:set_enabled', { appId: entry.app_id, enabled });
         }));
         body.append(toggle(t('appsShowInSidebar'), entry.showInSidebar, (show) =>
           native.call('apps:set_sidebar', { appId: entry.app_id, show })));
@@ -293,8 +280,6 @@ export function createAppCenter({
     state.busy.set(entry.app_id, { stage: 'appsClearing' });
     state.failures.delete(entry.app_id);
     render();
-    await stopOwner(entry.app_id);
-    lifecycle.notify('maintenance', entry.app_id);
     try {
       const unique = globalThis.crypto?.randomUUID?.() || `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
       await native.call('apps:clear_data', {
@@ -309,7 +294,6 @@ export function createAppCenter({
       setToast(t('appsDataDeleted'));
     } catch (error) { state.failures.set(entry.app_id, classifyAppError(error)); throw error; }
     finally {
-      lifecycle.notify('changed', entry.app_id);
       state.busy.delete(entry.app_id);
       await refresh();
     }
@@ -393,7 +377,7 @@ export function createAppCenter({
     stage.hidden = false;
     embeddedAppId = appId;
     if (!embeddedShell || !embeddedShell.hasSession) {
-      embeddedShell = createAppShell({ appId, stage });
+      embeddedShell = createAppShell({ appId, stage, openSettings });
       void embeddedShell.open();
     }
   }
@@ -440,17 +424,17 @@ export function createAppCenter({
     closeEmbedded();
     for (const close of dialogs) close(null);
     native.disconnect?.();
-    lifecycle.close();
     clearTimeout(toastTimer); clearTimeout(idleTimer);
   }
   function resume(event) {
     if (!event.persisted || disposed || !suspended) return;
     suspended = false;
-    lifecycle = appLifecycle();
     void reconnect();
   }
   function dispose() {
     disposed = true;
+    stopEvents();
+    storage.onChanged.removeListener(onPreferences);
     suspend();
     document.removeEventListener?.('visibilitychange', scheduleIdle);
     globalThis.window?.removeEventListener('pagehide', suspend);
@@ -505,8 +489,23 @@ export function createAppCenter({
   });
 
   document.querySelectorAll('[data-i18n]').forEach((el) => { el.textContent = t(el.dataset.i18n, el.textContent); });
+  document.querySelectorAll('[data-i18n-title]').forEach((el) => {
+    el.title = t(el.dataset.i18nTitle, el.title);
+    if (el.hasAttribute('aria-label')) el.setAttribute('aria-label', el.title);
+  });
+  const onPreferences=async(changes,area)=>{
+    if(area!=='local' || disposed)return;
+    if(changes['natives-apps-sidebar-collapsed'])applySidebarCollapsed(changes['natives-apps-sidebar-collapsed'].newValue);
+    if(changes['natives-language']){
+      language=changes['natives-language'].newValue;
+      await initI18n(language);if(disposed)return;
+      document.documentElement.lang=language==='en'?'en':'zh-CN';
+      document.querySelectorAll('[data-i18n]').forEach(el=>{el.textContent=t(el.dataset.i18n);});render();
+    }
+  };
+  storage.onChanged.addListener(onPreferences);
   const ready = reconnect();
   return { refresh, state, dispose, ready };
 }
 
-if (typeof document !== 'undefined' && document.getElementById('apps-list')) createAppCenter();
+// mode/T06：页面装配移至 apps-boot.js（装配汇点，注入 openSettings）。

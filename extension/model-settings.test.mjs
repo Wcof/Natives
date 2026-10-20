@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { createModelSettingsAPI } from './model-settings-api.js';
+import { localizedModelError } from './model-settings-errors.js';
 
 class FakePort {
   constructor() {
@@ -24,7 +25,7 @@ globalThis.__NATIVES_DEV_NATIVE_CONNECT__ = (host) => { connectedHost = host; re
 let event;
 const api = createModelSettingsAPI({ onEvent: (message) => { event = message; } });
 assert.equal((await api.snapshot()).revision, 1);
-assert.equal(connectedHost, 'com.natives.model_host');
+assert.equal(connectedHost, 'com.natives.file_manager', 'ADR-0042 routes both entries through Core to the single Model Hub');
 const started = await api.startGateway({ expectedRevision: 1 });
 assert.deepEqual(started.accepted, { expectedRevision: 1 });
 const probed = await api.testProvider({ providerId: 'custom', baseUrl: 'https://example.test/v1', protocol: 'openai_chat', apiKey: 'temporary', allowLan: false });
@@ -41,6 +42,7 @@ const kernelCheck = await api.checkKernelUpdate();
 assert.ok(kernelCheck.accepted !== undefined);
 const kernelUpdate = await api.updateKernel();
 assert.ok(kernelUpdate.accepted !== undefined);
+assert.equal(localizedModelError({ code: 'kernel_migration_required', message: 'internal detail' }, (key) => key), 'modelKernelMigrationRequired');
 
 port.emit({ ok: true, event: 'model_oauth_state_changed', result: { state: 'succeeded' } });
 assert.equal(event.event, 'model_oauth_state_changed');

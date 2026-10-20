@@ -1,3 +1,4 @@
+import { subscribeWidgetClock } from '../widget-clock.js';
 
 
 export const timeWidget = {
@@ -57,10 +58,10 @@ export const timeWidget = {
     }
 
     update();
-    const intervalId = setInterval(update, data.showSeconds ? 1000 : 10000);
+    const stopClock = subscribeWidgetClock(update, data.showSeconds ? 1000 : 10000);
 
     return () => {
-      clearInterval(intervalId);
+      stopClock();
       container.replaceChildren();
     };
   },

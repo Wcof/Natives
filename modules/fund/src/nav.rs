@@ -8,6 +8,14 @@
 //!   字段解析失败显式报错，不吞错为空数据。
 //! - 每条净值保留 source / fetched_at；UI 显示来源与日期，过期可判。
 
+#[path = "nav_classification.rs"]
+pub(crate) mod classification;
+#[path = "nav_estimate.rs"]
+mod estimate;
+#[path = "nav_quarterly.rs"]
+mod quarterly;
+pub(crate) use estimate::{cached_estimate, estimated_income, warm_estimates};
+
 use crate::fixed::Fixed;
 use crate::storage::Store;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -68,7 +76,7 @@ pub struct SyncReport {
 }
 
 /// 一条净值记录（来源可见，B2 验收）。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct NavRow {
     pub fund_code: String,
     pub nav_date: String,
@@ -77,6 +85,35 @@ pub struct NavRow {
     pub daily_growth_raw: Option<i64>,
     pub source: String,
     pub fetched_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct QuarterlyHolding {
+    pub code: String,
+    pub name: String,
+    pub ratio_pct: String,
+    pub change_type: String,
+    pub change_pct: String,
+    pub industry: String,
+    #[serde(
+        default,
+        rename = "quoteSymbol",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub quote_symbol: Option<String>,
+    #[serde(default)]
+    pub previous_ratio_pct: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct QuarterlyReport {
+    pub fund_code: String,
+    pub report_date: String,
+    pub source: String,
+    pub stocks: Vec<QuarterlyHolding>,
+    pub bonds: Vec<QuarterlyHolding>,
+    #[serde(default)]
+    pub previous_report_date: Option<String>,
 }
 
 /// EastMoney Mobile 历史净值响应条目（字段协议见审计 §4.4）。
@@ -117,12 +154,34 @@ impl EastMoneySource {
     /// 总体 deadline 受 RuntimeLimits 约束，关闭时由进程退出兜底，
     /// 不允许后台继续同步）。
     pub fn fetch_history(fund_code: &str) -> Result<Vec<NavRow>, NavError> {
-        let agent = ureq::AgentBuilder::new()
-            .timeout_connect(std::time::Duration::from_secs(5))
-            .timeout(std::time::Duration::from_secs(10))
-            .build();
+        Self::fetch_history_size(fund_code, 40)
+    }
+
+    pub(crate) fn fetch_analysis_history(fund_code: &str) -> Result<Vec<NavRow>, NavError> {
+        Self::fetch_history_size(fund_code, 250)
+    }
+
+    pub(crate) fn fetch_detail_history(fund_code: &str) -> Result<Vec<NavRow>, NavError> {
+        if fund_code.len() != 6 || !fund_code.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(NavError::BadPayload("基金代码无效".into()));
+        }
+        let body = crate::market::cached_public_response(
+            format!("fund-nav:{fund_code}"),
+            std::time::Duration::from_secs(30),
+            || {
+                let rows =
+                    Self::fetch_history_size(fund_code, 400).map_err(|e| (502, e.message()))?;
+                serde_json::to_string(&rows).map_err(|_| (500, "净值缓存编码失败".into()))
+            },
+        )
+        .map_err(|(_, message)| NavError::Source(message))?;
+        serde_json::from_str(&body).map_err(|_| NavError::BadPayload("净值缓存损坏".into()))
+    }
+
+    fn fetch_history_size(fund_code: &str, page_size: u32) -> Result<Vec<NavRow>, NavError> {
+        let agent = crate::network::client();
         let text = agent
-            .get(&Self::history_url(fund_code, 40))
+            .get(&Self::history_url(fund_code, page_size))
             .set(
                 "User-Agent",
                 "Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X) eastmoney/6.2.8",
@@ -229,7 +288,7 @@ pub fn sync_fund_nav(
 }
 
 /// 写入净值行（upsert 幂等）；返回 (总数, 其中更新已有记录数)。
-fn write_nav_rows(
+pub(crate) fn write_nav_rows(
     conn: &Connection,
     fund_id: i64,
     rows: &[NavRow],
@@ -264,7 +323,7 @@ fn write_nav_rows(
 }
 
 /// 刷新 funds.latest_nav 冗余（仅当有更新），返回最新日期。
-fn refresh_latest(conn: &Connection, fund_id: i64) -> rusqlite::Result<Option<String>> {
+pub(crate) fn refresh_latest(conn: &Connection, fund_id: i64) -> rusqlite::Result<Option<String>> {
     let latest: Option<(i64, String)> = conn
         .query_row(
             "SELECT unit_nav_raw, nav_date FROM fund_nav
@@ -324,6 +383,53 @@ pub fn list_nav(store: &Store, fund_code: &str, limit: usize) -> Result<Vec<NavR
                 })?
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(rows)
+        })
+        .map_err(NavError::from)
+}
+
+/// DES-D05 有界「查看更多」分页：返回 beforeDate（不含）之前最多 limit 条
+/// 净值（日期倒序）。limit 钳制 1..=100；nextCursor 为本页最后一条的日期，
+/// 没有更早数据时为 null。日期排序含明确同日语义：同日多行按日期倒序稳定
+/// 返回（id 无跨日跳变问题，此处以 nav_date 为游标）。
+pub fn list_nav_page(
+    store: &Store,
+    fund_code: &str,
+    before_date: Option<&str>,
+    limit: usize,
+) -> Result<(Vec<NavRow>, Option<String>), NavError> {
+    if let Some(d) = before_date {
+        if !crate::assets::is_valid_calendar_date(d) {
+            return Err(NavError::BadPayload("beforeDate 无效".into()));
+        }
+    }
+    let limit = limit.clamp(1, 100);
+    store
+        .with_read(|conn| -> rusqlite::Result<(Vec<NavRow>, Option<String>)> {
+            let mut stmt = conn.prepare(
+                "SELECT f.code, n.nav_date, n.unit_nav_raw, n.accumulated_raw,
+                        n.daily_growth_raw, n.source, n.fetched_at
+                 FROM fund_nav n JOIN funds f ON f.id = n.fund_id
+                 WHERE f.code = ?1 AND (?2 IS NULL OR n.nav_date < ?2)
+                 ORDER BY n.nav_date DESC LIMIT ?3",
+            )?;
+            let rows = stmt
+                .query_map(params![fund_code, before_date, limit as i64], |r| {
+                    Ok(NavRow {
+                        fund_code: r.get(0)?,
+                        nav_date: r.get(1)?,
+                        unit_nav_raw: r.get(2)?,
+                        accumulated_raw: r.get(3)?,
+                        daily_growth_raw: r.get(4)?,
+                        source: r.get(5)?,
+                        fetched_at: r.get(6)?,
+                    })
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            let next_cursor = rows
+                .last()
+                .filter(|_| rows.len() == limit)
+                .map(|row| row.nav_date.clone());
+            Ok((rows, next_cursor))
         })
         .map_err(NavError::from)
 }
@@ -397,5 +503,108 @@ mod tests {
         let store = Store::open_in_memory().unwrap();
         let err = sync_fund_nav(&store, "999999", |_: &str| Ok(vec![])).unwrap_err();
         assert!(matches!(err, NavError::UnknownFund(_)));
+    }
+
+    #[test]
+    fn parse_quarterly_positions_fixture() {
+        let json = r#"{
+            "Datas": {
+                "fundStocks": [
+                    {
+                        "GPDM": "300308",
+                        "GPJC": "中际旭创",
+                        "JZBL": "6.45",
+                        "PCTNVCHGTYPE": "增持",
+                        "PCTNVCHG": "2.14",
+                        "INDEXNAME": "通信"
+                    }
+                ],
+                "fundboods": [
+                    {
+                        "ZQDM": "019827",
+                        "ZQMC": "26国债01",
+                        "ZJZBL": "7.05"
+                    }
+                ]
+            },
+            "ErrCode": 0,
+            "Success": true,
+            "Expansion": "2026-06-30"
+        }"#;
+        let report = EastMoneySource::parse_quarterly_positions(json, "000001").unwrap();
+        assert_eq!(report.fund_code, "000001");
+        assert_eq!(report.report_date, "2026-06-30");
+        assert_eq!(report.stocks.len(), 1);
+        assert_eq!(report.stocks[0].code, "300308");
+        assert_eq!(report.stocks[0].name, "中际旭创");
+        assert_eq!(report.stocks[0].ratio_pct, "6.45");
+        assert_eq!(report.stocks[0].change_type, "增持");
+        assert_eq!(report.stocks[0].change_pct, "2.14");
+        assert_eq!(report.stocks[0].industry, "通信");
+        assert_eq!(report.bonds.len(), 1);
+        assert_eq!(report.bonds[0].name, "26国债01");
+    }
+}
+
+#[cfg(test)]
+mod pagination_tests {
+    use super::*;
+    use crate::storage::Store;
+
+    fn seed(store: &Store, code: &str, dates: &[&str]) {
+        store.with_write(|conn| {
+            conn.execute(
+                "INSERT INTO funds(code,name,updated_at) VALUES(?1,'隔离基金','0')",
+                params![code],
+            )?;
+            for (i, d) in dates.iter().enumerate() {
+                conn.execute(
+                    "INSERT INTO fund_nav(fund_id,nav_date,unit_nav_raw,accumulated_raw,daily_growth_raw,source,fetched_at)
+                     VALUES((SELECT id FROM funds WHERE code=?1),?2,1000,NULL,NULL,'test',?3)",
+                    params![code, d, i as i64],
+                )?;
+            }
+            Ok::<(), rusqlite::Error>(())
+        }).unwrap();
+    }
+
+    #[test]
+    fn nav_pagination_returns_bounded_pages_with_cursor_and_stops() {
+        let store = Store::open_in_memory().unwrap();
+        seed(
+            &store,
+            "012345",
+            &[
+                "2026-09-21",
+                "2026-09-22",
+                "2026-09-23",
+                "2026-09-24",
+                "2026-09-25",
+            ],
+        );
+        let (page1, cursor) = list_nav_page(&store, "012345", None, 2).unwrap();
+        assert_eq!(page1.len(), 2);
+        assert_eq!(page1[0].nav_date, "2026-09-25");
+        assert_eq!(cursor.as_deref(), Some("2026-09-24"));
+        let (page2, cursor2) = list_nav_page(&store, "012345", cursor.as_deref(), 2).unwrap();
+        assert_eq!(page2[0].nav_date, "2026-09-23");
+        assert_eq!(cursor2.as_deref(), Some("2026-09-22"));
+        let (page3, cursor3) = list_nav_page(&store, "012345", cursor2.as_deref(), 2).unwrap();
+        assert_eq!(page3.len(), 1, "final page returns the remainder");
+        assert_eq!(page3[0].nav_date, "2026-09-21");
+        assert!(cursor3.is_none(), "no earlier data -> null cursor");
+    }
+
+    #[test]
+    fn nav_pagination_rejects_invalid_date_and_clamps_limit() {
+        let store = Store::open_in_memory().unwrap();
+        seed(&store, "012345", &["2026-09-25"]);
+        assert!(list_nav_page(&store, "012345", Some("2026-13-99"), 10).is_err());
+        let (rows, _) = list_nav_page(&store, "012345", None, 500).unwrap();
+        assert_eq!(
+            rows.len(),
+            1,
+            "limit clamped to bounded maximum, still returns what exists"
+        );
     }
 }

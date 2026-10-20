@@ -179,7 +179,11 @@ fn detect_cup_handle(klines: &[KlineBar]) -> Option<CupHandleResult> {
 
     let buy_point = handle_high;
     let target = buy_point + (cup_high - cup_low);
-    let start30 = if klines.len() > 30 { klines.len() - 30 } else { 0 };
+    let start30 = if klines.len() > 30 {
+        klines.len() - 30
+    } else {
+        0
+    };
     let recent_highs_max = klines[start30..]
         .iter()
         .map(|k| k.high)
@@ -205,10 +209,20 @@ fn calc_n_score(klines: &[KlineBar]) -> (i64, String, Option<CupHandleResult>) {
         return (50, String::new(), None);
     }
     let high_250 = if klines.len() >= 100 {
-        let start = if klines.len() > 250 { klines.len() - 250 } else { 0 };
-        klines[start..].iter().map(|k| k.high).fold(f64::NEG_INFINITY, f64::max)
+        let start = if klines.len() > 250 {
+            klines.len() - 250
+        } else {
+            0
+        };
+        klines[start..]
+            .iter()
+            .map(|k| k.high)
+            .fold(f64::NEG_INFINITY, f64::max)
     } else {
-        klines.iter().map(|k| k.high).fold(f64::NEG_INFINITY, f64::max)
+        klines
+            .iter()
+            .map(|k| k.high)
+            .fold(f64::NEG_INFINITY, f64::max)
     };
     let price = klines.last().unwrap().close;
     let dist = if high_250 > 0.0 {
@@ -221,7 +235,10 @@ fn calc_n_score(klines: &[KlineBar]) -> (i64, String, Option<CupHandleResult>) {
     let high_120_prev = if klines.len() >= 121 {
         let start = klines.len() - 121;
         let end = klines.len() - 1;
-        klines[start..end].iter().map(|k| k.high).fold(f64::NEG_INFINITY, f64::max)
+        klines[start..end]
+            .iter()
+            .map(|k| k.high)
+            .fold(f64::NEG_INFINITY, f64::max)
     } else {
         0.0
     };
@@ -252,7 +269,10 @@ fn calc_n_score(klines: &[KlineBar]) -> (i64, String, Option<CupHandleResult>) {
 fn calc_s_score(klines: &[KlineBar], _quote: Option<&QuoteInput>) -> (i64, String) {
     let vol_ratio = if klines.len() >= 6 {
         let last_vol = klines.last().unwrap().volume;
-        let prev5_sum: f64 = klines[klines.len() - 6..klines.len() - 1].iter().map(|k| k.volume).sum();
+        let prev5_sum: f64 = klines[klines.len() - 6..klines.len() - 1]
+            .iter()
+            .map(|k| k.volume)
+            .sum();
         let prev5_avg = prev5_sum / 5.0;
         if prev5_avg > 0.0 {
             last_vol / prev5_avg
@@ -332,7 +352,11 @@ fn calc_i_score(flows: Option<&[FundFlowInput]>) -> (i64, String) {
     }
 
     let mut streak = 0;
-    let recent3_start = if main_nets.len() >= 3 { main_nets.len() - 3 } else { 0 };
+    let recent3_start = if main_nets.len() >= 3 {
+        main_nets.len() - 3
+    } else {
+        0
+    };
     for &v in main_nets[recent3_start..].iter().rev() {
         if v > 0.0 {
             streak += 1;
@@ -341,7 +365,11 @@ fn calc_i_score(flows: Option<&[FundFlowInput]>) -> (i64, String) {
         }
     }
 
-    let start5 = if main_nets.len() >= 5 { main_nets.len() - 5 } else { 0 };
+    let start5 = if main_nets.len() >= 5 {
+        main_nets.len() - 5
+    } else {
+        0
+    };
     let sum5: f64 = main_nets[start5..].iter().sum();
     let last = *main_nets.last().unwrap();
 

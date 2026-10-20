@@ -1,26 +1,33 @@
+import { storage } from './platform/storage.js';
 // Generic owner page for product-declared built-in modules.
-// Core verifies the product projection; business traffic goes directly to the module Host.
+// Core verifies the product projection and owns the shared module worker.
 import { createAppNativeClient } from './native-app-client.js';
 import { createNativeClient } from './native-client.js';
 import { classifyAppError } from './app-errors.js';
 import { appLifecycle } from './app-lifecycle.js';
 import { storageGet } from './files-preferences.js';
-import { mountAppMenu } from './app-navigation-projection.js';
+import { mountAppMenu, projectionFromApps, saveAppNavigation } from './app-navigation-projection.js';
+import { createModuleInferenceBroker } from './module-inference-broker.js';
+import { createModuleSecretBroker } from './module-secret-broker.js';
+import { acquireCapabilityLeases } from './system-capability-leases.js';
+import { isExtension } from './platform/env.js';
+import { getUILanguage } from './platform/i18n.js';
+import { ensureWebSurface } from './platform/surface.js';
+import { createModuleChangeBroker } from './module-change-broker.js';
 
 // AC-11: standalone owner page follows the product appearance preference.
 // 计划 §31.4：主题变化经 auth 级事件转发给模块 iframe，模块不维护第二份主题设置。
-// moduleFrame 是 open() 创建的 iframe 的顶层引用（局部 frame 变量保持原语义）。
-let moduleFrame = null;
+const moduleFrames = new Set();
 const applyOwnerTheme = (theme) => {
   document.documentElement.dataset.theme = ['volt', 'archive'].includes(theme) ? theme : 'archive';
   const appearance = theme === 'volt' ? 'dark' : 'light';
-  moduleFrame?.contentWindow?.postMessage({ type: 'theme', appearance }, '*');
+  for (const owned of moduleFrames) owned.contentWindow?.postMessage({ type: 'theme', appearance }, '*');
 };
 Promise.resolve()
   .then(() => storageGet('natives-theme', 'archive'))
   .then(applyOwnerTheme)
   .catch(() => {});
-globalThis.chrome?.storage?.onChanged?.addListener((changes, area) => {
+storage.onChanged?.addListener((changes, area) => {
   if (area === 'local' && changes['natives-theme']) {
     applyOwnerTheme(changes['natives-theme'].newValue);
   }
@@ -29,7 +36,25 @@ globalThis.chrome?.storage?.onChanged?.addListener((changes, area) => {
 const CORE_HOST = 'com.natives.file_manager';
 const IDLE_MS = 60_000;
 const el = (id) => typeof document === 'undefined' ? null : document.getElementById(id);
-const makeT = () => (key, fallback = key) => globalThis.chrome?.i18n?.getMessage?.(key) || fallback;
+let ownerMessages = {};
+const defaultOwnerLanguage = () => isExtension ? 'zh_CN' : (getUILanguage().startsWith('en') ? 'en' : 'zh_CN');
+const makeT = () => (key, fallback = key) => ownerMessages[key]?.message || globalThis.chrome?.i18n?.getMessage?.(key) || fallback;
+async function loadOwnerLanguage() {
+  const preference = await storageGet('natives-language', defaultOwnerLanguage());
+  const language = preference === 'en' ? 'en' : 'zh_CN';
+  const response = await fetch(`_locales/${language}/messages.json`);
+  if (!response.ok) throw Error('APP_LOCALE_UNAVAILABLE');
+  ownerMessages = await response.json();
+  document.documentElement.lang = language === 'en' ? 'en' : 'zh-CN';
+  const t = makeT();
+  document.querySelectorAll('[data-i18n]').forEach(node => {
+    node.textContent = t(node.dataset.i18n);
+    if (node.parentElement?.classList.contains('app-shell-nav-item')) {
+      node.parentElement.setAttribute('aria-label', node.textContent);
+      node.parentElement.title = node.textContent;
+    }
+  });
+}
 const randomId = () => {
   if (!globalThis.crypto?.getRandomValues) throw Object.assign(new Error('OS randomness unavailable'), { code: 'APP_START_FAILED' });
   const bytes = crypto.getRandomValues(new Uint8Array(16));
@@ -47,15 +72,78 @@ export function validLoopbackPort(port) {
   return Number.isInteger(port) && port > 0 && port <= 65_535;
 }
 
+export function validateNotification(payload) {
+  if (!payload || typeof payload !== 'object') return null;
+  const limits = { title: 64, body: 200, tag: 64 };
+  for (const [field, limit] of Object.entries(limits)) {
+    if (typeof payload[field] !== 'string' || payload[field].length > limit || /[<>]/.test(payload[field])) return null;
+  }
+  const text = payload.badge?.text ?? '';
+  const tones = ['neutral', 'info', 'success', 'warning', 'danger'];
+  if (typeof text !== 'string' || text.length > 16 || !tones.includes(payload.badge?.tone)) return null;
+  return { title: payload.title, body: payload.body, tag: payload.tag, badge: { text, tone: payload.badge.tone } };
+}
+
+// ADR-0036：深链只允许固定短 token（纯导航意图，不含 URL/数据/HTML）。
+export function isValidViewToken(value) {
+  return typeof value === 'string' && /^[a-z][a-z0-9-]{0,31}$/.test(value);
+}
+
+// ADR-0038：模块声明非空 views 白名单时严格放行；未声明（旧模块）回退短 token 正则。
+export function viewAllowedForModule(value, declaredViews) {
+  if (!isValidViewToken(value)) return false;
+  const list = Array.isArray(declaredViews) ? declaredViews : [];
+  return list.length === 0 || list.includes(value);
+}
+
 export function createAppShell({
   appId, stage = el('app-stage'), title = el('app-title'), sub = el('app-sub'),
   toast = el('app-toast'), back = el('app-back'), idleMs = IDLE_MS,
+  initialView = '',
+  getPreference = storageGet,
   getNativeClient = () => createNativeClient({ host: CORE_HOST }),
-  createHostClient = (app, handlers) => createAppNativeClient({ app, ...handlers }),
+  createHostClient = (runtimeHost, handlers) => createAppNativeClient({ runtimeHost, ...handlers }),
   t = makeT(),
+  openSettings,
 } = {}) {
   if (!appId || !stage) throw new Error('createAppShell: appId and stage are required');
-  let run = 0, host, frame, instanceId, generation, challenge, idleTimer, busy = false, loadCount = 0, helloReceived = false;
+  // mode/T06：设置打开器由装配层注入；Shell 组装 {t,language,returnFocus} 上下文。
+  if (typeof openSettings !== 'function') throw new Error('createAppShell: openSettings is required (inject from the page assembly entry)');
+  // ADR-0036/0038：深链视图经短 token 正则 + 模块 views 白名单（见 viewAllowedForModule）。
+  let declaredViews = [];
+  const isValidView = (value) => viewAllowedForModule(value, declaredViews);
+  let run = 0, host, frame, instanceId, generation, challenge, idleTimer, busy = false, loadCount = 0, helloReceived = false, releaseCapabilityLeases, capabilities = [], notificationTimes = [], currentDisplayName = null;
+
+  const inferenceBroker = createModuleInferenceBroker({context:()=>({frame,generation,challenge,capabilities}),openSettings: () => openSettings({ t, language: getPreference('natives-language', defaultOwnerLanguage()), returnFocus: document.activeElement })});
+  const secretBroker = createModuleSecretBroker({context:()=>({frame,generation,challenge,capabilities,host,instanceId}),t});
+  const changeBroker = createModuleChangeBroker({appId,context:()=>({frame,generation,challenge,host})});
+  let restoringSession = false;
+  const restoreWebSession = typeof __NATIVES_EXTENSION_BUILD__ !== 'undefined' && __NATIVES_EXTENSION_BUILD__ ? () => {} : async function () {
+    if (isExtension || !frame || !host || restoringSession) return;
+    restoringSession = true;
+    const current = run, ownedFrame = frame, ownedHost = host;
+    const core = getNativeClient();
+    try {
+      // Existing Web ports receive the same event and release their old leases first.
+      await Promise.resolve();
+      const detail = await core.call('apps:get', {appId});
+      if (current !== run || frame !== ownedFrame) return;
+      const app = detail.app;
+      if (!app?.enabled) throw Error('APP_DISABLED');
+      const activation = app.product_generation ?? app.productGeneration ?? app.activation_generation ?? app.activationGeneration;
+      await ownedHost.call('app:handshake', {protocolVersion:2,appId,productVersion:app.version,activationGeneration:activation});
+      const started = await ownedHost.call('app:start', {appId,requestId:randomId(),expectedActivationGeneration:activation});
+      if (current !== run || frame !== ownedFrame) return;
+      if (started.state !== 'ready' || !validLoopbackPort(started.port) || new URL(ownedFrame.src).port !== String(started.port)) throw Error('APP_RUNTIME_REPLACED');
+      instanceId = started.instanceId; generation = started.generation; challenge = randomId();
+      ownedFrame.contentWindow?.postMessage({type:'init',generation,challenge,appearance:document.documentElement.dataset.theme==='volt'?'dark':'light'},'*');
+    } catch {
+      if (current === run && frame === ownedFrame) {
+        ownedHost.disconnect();
+        setToast(t('appSurfaceSessionRestoreFailed'), true);
+      }
+    } finally { core.disconnect(); restoringSession = false; }
+  };
 
   function setToast(message, error = false) {
     if (!toast) return;
@@ -291,8 +379,14 @@ export function createAppShell({
     stage.append(box);
   }
   function disconnect() {
+    void inferenceBroker.dispose();
+    secretBroker.dispose();
     clearTimeout(idleTimer);
-    frame?.remove(); frame = undefined; moduleFrame = null;
+    try { releaseCapabilityLeases?.(); } catch { /* ignore */ }
+    releaseCapabilityLeases = undefined;
+    capabilities = []; notificationTimes = [];
+    moduleFrames.delete(frame);
+    frame?.remove(); frame = undefined;
     host?.disconnect(); host = undefined;
     instanceId = undefined; generation = undefined; challenge = undefined; busy = false;
   }
@@ -320,19 +414,21 @@ export function createAppShell({
     }, idleMs);
   }
   // 返回可见：会话还在则直接继续；已被停止/断开则自动重开（保留原状态渲染）。
-  function resumeOnVisible() {
+  async function resumeOnVisible() {
     clearTimeout(idleTimer);
     if (busy) return;
-    if (host && frame) return; // 会话仍存活：回到之前页面，无需任何操作
-    open();
+    if (host && host.connected !== false && frame) return;
+    if (!isExtension && frame && host) { await restoreWebSession(); return; }
+    if (!isExtension) {
+      try { await ensureWebSurface(); } catch { return; }
+    }
+    if (document.visibilityState !== 'hidden') void open();
   }
   async function createSandbox(port, current) {
-    const rotated = await host.call('app:session', { instanceId, op: 'rotate', generation });
-    generation = rotated.newGeneration || rotated.generation;
     if (current !== run || typeof generation !== 'string') return;
     challenge = randomId();
     frame = document.createElement('iframe');
-    moduleFrame = frame;
+    moduleFrames.add(frame);
     frame.className = 'managed-app-frame';
     frame.setAttribute('sandbox', 'allow-scripts allow-forms');
     frame.title = title?.textContent || appId;
@@ -354,13 +450,16 @@ export function createAppShell({
       }, '*');
     });
     helloReceived = false;
-    frame.src = `http://127.0.0.1:${port}/`;
+    // 首帧主题直传：模块 head 内联脚本在绘制前消费 ?theme=，消除深色用户
+    // 开页时沙箱内默认浅色首帧；后续切换仍走 init/theme 消息。
+    frame.src = `http://127.0.0.1:${port}/?theme=${document.documentElement.dataset.theme === 'volt' ? 'volt' : 'archive'}`;
     stage.replaceChildren(frame);
   }
   async function onWindowMessage(event) {
     if (!frame || event.source !== frame.contentWindow) return;
     const validOrigin = event.origin === 'null' || event.origin.startsWith('http://127.0.0.1:') || event.origin.startsWith('http://localhost:');
     if (!validOrigin) return;
+    if (changeBroker.handle(event)) return;
 
     if (event.data?.type === 'toggle-sidebar') {
       const appsCollapse = document.getElementById('apps-toggle-sidebar-btn');
@@ -398,34 +497,42 @@ export function createAppShell({
       return;
     }
 
+    if (await inferenceBroker.handle(event)) return;
+    if (await secretBroker.handle(event)) return;
+
     // 会话续期：页面 401（token 15 分钟 TTL 过期）后申请换发新 token。
     // 同 generation 内 issue 新 challenge 即可，无需 rotate/重载页面。
     if (event.data?.type === 'renew-session') {
       if (!host || !frame || !generation) return;
       try {
-        const challenge = randomId();
+        challenge = randomId();
         const issued = await host.call('app:session', { instanceId, op: 'issue', challenge });
         if (!frame || issued.generation !== generation) return;
-        frame.contentWindow.postMessage({ type: 'welcome', generation, challenge, token: issued.token, expiresAt: issued.expiresAt }, '*');
+        frame.contentWindow.postMessage({ type: 'welcome', generation, challenge, token: issued.token, expiresAt: issued.expiresAt, view: isValidView(initialView) ? initialView : '' }, '*');
       } catch { /* 下一次请求仍会 401，页面按错误路径提示 */ }
       return;
     }
 
-    // 预警联动（审计 F-07/C1）：fund 模块的异动预警转发 Service Worker，
-    // 由 SW 更新 badge 并弹系统通知（sandbox iframe 内 Notification 不可用）。
-    if (event.data?.type === 'invest:alert') {
-      const { symbol, name, changePercent, badgeText, isUp } = event.data;
-      if (typeof symbol !== 'string' || typeof changePercent !== 'number') return;
-      try {
-        await chrome.runtime.sendMessage({
-          type: 'invest:alert',
-          symbol: String(symbol).slice(0, 16),
-          name: typeof name === 'string' ? name.slice(0, 32) : '',
-          changePercent,
-          badgeText: typeof badgeText === 'string' ? badgeText.slice(0, 16) : '',
-          isUp: isUp === true,
-        });
-      } catch { /* SW 未就绪时静默：预警计数在模块内仍自洽 */ }
+    // 通用应用通知 Broker（ADR-0031 / 架构 Wave 7 / 审计 A-06）：
+    // 模块在受限沙箱 iframe 内无法直接使用 window.Notification，
+    // 经通用 natives:notification 协议转发父级 Shell，由父级 Shell 校验后转送 Service Worker。
+    // Shell 仅验证格式、限速与长度边界，严禁解析具体模块业务字段（symbol/changePercent 等）。
+    if (event.data?.type === 'natives:notification') {
+      const m=event.data;
+      if(m.generation!==generation || m.challenge!==challenge || !/^[a-zA-Z0-9-]{1,128}$/.test(m.requestId||'') || Object.keys(m).some(k=>!['type','op','requestId','generation','challenge','payload'].includes(k)))return;
+      const currentFrame=frame,currentGeneration=generation;
+      let error;
+      const payload=validateNotification(m.payload);
+      const now=Date.now();notificationTimes=notificationTimes.filter(time=>now-time<60000);
+      if(m.op==='status'&&capabilities.includes('system.notification')){
+        let result;try{result=await chrome.runtime.sendMessage({type:'natives:notification-status'});}catch{result={permission:'unknown'};}
+        if(frame===currentFrame&&generation===currentGeneration)frame.contentWindow.postMessage({type:'natives:reply',requestId:m.requestId,generation,challenge,result},'*');
+        return;
+      }
+      if(!capabilities.includes('system.notification') || !payload || m.op!=='notify')error=t('moduleNotificationUnavailable');
+      else if(notificationTimes.length>=10)error=t('moduleNotificationUnavailable');
+      else {notificationTimes.push(now);try{const result=await chrome.runtime.sendMessage({type:'natives:notification',appId:String(appId).slice(0,32),payload});if(!result?.delivered)error=t('moduleNotificationUnavailable');}catch{error=t('moduleNotificationUnavailable');}}
+      if(frame===currentFrame && generation===currentGeneration)frame.contentWindow.postMessage({type:'natives:reply',requestId:m.requestId,generation,challenge,result:error?null:{delivered:true},error},'*');
       return;
     }
 
@@ -435,7 +542,7 @@ export function createAppShell({
     try {
       const issued = await host.call('app:session', { instanceId, op: 'issue', challenge });
       if (!frame || issued.generation !== generation) return;
-      frame.contentWindow.postMessage({ type: 'welcome', generation, challenge, token: issued.token, expiresAt: issued.expiresAt }, '*');
+      frame.contentWindow.postMessage({ type: 'welcome', generation, challenge, token: issued.token, expiresAt: issued.expiresAt, view: isValidView(initialView) ? initialView : '' }, '*');
       // AC-11：页面级主题读取先于 iframe 创建，applyOwnerTheme 的首次
       // postMessage 会落在空 moduleFrame 上丢失。握手完成后补发当前外观，
       // 覆盖 iframe 启动晚于主题初始化的时序（init appearance 为兜底）。
@@ -443,18 +550,21 @@ export function createAppShell({
       // 语言同步（07 §5.2 / 审计 C3）：与主题同序补发当前语言；语言切换走
       // storage 变更监听（下方），切换本身会 reload 页面重新握手。
       try {
-        const lang = await chrome.storage?.local?.get('natives-language');
-        const language = lang?.['natives-language'] === 'en' ? 'en' : 'zh-CN';
+        const language = await getPreference('natives-language', defaultOwnerLanguage()) === 'en' ? 'en' : 'zh-CN';
         frame.contentWindow?.postMessage({ type: 'language', language }, '*');
       } catch { /* storage 不可用时模块保持默认 zh-CN */ }
       const isCollapsed = document.body.classList.contains('apps-sidebar-collapsed') ||
                           document.body.classList.contains('sidebar-collapsed');
       frame.contentWindow.postMessage({ type: 'sidebar-state', collapsed: isCollapsed }, '*');
+      // ADR-0036 深链：握手完成后一次性转发纯导航意图（初次打开场景）。
+      if (isValidView(initialView)) {
+        frame.contentWindow.postMessage({ type: 'navigate', view: initialView }, '*');
+      }
     } catch (error) { setToast(t(classifyAppError(error)), true); }
   }
   async function open() {
     // 若当前会话已经建立且正常存活，直接复用既有进程与视图，无需重新起机
-    if (frame && host && !busy) {
+    if (frame && host && host.connected !== false && !busy) {
       scheduleIdle();
       return;
     }
@@ -468,77 +578,90 @@ export function createAppShell({
     } catch (error) {
       core.disconnect(); disconnect();
       if (current !== run) return;
-      // 残留会话窗口（APP_RUNNING_ELSEWHERE / APP_ALREADY_RUNNING）：旧
-      // runtime 在 stdin EOF 后 ≤2s 自退，属瞬态失败——快速退避重试，避免卡屏等待。
-      if (['APP_RUNNING_ELSEWHERE', 'APP_ALREADY_RUNNING'].includes(error?.code || /APP_[A-Z_]+/.exec(error?.message || '')?.[0])) {
-        await new Promise((resolve) => setTimeout(resolve, 300));
-        if (current === run) await open();
-        return;
-      }
       setToast(t(classifyAppError(error)), true);
       renderStatus({ heading: t('appSurfaceOpenFailed', '应用无法打开'), body: t(classifyAppError(error)), actionLabel: t('retry', '重试'), onAction: open, error: true });
     }
   }
   async function openOnce(core, current) {
       renderAppLoading({ phase: 1, status: t('appBootEnv', '正在连接端侧安全运行环境…') });
+      const origin = globalThis.chrome?.runtime?.id
+        ? `chrome-extension://${globalThis.chrome.runtime.id}/`
+        : 'chrome-extension://gehmgcnlpdepnpmcbbdaijabcjdnbfmh/';
+      await core.call('apps:handshake', { origin });
+      if (current !== run) { core.disconnect(); return; }
+      const listed = await core.call('apps:list');
+      if (current !== run) { core.disconnect(); return; }
+      await saveAppNavigation(projectionFromApps(listed.apps, listed.revision, listed.modules));
       let detail = await core.call('apps:get', { appId });
       let app = detail?.app;
       if (!app) {
         core.disconnect();
         throw Object.assign(new Error('app not found'), { code: 'APP_NOT_FOUND' });
       }
-      if (title) title.textContent = app.name;
+      const language = await getPreference('natives-language', defaultOwnerLanguage());
+      currentDisplayName = detail.displayName || null;
+      const appName = currentDisplayName?.[language === 'en' ? 'en' : 'zh_CN'] || app.name;
+      if (title) title.textContent = appName;
+      document.title = `${appName} · Natives`;
       if (sub) sub.textContent = app.version;
+      capabilities = Array.isArray(app.capabilities) ? app.capabilities : [];
+      declaredViews = Array.isArray(app.views) ? app.views.filter((view) => isValidViewToken(view)) : [];
+      const settingsButton = document.getElementById('app-module-settings');
+      if(settingsButton){settingsButton.hidden=!declaredViews.includes('settings');settingsButton.onclick=()=>{
+        if(frame&&isValidView('settings'))frame.contentWindow.postMessage({type:'navigate',view:'settings'},'*');
+      };}
       if (!app.enabled) {
         core.disconnect();
         renderStatus({ heading: t('appSurfaceDisabled', '应用已停用'), body: t('appSurfaceDisabledBody', '请在应用中心重新启用。') });
         return;
       }
-      if (app.needs_migration) {
-        core.disconnect();
-        renderStatus({ heading: t('appSurfaceRepairRequired', '应用需要更新'), body: t('appsNeedsUpdate', '请更新 Natives 后重试。') });
-        return;
-      }
-      if (app.kind !== 'managed_local' || !app.runtime_host) {
+      if (!app.app_id) {
         core.disconnect();
         renderStatus({ heading: t('appSurfaceOpenFailed', '应用无法打开'), body: t('appsNeedsUpdate', '请更新 Natives 后重试。'), error: true });
         return;
       }
+      if (typeof detail.runtime_host !== 'string' || !detail.runtime_host) {
+        core.disconnect();
+        throw Object.assign(new Error('product runtime host missing'), { code: 'APP_START_FAILED' });
+      }
       renderAppLoading({ name: app.name, phase: 2, status: t('appBootVerify', '验证应用权限与会话安全凭据…') });
-      host = createHostClient(app, { onDisconnect: (_error, intentional) => {
-        if (!intentional && current === run) renderStatus({ heading: t('appSurfaceHostOffline', '应用已退出'), actionLabel: t('retry', '重试'), onAction: open, error: true });
+      // 依据模块元数据声明的 requires 申请系统能力租约（架构 07 §3）：
+      releaseCapabilityLeases = acquireCapabilityLeases(Array.isArray(app.requires) ? app.requires : []);
+      const capabilityLease=releaseCapabilityLeases;
+      await capabilityLease.ready;
+      if(current!==run){capabilityLease();return;}
+      host = createHostClient(detail.runtime_host, { onDisconnect: (_error, intentional) => {
+        if (!intentional && current === run && !restoringSession) {
+          if (!isExtension && frame) { setToast(t('appSurfaceHostOffline'), true); return; }
+          disconnect();
+          renderStatus({ heading: t('appSurfaceHostOffline', '应用已退出'), actionLabel: t('retry', '重试'), onAction: open, error: true });
+        }
       }});
-      let expectedActivationGeneration = app.activation_generation ?? app.activationGeneration ?? app.revision;
+      let expectedActivationGeneration = app.product_generation ?? app.productGeneration ?? app.activation_generation ?? app.activationGeneration;
+      const requestHandshake = () => host.call('app:handshake', {
+        protocolVersion: 2, appId: app.app_id, productVersion: app.version,
+        activationGeneration: expectedActivationGeneration,
+      });
       let handshake;
       let attempts = 0;
       try {
         while (attempts < 6) {
           try {
             // 只接受 App Runtime Protocol v2（ADR-0031）；不向 v1 回退。
-            handshake = await host.call('app:handshake', {
-              protocolVersion: 2,
-              appId: app.app_id,
-              productVersion: app.version,
-              activationGeneration: expectedActivationGeneration,
-            });
+            handshake = await requestHandshake();
             break;
           } catch (handshakeError) {
             const errCode = handshakeError?.code || /APP_[A-Z_]+/.exec(handshakeError?.message || '')?.[0];
             if (errCode === 'APP_PACKAGE_INVALID') {
               // 本地开发或代码更新后 runtime 二进制变动未密封重配：向 Core 触发一次 apps:handshake 自动重配自愈
               try {
-                const origin = globalThis.location?.origin || `chrome-extension://${globalThis.chrome?.runtime?.id}/`;
                 await core.call('apps:handshake', { origin });
                 detail = await core.call('apps:get', { appId });
                 if (detail?.app) {
                   app = detail.app;
-                  expectedActivationGeneration = app.activation_generation ?? app.activationGeneration ?? app.revision;
-                  handshake = await host.call('app:handshake', {
-                    protocolVersion: 2,
-                    appId: app.app_id,
-                    productVersion: app.version,
-                    activationGeneration: expectedActivationGeneration,
-                  });
+                  currentDisplayName = detail.displayName || currentDisplayName;
+                  expectedActivationGeneration = app.product_generation ?? app.productGeneration ?? app.activation_generation ?? app.activationGeneration;
+                  handshake = await requestHandshake();
                   break;
                 } else {
                   throw handshakeError;
@@ -549,12 +672,7 @@ export function createAppShell({
             } else if (['APP_RUNNING_ELSEWHERE', 'APP_ALREADY_RUNNING'].includes(errCode)) {
               attempts++;
               if (attempts >= 6) throw handshakeError;
-              // 收到旧进程占用，先广播通知同一 profile 下的旧页面主动让出会话
-              if (attempts === 1) {
-                lifecycle?.notify?.('stop', appId);
-                try { globalThis.chrome?.runtime?.sendMessage?.({ type: 'natives-app-stop', appId }).catch?.(() => {}); } catch {}
-              }
-              // 宿主连接保持存活，原地等待旧实例释放锁（旧实例 ≤2s 自退），避免断开再建引发雪崩撞锁
+              // An unrelated owner must never be stopped to acquire this session.
               await new Promise((resolve) => setTimeout(resolve, 300));
               continue;
             } else {
@@ -571,7 +689,7 @@ export function createAppShell({
         throw Object.assign(new Error('app protocol mismatch'), { code: 'APP_PROTOCOL_MISMATCH' });
       }
       renderAppLoading({ name: app.name, phase: 3, status: t('appBootAlloc', '分配隔离沙箱与本地回环通道…') });
-      const started = await host.call('app:start', { requestId: randomId(), expectedActivationGeneration });
+      const started = await host.call('app:start', { appId: app.app_id, requestId: randomId(), expectedActivationGeneration });
       if (started.state !== 'ready' || !validLoopbackPort(started.port) || typeof started.instanceId !== 'string' || typeof started.generation !== 'string') {
         throw Object.assign(new Error('invalid start result'), { code: 'APP_START_FAILED' });
       }
@@ -580,27 +698,30 @@ export function createAppShell({
       await createSandbox(started.port, current);
       scheduleIdle();
   }
-  const lifecycle = appLifecycle(async ({ type, appId: changedId }) => {
-    if (changedId !== appId) return;
-    if (type === 'maintenance' || type === 'stop') await stop(type === 'stop' ? 'user' : 'maintenance');
-    // AC-10 (§5.6): a `changed` notification must never restart the surface.
-    // Sidebar/metadata changes only matter to the center; a running session
-    // keeps its owner and a stopped page stays stopped — the user reopens it.
-  });
+  const lifecycle = appLifecycle(() => stop('maintenance'), appId);
   const pagehide = () => { void stop('page_closing', false); lifecycle.close(); };
-  const pageshow = (event) => { if (event.persisted) resumeOnVisible(); };
+  const pageshow = (event) => { if (event.persisted) { lifecycle.resume(); resumeOnVisible(); } };
   const onVisibilityChange = () => {
     if (document.visibilityState === 'visible') resumeOnVisible();
     else scheduleIdle();
   };
   globalThis.window?.addEventListener('message', onWindowMessage);
+  globalThis.window?.addEventListener('natives-web-session-restored', restoreWebSession);
   // 语言变更监听（07 §5.2 / 审计 C3）：切换入口本身会 reload，这里兜底
   // 其他入口改语言时把新值推给存活中的模块会话。
-  chrome.storage?.onChanged?.addListener((changes, area) => {
-    if (area !== 'local' || !changes['natives-language'] || !frame) return;
-    const language = changes['natives-language'].newValue === 'en' ? 'en' : 'zh-CN';
-    frame.contentWindow?.postMessage({ type: 'language', language }, '*');
-  });
+  const onLanguageChange = (changes, area) => {
+    if (area !== 'local' || !changes['natives-language']) return;
+    const value = changes['natives-language'].newValue;
+    const language = value === 'en' ? 'en' : 'zh-CN';
+    document.documentElement.lang = language;
+    const localized = currentDisplayName?.[language === 'en' ? 'en' : 'zh_CN'];
+    if (localized) {
+      if (title) title.textContent = localized;
+      document.title = `${localized} · Natives`;
+    }
+    frame?.contentWindow?.postMessage({ type: 'language', language }, '*');
+  };
+  storage.onChanged?.addListener(onLanguageChange);
   globalThis.window?.addEventListener('pagehide', pagehide);
   globalThis.window?.addEventListener('pageshow', pageshow);
   document.addEventListener?.('visibilitychange', onVisibilityChange);
@@ -608,12 +729,23 @@ export function createAppShell({
   return { open, stop, setToast, renderStatus, renderAppLoading,
     get busy() { return busy; },
     get hasSession() { return Boolean(frame && host); },
+    // ADR-0036 深链二次导航：已打开会话内的纯导航意图（校验 iframe 存活）。
+    navigate(view) {
+      if (!isValidView(view)) return;
+      if (frame && host && !busy) {
+        frame.contentWindow?.postMessage({ type: 'navigate', view }, '*');
+      }
+    },
     dispose: () => {
-    void stop('page_closing', false); lifecycle.close();
+    const stopped = stop('page_closing', false); lifecycle.close();
+    changeBroker.dispose();
     globalThis.window?.removeEventListener('message', onWindowMessage);
+    globalThis.window?.removeEventListener('natives-web-session-restored', restoreWebSession);
     globalThis.window?.removeEventListener('pagehide', pagehide);
     globalThis.window?.removeEventListener('pageshow', pageshow);
+    storage.onChanged?.removeListener?.(onLanguageChange);
     document.removeEventListener?.('visibilitychange', onVisibilityChange);
+    return stopped;
   }};
 }
 
@@ -621,11 +753,17 @@ export function createAppShell({
 // Mounted into the host page's content area instead of navigating to
 // app.html, so the sidebar stays put; sessions survive switching back to
 // the host view and are reclaimed after EMBEDDED_IDLE_MS without access.
+//
+// ADR-0036：surface 必须是会话的唯一 owner——dispose() 释放全部资源
+// （Port、idle 计时、自身 visibilitychange 监听）并返回可等待的停止
+// Promise；宿主（space.js）返回 Workspace 前必须 await 完成后才能发起
+// 卡片短命查询，否则会同 appId 锁竞争。
 export const EMBEDDED_IDLE_MS = 5 * 60_000;
 
-export function createEmbeddedAppSurface({ appId, stage, onClosed, getNativeClient } = {}) {
+export function createEmbeddedAppSurface({ appId, stage, onClosed, initialView = '', getNativeClient, t, openSettings } = {}) {
   if (!appId || !stage) throw new Error('createEmbeddedAppSurface: appId and stage are required');
-  const shell = createAppShell({ appId, stage, idleMs: null, getNativeClient });
+  if (typeof openSettings !== 'function') throw new Error('createEmbeddedAppSurface: openSettings is required (inject from the page assembly entry)');
+  const shell = createAppShell({ appId, stage, idleMs: null, initialView, getNativeClient, t, openSettings });
   let idleTimer, closed = false;
   const touch = () => {
     clearTimeout(idleTimer);
@@ -644,19 +782,37 @@ export function createEmbeddedAppSurface({ appId, stage, onClosed, getNativeClie
     touch();
     if (!shell.hasSession) await shell.open();
   }
+  function navigate(view) {
+    shell.navigate?.(view);
+  }
+  function onVisibilityTouch() {
+    // idle 路径只在 hidden 时停会话；可见性变化本身不回收。
+    if (document.visibilityState === 'visible') return;
+    touch();
+  }
   function dispose() {
     closed = true;
     clearTimeout(idleTimer);
-    void stop('page_closing');
+    document.removeEventListener?.('visibilitychange', onVisibilityTouch);
+    const stopped = shell.dispose();
+    return Promise.resolve(stopped).catch(() => {});
   }
-  document.addEventListener?.('visibilitychange', touch);
-  return { open, stop, dispose };
+  document.addEventListener?.('visibilitychange', onVisibilityTouch);
+  return { open, stop, dispose, navigate };
 }
 
-if (typeof document !== 'undefined' && globalThis.location?.pathname?.endsWith('app.html') && el('app-stage')) {
+// mode/T06：页面装配移至 app-boot.js（装配汇点，注入 openSettings），
+// Shell/Broker 不回导上层设置页，导入图无环。
+export async function bootAppPage({ openSettings }) {
+  if (typeof openSettings !== 'function') throw new Error('bootAppPage: openSettings is required (inject from the page assembly entry)');
+  await loadOwnerLanguage();
   const t = makeT();
   document.querySelectorAll('[data-i18n]').forEach((node) => { node.textContent = t(node.dataset.i18n, node.textContent); });
+  const params = new URLSearchParams(globalThis.location.search);
   const appId = parseAppId(globalThis.location.search);
+  // ADR-0036 深链：独立 app.html 入口同样转发 view 导航意图（createAppShell
+  // 内部经 isValidViewToken 过滤；早于 welcome 到达时由 fund 页暂存并初始化后应用）。
+  const initialView = params.get('view') ?? '';
   const appMenu = document.getElementById('app-menu-apps');
   if (appMenu) {
     mountAppMenu(appMenu, { t }).then(() => {
@@ -664,5 +820,8 @@ if (typeof document !== 'undefined' && globalThis.location?.pathname?.endsWith('
       item?.classList.add('active');
     }).catch(() => {});
   }
-  void createAppShell({ appId }).open();
+  void createAppShell({ appId, initialView, t, openSettings }).open();
+  storage.onChanged?.addListener((changes, area) => {
+    if (area === 'local' && changes['natives-language']) void loadOwnerLanguage().catch(() => {});
+  });
 }

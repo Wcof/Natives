@@ -1,42 +1,58 @@
 //! Read-side queries for built-in module state.
 
 use super::types::{App, AppError};
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 
-const APP_COLUMNS: &str = "app_id, kind, name, version, enabled, show_in_sidebar, \
-    sidebar_order, runtime_spec_json, surface_json, manifest_json, installed_at, \
-    updated_at, revision, host_registered, needs_migration";
+fn product_activation(apps_root: Option<&std::path::Path>) -> (Option<u64>, String) {
+    apps_root
+        .and_then(|root| {
+            crate::app_activation::read_product_activation_receipt(root)
+                .ok()
+                .flatten()
+        })
+        .map(|value| {
+            (
+                value
+                    .get("productGeneration")
+                    .and_then(serde_json::Value::as_u64),
+                value
+                    .get("productVersion")
+                    .and_then(serde_json::Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+            )
+        })
+        .unwrap_or_default()
+}
 
-fn map_app(row: &rusqlite::Row<'_>, apps_root: Option<&std::path::Path>) -> rusqlite::Result<App> {
-    let app_id: String = row.get(0)?;
-    let kind: String = row.get(1)?;
-    let host_registered = row.get::<_, i64>(13)? != 0;
-    let runtime_host = (kind == super::types::KIND_MANAGED_LOCAL && host_registered)
-        .then(|| crate::app_activation::runtime_host_name(&app_id));
-    let activation_generation = apps_root.and_then(|root| {
-        crate::app_activation::read_activation_projection(root, &app_id)
-            .ok()
-            .flatten()
-            .and_then(|value| value.get("generation").and_then(serde_json::Value::as_u64))
-    });
+fn project_app(
+    conn: &Connection,
+    module: &crate::app_product::FixedModule,
+    generation: Option<u64>,
+    product_version: &str,
+) -> Result<App, AppError> {
+    let preference = conn
+        .query_row(
+            "SELECT enabled, show_in_sidebar, sidebar_order, updated_at, revision FROM builtin_app_preferences WHERE app_id = ?1",
+            [module.app_id],
+            |row| Ok((row.get::<_, i64>(0)? != 0, row.get::<_, i64>(1)? != 0, row.get(2)?, row.get(3)?, row.get(4)?)),
+        )
+        .optional()?;
+    let (enabled, show_in_sidebar, sidebar_order, updated_at, revision) =
+        preference.unwrap_or((true, true, 0, 0, 0));
     Ok(App {
-        app_id,
-        kind,
-        name: row.get(2)?,
-        version: row.get(3)?,
-        enabled: row.get::<_, i64>(4)? != 0,
-        show_in_sidebar: row.get::<_, i64>(5)? != 0,
-        sidebar_order: row.get(6)?,
-        runtime_spec_json: row.get(7)?,
-        surface_json: row.get(8)?,
-        manifest_json: row.get(9)?,
-        installed_at: row.get(10)?,
-        updated_at: row.get(11)?,
-        revision: row.get(12)?,
-        host_registered,
-        runtime_host,
-        needs_migration: row.get::<_, i64>(14)? != 0,
-        activation_generation,
+        app_id: module.app_id.into(),
+        name: module.name_zh.into(),
+        version: product_version.to_string(),
+        enabled,
+        show_in_sidebar,
+        sidebar_order,
+        updated_at,
+        revision,
+        product_generation: generation,
+        capabilities: serde_json::from_str(module.capabilities_json).unwrap_or_default(),
+        requires: serde_json::from_str(module.requires_json).unwrap_or_default(),
+        views: serde_json::from_str(module.views_json).unwrap_or_default(),
     })
 }
 
@@ -44,9 +60,15 @@ pub(crate) fn apps(
     conn: &Connection,
     apps_root: Option<&std::path::Path>,
 ) -> Result<Vec<App>, AppError> {
-    let mut statement = conn.prepare(&format!("SELECT {APP_COLUMNS} FROM apps WHERE kind = 'managed_local' ORDER BY sidebar_order, app_id"))?;
-    let rows = statement.query_map([], |row| map_app(row, apps_root))?;
-    Ok(rows.collect::<Result<Vec<_>, _>>()?)
+    let (generation, product_version) = product_activation(apps_root);
+    let mut apps = crate::app_product::FIXED_MODULES
+        .iter()
+        .map(|module| project_app(conn, module, generation, &product_version))
+        .collect::<Result<Vec<_>, _>>()?;
+    apps.sort_by(|left, right| {
+        (left.sidebar_order, &left.app_id).cmp(&(right.sidebar_order, &right.app_id))
+    });
+    Ok(apps)
 }
 
 pub(crate) fn app(
@@ -54,15 +76,12 @@ pub(crate) fn app(
     app_id: &str,
     apps_root: Option<&std::path::Path>,
 ) -> Result<App, AppError> {
-    conn.query_row(
-        &format!("SELECT {APP_COLUMNS} FROM apps WHERE app_id = ?1 AND kind = 'managed_local'"),
-        [app_id],
-        |row| map_app(row, apps_root),
-    )
-    .map_err(|error| match error {
-        rusqlite::Error::QueryReturnedNoRows => AppError::NotFound(app_id.into()),
-        other => AppError::Sql(other),
-    })
+    let module = crate::app_product::FIXED_MODULES
+        .iter()
+        .find(|module| module.app_id == app_id)
+        .ok_or_else(|| AppError::NotFound(app_id.into()))?;
+    let (generation, product_version) = product_activation(apps_root);
+    project_app(conn, module, generation, &product_version)
 }
 
 pub(crate) fn global_revision(conn: &Connection) -> Result<i64, AppError> {

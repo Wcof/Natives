@@ -194,7 +194,7 @@ pub(crate) fn sina_sector_node(name: &str) -> &'static str {
 /// 从新浪财经公开接口实时拉取该板块的真实成分股行情（真实在线活数据）。
 pub(crate) fn fetch_live_sector_stocks(node: &str) -> Result<Vec<Quote>, String> {
     let url = format!(
-        "http://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/Market_Center.getHQNodeData?page=1&num=40&sort=changepercent&asc=0&node={node}"
+        "https://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/Market_Center.getHQNodeData?page=1&num=40&sort=changepercent&asc=0&node={node}"
     );
     let response: serde_json::Value = agent()
         .get(&url)
@@ -248,6 +248,7 @@ pub(crate) fn fetch_live_sector_stocks(node: &str) -> Result<Vec<Quote>, String>
         };
 
         quotes.push(Quote {
+            as_of: None,
             code: if !symbol.is_empty() {
                 symbol.to_string()
             } else {

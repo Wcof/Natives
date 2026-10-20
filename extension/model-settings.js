@@ -3,7 +3,7 @@ import { createModelSettingsView, renderNewProvider } from './model-settings-vie
 import { handleAdvancedAction, handleAdvancedSubmit } from './model-advanced-controller.js';
 import { localizedModelError } from './model-settings-errors.js';
 import { handleUsageAction, handleUsageSubmit } from './model-usage-controller.js';
-import { userTimezone, acquireModelApi, releaseModelApi, sharedCall } from './tokenusage/index.js';
+import { userTimezone, acquireModelApi, releaseModelApi, sharedCall } from './ai-usage-client/index.js';
 import { handleAgentAction, loadAgentClients } from './model-agent-controller.js';
 import { openAccountModelsDialog } from './model-account-models-dialog.js';
 
@@ -99,9 +99,13 @@ class ModelSettings {
     try {
       const { createAppCenter } = await import('./apps.js');
       const appsList = this.view.dialog.querySelector('[data-role="appsList"]');
+      // mode/T06：设置页内嵌应用中心的设置打开器由本页自持（复用已打开的
+      // 设置实例聚焦），不回经 Shell/Broker 的动态导入链。
       this.appCenter = createAppCenter({
         list: appsList,
+        language: this.language,
         t: (...args) => this.t(...args),
+        openSettings: (context) => openModelSettings({ ...context, returnFocus: context?.returnFocus ?? document.activeElement }),
       });
       await this.appCenter.ready;
     } catch (err) {
@@ -116,6 +120,7 @@ class ModelSettings {
     try {
       if (this.view.activePage === 'apps') {
         await this.ensureAppCenter();
+        return;
       }
       try {
         this.snapshot = await this.api.snapshot();
@@ -253,7 +258,7 @@ class ModelSettings {
         const status = await this.api.updateKernelStatus();
         const phase = status?.job?.phase || 'idle';
         if (phase === 'done') return status.job;
-        if (phase === 'failed') return status.job;
+        if (phase === 'failed') return { ...status.job, message: localizedModelError({ code: status.job.errorCode || 'internal_error' }, this.t) };
         if (phase === 'idle') {
           // 新 worker 尚无任务记录：内核版本已等于目标版本即视为完成
           if (target) {
@@ -273,6 +278,9 @@ class ModelSettings {
   }
 
   async mutate(work, { select } = {}) {
+    if (this.mutating) return null;
+    this.mutating = true;
+    this.view.setLoading(true);
     this.view.showError('');
     try {
       const result = await work();
@@ -283,6 +291,9 @@ class ModelSettings {
     } catch (error) {
       this.showError(error);
       return null;
+    } finally {
+      this.mutating = false;
+      this.view.setLoading(false);
     }
   }
 
@@ -299,6 +310,11 @@ class ModelSettings {
   async handleAction(action, target, event) {
     const revision = this.snapshot?.revision;
     if (action === 'close') return this.view.close();
+    if (this.mutating) return;
+    if (!this.snapshot && action !== 'refresh' && !(action === 'select-model-page' && target.dataset.page === 'apps')) {
+      if (action === 'select-model-page') this.view.setPage(target.dataset.page);
+      return;
+    }
     if (action === 'refresh') {
       if (this.view.activePage === 'apps') {
         this.view.setLoading(true);
@@ -571,8 +587,7 @@ class ModelSettings {
     if (form.matches('[data-new-provider]')) {
       event.preventDefault();
       const data = Object.fromEntries(new FormData(form));
-      const result = await this.mutate(() => this.api.createProvider({ ...data, enabled: form.elements.enabled.checked, allowLan: form.elements.allowLan.checked, expectedRevision: this.snapshot.revision }), { select: (snapshot) => snapshot.providers.at(-1)?.id });
-      if (result) this.render();
+      await this.mutate(() => this.api.createProvider({ ...data, enabled: form.elements.enabled.checked, allowLan: form.elements.allowLan.checked, expectedRevision: this.snapshot.revision }), { select: (snapshot) => snapshot.providers.at(-1)?.id });
       return;
     }
     if (form.matches('[data-model-form]')) {
@@ -611,6 +626,22 @@ class ModelSettings {
   }
 
   handleEvent(message) {
+    if (message?.type === 'model_changed' || (message?.type === 'resync' && message.reason !== 'unavailable')) {
+      if (this.recoveringEvents) return;
+      if (document.activeElement?.matches?.('input,textarea,[contenteditable="true"]')) {
+        this.view.showNotice(this.t('sharedPreferencesReviewLatest'));
+        return;
+      }
+      this.recoveringEvents=(async()=>{
+        const [snapshot,events]=await Promise.all([this.api.snapshot(),this.api.surfaceEvents()]);
+        this.snapshot=snapshot;
+        for (const event of events.events || []) this.handleEvent(event);
+        if (this.view.activePage==='usage') await this.loadUsageData();
+        if (this.view.activePage==='oauth') await this.loadAuthFiles();
+        this.render();
+      })().catch(error=>this.showError(error)).finally(()=>{this.recoveringEvents=null;});
+      return;
+    }
     if (message?.event === 'model_gateway_state_changed' && message.result?.snapshot) {
       this.snapshot = message.result.snapshot;
       this.render();

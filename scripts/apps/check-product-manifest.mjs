@@ -25,6 +25,10 @@ export function checkProductManifest(manifest) {
       assert.ok(typeof module.moduleApiVersion === 'number');
       assert.ok(typeof module.dataSchemaVersion === 'number');
       assert.ok(typeof module.capabilityVersion === 'number');
+      if (module.views !== undefined) {
+        assert.ok(Array.isArray(module.views), `module ${module.appId} views must be an array`);
+        for (const view of module.views) assert.match(view, /^[a-z][a-z0-9-]{0,31}$/, `module ${module.appId} invalid view token ${view}`);
+      }
     } else {
       assert.match(module.version, /^\d+\.\d+\.\d+$/);
       assert.ok(!module.artifactPath.startsWith('/') && !module.artifactPath.split('/').includes('..'));
@@ -33,32 +37,34 @@ export function checkProductManifest(manifest) {
   }
 }
 
-const input = process.argv[2];
-const manifest = input
-  ? JSON.parse(readFileSync(resolve(input), 'utf8'))
-  : {
-      schemaVersion: 2,
-      product: 'natives',
-      version: '0.1.0',
-      platform: 'darwin',
-      arch: 'arm64',
-      appRuntime: {
-        protocolVersion: 2,
-        path: 'hosts/natives-app-runtime',
-        bytes: 12345,
-        sha256: 'a'.repeat(64),
-      },
-      modules: [{
-        appId: 'fund',
-        entryRoute: 'app.html?app=fund',
-        moduleApiVersion: 1,
-        dataSchemaVersion: 1,
-        capabilityVersion: 1,
-        ui: {
-          path: 'modules/fund/ui',
-          treeSha256: 'b'.repeat(64),
+if (import.meta.url === (await import('node:url')).pathToFileURL(process.argv[1] ?? '').href) {
+  const input = process.argv[2];
+  const manifest = input
+    ? JSON.parse(readFileSync(resolve(input), 'utf8'))
+    : {
+        schemaVersion: 2,
+        product: 'natives',
+        version: '0.1.0',
+        platform: 'darwin',
+        arch: 'arm64',
+        appRuntime: {
+          protocolVersion: 2,
+          path: 'hosts/natives-app-runtime',
+          bytes: 12345,
+          sha256: 'a'.repeat(64),
         },
-      }],
-    };
-checkProductManifest(manifest);
-console.log('product manifest contract passed');
+        modules: [{
+          appId: 'fund',
+          entryRoute: 'app.html?app=fund',
+          moduleApiVersion: 1,
+          dataSchemaVersion: 1,
+          capabilityVersion: 1,
+          ui: {
+            path: 'modules/fund/ui',
+            treeSha256: 'b'.repeat(64),
+          },
+        }],
+      };
+  checkProductManifest(manifest);
+  console.log('product manifest contract passed');
+}

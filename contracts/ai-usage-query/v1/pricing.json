@@ -1,0 +1,19 @@
+{
+  "prices": [
+    {
+      "id": "price_claude_35_sonnet",
+      "providerId": "anthropic",
+      "modelId": "claude-3-5-sonnet-20241022",
+      "inputPriceMicro": 3000000,
+      "outputPriceMicro": 15000000,
+      "cacheReadPriceMicro": 300000,
+      "cacheWritePriceMicro": 3750000,
+      "source": "builtin",
+      "updatedAt": "2026-09-28T00:00:00Z"
+    }
+  ],
+  "catalogVersion": "2026.09.28",
+  "totalEstimatedCostUsd": 1.4852,
+  "pricedRequestsCount": 128,
+  "unpricedRequestsCount": 0
+}

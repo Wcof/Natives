@@ -12,9 +12,11 @@ const { authFetch } = globalThis.Fund;
 // 渲染用 ECharts graphic 组件（replaceMerge 只替换 graphic 层，不触碰 K线/MA series），
 // 数据坐标 → 像素经 convertToPixel 换算，dataZoom/resize/换标的时整层重绘。
 
-const ACCENT = '#38bdf8';
-const SEL = '#f59e0b';
-const COLORS = { trendline: ACCENT, horizontal: '#0284c7', rectangle: '#38bdf8', channel: '#e040fb' };
+// DES-D02：缺省绘图色消费语义角色（随主题解析），显式用户色永不被覆盖；
+// 新建对象不再把当时解析的 HEX 伪存进 options.color。
+const ACCENT = () => Fund.themeColor('--draw-line');
+const SEL = () => Fund.themeColor('--draw-selected');
+const ANCHOR = () => Fund.themeColor('--draw-anchor');
 
 // d = { id, symbol, period, toolType, points:[{date, price}...], options:{color} }
 // points 约定：trendline 2 点；horizontal 1 点（y 轴价）；rectangle 2 点（对角）；
@@ -24,35 +26,35 @@ let tempDrawing = null;
 let drawingTool = 'cursor';   // cursor | trendline | horizontal | rectangle | channel
 let selected = null;          // { id, anchor }  anchor=-1 整体, 0/1/2 锚点
 let dragging = false;
+let dragConfirmed = null;
+let dragStart = null;
+
+function cancelDraft() {
+  const pending = !!(tempDrawing || dragging);
+  if (!pending) return false;
+  if (dragConfirmed) {
+    const index = drawings.findIndex(d => d.id === dragConfirmed.id);
+    if (index >= 0) drawings[index] = dragConfirmed;
+  }
+  dragConfirmed = null; dragStart = null;
+  tempDrawing = null;
+  dragging = false;
+  renderDrawings();
+  return true;
+}
 
 // ---------- 持久化（复用 /api/drawings） ----------
 function periodKey() {
   return tState.currentView === 'week' ? 'week' : (tState.currentView === 'month' ? 'month' : 'day');
 }
-function listDrawings() {
-  const sym = tState.currentSymbol;
-  if (!sym) return;
-  const period = periodKey();
-  authFetch('/api/drawings?symbol=' + sym + '&period=' + period)
-    .then(r => r.json())
-    .then(res => {
-      // 后端 normalize_symbol 会补 sh/sz/bj 前缀，前端统一归一化后再比较
-      drawings = (res.drawings || []).filter(d => normSym(d.symbol) === normSym(sym) && d.period === period);
-      selected = null;
-      renderDrawings();
-    })
-    .catch(() => {});
-}
-function saveDrawing(d) {
-  authFetch('/api/drawings', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ id: d.id, symbol: d.symbol, period: d.period, toolType: d.toolType, points: d.points, options: d.options || {} }),
-  }).catch(() => {});
-}
-function deleteDrawing(id) {
-  authFetch('/api/drawings?id=' + encodeURIComponent(id), { method: 'DELETE' }).catch(() => {});
-}
+const persistence = Fund.createDrawingSession({
+  scope: () => ({ symbol: tState.currentSymbol, period: periodKey(), viewContext: { fq: tState.fq || 'qfq', seriesKind: 'OHLC' } }),
+  replace: rows => { drawings = rows; if (selected && !rows.some(d => d.id === selected.id)) selected = null; renderDrawings(); },
+  statusRoot: () => document.getElementById('trends-chart-toolbar'),
+});
+function listDrawings() { cancelDraft(); return persistence.load(); }
+function saveDrawing(d) { return persistence.save(d); }
+function deleteDrawing(id) { return persistence.remove(id); }
 
 // 与后端 market::normalize_symbol 对齐的前端归一化（6位数字代码补交易所前缀）
 function normSym(raw) {
@@ -80,7 +82,8 @@ function pxToPrice(py) {
 }
 function pointToPixel(pt) {
   try {
-    return charts.klineChart.convertToPixel({ xAxisIndex: 0, yAxisIndex: 0 }, [pt.date, pt.price]);
+    const pixel = charts.klineChart.convertToPixel({ xAxisIndex: 0, yAxisIndex: 0 }, [pt.date, pt.price]);
+    return Array.isArray(pixel) && pixel.every(Number.isFinite) ? pixel : null;
   } catch (e) { return null; }
 }
 
@@ -95,44 +98,11 @@ function renderDrawings() {
 }
 
 function buildGraphic(d, els) {
-  const isSel = selected && selected.id === d.id;
-  const color = (d.options && d.options.color) || COLORS[d.toolType] || ACCENT;
-  const stroke = isSel ? SEL : color;
-  const width = isSel ? 2.5 : 1.8;
-  const pts = d.points.map(pointToPixel);
-  if (pts.some(p => !p)) return;
-  const style = { stroke: stroke, lineWidth: width };
-  const prefix = 'dw_' + d.id;
-
-  if (d.toolType === 'trendline' && pts.length >= 2) {
-    els.push({ id: prefix + '_l', type: 'line', shape: { x1: pts[0][0], y1: pts[0][1], x2: pts[1][0], y2: pts[1][1] },
-      style: style, silent: true, z: 60 });
-  } else if (d.toolType === 'horizontal' && pts.length >= 1) {
-    els.push({ id: prefix + '_l', type: 'line', shape: { x1: 0, y1: pts[0][1], x2: chartWidthPx(), y2: pts[0][1] },
-      style: Object.assign({ lineDash: [5, 4] }, style), silent: true, z: 60 });
-  } else if (d.toolType === 'rectangle' && pts.length >= 2) {
-    els.push({ id: prefix + '_r', type: 'rect',
-      shape: { x: Math.min(pts[0][0], pts[1][0]), y: Math.min(pts[0][1], pts[1][1]),
-               width: Math.abs(pts[1][0] - pts[0][0]), height: Math.abs(pts[1][1] - pts[0][1]) },
-      style: Object.assign({ fill: color + '22' }, style), silent: true, z: 60 });
-  } else if (d.toolType === 'channel' && pts.length >= 3) {
-    // p1-p2 基线 + 过 p3 偏移的平行线
-    const off = [pts[2][0] - pts[0][0], pts[2][1] - pts[0][1]];
-    const c1 = [pts[0][0] + off[0], pts[0][1] + off[1]];
-    const c2 = [pts[1][0] + off[0], pts[1][1] + off[1]];
-    els.push({ id: prefix + '_l1', type: 'line', shape: { x1: pts[0][0], y1: pts[0][1], x2: pts[1][0], y2: pts[1][1] },
-      style: style, silent: true, z: 60 });
-    els.push({ id: prefix + '_l2', type: 'line', shape: { x1: c1[0], y1: c1[1], x2: c2[0], y2: c2[1] },
-      style: Object.assign({ lineDash: [5, 4] }, style), silent: true, z: 60 });
-  } else {
-    return;
-  }
-  if (isSel) {
-    pts.forEach((p, i) => {
-      els.push({ id: prefix + '_a' + i, type: 'circle', shape: { cx: p[0], cy: p[1], r: 4.5 },
-        style: { fill: '#ffffff', stroke: SEL, lineWidth: 2 }, silent: true, z: 61 });
-    });
-  }
+  Fund.StockDrawingsShapes.buildGraphic({
+    selected, hoverHit: null, strokeColor: ACCENT(), selectedColor: SEL(), strokeWidth: 1.8,
+    pointToPixel, chartWidthPx, getKlineData: () => tState.klineData,
+    dashPattern: type => ({dashed:[5,4],'dashed-dense':[3,2],'dashed-sparse':[8,6]})[type] || null,
+  }, d, els);
 }
 
 function chartWidthPx() {
@@ -150,13 +120,15 @@ function bindInteraction() {
   if (!zr) return;
 
   zr.on('mousedown', function(e) {
-    if (!isKlineView()) return;
+    if (!isKlineView() || !persistence.canEdit()) return;
     const x = e.offsetX, y = e.offsetY;
 
     if (drawingTool === 'cursor') {
       const hit = hitTest(x, y);
       selected = hit;
-      dragging = !!hit;
+      dragging = !!hit && !drawings.find(d=>d.id===hit.id)?.options.locked;
+      dragConfirmed = hit ? structuredClone(drawings.find(d => d.id === hit.id)) : null;
+      dragStart = hit ? {x,y} : null;
       if (hit) renderDrawings();
       return;
     }
@@ -166,16 +138,40 @@ function bindInteraction() {
     const price = pxToPrice(y);
     if (date == null || price == null) return;
     const base = { date: date, price: price };
-    const need = drawingTool === 'horizontal' ? 1 : (drawingTool === 'channel' ? 3 : 2);
+    if (tempDrawing?.toolType === 'channel' && tempDrawing._stage2) {
+      tempDrawing.points[2] = base; finishTemp(); return;
+    }
+    if (tempDrawing?.toolType === 'polyline') {
+      if (tempDrawing.points.length < 512) tempDrawing.points.push({...base});
+      renderDrawings(); return;
+    }
+    const need = ['horizontal', 'text'].includes(drawingTool) ? 1 : (drawingTool === 'channel' ? 3 : 2);
     tempDrawing = {
       id: 'draw_' + Date.now(),
       symbol: tState.currentSymbol,
       period: periodKey(),
       toolType: drawingTool,
       points: new Array(need).fill(0).map(() => Object.assign({}, base)),
-      options: { color: COLORS[drawingTool] },
+      options: {},
     };
-    if (need === 1) finishTemp(); // 水平线单击即成
+    if (drawingTool === 'text') {
+      const draft=tempDrawing; tempDrawing=null;
+      const dialog=document.createElement('dialog'); dialog.className='home-dialog';
+      const form=document.createElement('form'), input=document.createElement('input');
+      input.type='text'; input.maxLength=256; input.required=true; input.setAttribute('aria-label',Fund.t('fundTrendsDrawingText'));
+      const save=document.createElement('button'); save.type='submit'; save.textContent=Fund.t('fundHomeSave');
+      const cancel=document.createElement('button'); cancel.type='button'; cancel.textContent=Fund.t('cancel');
+      cancel.onclick=()=>dialog.close();
+      form.append(input,save,cancel); dialog.append(form); document.body.append(dialog);
+      const context=JSON.stringify({symbol:tState.currentSymbol,period:periodKey(),fq:tState.fq});
+      form.onsubmit=event=>{event.preventDefault(); const text=input.value.trim();
+        if(!text || context!==JSON.stringify({symbol:tState.currentSymbol,period:periodKey(),fq:tState.fq}))return;
+        draft.options={text,name:text}; tempDrawing=draft; finishTemp(); dialog.close();
+      };
+      dialog.addEventListener('close',()=>{dialog.remove();setDrawingTool('cursor');},{once:true});
+      dialog.showModal(); input.focus(); return;
+    }
+    if (need === 1) finishTemp();
     else renderDrawings();
   });
 
@@ -189,7 +185,9 @@ function bindInteraction() {
       const date = pxToDate(x);
       const price = pxToPrice(y);
       if (date == null || price == null) return;
-      moveAnchor(d, selected.anchor, date, price);
+      if (selected.anchor === -1 && dragConfirmed && dragStart) {
+        Fund.StockDrawingsShapes.moveWholeDrawing({chart:charts.klineChart,getKlineData:()=>tState.klineData}, d, dragConfirmed.points, dragStart, {x,y});
+      } else moveAnchor(d, selected.anchor, date, price);
       renderDrawings();
       return;
     }
@@ -209,8 +207,10 @@ function bindInteraction() {
       const d = drawings.find(dd => dd.id === selected.id);
       if (d) saveDrawing(d);
       dragging = false;
+      dragConfirmed = null;
       return;
     }
+    if (tempDrawing?.toolType === 'polyline') return;
     if (tempDrawing) {
       const x = e.offsetX, y = e.offsetY;
       const date = pxToDate(x);
@@ -227,16 +227,19 @@ function bindInteraction() {
   });
 
   document.addEventListener('keydown', function(e) {
+    if (tempDrawing?.toolType === 'polyline' && !document.querySelector('dialog[open]')) {
+      if(e.key==='Enter'){ e.preventDefault(); tempDrawing.points.pop(); finishTemp(); return; }
+      if(e.key==='Backspace'){e.preventDefault();if(tempDrawing.points.length>2)tempDrawing.points.splice(-2,1);renderDrawings();return;}
+    }
     if (e.key !== 'Delete' && e.key !== 'Backspace') return;
     const tag = (document.activeElement && document.activeElement.tagName || '').toLowerCase();
-    if (tag === 'input' || tag === 'textarea') return;
+    if (tag === 'input' || tag === 'textarea' || document.activeElement?.isContentEditable || document.querySelector('dialog[open]') || document.getElementById('view-trends')?.hidden) return;
     if (selected) {
       deleteDrawing(selected.id);
-      drawings = drawings.filter(d => d.id !== selected.id);
-      selected = null;
-      renderDrawings();
     }
   });
+
+  zr.on('dblclick', () => { if(tempDrawing?.toolType==='polyline'){tempDrawing.points.pop();finishTemp();} });
 
   // datazoom / resize / 标的切换后按当前视窗重算像素坐标
   charts.klineChart.on('datazoom', function() { renderDrawings(); });
@@ -246,11 +249,11 @@ function bindInteraction() {
 function updateTemp(date, price) {
   const d = tempDrawing;
   if (!d) return;
-  if (d.toolType === 'trendline' || d.toolType === 'rectangle') {
+  if (['trendline', 'rectangle', 'circle', 'fibonacci', 'measure'].includes(d.toolType)) {
     d.points[1] = { date: date, price: price };
+  } else if(d.toolType === 'polyline') { d.points[d.points.length-1]={date,price};
   } else if (d.toolType === 'channel') {
-    d.points[1] = { date: date, price: price };
-    if (d._stage2) d.points[2] = { date: date, price: price };
+    d.points[d._stage2 ? 2 : 1] = {date,price};
   }
 }
 
@@ -260,9 +263,11 @@ function finishTemp() {
   if (!d) return;
   // 过滤无效图形（点重合/无位移）
   const pts = d.points;
-  const valid = d.toolType === 'horizontal' ||
+  const areaValid=!['circle','rectangle'].includes(d.toolType) || (pts[0].date!==pts[1].date && Math.abs(pts[0].price-pts[1].price)>1e-9);
+  const valid = areaValid && (['horizontal', 'text'].includes(d.toolType) ||
+    (d.toolType === 'polyline' && pts.length>=2 && pts.some(p=>p.date!==pts[0].date || p.price!==pts[0].price)) ||
     (pts.length === 2 && (pts[0].date !== pts[1].date || Math.abs(pts[0].price - pts[1].price) > 1e-9)) ||
-    (pts.length === 3 && (Math.abs(pts[0].price - pts[1].price) > 1e-9 || pts[0].date !== pts[1].date));
+    (pts.length === 3 && (Math.abs(pts[0].price - pts[1].price) > 1e-9 || pts[0].date !== pts[1].date)));
   if (valid) {
     drawings.push(d);
     selected = { id: d.id, anchor: -1 };
@@ -279,48 +284,17 @@ function moveAnchor(d, anchor, date, price) {
 }
 
 function hitTest(x, y) {
-  for (let i = drawings.length - 1; i >= 0; i--) {
-    const d = drawings[i];
-    const pts = d.points.map(pointToPixel);
-    if (pts.some(p => !p)) continue;
-    for (let a = 0; a < pts.length; a++) {
-      if (Math.hypot(x - pts[a][0], y - pts[a][1]) <= 8) return { id: d.id, anchor: a };
-    }
-    if (d.toolType === 'horizontal' && Math.abs(y - pts[0][1]) <= 6) return { id: d.id, anchor: -1 };
-    if (d.toolType === 'trendline' && pts.length >= 2 && distToSegment(x, y, pts[0], pts[1]) <= 6) {
-      return { id: d.id, anchor: -1 };
-    }
-    if (d.toolType === 'rectangle' && pts.length >= 2) {
-      const minX = Math.min(pts[0][0], pts[1][0]), maxX = Math.max(pts[0][0], pts[1][0]);
-      const minY = Math.min(pts[0][1], pts[1][1]), maxY = Math.max(pts[0][1], pts[1][1]);
-      if (x >= minX && x <= maxX && y >= minY && y <= maxY) return { id: d.id, anchor: -1 };
-    }
-    if (d.toolType === 'channel' && pts.length >= 3) {
-      const off = [pts[2][0] - pts[0][0], pts[2][1] - pts[0][1]];
-      const c1 = [pts[0][0] + off[0], pts[0][1] + off[1]];
-      const c2 = [pts[1][0] + off[0], pts[1][1] + off[1]];
-      if (distToSegment(x, y, pts[0], pts[1]) <= 6 || distToSegment(x, y, c1, c2) <= 6) {
-        return { id: d.id, anchor: -1 };
-      }
-    }
-  }
-  return null;
-}
-
-function distToSegment(px, py, v, w) {
-  const l2 = Math.pow(v[0] - w[0], 2) + Math.pow(v[1] - w[1], 2);
-  if (l2 === 0) return Math.hypot(px - v[0], py - v[1]);
-  const t = Math.max(0, Math.min(1, ((px - v[0]) * (w[0] - v[0]) + (py - v[1]) * (w[1] - v[1])) / l2));
-  return Math.hypot(px - (v[0] + t * (w[0] - v[0])), py - (v[1] + t * (w[1] - v[1])));
+  return Fund.StockDrawingsShapes.hitTest({ drawings, pointToPixel }, x, y);
 }
 
 function isKlineView() {
-  return charts.klineChart && tState.currentView !== 'minute' && tState.klineData.length > 0;
+  return tState.instrumentKind !== 'fund' && charts.klineChart && tState.currentView !== 'minute' && tState.klineData.length > 0;
 }
 
 // ---------- 工具栏联动 ----------
 function setDrawingTool(tool) {
   drawingTool = tool;
+  cancelDraft();
   if (tool !== 'cursor') selected = null;
   document.querySelectorAll('.td-btn[data-tool]').forEach(b => {
     b.classList.toggle('active', b.dataset.tool === tool);
@@ -332,21 +306,23 @@ function initToolbar() {
   document.querySelectorAll('.td-btn[data-tool]').forEach(b => {
     b.addEventListener('click', () => setDrawingTool(b.dataset.tool));
   });
+  const objects=document.createElement('button');objects.type='button';objects.className='tb-btn';objects.textContent=Fund.t('fundChartDrawingObjects');objects.dataset.i18n='fundChartDrawingObjects';objects.onclick=()=>{cancelDraft();persistence.manage();};document.getElementById('trends-chart-toolbar').append(objects);
   const clearBtn = document.getElementById('btn-draw-clear');
   if (clearBtn) {
     clearBtn.addEventListener('click', () => {
       if (!selected) return;
       deleteDrawing(selected.id);
-      drawings = drawings.filter(d => d.id !== selected.id);
-      selected = null;
-      renderDrawings();
     });
   }
 }
 
 // ---------- 对外挂载 ----------
 trends.drawings = {
+  cancelDraft,
+  pause() { cancelDraft(); persistence.pause(); },
   init() {
+    if (this.initialized || !charts.klineChart) return;
+    this.initialized = true;
     initToolbar();
     bindInteraction();
     listDrawings();
@@ -355,5 +331,11 @@ trends.drawings = {
   render: renderDrawings,
   getTool: () => drawingTool,
 };
+window.addEventListener('blur', cancelDraft);
+window.addEventListener('pagehide', cancelDraft);
+document.addEventListener('pointercancel', cancelDraft);
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape' && !e.defaultPrevented && !document.querySelector('dialog[open]') && cancelDraft()) e.preventDefault();
+});
 
 })();

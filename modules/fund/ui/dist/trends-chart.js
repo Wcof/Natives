@@ -7,6 +7,7 @@ const tState = (trends.state = trends.state || {
   currentSymbol: '',
   currentStockName: '',
   currentView: 'dayk',
+  fq: 'qfq',
   mode: 'pro',
   klineData: [],
   lastSignalData: null,
@@ -32,53 +33,46 @@ const charts = (trends.charts = trends.charts || {
   indicatorChart: null,
 });
 
-// 全局主题色
-const C = (trends.C = {
-  bg: 'transparent',
-  up: '#ff2d2d',       // 涨-红
-  down: '#00b35c',     // 跌-绿
-  ma5: '#ffeb3b',      // MA5-黄
-  ma10: '#e040fb',     // MA10-紫
-  ma20: '#4fc3f7',     // MA20-蓝
-  ma60: '#ff9800',     // MA60-橙
-  text: '#aaa',
-  textDim: '#666',
-  grid: '#1a1a1a',
-  axis: '#333',
-  preClose: '#555',
-  avgLine: '#cdf24b',
-});
+// 图表实例 owner 侧操作（mode/T05）：页面/侧栏尺寸变化经公开动作触发 resize，
+// 不再由 controller 直接遍历 charts 内部实例集合。
+actions.resizeTrendsCharts = function () {
+  Object.values(charts).forEach(function (c) {
+    if (c && typeof c.resize === "function") c.resize();
+  });
+};
+
+// 全局主题色（DES 02 图表语义角色）：初始、延迟创建实例与隐藏恢复前都经
+// updateTrendsThemeColors() 从 CSS 变量解析（Archive/Volt 同一角色表），
+// 普通 object 保存解析值，避免 pointermove/tooltip 每帧读 computed style；
+// 缺角色由 themeColor 回 muted，不静默统一退灰。
+const C = (trends.C = { bg: 'transparent' });
 
 function updateTrendsThemeColors() {
-  const isLight = document.documentElement.dataset.theme === 'archive';
-  C.text = isLight ? '#1a1a18' : '#aaa';
-  C.textDim = isLight ? '#6b6355' : '#666';
-  C.grid = isLight ? '#e8dfce' : '#1a1a1a';
-  C.axis = isLight ? '#d8cfbe' : '#333';
-  C.preClose = isLight ? '#8c8273' : '#555';
-  C.avgLine = isLight ? '#cc785c' : '#cdf24b';
+  const color = Fund.themeColor, rgba = Fund.themeRgba;
+  C.up = color('--color-up'); C.down = color('--color-down');
+  C.ma5 = color('--series-4'); C.ma10 = color('--series-5');
+  C.ma20 = color('--series-6'); C.ma60 = color('--series-2');
+  C.text = color('--chart-text'); C.textDim = color('--chart-text-dim');
+  C.grid = color('--chart-grid'); C.axis = color('--chart-axis');
+  C.preClose = color('--chart-pre-close'); C.avgLine = color('--natives-accent');
+  C.tooltipBg = rgba('--natives-surface', 0.95); C.tooltipBorder = color('--chart-tooltip-border');
 }
 updateTrendsThemeColors();
 
 trends.reloadTheme = function() {
+  const zooms = Object.entries(charts).map(([key, chart]) => [key, chart?.getOption().dataZoom]);
   updateTrendsThemeColors();
-  if (charts.klineChart) {
-    const opts = {
-      textStyle: { color: C.text },
-      categoryAxis: {
-        axisLine: { lineStyle: { color: C.axis } },
-        axisLabel: { color: C.textDim },
-      },
-      valueAxis: {
-        axisLine: { lineStyle: { color: C.axis } },
-        axisLabel: { color: C.textDim },
-        splitLine: { lineStyle: { color: C.grid } },
-      },
-    };
-    Object.values(charts).forEach(c => {
-      if (c && typeof c.setOption === 'function') c.setOption(opts);
-    });
+  if (tState.instrumentKind === 'fund') trends.coordinator?.renderNav();
+  if (charts.klineChart && tState.klineData.length) {
+    trends.chart?.renderKline(tState.klineData, tState.lastSignalData || {}, false);
+    trends.chan?.applyChanlunDailyOverlay(tState.dailyChanlun);
   }
+  if (charts.minuteChart && tState.minuteData) trends.chart?.renderMinute(tState.minuteData, tState.minuteChanlun);
+  if (charts.flowChart) trends.flow?.reloadTheme();
+  for (const [key, zoom] of zooms) {
+    if (zoom?.length) charts[key].setOption({ dataZoom: zoom.map(({ start, end, startValue, endValue }) => ({ start, end, startValue, endValue })) });
+  }
+  trends.drawings?.render();
 };
 
 let _zoomBound = false;
@@ -99,15 +93,15 @@ function initCharts() {
       textStyle: { color: C.text, fontFamily: 'Microsoft YaHei' },
       categoryAxis: {
         axisLine: { lineStyle: { color: C.axis } },
-        axisLabel: { color: C.textDim, fontSize: 10 },
+        axisLabel: { color: C.textDim, fontSize: parseFloat(Fund.themeColor('--natives-fs-secondary')) },
         splitLine: { show: false },
       },
       valueAxis: {
         axisLine: { lineStyle: { color: C.axis } },
-        axisLabel: { color: C.textDim, fontSize: 10 },
+        axisLabel: { color: C.textDim, fontSize: parseFloat(Fund.themeColor('--natives-fs-secondary')) },
         splitLine: { lineStyle: { color: C.grid } },
       },
-      tooltip: { backgroundColor: 'rgba(20,20,20,0.95)', borderColor: '#333', textStyle: { color: '#ddd', fontSize: 12 } },
+      tooltip: { backgroundColor: C.tooltipBg, borderColor: C.tooltipBorder, textStyle: { color: C.text, fontSize: 12 } },
     };
 
     charts.klineChart = echarts.init(document.getElementById('kline-chart'));
@@ -123,6 +117,20 @@ function initCharts() {
     charts.minuteChart.setOption(opts);
     charts.minuteVolChart.setOption(opts);
     charts.indicatorChart.setOption(opts);
+
+    // Toolbar wrapping and panel moves change chart sizes without a window resize.
+    const resizeObserver = new ResizeObserver(entries => {
+      for (const entry of entries) {
+        if (entry.contentRect.width <= 0 || entry.contentRect.height <= 0) continue;
+        const chart = Object.values(charts).find(chart => chart?.getDom() === entry.target);
+        chart?.resize();
+        if (chart === charts.klineChart) trends.drawings?.render();
+      }
+    });
+    const observeCharts = () => Object.values(charts).forEach(chart => resizeObserver.observe(chart.getDom()));
+    observeCharts();
+    window.addEventListener('pagehide', () => resizeObserver.disconnect());
+    window.addEventListener('pageshow', event => { if (event.persisted) observeCharts(); });
 
     window.addEventListener('resize', () => {
       if (charts.klineChart) charts.klineChart.resize();
@@ -162,6 +170,7 @@ function initCharts() {
     } else if (trends.chart?.bindChartTooltip) {
       trends.chart.bindChartTooltip();
     }
+    trends.drawings?.init();
     return true;
   } catch (err) {
     console.warn("initCharts error:", err);
@@ -170,6 +179,8 @@ function initCharts() {
 }
 
 function switchView(view) {
+  trends.drawings?.cancelDraft();
+  document.getElementById('trends-fq-group').hidden = view === 'minute';
   const prevView = tState.currentView;
   tState.currentView = view;
   const dk = document.getElementById('view-dayk');

@@ -53,20 +53,7 @@ export function createFileOperations({ $, call, t, session, setStatus, toast, up
     } catch (error) { setStatus(error.message || t('clipboardUnavailable', '剪贴板不可用'), 'error'); }
   }
   async function copyPathSelected() {
-    const paths = selectedItems().map((item) => item.path);
-    if (!paths.length) return;
-    const text = paths.join('\n');
-    try {
-      if (navigator.clipboard?.writeText) await navigator.clipboard.writeText(text);
-      else {
-        const input = document.createElement('textarea');
-        input.value = text; input.setAttribute('readonly', ''); input.style.position = 'fixed'; input.style.opacity = '0';
-        document.body.append(input); input.select();
-        if (!document.execCommand('copy')) throw new Error(t('clipboardUnavailable', '剪贴板不可用'));
-        input.remove();
-      }
-      toast(t('copiedPath', '路径已复制'));
-    } catch (error) { setStatus(error.message || t('clipboardUnavailable', '剪贴板不可用'), 'error'); }
+    await copyPathSelectedFor(selectedItems().map((item) => item.path).join('\n'));
   }
   async function copyFileSelected() { const paths = selectedItems().filter((item) => !item.isDir).map((item) => item.path); if (!paths.length) return; try { await call('copy_paths', { paths }); toast(t('fileCopied', '文件已复制')); } catch (error) { setStatus(error.message, 'error'); } }
 
@@ -128,7 +115,7 @@ export function createFileOperations({ $, call, t, session, setStatus, toast, up
         await call('import_probe', { parent, name });
         const begun = await call('import_begin', { uploadId, parent, name, size: file.size, conflict: 'rename' });
         if (begun?.renamed) renamedCount++;
-        const chunkSize = 512 * 1024;
+        const chunkSize = 128 * 1024;
         for (let offset = 0; offset < file.size; offset += chunkSize) {
           if (activeImport.cancelled) throw new Error(t('importCancelled', '导入已取消'));
           const bytes = new Uint8Array(await file.slice(offset, Math.min(offset + chunkSize, file.size)).arrayBuffer());
@@ -161,7 +148,7 @@ export function createFileOperations({ $, call, t, session, setStatus, toast, up
     const editorPath = editorState.path; const parent = parentAndName(editorPath).parent; const uploadId = crypto.randomUUID(); activeImport = { cancelled: false, uploadId, totalBytes: file.size, completedBytes: 0 }; setOperationCancelable(true); updateProgress(0, file.size);
     try {
       await call('import_probe', { parent, name: file.name }); await call('import_begin', { uploadId, parent, name: file.name, size: file.size, conflict: 'rename' });
-      const chunkSize = 512 * 1024; for (let offset = 0; offset < file.size; offset += chunkSize) { if (activeImport.cancelled) throw new Error(t('importCancelled', '导入已取消')); const bytes = new Uint8Array(await file.slice(offset, Math.min(offset + chunkSize, file.size)).arrayBuffer()); await call('import_chunk', { uploadId, offset, data: bytesToBase64(bytes) }); updateProgress(offset + bytes.length, file.size); }
+      const chunkSize = 128 * 1024; for (let offset = 0; offset < file.size; offset += chunkSize) { if (activeImport.cancelled) throw new Error(t('importCancelled', '导入已取消')); const bytes = new Uint8Array(await file.slice(offset, Math.min(offset + chunkSize, file.size)).arrayBuffer()); await call('import_chunk', { uploadId, offset, data: bytesToBase64(bytes) }); updateProgress(offset + bytes.length, file.size); }
       const result = await call('import_end', { uploadId }); const name = result?.path ? parentAndName(result.path).name : file.name; const encoded = encodeURIComponent(name); const value = `![${name}](${encoded})`; const start = editor.selectionStart; editor.setRangeText(value, start, editor.selectionEnd, 'end'); editor.dispatchEvent(new Event('input', { bubbles: true })); toast(t('imageInserted', '图片已插入'), 'success'); await loadDirectory(session.currentPath); return true;
     } catch (error) { await call('import_cancel', { uploadId }).catch(() => {}); if (!activeImport?.cancelled) { rememberFailedOperation({ method: 'image-import', files: [file], editorPath }); toast(`${file.name}：${error.message}`, 'error'); } return false; }
     finally { activeImport = undefined; setOperationCancelable(false); updateProgress(0, 1, false); }
@@ -232,7 +219,33 @@ export function createFileOperations({ $, call, t, session, setStatus, toast, up
   }
 
   
-  async function extractArchive(item) { if (!item?.path || activeImport || activeBatch) return; const suggested = `${item.path.replace(/\.(zip|jar|tar|tgz|tbz2?|txz|gz|zst)$/i, '')}-extracted`; openModal({ title: t('extractArchive', '解压缩包'), message: t('extractArchiveHint', '请输入解压目标文件夹路径（支持 ZIP/TAR）'), label: t('destination', '目标文件夹路径'), value: suggested, submit: async (destination) => { try { const result = await call('extract_archive', { path: item.path, dest: destination }, crypto.randomUUID()); if (destination === session.currentPath) await loadDirectory(session.currentPath); toast(`${result?.files || 0} ${t('archiveExtracted', '个文件已解压')}`, 'success'); } catch (error) { setStatus(error.message, 'error'); } } }); }
+  async function extractArchive(item) {
+    if (!item?.path || activeImport || activeBatch) return;
+    const suggested = `${item.path.replace(/\.(zip|jar|tar|tgz|tbz2?|txz|gz|zst)$/i, '')}-extracted`;
+    openModal({
+      title: t('extractArchive', '解压缩包'), message: t('extractArchiveHint', '请输入解压目标文件夹路径（支持 ZIP/TAR）'),
+      label: t('destination', '目标文件夹路径'), value: suggested,
+      submit: async (destination) => {
+        if (activeImport || activeBatch) return;
+        const requestId = crypto.randomUUID();
+        activeBatch = { cancelled: false, requestId };
+        setOperationCancelable(true);
+        updateProgress(0, 1);
+        try {
+          const result = await call('extract_archive', { path: item.path, dest: destination }, requestId);
+          if (activeBatch.cancelled || result?.cancelled) throw Error(t('archiveExtractionCancelled'));
+          if (destination === session.currentPath) await loadDirectory(session.currentPath);
+          toast(`${result?.files || 0} ${t('archiveExtracted', '个文件已解压')}`, 'success');
+        } catch (error) {
+          setStatus(activeBatch.cancelled ? t('archiveExtractionCancelled') : error.message, 'error');
+        } finally {
+          activeBatch = undefined;
+          setOperationCancelable(false);
+          updateProgress(0, 1, false);
+        }
+      },
+    });
+  }
   async function createZip() { const items = selectedItems(); if (!items.length || activeImport || activeBatch) return; openModal({ title: t('createArchive', '创建 ZIP'), message: t('createArchiveHint', '选中项目必须位于同一目录'), label: t('archiveName', '归档名称'), value: 'archive.zip', submit: async (name) => { const requestId = crypto.randomUUID(); activeBatch = { cancelled: false, requestId }; setOperationCancelable(true); setStatus(`${t('processing', '处理中')} ${items.length} 项`); updateProgress(0, 1); try { const result = await call('create_zip', { paths: items.map((item) => item.path), dest: session.currentPath, name }, requestId); if (activeBatch?.cancelled || result?.cancelled) throw new Error(t('operationCancelled', '操作已取消')); link.setPendingSelectionPath(result?.path); await loadDirectory(session.currentPath); renderSelection(); toast(`${result?.files || 0} ${t('archiveCreated', '个文件已打包')}`, 'success'); } catch (error) { setStatus(error.message, 'error'); } finally { activeBatch = undefined; setOperationCancelable(false); updateProgress(0, 1, false); } } }); }
 
   async function duplicateSelected() { await duplicateSelectedNow(); }

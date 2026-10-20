@@ -1,0 +1,33 @@
+{
+  "status": "ready",
+  "totalEventsCount": 128,
+  "metrics": {
+    "totalRequests": 128,
+    "totalTokens": 2450000,
+    "successRate": 98.4,
+    "tps": 24.5,
+    "cacheHitRate": 32.1,
+    "estimatedCostUsd": 1.4852
+  },
+  "trend": [
+    {
+      "timestamp": "2026-09-28T00:00:00Z",
+      "requests": 64,
+      "tokens": 1200000,
+      "costUsd": 0.725
+    },
+    {
+      "timestamp": "2026-09-28T12:00:00Z",
+      "requests": 64,
+      "tokens": 1250000,
+      "costUsd": 0.7602
+    }
+  ],
+  "tokens": {
+    "input": 500000,
+    "output": 150000,
+    "cacheRead": 1200000,
+    "cacheWrite": 300000,
+    "reasoning": 300000
+  }
+}

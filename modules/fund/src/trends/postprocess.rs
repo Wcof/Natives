@@ -30,7 +30,8 @@ pub fn apply_signal_optimization(
         stock_signals.extend(vp.signals.clone());
     }
     for s in r.buy_signals.iter().chain(r.sell_signals.iter()) {
-        if s.contains("大盘") || s.contains("空头环境") || s.contains("今日") || s.contains("上证") {
+        if s.contains("大盘") || s.contains("空头环境") || s.contains("今日") || s.contains("上证")
+        {
             continue;
         }
         stock_signals.push(s.clone());
@@ -126,7 +127,8 @@ pub fn apply_signal_optimization(
         .unwrap_or("")
         .to_string();
 
-    let position_advice = if action == "买入" || action == "强烈买入" || action == "谨慎买入" {
+    let position_advice = if action == "买入" || action == "强烈买入" || action == "谨慎买入"
+    {
         if m_score < 40 {
             if action == "强烈买入" {
                 action = "买入".to_string();

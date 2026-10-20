@@ -31,7 +31,7 @@ function renderSummary(signal) {
   const riskClass = risk === '低' ? 'low' : risk === '中' ? 'mid' : 'high';
 
   const score = signal.score || 0;
-  const scoreColor = isBuy ? C.up : isSell ? C.down : '#ffc107';
+  const scoreColor = isBuy ? C.up : isSell ? C.down : Fund.themeColor('--natives-warning');
 
   let summary = signal.plain_summary || '';
 
@@ -43,28 +43,28 @@ function renderSummary(signal) {
 
   let optimizeHtml = '';
   if (origAction && origAction !== action) {
-    optimizeHtml = `<div style="margin-top:4px;font-size:11px;color:#888">
-      <span style="text-decoration:line-through;color:#666">${origAction}</span>
+    optimizeHtml = `<div style="margin-top:4px;font-size:var(--natives-fs-secondary);color:var(--natives-text-muted)">
+      <span style="text-decoration:line-through;color:var(--natives-text-muted)">${origAction}</span>
       <span style="margin:0 2px">→</span>
-      <span style="color:${isCautious ? '#ffb74d' : '#ffc107'};font-weight:500">${action}</span>
-      ${vetoReason ? `<span style="margin-left:6px;color:#ff6b6b">⚠ ${vetoReason}</span>` : ''}
+      <span style="color:var(--natives-warning);font-weight:500">${action}</span>
+      ${vetoReason ? `<span style="margin-left:6px;color:var(--natives-danger)">⚠ ${vetoReason}</span>` : ''}
     </div>`;
   } else if (vetoReason) {
-    optimizeHtml = `<div style="margin-top:4px;font-size:11px;color:#ff6b6b">⚠ ${vetoReason}</div>`;
+    optimizeHtml = `<div style="margin-top:4px;font-size:var(--natives-fs-secondary);color:var(--natives-danger)">⚠ ${vetoReason}</div>`;
   }
 
   let riskNotesHtml = '';
   if (riskNotes.length > 0) {
-    riskNotesHtml = `<div style="margin-top:6px;padding:6px 8px;background:rgba(255,152,0,0.08);border-radius:6px;border:1px solid rgba(255,152,0,0.15)">
-      ${riskNotes.map(n => `<div style="font-size:11px;color:#ffb74d;line-height:1.5">⚠ ${n}</div>`).join('')}
+    riskNotesHtml = `<div style="margin-top:6px;padding:6px 8px;background:var(--natives-warning-bg);border-radius:6px;border:1px solid var(--natives-warning)">
+      ${riskNotes.map(n => `<div style="font-size:var(--natives-fs-secondary);color:var(--natives-warning);line-height:1.5">⚠ ${n}</div>`).join('')}
     </div>`;
   }
 
   let posHtml = '';
   if (posAdvice && posAdvice !== '空仓等待' && (isBuy || isCautious)) {
-    posHtml = `<div style="margin-top:4px;font-size:11px;color:#aaa">
-      <span style="color:#cdf24b">建议仓位：</span><span style="color:#ddd">${posAdvice}</span>
-      ${riskReward ? `<span style="margin-left:8px;color:#888">盈亏比 ${riskReward}</span>` : ''}
+    posHtml = `<div style="margin-top:4px;font-size:var(--natives-fs-secondary);color:var(--natives-text-muted)">
+      <span style="color:var(--natives-accent)">建议仓位：</span><span style="color:var(--natives-text-primary)">${posAdvice}</span>
+      ${riskReward ? `<span style="margin-left:8px;color:var(--natives-text-muted)">盈亏比 ${riskReward}</span>` : ''}
     </div>`;
   }
 
@@ -80,8 +80,8 @@ function renderSummary(signal) {
     ${riskNotesHtml}
     <div class="sum-risk-row">
       <span class="sum-risk-dot ${riskClass}"></span>
-      <span style="color:#888">风险等级：<span style="color:${risk==='低'?C.down:risk==='高'?C.up:'#ffc107'};font-weight:bold">${risk}</span></span>
-      <span style="color:#555;margin-left:auto">置信度 ${signal.confidence||0}%</span>
+      <span style="color:var(--natives-text-muted)">风险等级：<span style="color:${risk==='低'?C.down:risk==='高'?C.up:'var(--natives-warning)'};font-weight:bold">${risk}</span></span>
+      <span style="color:var(--natives-text-muted);margin-left:auto">置信度 ${signal.confidence||0}%</span>
     </div>
   `;
 }
@@ -113,14 +113,14 @@ function renderTradePlan(signal) {
   if (isWatch) {
     const vetoReason = signal.veto_reason || '';
     const vetoHtml = vetoReason ? `
-      <div style="padding:6px 8px;margin-bottom:6px;background:rgba(255,107,107,0.08);border-radius:6px;border:1px solid rgba(255,107,107,0.15);font-size:11px;color:#ff6b6b;line-height:1.5">
+      <div style="padding:6px 8px;margin-bottom:6px;background:var(--natives-danger-soft);border-radius:6px;border:1px solid color-mix(in srgb, var(--natives-danger) 15%, transparent);font-size:var(--natives-fs-secondary);color:var(--natives-danger);line-height:1.5">
         ⚠ ${vetoReason}
       </div>` : '';
     el.innerHTML = `
       ${vetoHtml}
-      <div style="padding:8px 0;font-size:13px;color:#aaa;line-height:1.6">
-        <div style="margin-bottom:6px"><span style="color:#ffc107">当前建议：</span>${pos || signal.position_advice || '空仓等待'}</div>
-        <div style="margin-bottom:6px"><span style="color:#888">适合周期：</span>${period}</div>
+      <div style="padding:8px 0;font-size:13px;color:var(--natives-text-muted);line-height:1.6">
+        <div style="margin-bottom:6px"><span style="color:var(--natives-warning)">当前建议：</span>${pos || signal.position_advice || '空仓等待'}</div>
+        <div style="margin-bottom:6px"><span style="color:var(--natives-text-muted)">适合周期：</span>${period}</div>
         <div class="plan-notes">${notes}</div>
       </div>`;
     return;
@@ -128,7 +128,7 @@ function renderTradePlan(signal) {
 
   if (isSell) {
     el.innerHTML = `
-      <div style="padding:8px 0;font-size:13px;color:#aaa;line-height:1.6">
+      <div style="padding:8px 0;font-size:13px;color:var(--natives-text-muted);line-height:1.6">
         <div style="margin-bottom:6px"><span style="color:${C.down}">操作建议：</span>${pos}</div>
         <div class="plan-notes">${notes}</div>
       </div>`;
@@ -136,7 +136,7 @@ function renderTradePlan(signal) {
   }
 
   const cautionBanner = isCautious ? `
-    <div style="padding:6px 8px;margin-bottom:8px;background:rgba(255,152,0,0.1);border-radius:6px;border:1px solid rgba(255,152,0,0.2);font-size:11px;color:#ffb74d;line-height:1.5">
+    <div style="padding:6px 8px;margin-bottom:8px;background:var(--natives-warning-soft);border-radius:6px;border:1px solid color-mix(in srgb, var(--natives-warning) 20%, transparent);font-size:var(--natives-fs-secondary);color:var(--natives-warning);line-height:1.5">
       ⚠ 谨慎买入：信号存在风险因素，建议轻仓试探，严格执行止损
     </div>` : '';
   el.innerHTML = `
@@ -152,7 +152,7 @@ function renderTradePlan(signal) {
       </div>
       <div class="plan-price-box">
         <div class="plan-price-label">目标价 <span class="plan-tip">涨到这里就卖</span></div>
-        <div class="plan-price-val" style="color:#cdf24b">${target.toFixed(2)}</div>
+        <div class="plan-price-val" style="color:var(--natives-accent)">${target.toFixed(2)}</div>
       </div>
     </div>
     <div class="plan-rr">
@@ -161,7 +161,7 @@ function renderTradePlan(signal) {
     </div>
     <div class="plan-row">
       <span class="plan-label">建议仓位 <span class="plan-tip">投多少钱</span></span>
-      <span class="plan-val" style="color:#cdf24b">${pos || signal.position_advice || ''}</span>
+      <span class="plan-val" style="color:var(--natives-accent)">${pos || signal.position_advice || ''}</span>
     </div>
     <div class="plan-row">
       <span class="plan-label">持有周期 <span class="plan-tip">大概持多久</span></span>
@@ -183,13 +183,13 @@ function renderSignal(signal) {
     const sorted = Object.entries(ms).sort((a, b) => b[1] - a[1]);
     ml.innerHTML = sorted.map(([k, v]) => {
       const pct = Math.min(100, Math.max(0, v));
-      const c = pct >= 65 ? C.up : pct >= 45 ? '#ffc107' : C.down;
+      const c = pct >= 65 ? C.up : pct >= 45 ? Fund.themeColor('--natives-warning') : C.down;
       const tag = pct >= 65 ? '偏多' : pct >= 45 ? '中性' : '偏空';
       return `<div class="ml-row">
         <span class="ml-name">${labels[k] || k}</span>
         <div class="ml-bar-bg"><div class="ml-bar" style="width:${pct}%;background:${c}"></div></div>
         <span class="ml-val" style="color:${c}">${v}</span>
-        <span style="font-size:10px;color:${c};width:28px">${tag}</span>
+        <span style="font-size:var(--natives-fs-secondary);color:${c};width:28px">${tag}</span>
       </div>`;
     }).join('');
   }
@@ -207,7 +207,7 @@ function renderSignal(signal) {
       const coreTag = isCore ? '<span class="sig-core-tag">核心</span>' : '';
       if (s.type === 'buy') return `<div class="sig-item sig-buy">▲ ${s.text}${coreTag}</div>`;
       else return `<div class="sig-item sig-sell">▼ ${s.text}${coreTag}</div>`;
-    }).join('') || '<div style="color:#555;font-size:12px;padding:8px">暂无信号</div>';
+    }).join('') || '<div style="color:var(--natives-text-muted);font-size:12px;padding:8px">暂无信号</div>';
   }
 
   const rc = document.getElementById('risk-card');
@@ -238,7 +238,7 @@ function renderCanslim(cs) {
   const grid = document.getElementById('cs-grid');
   if (grid) {
     grid.innerHTML = items.map(i => {
-      const c = i.s >= 65 ? C.up : i.s >= 45 ? '#ffc107' : C.down;
+      const c = i.s >= 65 ? C.up : i.s >= 45 ? Fund.themeColor('--natives-warning') : C.down;
       const tag = i.s >= 65 ? '好' : i.s >= 45 ? '中' : '差';
       return `<div class="cs-item" title="${i.tip}">
         <span class="cs-letter">${i.l}</span>
@@ -252,7 +252,7 @@ function renderCanslim(cs) {
   const simple = document.getElementById('cs-simple');
   if (simple) {
     const totalScore = Math.round((cs.c_score + cs.a_score + cs.n_score + cs.s_score + cs.l_score + cs.i_score + cs.m_score) / 7);
-    const tColor = totalScore >= 65 ? C.up : totalScore >= 45 ? '#ffc107' : C.down;
+    const tColor = totalScore >= 65 ? C.up : totalScore >= 45 ? Fund.themeColor('--natives-warning') : C.down;
     const tLabel = totalScore >= 65 ? '良好' : totalScore >= 45 ? '一般' : '较差';
     const sorted = [...items].sort((a, b) => b.s - a.s);
     const best = sorted[0], worst = sorted[sorted.length - 1];
@@ -261,9 +261,9 @@ function renderCanslim(cs) {
         <span class="cs-simple-score" style="color:${tColor}">${totalScore}</span>
         <span class="cs-simple-label">基本面综合评分（${tLabel}）</span>
       </div>
-      <div style="font-size:11px;color:#888;margin-top:6px">
-        最强：<span style="color:${best.s >= 65 ? C.up : '#ffc107'}">${best.n} ${best.s}分</span>　
-        最弱：<span style="color:${worst.s >= 45 ? '#ffc107' : C.down}">${worst.n} ${worst.s}分</span>
+      <div style="font-size:var(--natives-fs-secondary);color:var(--natives-text-muted);margin-top:6px">
+        最强：<span style="color:${best.s >= 65 ? C.up : 'var(--natives-warning)'}">${best.n} ${best.s}分</span>　
+        最弱：<span style="color:${worst.s >= 45 ? 'var(--natives-warning)' : C.down}">${worst.n} ${worst.s}分</span>
       </div>
     `;
   }
@@ -295,13 +295,13 @@ function renderKeyLevels(levels) {
   const eh = document.getElementById('kl-empty-hint');
   if (eh) eh.style.display = 'none';
   if (!levels || !Object.keys(levels).length) {
-    el.innerHTML = '<span style="color:#555;font-size:12px;padding:8px">无关键价位</span>';
+    el.innerHTML = '<span style="color:var(--natives-text-muted);font-size:12px;padding:8px">无关键价位</span>';
     return;
   }
   el.innerHTML = Object.entries(levels).map(([k, v]) => {
     const tip = explainKeyLevel(k);
     return `<div class="kl-item" title="${tip}" style="cursor:help">
-      <span class="kl-label" style="border-bottom:1px dashed #444">${k}</span>
+      <span class="kl-label" style="border-bottom:1px dashed var(--natives-control)">${k}</span>
       <span class="kl-val">${v.toFixed(2)}</span>
     </div>`;
   }).join('');
@@ -318,7 +318,7 @@ function renderMarket(signal, breadth) {
   const isBearish = m < 40;
 
   card.style.display = 'block';
-  const mColor = m >= 65 ? C.up : m >= 45 ? '#ffc107' : C.down;
+  const mColor = m >= 65 ? C.up : m >= 45 ? Fund.themeColor('--natives-warning') : C.down;
   const mLabel = m >= 65 ? '偏多' : m >= 45 ? '中性' : '偏空';
 
   let breadthHtml = '';
@@ -327,15 +327,15 @@ function renderMarket(signal, breadth) {
     const downN = breadth.down || 0;
     const br = breadth.breadth_ratio || 0.5;
     const brPct = (br * 100).toFixed(0);
-    const brColor = br >= 0.6 ? C.up : br >= 0.4 ? '#ffc107' : C.down;
+    const brColor = br >= 0.6 ? C.up : br >= 0.4 ? Fund.themeColor('--natives-warning') : C.down;
     const brLabel = br >= 0.7 ? '普涨' : br >= 0.6 ? '多数上涨' : br >= 0.4 ? '多数下跌' : '普跌';
-    breadthHtml = `<div style="margin-top:6px;padding:6px 8px;background:rgba(255,255,255,0.05);border-radius:6px">
+    breadthHtml = `<div style="margin-top:6px;padding:6px 8px;background:var(--natives-surface-3);border-radius:6px">
       <div style="display:flex;align-items:center;gap:8px;font-size:12px">
         <span style="color:${C.up};font-weight:bold">${upN}</span>
-        <span style="color:#666">涨</span>
-        <span style="color:#444">/</span>
+        <span style="color:var(--natives-text-muted)">涨</span>
+        <span style="color:var(--natives-text-muted)">/</span>
         <span style="color:${C.down};font-weight:bold">${downN}</span>
-        <span style="color:#666">跌</span>
+        <span style="color:var(--natives-text-muted)">跌</span>
         <span style="color:${brColor};font-weight:bold;margin-left:auto">${brPct}% ${brLabel}</span>
       </div>
     </div>`;
@@ -343,13 +343,13 @@ function renderMarket(signal, breadth) {
 
   let advice = '';
   if (isBearish && breadth && breadth.breadth_ratio >= 0.55) {
-    advice = '<div style="color:#ffc107;margin-top:4px;font-size:11px">大盘趋势偏空，但今日多数个股上涨，短线可关注反弹</div>';
+    advice = '<div style="color:var(--natives-warning);margin-top:4px;font-size:var(--natives-fs-secondary)">大盘趋势偏空，但今日多数个股上涨，短线可关注反弹</div>';
   } else if (isBearish) {
-    advice = `<div style="color:#ff2d2d;margin-top:4px;font-size:11px">大盘偏空${breadth ? `，今日${breadth.up}涨/${breadth.down}跌` : ''}，建议降低仓位或等待大盘转暖</div>`;
+    advice = `<div style="color:var(--color-up);margin-top:4px;font-size:var(--natives-fs-secondary)">大盘偏空${breadth ? `，今日${breadth.up}涨/${breadth.down}跌` : ''}，建议降低仓位或等待大盘转暖</div>`;
   } else if (m >= 65) {
-    advice = '<div style="color:#00b35c;margin-top:4px;font-size:11px">大盘环境偏多，适合积极操作</div>';
+    advice = '<div style="color:var(--color-down);margin-top:4px;font-size:var(--natives-fs-secondary)">大盘环境偏多，适合积极操作</div>';
   } else {
-    advice = '<div style="color:#ffc107;margin-top:4px;font-size:11px">大盘环境中性，可适度操作但需谨慎</div>';
+    advice = '<div style="color:var(--natives-warning);margin-top:4px;font-size:var(--natives-fs-secondary)">大盘环境中性，可适度操作但需谨慎</div>';
   }
 
   const mSignals = (signal.canslim.signals || []).filter(s =>
@@ -361,9 +361,9 @@ function renderMarket(signal, breadth) {
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
       <span style="font-size:14px;font-weight:bold;color:${mColor}">${mLabel}</span>
       <span style="font-size:28px;font-weight:bold;color:${mColor};line-height:1">${m}分</span>
-      <span style="font-size:11px;color:#666;margin-left:auto">上证指数环境</span>
+      <span style="font-size:var(--natives-fs-secondary);color:var(--natives-text-muted);margin-left:auto">上证指数环境</span>
     </div>
-    ${mSignalText ? `<div style="color:#888;font-size:11px">${mSignalText}</div>` : ''}
+    ${mSignalText ? `<div style="color:var(--natives-text-muted);font-size:var(--natives-fs-secondary)">${mSignalText}</div>` : ''}
     ${breadthHtml}
     ${advice}
   `;
@@ -403,12 +403,12 @@ function applyMode() {
 // ===== 卡片折叠 =====
 function toggleCard(headerEl) {
   const card = headerEl.closest('.signal-card, .chanlun-card, .side-card, .summary-card, .plan-card');
-  if (card) card.classList.toggle('collapsed');
+  if (card) { card.classList.toggle('collapsed'); headerEl.setAttribute('aria-expanded', String(!card.classList.contains('collapsed'))); }
 }
 
 function collapseCard(cardName, collapse) {
   const card = document.querySelector(`[data-card="${cardName}"]`);
-  if (card) card.classList.toggle('collapsed', collapse);
+  if (card) { card.classList.toggle('collapsed', collapse); card.querySelector('.sc-header')?.setAttribute('aria-expanded', String(!collapse)); }
 }
 
 // 绑定模式与资金流切换

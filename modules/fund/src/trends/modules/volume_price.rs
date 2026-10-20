@@ -161,10 +161,17 @@ fn detect_volume_breakout(klines: &[KlineBar]) -> Option<String> {
         return None;
     }
     let latest = klines.last().unwrap();
-    let start = if klines.len() >= 21 { klines.len() - 21 } else { 0 };
+    let start = if klines.len() >= 21 {
+        klines.len() - 21
+    } else {
+        0
+    };
     let window = &klines[start..klines.len() - 1];
     let avg_vol = window.iter().map(|k| k.volume).sum::<f64>() / window.len() as f64;
-    let max_vol = window.iter().map(|k| k.volume).fold(f64::NEG_INFINITY, f64::max);
+    let max_vol = window
+        .iter()
+        .map(|k| k.volume)
+        .fold(f64::NEG_INFINITY, f64::max);
     if latest.volume > avg_vol * 1.5 && latest.volume > max_vol {
         return Some("量能突破，资金活跃".into());
     }
@@ -252,7 +259,10 @@ pub fn analyze_volume_price(
     } else {
         format!("{}", volume_ratio)
     };
-    let mut desc = format!("量价模式={}，量比={}，换手={:.1}%", pattern, vr_str, turnover);
+    let mut desc = format!(
+        "量价模式={}，量比={}，换手={:.1}%",
+        pattern, vr_str, turnover
+    );
     if !fund_text.is_empty() {
         desc.push_str(&format!("，{}", fund_text));
     }

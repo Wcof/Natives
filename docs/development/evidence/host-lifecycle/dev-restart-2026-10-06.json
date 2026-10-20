@@ -1,0 +1,39 @@
+{
+  "verifiedAtBeijing": "2026-10-06 21:35",
+  "authorization": "User explicitly requested restoring automatic termination of previous development app hosts.",
+  "scope": "Current repository exact debug/release Host whitelist; Chrome bridges, shared worker and old statusbar; excludes other repositories and installed product.",
+  "sourceSha256": {
+    "extension/dev.mjs": "3aaf86201d5c22fafaef33a1a3892b64cb5eae64bc9a03129b1e9759f0ff55ba",
+    "extension/dev-processes.test.mjs": "a6906cb1a02da70d005ad7ade34e331ddd0718c991b02cdc96231de25df143cc"
+  },
+  "regression": {
+    "script": "extension/dev-processes.test.mjs",
+    "exitCode": 0,
+    "cases": [
+      "old clients/worker/release termination",
+      "foreign and installed executable exclusion",
+      "SIGTERM grace and SIGKILL survivor",
+      "PID start-time reuse and changed executable guard",
+      "new occupancy prevents build",
+      "cleanup precedes build"
+    ]
+  },
+  "actualCleanup": {
+    "method": "Executed shared dev stopProjectHosts functions with real ps and process.kill; no registration/build/startup side effects",
+    "beforePids": [
+      5965,
+      5926
+    ],
+    "afterMatchingHosts": [],
+    "exitCode": 0
+  },
+  "checks": {
+    "perf:check": 0,
+    "git diff --check": 0
+  },
+  "limits": [
+    "Full npm run dev build/registration session not launched.",
+    "Windows physical process termination not verified.",
+    "No performance gain claim."
+  ]
+}

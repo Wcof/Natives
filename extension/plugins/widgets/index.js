@@ -11,6 +11,10 @@ import { greetingWidget } from './greeting.js';
 import { htmlWidget } from './html.js';
 import { ipInfoWidget } from './ip-info.js';
 import { linksWidget } from './links.js';
+import { investmentAllocationCheckWidget, investmentAllocationWidget } from './investment-allocation.js';
+import { investmentAssetsWidget } from './investment-assets.js';
+import { investmentGoalWidget } from './investment-goal.js';
+import { investmentHoldingsWidget } from './investment-holdings.js';
 import { messageWidget } from './message.js';
 import { notesWidget } from './notes.js';
 import { paletteWidget } from './palette.js';
@@ -27,6 +31,12 @@ import { workHoursWidget } from './work-hours.js';
 
 export const widgetPlugins = {
   [aiPerformanceWidget.key]: aiPerformanceWidget,
+  // 投资卡（ADR-0036）：全部消费页面级一次只读投影，无独立查询。
+  [investmentHoldingsWidget.key]: investmentHoldingsWidget,
+  [investmentAssetsWidget.key]: investmentAssetsWidget,
+  [investmentGoalWidget.key]: investmentGoalWidget,
+  [investmentAllocationWidget.key]: investmentAllocationWidget,
+  [investmentAllocationCheckWidget.key]: investmentAllocationCheckWidget,
   // R1：七个独立 AI 效能组件（与旧 aiPerformance 共享 renderer/查询/样式）。
   [aiComponentDefinitions.aiCost.key]: aiComponentDefinitions.aiCost,
   [aiComponentDefinitions.aiTokens.key]: aiComponentDefinitions.aiTokens,

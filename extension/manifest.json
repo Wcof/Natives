@@ -65,7 +65,7 @@
     "type": "module"
   },
   "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'none'; frame-src http://127.0.0.1:*"
+    "extension_pages": "script-src 'self'; object-src 'none'; frame-src http://127.0.0.1:* blob:"
   },
   "content_scripts": [
     {

@@ -10,24 +10,17 @@ const { state, actions, api, themeColor, themeRgba, applyLanguage } = globalThis
 const colorBtn = document.getElementById("btn-color-mode");
 function applyColorModeLabel() {
   const cn = state.colorMode === "cn";
-  colorBtn.title = cn ? "当前：红涨绿跌，点击切换为绿涨红跌" : "当前：绿涨红跌，点击切换为红涨绿跌";
-  colorBtn.setAttribute("aria-label", cn ? "切换涨跌配色（当前：红涨绿跌）" : "切换涨跌配色（当前：绿涨红跌）");
+  colorBtn.title = Fund.t(cn ? "fundHomeSettingscn" : "fundHomeSettingsintl");
+  colorBtn.setAttribute("aria-label", colorBtn.title);
 }
-colorBtn.addEventListener("click", function() {
-  if (state.colorMode === "cn") {
-    state.colorMode = "intl";
-    document.documentElement.setAttribute("data-color-mode", "intl");
-  } else {
-    state.colorMode = "cn";
-    document.documentElement.removeAttribute("data-color-mode");
-  }
-  applyColorModeLabel();
-  if (actions.redrawChart) actions.redrawChart();
-  if (actions.reloadStockDetailTheme) actions.reloadStockDetailTheme();
-  if (globalThis.Fund.trends && globalThis.Fund.trends.reloadTheme) {
-    globalThis.Fund.trends.reloadTheme();
-  }
+colorBtn.addEventListener("click", async function() {
+  colorBtn.disabled=true;
+  try { await actions.setFinancialColorMode(state.colorMode === "cn" ? "intl" : "cn"); }
+  catch { Fund.home.status(Fund.t("fundHomeSettingsWriteFailed")); }
+  finally { colorBtn.disabled=false; }
 });
+document.addEventListener("fund:financial-display-changed",applyColorModeLabel);
+document.addEventListener("fund:language-changed",applyColorModeLabel);
 applyColorModeLabel();
 
 // ---------- 双侧栏折叠联动（左侧边栏与右侧看板各自拥有独立的 collapse-btn） ----------
@@ -39,7 +32,8 @@ function applyLeftSidebarCollapsed(notify = true) {
   if (leftSidebarBtn) {
     leftSidebarBtn.setAttribute("aria-pressed", String(leftSidebarCollapsed));
     leftSidebarBtn.innerHTML = '<svg class="svg-icon" aria-hidden="true"><use href="#i-panel" /></svg>';
-    leftSidebarBtn.title = leftSidebarCollapsed ? "展开左侧栏" : "折叠左侧栏";
+    leftSidebarBtn.title = Fund.t(leftSidebarCollapsed ? "fundHomeSidebarExpand" : "fundHomeSidebarCollapse");
+    leftSidebarBtn.setAttribute("aria-label",leftSidebarBtn.title);
     leftSidebarBtn.classList.toggle("active", leftSidebarCollapsed);
   }
   if (notify && window.parent && window.parent !== window) {
@@ -77,25 +71,20 @@ function applySideCollapsed() {
   sideBody.classList.toggle("side-collapsed", sideCollapsed);
   sideBtn.setAttribute("aria-pressed", String(sideCollapsed));
   sideBtn.innerHTML = '<svg class="svg-icon" aria-hidden="true"><use href="#i-panel-right" /></svg>';
-  sideBtn.title = (sideCollapsed ? "展开看板" : "折叠看板") + " (⌘B)";
+  sideBtn.title = Fund.t(sideCollapsed ? "fundHomeDashboardExpand" : "fundHomeDashboardCollapse") + " (⌘B)";
+  sideBtn.setAttribute("aria-label",sideBtn.title);
   sideBtn.classList.toggle("active", sideCollapsed);
   try { localStorage.setItem("natives-fund-side-collapsed", sideCollapsed ? "1" : "0"); } catch (e) {}
   if (actions.redrawChart) actions.redrawChart();
   if (actions.resizeStockDetailCharts) actions.resizeStockDetailCharts();
   window.dispatchEvent(new Event("resize"));
-  const tc = (globalThis.Fund && globalThis.Fund.trends && globalThis.Fund.trends.charts) || (globalThis.Fund && globalThis.Fund.trendsCharts);
-  if (tc) {
-    try {
-      Object.values(tc).forEach(function(c) {
-        if (c && typeof c.resize === "function") c.resize();
-      });
-    } catch (e) {}
-  }
+  // 图表重绘经图表模块公开动作（mode/T05），不直接遍历其内部实例集合。
+  actions.resizeTrendsCharts();
 }
 // 顶栏唯一折叠入口：个股详情激活时托管右侧看板，其余场景折叠外层侧栏
 function toggleSidePanel() {
-  if (typeof actions.isStockDetailActive === "function" && actions.isStockDetailActive()) {
-    if (typeof actions.toggleStockDetailSide === "function") actions.toggleStockDetailSide();
+  if (actions.isStockDetailActive()) {
+    actions.toggleStockDetailSide();
     return;
   }
   sideCollapsed = !sideCollapsed;
@@ -156,8 +145,33 @@ sideResizer.addEventListener("keydown", function(e) {
 });
 applySideWidth(sideWidth, false);
 
-// ---------- 标签页切换与数字键 1-7 直达 ----------
-const tabs = ["watchlist", "market", "trends", "positions", "tx", "import", "nav"];
+// ---------- 标签页切换与数字键 1-9 直达（0=首页） ----------
+const tabs = ["watchlist", "market", "trends", "positions", "assets", "tx", "import", "nav", "news", "history"];
+// 首页是默认视图但不占 1-9 快捷键位（方案 01 §3）；allViews 驱动视图切换循环。
+const allViews = ["home", "settings"].concat(tabs);
+function setTabSelected(el, selected) {
+  if (!el) return;
+  // DES 02 R03：主导航为 tab（aria-selected）；工具菜单项为 menuitem（data-active）。
+  if (el.getAttribute("role") === "tab") el.setAttribute("aria-selected", selected ? "true" : "false");
+  else el.toggleAttribute("data-active", selected);
+}
+actions.openFinanceSettings=()=>{
+  allViews.forEach(other=>{
+    document.getElementById("view-"+other)?.toggleAttribute("hidden",other!=="settings");
+    setTabSelected(document.getElementById("tab-"+other), false);
+  });
+  sideBody.classList.remove("stock-detail-active","trends-active","home-active");
+  document.getElementById("view-stock-detail").hidden=true;
+  Fund.leaveFundDetail?.();
+  Fund.holdingSummary?.clear();
+  const fdView = document.getElementById("view-fund-detail");
+  if (fdView) fdView.hidden = true;
+  document.body.classList.remove("fund-detail-active");
+  actions.pauseStockDetail?.();actions.leavePositions?.();actions.leaveHome?.();actions.leaveAssets?.();actions.leaveTx?.();
+  syncNavFocus();
+  switchSidePane("settings");actions.loadFinanceSettings();
+  document.getElementById("financial-settings-title")?.focus();
+};
 
 // ---------- 右侧看板随 Tab 切换联动（自选/行情/趋势/持仓/流水/导入/净值） ----------
 function switchSidePane(tabName) {
@@ -179,14 +193,8 @@ function switchSidePane(tabName) {
   }
   // 切换页签可能导致主区域尺寸变化，重绘图表
   window.dispatchEvent(new Event("resize"));
-  const tc = (globalThis.Fund && globalThis.Fund.trends && globalThis.Fund.trends.charts) || (globalThis.Fund && globalThis.Fund.trendsCharts);
-  if (tc) {
-    try {
-      Object.values(tc).forEach(function(c) {
-        if (c && typeof c.resize === "function") c.resize();
-      });
-    } catch (e) {}
-  }
+  // 图表重绘经图表模块公开动作（mode/T05），不直接遍历其内部实例集合。
+  actions.resizeTrendsCharts();
 }
 actions.switchSidePane = switchSidePane;
 
@@ -194,43 +202,187 @@ tabs.forEach(function(t) {
   const btn = document.getElementById("tab-" + t);
   if (btn) {
     btn.addEventListener("click", function() {
-      // 切换常规 Tab 时，关闭个股详情视口并暂停轮询
+      // 切换常规 Tab 时，关闭个股与基金详情视口并暂停轮询
       const sdView = document.getElementById("view-stock-detail");
       if (sdView) sdView.hidden = true;
+      Fund.leaveFundDetail?.();
+  Fund.holdingSummary?.clear();
+  const fdView = document.getElementById("view-fund-detail");
+      if (fdView) fdView.hidden = true;
       sideBody.classList.remove("stock-detail-active");
+      document.body.classList.remove("fund-detail-active");
       if (actions.pauseStockDetail) actions.pauseStockDetail();
 
-      tabs.forEach(function(other) {
+      allViews.forEach(function(other) {
         const el = document.getElementById("tab-" + other);
-        if (el) el.setAttribute("aria-selected", other === t ? "true" : "false");
+        setTabSelected(el, other === t);
         const v = document.getElementById("view-" + other);
         if (v) v.hidden = (other !== t);
-      });
+      })
+      document.body.classList.toggle("market-active", t === "market");
+      updateRefreshScope(t);;
+      if (t !== "watchlist") actions.leaveWatchlist?.();
       if (t === "trends") {
         sideBody.classList.add("trends-active");
-        actions.refreshTrends();
+        const ensure = actions.ensureEcharts || globalThis.Fund?.ensureEcharts;
+        if (ensure) {
+          ensure.call(globalThis.Fund).catch(function() {}).then(function() { actions.refreshTrends(); });
+        } else {
+          actions.refreshTrends();
+        }
       } else {
         sideBody.classList.remove("trends-active");
+        actions.pauseTrends?.();
+      }
+      if (t === "home") {
+        sideBody.classList.add("home-active");
+      } else {
+        sideBody.classList.remove("home-active");
       }
       switchSidePane(t);
       if (t === "watchlist") actions.refreshWatchlist();
       if (t === "market") actions.refreshMarket();
+      else actions.leaveMarket?.();
       if (t === "positions") actions.loadPositions();
+      else if (actions.leavePositions) actions.leavePositions();
+      if (actions.leaveHome) actions.leaveHome();
+      if (t === "assets") actions.loadAssets();
+      else actions.leaveAssets?.();
       if (t === "tx") actions.loadTx();
+      else actions.leaveTx?.();
+      actions.leaveFinanceSettings?.();
+      if(t!=='import')actions.leaveImport?.();
+      actions.leaveNewsPage?.();
+      actions.leaveDecisionHistory?.();
+      if(t==='news')actions.loadNewsPage?.();
+      if(t==='history')actions.loadDecisionHistory?.();
     });
   }
 });
 
-// 数字键 1-7 直达页签（同花顺快捷键风格；输入框聚焦时不触发）
+// 首页：默认视图；点击仅切换视图（快照已在 initApp 时加载，手动刷新按钮重取）。
+const homeBtn = document.getElementById("tab-home");
+document.getElementById('tab-ai')?.addEventListener('click',()=>{homeBtn.click();document.getElementById('home-ai-panel')?.scrollIntoView({block:'center'});document.getElementById('home-ai-title')?.focus({preventScroll:true});});
+if (homeBtn) {
+  homeBtn.addEventListener("click", function() {
+    Fund.leaveFundDetail?.();
+    Fund.holdingSummary?.clear();
+    actions.leaveFinanceSettings?.();
+    actions.leaveDecisionHistory?.();
+    actions.leaveNewsPage?.();
+    actions.leaveAssets?.();actions.leaveTx?.();
+    if (actions.leavePositions) actions.leavePositions();
+    const sdView = document.getElementById("view-stock-detail");
+    if (sdView) sdView.hidden = true;
+    sideBody.classList.remove("stock-detail-active");
+    if (actions.pauseStockDetail) actions.pauseStockDetail();
+    allViews.forEach(function(other) {
+      const el = document.getElementById("tab-" + other);
+      setTabSelected(el, other === "home");
+      const v = document.getElementById("view-" + other);
+      if (v) v.hidden = (other !== "home");
+    });
+    document.body.classList.remove("market-active");
+    updateRefreshScope("home");
+    sideBody.classList.add("home-active");
+    sideBody.classList.remove("trends-active");
+    switchSidePane("home");
+    actions.leaveWatchlist?.();actions.pauseTrends?.();
+    if (actions.loadHome) actions.loadHome();
+  });
+}
+
+// 主导航按视觉顺序漫游；既有数字快捷键保持兼容。
+const mainNav=document.querySelector("nav.main-nav");
+const navButtons=()=>[...mainNav.querySelectorAll("[role=tab]")];
+const syncNavFocus=()=>navButtons().forEach(button=>{button.tabIndex=button.getAttribute("aria-selected")==="true"?0:-1;});
+navButtons().forEach(button=>{
+  button.setAttribute("aria-controls","view-"+button.id.slice(4));
+  const view=document.getElementById("view-"+button.id.slice(4));view?.setAttribute("role","tabpanel");view?.setAttribute("aria-labelledby",button.id);
+});
+mainNav.addEventListener("click",syncNavFocus);
+mainNav.addEventListener("keydown",e=>{
+  if(!["ArrowLeft","ArrowRight","Home","End"].includes(e.key)||e.metaKey||e.ctrlKey||e.altKey)return;
+  const buttons=navButtons(),index=buttons.indexOf(document.activeElement);if(index<0)return;e.preventDefault();
+  const next=e.key==="Home"?0:e.key==="End"?buttons.length-1:(index+(e.key==="ArrowLeft"?-1:1)+buttons.length)%buttons.length;
+  buttons[next].click();buttons[next].focus();
+});
+syncNavFocus();
+document.addEventListener("fund:language-changed",()=>{applyLeftSidebarCollapsed(false);sideBtn.title=Fund.t(sideCollapsed?"fundHomeDashboardExpand":"fundHomeDashboardCollapse")+" (⌘B)";sideBtn.setAttribute("aria-label",sideBtn.title);});
+// 数字键 0=首页、1-9 直达页签（同花顺快捷键风格；输入框聚焦时不触发）
 document.addEventListener("keydown", function(e) {
-  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.metaKey || e.ctrlKey || e.altKey || document.querySelector("dialog[open]")) return;
   const tag = (document.activeElement && document.activeElement.tagName || "").toLowerCase();
   if (tag === "input" || tag === "textarea" || tag === "select") return;
-  const idx = "1234567".indexOf(e.key);
+  if (e.key === "0") {
+    const btn = document.getElementById("tab-home");
+    if (btn) btn.click();
+    return;
+  }
+  const idx = "123456789".indexOf(e.key);
   if (idx < 0) return;
   const btn = document.getElementById("tab-" + tabs[idx]);
   if (btn) btn.click();
 });
+
+// ---------- 工具菜单与刷新范围（DES 02 R03） ----------
+// 刷新按钮标注当前刷新范围；视图切换时更新（休市也可手动拉取的既有语义不变）。
+const refreshScopeKeys = {
+  home: "fundHomeHome", positions: "fundLedgerPagePositions", assets: "fundLedgerNavAssets",
+  tx: "fundLedgerPageTransactions", watchlist: "fundLedgerNavWatchlist", market: "fundLedgerNavMarket",
+  trends: "fundLedgerNavTrends", import: "fundLedgerNavImport", nav: "fundLedgerNavNav", settings: "fundHomeFinanceSettings",
+  news:'fundHomeNews',history:'fundHomeDecisionHistory',
+};
+function updateRefreshScope(viewName) {
+  const btn = document.getElementById("btn-manual-refresh");
+  if (!btn) return;
+  const scope = refreshScopeKeys[viewName] ? Fund.t(refreshScopeKeys[viewName]) : "";
+  const base = Fund.t("fundHomeRefresh");
+  btn.title = base + (scope ? " · " + scope : "");
+  btn.setAttribute("aria-label", btn.title);
+}
+actions.updateRefreshScope = updateRefreshScope;
+
+// 工具菜单：原生 menu 语义，Esc／外部点击／再次点击关闭；菜单项复用 tab-* 视图切换。
+const toolsWrap = document.querySelector(".tools-wrap");
+const toolsBtn = document.getElementById("btn-tools-menu");
+const toolsMenu = document.getElementById("tools-menu");
+function closeToolsMenu(refocus) {
+  if (!toolsMenu || toolsMenu.hidden) return;
+  toolsMenu.hidden = true;
+  toolsBtn?.setAttribute("aria-expanded", "false");
+  if (refocus) toolsBtn?.focus();
+}
+function openToolsMenu() {
+  if (!toolsMenu) return;
+  toolsMenu.hidden = false;
+  toolsBtn?.setAttribute("aria-expanded", "true");
+  toolsMenu.querySelector("button")?.focus();
+}
+if (toolsBtn && toolsMenu) {
+  toolsBtn.addEventListener("click", function() {
+    if (toolsMenu.hidden) openToolsMenu(); else closeToolsMenu(true);
+  });
+  toolsMenu.addEventListener("click", function(e) {
+    // 激活任一菜单项即关闭菜单（DES R05：菜单最多一条展开，激活后收起）。
+    if (e.target.closest("button")) closeToolsMenu(false);
+  });
+  toolsMenu.addEventListener("keydown", function(e) {
+    const items = [...toolsMenu.querySelectorAll("button")];
+    const idx = items.indexOf(document.activeElement);
+    if (e.key === "Escape") { e.stopPropagation(); closeToolsMenu(true); }
+    else if (e.key === "ArrowDown") { e.preventDefault(); items[(idx + 1) % items.length]?.focus(); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); items[(idx - 1 + items.length) % items.length]?.focus(); }
+  });
+  document.addEventListener("click", function(e) {
+    if (toolsMenu.hidden) return;
+    if (!toolsWrap?.contains(e.target)) closeToolsMenu(false);
+  });
+  document.addEventListener("fund:language-changed", function() {
+    if (toolsBtn) { toolsBtn.textContent = Fund.t("fundHomeToolsMenu"); }
+    if (toolsMenu) toolsMenu.setAttribute("aria-label", Fund.t("fundHomeToolsMenu"));
+  });
+}
 
 function safeDecode(str) {
   if (!str) return '';
@@ -263,8 +415,8 @@ function selectSymbol(symbol, name, userTriggered = false) {
   actions.loadCompareIndex();
   actions.loadDrawings();
   if (actions.loadTrendsStock) {
-    const clean = symbol.replace(/^(sh|sz|bj)/i, "");
-    actions.loadTrendsStock(clean);
+    const item=state.watchlistItems.find(item=>item.symbol===symbol);
+    actions.loadTrendsStock(symbol,name,item?.assetType);
   }
   if (actions.updateSectorStockDetail) {
     actions.updateSectorStockDetail(symbol, name);
@@ -280,28 +432,21 @@ function updateFavButtonState() {
 }
 actions.updateFavButtonState = updateFavButtonState;
 
-document.getElementById("btn-toggle-fav").addEventListener("click", function() {
-  const isFav = state.watchlistItems.some(function(i) { return i.symbol === state.currentSymbol; });
-  if (isFav) {
-    api("DELETE", "/api/watchlists/items?watchlistId=" + state.activeGroup + "&symbol=" + state.currentSymbol).then(function() {
-      actions.refreshWatchlist();
-    });
-  } else {
-    api("POST", "/api/watchlists/items", {
-      watchlistId: state.activeGroup,
-      symbol: state.currentSymbol,
-      name: state.currentName
-    }).then(function() {
-      actions.refreshWatchlist();
-    });
-  }
+document.getElementById('btn-toggle-fav').addEventListener('click',async function() {
+  if(this.disabled || !state.currentSymbol)return;this.disabled=true;
+  try {await actions.setWatchlistMember({symbol:state.currentSymbol,name:state.currentName},!state.watchlistItems.some(item=>item.symbol===state.currentSymbol));}
+  catch(error){document.getElementById('dash-name').textContent=error.message || Fund.t('fundHomeRequestFailed');}
+  finally {this.disabled=false;}
 });
 
 function applyGlobalTheme(appearanceOrTheme) {
+  // DES-D07：仅接受已知值（light/archive/dark/volt）；缺偏好或非法值回
+  // Archive，不落到深色。已知值才写入模块缓存（缓存仅启动兜底）。
+  const known = ["light", "archive", "dark", "volt"].includes(appearanceOrTheme);
   const isLight = appearanceOrTheme === "light" || appearanceOrTheme === "archive";
-  document.documentElement.dataset.theme = isLight ? "archive" : "volt";
+  document.documentElement.dataset.theme = known && !isLight ? "volt" : "archive";
   try {
-    localStorage.setItem("natives-theme", isLight ? "archive" : "volt");
+    if (known) localStorage.setItem("natives-theme", isLight ? "archive" : "volt");
   } catch (e) {}
   if (actions.redrawChart) {
     actions.redrawChart();
@@ -323,7 +468,51 @@ try {
 } catch (e) {}
 
 // ---------- 握手与初始化自启 ----------
+// ADR-0036 深链：Shell 转发的纯导航意图（白名单 view），未知值回到默认视图。
+function applyNavigateView(view) {
+  if (typeof view !== "string") return null;
+  if(view==="settings"){actions.openFinanceSettings();return "settings";}
+  // P02：目标与配置 Tab 已撤销，goal/allocation 深链回首页（不自动打开编辑弹窗）。
+  const target = { holdings: "positions", assets: "assets", goal: "home", allocation: "home" }[view];
+  if (!target) return null; // 未知目标：保持当前/默认视图
+  const btn = document.getElementById("tab-" + target);
+  if (btn && btn.getAttribute("aria-selected")!=="true") btn.click();
+  return target;
+}
+
+// 早于 welcome 到达的深链导航意图先保存，initApp 完成初始化后应用（方案 01 §3）。
+let pendingInitialView = null;
+let initialized = false;
+let sharedDataDirty = false;
+function refreshSharedData() {
+  if (!sharedDataDirty || document.hidden || !initialized || document.querySelector('dialog[open]') || document.activeElement?.matches('input,textarea,select')) return;
+  const view = document.querySelector('.main-column > section:not([hidden])')?.id;
+  const refresh = {
+    'view-home': actions.refreshHomeValuation,
+    'view-positions': actions.loadPositions,
+    'view-assets': actions.loadAssets,
+    'view-tx': actions.loadTx,
+    'view-watchlist': actions.refreshWatchlist,
+    'view-news': () => actions.loadNewsPage?.(false),
+    'view-history': actions.loadDecisionHistory,
+    'view-fund-detail': () => Fund.refreshFundDetail?.(),
+    'view-stock-detail': () => Fund.holdingSummary?.refresh(),
+  }[view];
+  // Settings/import editors retain their draft; navigation reads fresh state.
+  if (!refresh) return;
+  sharedDataDirty = false;
+  Promise.resolve(refresh()).catch(error => Fund.home?.failure(error));
+}
+actions.invalidateSharedData = () => { sharedDataDirty = true; refreshSharedData(); };
+document.addEventListener('visibilitychange', refreshSharedData);
+document.addEventListener('focusout', () => queueMicrotask(refreshSharedData));
+const sharedDialogObserver = new MutationObserver(refreshSharedData);
+sharedDialogObserver.observe(document.body, {childList:true});
+window.addEventListener('pagehide', () => sharedDialogObserver.disconnect());
+window.addEventListener('pageshow', () => sharedDialogObserver.observe(document.body, {childList:true}));
+
 window.addEventListener("message", function(e) {
+  if (e.source !== window.parent) return;
   const msg = e.data;
   if (!msg || typeof msg !== "object") return;
   if (msg.type === "init") {
@@ -334,58 +523,89 @@ window.addEventListener("message", function(e) {
   } else if (msg.type === "welcome") {
     // 首次 welcome 走完整初始化；续期（renew-session 换发）只更新 token，
     // 不重复 initApp，避免重启轮询定时器/重复拉数据。
-    const firstInit = !state.token;
+    const firstInit = !initialized;
+    state.surfaceGeneration = msg.generation;
+    state.surfaceChallenge = msg.challenge;
     state.token = msg.token;
-    if (firstInit) initApp();
+    if (firstInit) initApp(msg.view || pendingInitialView);
+    pendingInitialView = null;
   } else if (msg.type === "theme") {
     applyGlobalTheme(msg.appearance || msg.theme);
   } else if (msg.type === "language") {
     applyLanguage(msg.language);
+  } else if (msg.type === "navigate") {
+    // 覆盖初次打开与已打开后的二次导航：会话存活期间直接切页。
+    // 初始化未完成（无 token）时先保存意图，initApp 后应用，避免被默认视图覆盖。
+    if (!state.token) {
+      pendingInitialView = msg.view;
+      return;
+    }
+    applyNavigateView(msg.view);
+  } else if (msg.type === "natives:data-invalidated" && msg.generation === state.surfaceGeneration && msg.challenge === state.surfaceChallenge) {
+    actions.invalidateSharedData?.();
   }
 });
 
-function initApp() {
-  switchSidePane("watchlist");
-  actions.refreshTickers();
-  actions.refreshWatchlist();
-  if (state.currentSymbol) {
-    selectSymbol(state.currentSymbol, state.currentName);
+function initApp(initialView) {
+  // 深链优先（holdings/assets/goal/allocation 等），否则默认进入首页；
+  // 隐藏视图的数据刷新由页签点击按需触发，初始化不再无条件启动自选与趋势。
+  if (initialized || !state.token) return;
+  initialized = true;
+  if(initialView!=="settings")actions.loadFinancialDisplay();
+  const startView = { holdings: "positions", assets: "assets", goal: "home", allocation: "home" }[initialView] || "home";
+  if(initialView==="settings"){
+    actions.openFinanceSettings();
+  } else {
+  const startBtn = document.getElementById("tab-" + startView);
+  if (startBtn) {
+    startBtn.click();
+  } else {
+    switchSidePane(startView);
   }
-  if (actions.initTrends) {
-    actions.initTrends();
   }
 
-  // 视口感知 + 交易时段分级调度：market-session 按开市状态选择周期——
-  // 开市 3s（秒级），休市 30min（分钟级兜底，页面保持静止）。
-  // runtime 后端无 /ws 端点，WS 实际永远离线：自选表行情必须走轮询兜底，
-  // 否则表格只在启动取一次数，此后永不更新（表现为"没数据/不动"）。
-  // tick 回调只在「开市 / 调度器初始 / 手动刷新」三种情况下干活；
-  // 休市期间定时唤醒后直接 return，不发起任何请求、不触发任何重绘。
+
+  // 顶部跑马灯全局可见，保留市场调度；各页签数据按「当前可见页签」刷新——
+  // 隐藏视图不发请求（方案 05 G1.1），可见视图保留交易时段轮询兜底。
   let watchlistPollCount = 0;
-  let lastTickOpen = null;
+  let positionsPollCount = 0;
   const session = globalThis.Fund.marketSession;
   session.startScheduler(function(tick) {
-    const firstRun = lastTickOpen === null;
-    const switched = !firstRun && lastTickOpen !== tick.open;
-    lastTickOpen = tick.open;
-    // 干活条件：开市轮询 / 开休市切换后首刷 / 手动刷新 / 调度器初始首刷
-    const shouldWork = tick.open || tick.manual || tick.reason === "init" || switched;
-    if (!shouldWork) return;
-    if (document.visibilityState !== "visible" && tick.reason !== "init") return;
-    // 个股详情激活时由详情自带轮询（盘口 + 分时/K线）接管数据刷新：
-    // 停跑自选表/跑马灯/隐藏盘口的后台轮询，避免多路请求同时打上游，
-    // 造成详情首屏数据排队变慢。
-    if (typeof actions.isStockDetailActive === "function" && actions.isStockDetailActive()) return;
+    const detailView=document.getElementById('view-fund-detail');
+    if(document.visibilityState==='visible'&&detailView&&!detailView.hidden){Fund.tickFundDetail(tick);return;}
 
+    const shouldWork = tick.open || tick.manual || tick.reason === "init";
+    if (!shouldWork) {
+      if (document.visibilityState === "visible" && !document.getElementById("view-positions").hidden) actions.refreshPositionsQuotes();
+      if (document.visibilityState === "visible" && !document.getElementById("view-home").hidden && !Fund.home?.inlineAIActive?.()) actions.refreshHomeValuation(true);
+      return;
+    }
+    if (document.visibilityState !== "visible" && tick.reason !== "init") return;
+    if (actions.isStockDetailActive()) return;
     actions.refreshTickers();
-    actions.loadDetailQuote();
-    // 自选表开市期 6s 一刷（每两次轮询一次），与 tickers/详情的 3s 错开减负；
-    // 休市首刷/手动刷新时立即刷一次
-    if (tick.manual || switched || firstRun || (tick.open && watchlistPollCount++ % 2 === 0)) {
-      actions.refreshWatchlist();
+    const active = document.querySelector('.main-column > section:not([hidden])')?.id.replace('view-','')||'home';
+    if (active === "home" && (tick.manual || !Fund.home?.inlineAIActive?.())) {
+      if (tick.manual) actions.refreshHome();
+      else if (tick.reason !== "init") actions.refreshHomeValuation(true);
+    }
+    if (active === "trends") {
+      const selection = Fund.trends?.coordinator?.selection();
+      if (selection?.symbol) Fund.trends.coordinator.refreshQuote(selection.symbol);
+    }
+    if (active === "watchlist") actions.loadDetailQuote();
+    if (active === "watchlist" && (tick.open || tick.manual || tick.reason === "init")) {
+      if (tick.manual || tick.reason === "init" || (tick.open && watchlistPollCount++ % 2 === 0)) {
+        actions.refreshWatchlist();
+      }
+    }
+    // 持仓页行情共享同一调度（A24）：账本快照只在切页/手动重载时取，
+    // tick 刷当前 Tab 的场内报价并检查过期 NAV，开市时段降频、盘后 30 分钟检查。
+    if (active === "positions") {
+      if (tick.manual || tick.reason === "init" || (tick.open && positionsPollCount++ % 2 === 0)) {
+        actions.refreshPositionsQuotes(tick.manual);
+      }
     }
   });
-  // 手动刷新入口（下拉刷新/快捷键可调用）：休市时也能立即拉一次最新数据
   actions.requestFundRefresh = session.requestManualRefresh;
   const manualRefreshBtn = document.getElementById("btn-manual-refresh");
   if (manualRefreshBtn) {
@@ -395,8 +615,6 @@ function initApp() {
   }
 }
 
-setTimeout(function() {
-  if (!state.token) initApp();
-}, 300);
+
 
 })();

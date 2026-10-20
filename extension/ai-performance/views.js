@@ -115,18 +115,14 @@ function renderAttentionView(root, data, i18n, api) {
 }
 
 // renderLimitsView 额度与预算：显示各预算规则本周期的花费、进度条与预警状态
-function renderLimitsView(root, data, i18n) {
+function renderLimitsView(root, data, quota, i18n) {
   const budgets = data.budgets || [];
   const evals = data.evaluations || [];
-  if (!budgets.length) {
-    root.innerHTML = `<div class="ai-perf-empty">${escapeHtml(t(i18n, 'aiPerfLimitsEmpty', '暂无预算规则；支持按日/月设置 API 估算预算与阈值提醒'))}</div>`;
-    return;
-  }
   const evalMap = new Map(evals.map((e) => [e.budgetId, e]));
   const rows = budgets.map((b) => {
-    const ev = evalMap.get(b.id) || { spentMicro: 0, percent: 0 };
-    const pct = Math.min(100, Math.max(0, ev.percent || 0));
-    const spentUSD = (ev.spentMicro / 1e6).toFixed(2);
+    const ev = evalMap.get(b.id);
+    const pct = ev ? Math.min(100, Math.max(0, ev.percent || 0)) : null;
+    const spentUSD = ev ? (ev.spentMicro / 1e6).toFixed(2) : t(i18n, 'aiPerfUnknown', '未知');
     const amountUSD = (b.amountMicro / 1e6).toFixed(2);
     const isOver = pct >= 100;
     const isWarn = pct >= 80;
@@ -134,19 +130,32 @@ function renderLimitsView(root, data, i18n) {
     return `<div class="ai-perf-budget-row">
       <div class="ai-perf-budget-head">
         <strong>${escapeHtml(b.id)}</strong>
-        <span class="ai-perf-budget-period">${escapeHtml(b.period === 'daily' ? '每日' : '每月')} (${escapeHtml(b.currency)})</span>
+        <span class="ai-perf-budget-period">${escapeHtml(t(i18n, b.period === 'daily' ? 'aiPerfDaily' : 'aiPerfMonthly'))} (${escapeHtml(b.currency)})</span>
         <span class="ai-perf-budget-val">${escapeHtml(spentUSD)} / ${escapeHtml(amountUSD)}</span>
       </div>
       <div class="ai-perf-bar-track">
-        <span class="ai-perf-bar-fill ai-perf-fill-${barClass}" style="width:${pct}%"></span>
+        <span class="ai-perf-bar-fill ai-perf-fill-${barClass}" style="width:${pct ?? 0}%"></span>
       </div>
       <div class="ai-perf-budget-meta">
-        <span>${escapeHtml(t(i18n, 'aiPerfBudgetUsed', '已消耗'))} ${pct}%</span>
-        <span>${escapeHtml(b.enabled ? '已启用' : '已暂停')}</span>
+        <span>${escapeHtml(t(i18n, 'aiPerfBudgetUsed', '已消耗'))} ${pct === null ? escapeHtml(t(i18n, 'aiPerfUnknown', '未知')) : `${pct}%`}</span>
+        <span>${escapeHtml(t(i18n, b.enabled ? 'aiPerfSourceEnabled' : 'aiPerfPaused'))}</span>
       </div>
     </div>`;
   }).join('');
-  root.innerHTML = `<div class="ai-perf-limits">${rows}</div>`;
+  const quotaRows = Object.values(quota?.entries || {}).map(entry => {
+    const windows = (entry.windows || []).map(window => {
+      const remaining = window.remainingPercent;
+      const value = typeof remaining === 'number' && Number.isFinite(remaining) && remaining >= 0 && remaining <= 100
+        ? `${remaining.toFixed(1)}%` : t(i18n, 'aiPerfUnknown', '未知');
+      return `<div>${escapeHtml(window.name)} · ${escapeHtml(t(i18n, 'aiPerfQuotaRemaining', '剩余'))} ${escapeHtml(value)}</div>`;
+    }).join('');
+    const timestamp = Number(entry.fetchedAt);
+    const fetched = Number.isFinite(timestamp) && timestamp > 0 ? new Date(timestamp).toLocaleString() : t(i18n, 'aiPerfUnknown', '未知');
+    return `<div class="ai-perf-budget-row"><strong>${escapeHtml(entry.provider)}</strong>${windows || escapeHtml(t(i18n, 'aiPerfUnknown', '未知'))}<div class="ai-perf-audit">${escapeHtml(t(i18n, 'aiPerfQuotaCached', '最近探测缓存'))} · ${escapeHtml(fetched)}</div></div>`;
+  }).join('');
+  const emptyQuota = t(i18n, quota ? 'aiPerfQuotaEmpty' : 'aiPerfQuotaUnavailable');
+  const emptyBudget = t(i18n, data.failed ? 'aiPerfLoadFailed' : 'aiPerfLimitsEmpty');
+  root.innerHTML = `<div class="ai-perf-limits">${quotaRows || `<div class="ai-perf-empty">${escapeHtml(emptyQuota)}</div>`}${rows || `<div class="ai-perf-empty">${escapeHtml(emptyBudget)}</div>`}</div>`;
 }
 
 // renderLedgerView 统一用量账本：显示近期的唯一定位计费原子与事件流水
@@ -234,9 +243,12 @@ export async function renderView(view, root, api, i18n, signal) {
       return true;
     }
     case 'limits': {
-      const data = await sharedCall(api, 'getUsageBudgets', {});
+      const [budget, quota] = await Promise.allSettled([
+        sharedCall(api, 'getUsageBudgets', {}),
+        sharedCall(api, 'getCachedQuota', {}),
+      ]);
       if (signal?.aborted) return true;
-      renderLimitsView(root, data || {}, i18n);
+      renderLimitsView(root, budget.status === 'fulfilled' ? budget.value || {} : { failed: true }, quota.status === 'fulfilled' ? quota.value : null, i18n);
       return true;
     }
     case 'ledger': {

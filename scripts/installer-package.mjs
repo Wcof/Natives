@@ -9,7 +9,7 @@
 //   已签名产品组合清单 product-manifest.json/.sig（Schema 2，Ed25519，dev/生产密钥）
 // pkgbuild/productbuild 只发生在 build-pkg.sh；这里不再有第二布局，
 // 不暴露模块级安装入口；主 Natives.app 由 build-pkg.sh 组装并安装。
-import { existsSync, mkdirSync, rmSync, writeFileSync, copyFileSync, readFileSync, readdirSync, chmodSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, writeFileSync, copyFileSync, cpSync, readFileSync, readdirSync, chmodSync, statSync } from 'node:fs';
 import { treeSha256 } from './lib/tree-hash.mjs';
 import { createHash } from 'node:crypto';
 import { join, resolve, dirname, basename } from 'node:path';
@@ -177,13 +177,17 @@ export async function buildInstaller({ mode = 'local', version, output, manifest
     if (!existsSync(join(uiDist, 'index.html'))) {
       throw new Error(`module ${entry.appId} UI missing: modules/${entry.appId}/ui/dist/index.html (run module UI build first)`);
     }
-    copyFileSync(join(uiDist, 'index.html'), join(uiDst, 'index.html'));
+    cpSync(uiDist, uiDst, { recursive: true });
     return {
       appId: meta.appId,
       entryRoute: meta.entryRoute,
       moduleApiVersion: meta.moduleApiVersion,
       dataSchemaVersion: meta.dataSchemaVersion,
       capabilityVersion: meta.capabilityVersion,
+      capabilities: meta.capabilities || [],
+      requires: meta.requires || [],
+      views: meta.views || [],
+      optionalActions: meta.optionalActions || [],
       ui: {
         path: `modules/${meta.appId}/ui`,
         treeSha256: treeSha256(uiDst),

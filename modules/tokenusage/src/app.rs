@@ -1,6 +1,7 @@
-//! TokenUsageModule：Built-in App Module 实现（ADR-0031 / 技术 06）。
+//! TokenUsageModule：Built-in App Module 实现（ADR-0031 / ADR-0033 / 架构 Wave 2）。
 
 use crate::api;
+use crate::model_host::ModelUsageQueryClient;
 use crate::storage::{Store, SCHEMA_VERSION};
 use crate::ui;
 use app_runtime_core::http::HttpRequest;
@@ -16,6 +17,7 @@ pub struct TokenUsageModule {
     product_version: Option<String>,
     cancellation: Option<Arc<app_runtime_core::CancellationToken>>,
     store: Option<Arc<Store>>,
+    client: ModelUsageQueryClient,
 }
 
 impl TokenUsageModule {
@@ -25,6 +27,17 @@ impl TokenUsageModule {
             product_version: None,
             cancellation: None,
             store: None,
+            client: ModelUsageQueryClient::new(),
+        }
+    }
+
+    pub fn with_client(client: ModelUsageQueryClient) -> Self {
+        Self {
+            data_dir: None,
+            product_version: None,
+            cancellation: None,
+            store: None,
+            client,
         }
     }
 
@@ -81,14 +94,67 @@ impl Default for TokenUsageModule {
     }
 }
 
+pub struct TokenUsageService {
+    store: Arc<Store>,
+    client: ModelUsageQueryClient,
+    cancellation: Option<Arc<app_runtime_core::CancellationToken>>,
+}
+
+impl app_runtime_core::module::ModuleService for TokenUsageService {
+    fn handle_ui(&self, path: &str) -> Result<Option<ModuleHttpResponse>, String> {
+        if path == "/" || path == "/index.html" {
+            return Ok(Some(ModuleHttpResponse::ok_html(ui::index_html())));
+        }
+        if let Some(js) = ui::static_js(path) {
+            let mut resp = ModuleHttpResponse::ok_json(js.into_bytes());
+            resp.content_type = "application/javascript; charset=utf-8".into();
+            return Ok(Some(resp));
+        }
+        if let Some(css) = ui::static_css(path) {
+            let mut response = ModuleHttpResponse::ok_json(css.as_bytes().to_vec());
+            response.content_type = "text/css; charset=utf-8".into();
+            return Ok(Some(response));
+        }
+        Ok(None)
+    }
+
+    fn handle_api(
+        &self,
+        req: &HttpRequest,
+        route: &str,
+    ) -> Result<ModuleHttpResponse, (u16, String)> {
+        if let Some(cancel) = self.cancellation.as_ref() {
+            if cancel.is_cancelled() {
+                return Err((503, "APP_RUNTIME_STOPPING".into()));
+            }
+        }
+        let json = api::handle_api_request(&self.store, &self.client, req, route)?;
+        Ok(ModuleHttpResponse::ok_json(json.into_bytes()))
+    }
+
+    fn handle_authenticated_api(
+        &self,
+        context: &app_runtime_core::module::RequestContext,
+        req: &HttpRequest,
+        route: &str,
+    ) -> Result<ModuleHttpResponse, (u16, String)> {
+        if context.app_id != "tokenusage" {
+            return Err((403, "APP_REQUEST_CONTEXT_INVALID".into()));
+        }
+        self.handle_api(req, route)
+    }
+}
+
 impl BuiltInAppModule for TokenUsageModule {
     fn descriptor(&self) -> ModuleDescriptor {
+        let manifest: serde_json::Value = serde_json::from_str(include_str!("../module.json"))
+            .expect("tokenusage module.json must be valid");
         ModuleDescriptor {
-            app_id: "tokenusage".into(),
-            display_name: "Token Usage".into(),
-            module_api_version: 1,
-            data_schema_version: 1,
-            capability_version: 1,
+            app_id: manifest["appId"].as_str().unwrap().into(),
+            display_name: manifest["displayName"]["zh_CN"].as_str().unwrap().into(),
+            module_api_version: manifest["moduleApiVersion"].as_u64().unwrap() as u32,
+            data_schema_version: manifest["dataSchemaVersion"].as_u64().unwrap() as u32,
+            capability_version: manifest["capabilityVersion"].as_u64().unwrap() as u32,
         }
     }
 
@@ -99,42 +165,31 @@ impl BuiltInAppModule for TokenUsageModule {
         Ok(())
     }
 
-    fn start(&mut self) -> Result<(), String> {
+    fn start(
+        &mut self,
+    ) -> Result<std::sync::Arc<dyn app_runtime_core::module::ModuleService>, String> {
         let Some(data_dir) = self.data_dir.as_ref() else {
             return Err("not initialized".into());
         };
         let product_version = self.product_version.as_deref().unwrap_or("unknown");
-        let store = Store::open(data_dir).map_err(|e| format!("open store: {e}"))?;
+        let store = Arc::new(Store::open(data_dir).map_err(|e| format!("open store: {e}"))?);
         store.set_writer_version(product_version);
-        let _ = crate::collector::seed_sources(&store);
-        // 启动时同步 Model Host usage.db 权威投影，保证开箱即有数据
-        let _ = crate::collector::collect_all(&store, None, None);
-        self.store = Some(Arc::new(store));
+        self.store = Some(store.clone());
+        let service = Arc::new(TokenUsageService {
+            store,
+            client: self.client.clone(),
+            cancellation: self.cancellation.clone(),
+        });
+        Ok(service)
+    }
+
+    fn health(&self) -> Result<AppHealth, String> {
+        Ok(self.local_health())
+    }
+
+    fn shutdown(&mut self) -> Result<(), String> {
+        self.store = None;
         Ok(())
-    }
-
-    fn handle_ui(&self, path: &str) -> Result<Option<ModuleHttpResponse>, String> {
-        if path == "/" || path == "/index.html" {
-            return Ok(Some(ModuleHttpResponse::ok_html(ui::index_html())));
-        }
-        if let Some(js) = ui::static_js(path) {
-            let mut resp = ModuleHttpResponse::ok_json(js.into_bytes());
-            resp.content_type = "application/javascript; charset=utf-8".into();
-            return Ok(Some(resp));
-        }
-        Ok(None)
-    }
-
-    fn handle_api(
-        &self,
-        req: &HttpRequest,
-        route: &str,
-    ) -> Result<ModuleHttpResponse, (u16, String)> {
-        let Some(store) = self.store.as_ref() else {
-            return Err(api::api_error(503, "NOT_STARTED", "module not started"));
-        };
-        let json = api::handle_api_request(store, req, route)?;
-        Ok(ModuleHttpResponse::ok_json(json.into_bytes()))
     }
 
     fn data_status(&self) -> Result<DataStatusResult, String> {
@@ -155,17 +210,11 @@ impl BuiltInAppModule for TokenUsageModule {
             last_data_writer_version: writer_version,
             has_committed_new_writes: false,
             previous_version_compatible: true,
+            readiness: Some(if health.ok {
+                "ready".into()
+            } else {
+                "recovery_required".into()
+            }),
         })
-    }
-
-    fn health(&self) -> Result<AppHealth, String> {
-        Ok(self.local_health())
-    }
-
-    fn shutdown(&mut self) -> Result<(), String> {
-        self.store = None;
-        self.data_dir = None;
-        self.cancellation = None;
-        Ok(())
     }
 }

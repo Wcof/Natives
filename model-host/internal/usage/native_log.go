@@ -8,12 +8,14 @@ package usage
 //   - Claude Code：每行一个 JSON 对象；type=="assistant" 的 message.usage
 //     提供 input_tokens / cache_read_input_tokens / cache_creation_input_tokens /
 //     output_tokens；稳定标识 requestId（无则 sessionId+timestamp+uuid）。
-//   - Codex：sessions 快照为累计值；同一计量序列内求差，重复快照记 0，
+//   - Codex：新版按 response_id + usage 计量并忽略伴随累计快照；旧版
+//     sessions 快照同一计量序列内求差，重复快照记 0，
 //     序列重置（当前值 < 上一累计值）开新序列并从 0 重新累计，不静默截负。
 
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 )
@@ -134,6 +136,8 @@ type codexUnifiedLine struct {
 	SessionID string `json:"session_id"`
 	Type      string `json:"type"`
 	Payload   *struct {
+		ID         string `json:"id"`
+		Model      string `json:"model"`
 		SessionID  string `json:"session_id"`
 		ThreadID   string `json:"thread_id"`
 		ResponseID string `json:"response_id"`
@@ -142,6 +146,11 @@ type codexUnifiedLine struct {
 			CachedTokens int64 `json:"cached_input_tokens"`
 			OutputTokens int64 `json:"output_tokens"`
 		} `json:"usage"`
+		ThreadTokenUsage *struct {
+			InputTokens  int64 `json:"input_tokens"`
+			CachedTokens int64 `json:"cached_input_tokens"`
+			OutputTokens int64 `json:"output_tokens"`
+		} `json:"thread_token_usage"`
 		Info *struct {
 			TotalTokenUsage *struct {
 				InputTokens  int64 `json:"input_tokens"`
@@ -167,9 +176,9 @@ func ParseCodexSessions(content []byte, now time.Time) ([]NativeEvent, int, int)
 }
 
 // ParseCodexSessionsWithBaseline 在跨批（分块读取）场景下从上一批持久化的
-// 累计基线继续求差（方案 §3.2），并以 atomSalt 保证 atom 跨批不冲突。
+// 累计基线继续求差（方案 §3.2），快照标识不依赖批次或文件路径。
 // 返回末尾基线，调用方与文件游标同批持久化。
-func ParseCodexSessionsWithBaseline(content []byte, now time.Time, bl codexCursorBaseline, atomSalt string) ([]NativeEvent, int, int, codexCursorBaseline) {
+func ParseCodexSessionsWithBaseline(content []byte, now time.Time, bl codexCursorBaseline, _ string) ([]NativeEvent, int, int, codexCursorBaseline) {
 	type seq struct {
 		in, cacheRead, out int64
 		epoch              int
@@ -178,12 +187,16 @@ func ParseCodexSessionsWithBaseline(content []byte, now time.Time, bl codexCurso
 	parsed, skipped := 0, 0
 	sequences := map[string]*seq{}
 	lastBL := bl
-	snapAtom := func(sessID string, epoch int) string {
-		if atomSalt != "" {
-			return fmt.Sprintf("codex:%s:e%d:snap-%s-%d", sessID, epoch, atomSalt, parsed)
+	// 新版单响应与旧版累计快照是不同计量器，不能交替求差。
+	responses := bl.Responses
+	for _, line := range strings.Split(string(content), "\n") {
+		var rec codexUnifiedLine
+		if json.Unmarshal([]byte(line), &rec) == nil && rec.Type == "token_usage_record" {
+			responses = true
 		}
-		return fmt.Sprintf("codex:%s:e%d:snap-%d", sessID, epoch, parsed)
 	}
+	lastBL.Responses = responses
+	currentSession, currentModel := bl.Session, bl.Model
 	for _, line := range strings.Split(string(content), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -192,6 +205,33 @@ func ParseCodexSessionsWithBaseline(content []byte, now time.Time, bl codexCurso
 		var rec codexUnifiedLine
 		if err := json.Unmarshal([]byte(line), &rec); err != nil {
 			skipped++
+			continue
+		}
+		if rec.Type == "token_usage_record" && rec.Payload == nil {
+			skipped++
+			continue
+		}
+		if rec.Payload != nil {
+			if rec.Type == "token_usage_record" && (rec.Payload.Usage == nil || rec.Payload.ResponseID == "") {
+				skipped++
+				continue
+			}
+			if rec.Type == "session_meta" {
+				currentSession = rec.Payload.SessionID
+				if currentSession == "" {
+					currentSession = rec.Payload.ID
+				}
+				if currentSession != lastBL.Session {
+					lastBL = codexCursorBaseline{Responses: responses}
+				}
+				currentModel = ""
+			}
+			if rec.Type == "turn_context" {
+				currentModel = rec.Payload.Model
+			}
+		}
+		lastBL.Session, lastBL.Model = currentSession, currentModel
+		if responses && rec.Type != "token_usage_record" {
 			continue
 		}
 
@@ -206,7 +246,15 @@ func ParseCodexSessionsWithBaseline(content []byte, now time.Time, bl codexCurso
 				sessID = rec.Payload.ThreadID
 			}
 			respID = rec.Payload.ResponseID
-			if rec.Payload.Usage != nil {
+			if responses && rec.Payload.Usage != nil {
+				in = rec.Payload.Usage.InputTokens
+				cacheRead = rec.Payload.Usage.CachedTokens
+				out = rec.Payload.Usage.OutputTokens
+			} else if rec.Payload.ThreadTokenUsage != nil {
+				in = rec.Payload.ThreadTokenUsage.InputTokens
+				cacheRead = rec.Payload.ThreadTokenUsage.CachedTokens
+				out = rec.Payload.ThreadTokenUsage.OutputTokens
+			} else if rec.Payload.Usage != nil {
 				in = rec.Payload.Usage.InputTokens
 				cacheRead = rec.Payload.Usage.CachedTokens
 				out = rec.Payload.Usage.OutputTokens
@@ -216,21 +264,47 @@ func ParseCodexSessionsWithBaseline(content []byte, now time.Time, bl codexCurso
 				out = rec.Payload.Info.TotalTokenUsage.OutputTokens
 			}
 		}
+		if sessID == "" {
+			sessID = currentSession
+		}
 		if in == 0 && out == 0 && cacheRead == 0 && rec.Info != nil && rec.Info.TokenUsage != nil {
 			in = rec.Info.TokenUsage.InputTokens
 			cacheRead = rec.Info.TokenUsage.CachedTokens
 			out = rec.Info.TokenUsage.OutputTokens
 		}
-		if (in == 0 && out == 0 && cacheRead == 0) || sessID == "" {
+		if in == 0 && out == 0 && cacheRead == 0 {
+			continue
+		}
+		if sessID == "" {
+			skipped++
+			continue
+		}
+		if in < 0 || out < 0 || cacheRead < 0 || cacheRead > in || in > math.MaxInt64-out {
 			skipped++
 			continue
 		}
 
-		requestedAt := now
-		if ts, err := time.Parse(time.RFC3339Nano, rec.Timestamp); err == nil {
-			requestedAt = ts
-		} else if ts, err := time.Parse(time.RFC3339, rec.Timestamp); err == nil {
-			requestedAt = ts
+		requestedAt, err := time.Parse(time.RFC3339Nano, rec.Timestamp)
+		if err != nil {
+			skipped++
+			continue
+		}
+		currentSession = sessID
+		if responses {
+			model := currentModel
+			if model == "" {
+				model = "unknown"
+			}
+			events = append(events, NativeEvent{
+				BillingAtom: "codex:" + respID, SourceRecordID: respID,
+				RequestedAt: requestedAt, Provider: "openai", Model: model,
+				Source: "Codex", Result: ResultSuccess, InputTokens: in - cacheRead,
+				CacheReadTokens: cacheRead, OutputTokens: out, TotalTokens: in + out,
+				SessionID: sessID, ParserVersion: "codex-responses/1", RecordKind: "request",
+			})
+			lastBL.Session = sessID
+			parsed++
+			continue
 		}
 		s := sequences[sessID]
 		if s == nil {
@@ -253,9 +327,14 @@ func ParseCodexSessionsWithBaseline(content []byte, now time.Time, bl codexCurso
 		}
 		deltaOut := out - s.out
 		s.in, s.cacheRead, s.out = in, cacheRead, out
-		lastBL = codexCursorBaseline{Session: sessID, In: s.in, Cache: s.cacheRead, Out: s.out, Epoch: s.epoch}
+		lastBL = codexCursorBaseline{Session: sessID, Model: currentModel, In: s.in, Cache: s.cacheRead, Out: s.out, Epoch: s.epoch}
+		model := currentModel
+		if model == "" {
+			model = "unknown"
+		}
 
-		atom := snapAtom(sessID, s.epoch)
+		// 累计值标识快照，避免批次序号重置／归档路径变化造成漏算或重复计量。
+		atom := fmt.Sprintf("codex:%s:e%d:snap-%d-%d-%d", sessID, s.epoch, in, cacheRead, out)
 		if respID != "" {
 			atom = "codex:" + respID
 		}
@@ -268,7 +347,7 @@ func ParseCodexSessionsWithBaseline(content []byte, now time.Time, bl codexCurso
 				SourceRecordID: fmt.Sprintf("codex:%s:snap-%d", sessID, parsed),
 				RequestedAt:    requestedAt,
 				Provider:       "openai",
-				Model:          "codex",
+				Model:          model,
 				Source:         "Codex",
 				Result:         ResultSuccess,
 				TotalTokens:    0,
@@ -289,7 +368,7 @@ func ParseCodexSessionsWithBaseline(content []byte, now time.Time, bl codexCurso
 			SourceRecordID:  fmt.Sprintf("codex:%s:snap-%d", sessID, parsed),
 			RequestedAt:     requestedAt,
 			Provider:        "openai",
-			Model:           "codex",
+			Model:           model,
 			Source:          "Codex",
 			Result:          ResultSuccess,
 			InputTokens:     uncached,
@@ -308,11 +387,14 @@ func ParseCodexSessionsWithBaseline(content []byte, now time.Time, bl codexCurso
 // codexCursorBaseline 为 Codex 累计快照跨批求差的持久化基线
 // （与文件游标同表存储，方案 §7.3-3/§3.2）。
 type codexCursorBaseline struct {
-	Session string
-	In      int64
-	Cache   int64
-	Out     int64
-	Epoch   int
+	Responses     bool
+	ParserVersion string
+	Session       string
+	Model         string
+	In            int64
+	Cache         int64
+	Out           int64
+	Epoch         int
 }
 
 // nativeEventToEvent 转换为入库 Event（计费原子参与去重，只计一次）。

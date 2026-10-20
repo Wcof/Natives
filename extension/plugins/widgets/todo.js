@@ -1,6 +1,7 @@
 
 
 import { escapeHtml } from '../sanitizer.js';
+import { subscribeWidgetClock } from '../widget-clock.js';
 
 export const todoWidget = {
   key: 'widget/todo',
@@ -17,9 +18,10 @@ export const todoWidget = {
     const root = document.createElement('div');
     root.className = 'todo-content';
 
-    let timerInterval = null;
+    let stopClock = null;
     let timerRemaining = (data.focusDuration || 25) * 60;
     let timerRunning = false;
+    let timerDeadline = null;
 
     
     if (data.showPomodoro) {
@@ -52,27 +54,28 @@ export const todoWidget = {
       resetBtn.title = t('reset', '重置');
 
       toggleBtn.onclick = () => {
+        if (timerRunning) timerRemaining = Math.max(0, Math.ceil((timerDeadline - Date.now()) / 1000));
         timerRunning = !timerRunning;
         renderToggleContent();
         if (timerRunning) {
-          timerInterval = setInterval(() => {
-            if (timerRemaining > 0) {
-              timerRemaining--;
-              timeDisplay.textContent = formatTime(timerRemaining);
-            } else {
-              clearInterval(timerInterval);
+          timerDeadline = Date.now() + timerRemaining * 1000;
+          stopClock = subscribeWidgetClock(() => {
+            timerRemaining = Math.max(0, Math.ceil((timerDeadline - Date.now()) / 1000));
+            timeDisplay.textContent = formatTime(timerRemaining);
+            if (timerRemaining === 0) {
+              stopClock?.(); stopClock = null;
               timerRunning = false;
               renderToggleContent();
               timeDisplay.textContent = t('pomodoroCompleted', '已完成!');
             }
           }, 1000);
         } else {
-          clearInterval(timerInterval);
+          stopClock?.(); stopClock = null;
         }
       };
 
       resetBtn.onclick = () => {
-        clearInterval(timerInterval);
+        stopClock?.(); stopClock = null;
         timerRunning = false;
         renderToggleContent();
         timerRemaining = (data.focusDuration || 25) * 60;
@@ -327,7 +330,7 @@ export const todoWidget = {
     container.append(root);
 
     return () => {
-      if (timerInterval) clearInterval(timerInterval);
+      stopClock?.();
       window.removeEventListener('pointerdown', onWindowPointerDown);
       container.replaceChildren();
     };

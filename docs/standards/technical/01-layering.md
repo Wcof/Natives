@@ -1,30 +1,31 @@
 # 技术 01 · 进程、分层与通信
 
-> 版本：4.0.0 · 日期：2026-09-14
-> 依据：ADR-0020、ADR-0023、ADR-0027、ADR-0029
+> 版本：4.2.0 · 日期：2026-10-15
+> 依据：ADR-0020、ADR-0029、ADR-0031、ADR-0033、ADR-0035～0039、ADR-0042
 
 ## 当前生产拓扑
 
 ```text
-Chrome/Chromium
-├─ newtab.html / files.html / apps.html / model settings
-│  └─ domain client → Native Messaging
-├─ app.html
+Chrome 扩展页面 / 本机独立 Web 页面（127.0.0.1:8770 / 8771，ADR-0042）
+├─ space.html / files.html / apps.html / model settings
+│  ├─ 扩展入口：domain client → Native Messaging Relay → native-file-host
+│  └─ Web 入口：domain client → 认证 HTTP/SSE → native-file-host 服务模式
+├─ app.html（通用 App Shell）
 │  ├─ short Core verification → Files Host
-│  └─ direct Native Port → Built-in Module Host → 127.0.0.1 sandbox iframe
+│  └─ Core Relay / authenticated Web RPC → shared per-app Runtime → 127.0.0.1 sandbox iframe
 └─ Service Worker（无状态，无 Native Port）
 
 Natives.app
-└─ 打开 Chrome / 定位扩展 / 安装引导 / 简短诊断 → 退出
+└─ 打开 Chrome / 独立 Web / 定位扩展 / 安装引导 / 简短诊断 → 退出
 ```
 
 #### R-T1 · Surface 与 Host 职责固定
 
 - **等级**：MUST
-- Extension Page 只拥有 UI、交互草稿和派生缓存。
-- Files Host（`native-file-host`）拥有文件、Workspace、Core App Store 和产品配置。
+- Surface（包含 Chrome Extension Page 与 ADR-0042 放行的本机独立 Web 页面）只拥有 UI、交互草稿和派生缓存。
+- Files Host（`native-file-host`）拥有文件、Workspace、Core App Store 和产品配置；在 ADR-0042 下提供受限服务监听模式与 Native Relay 模式。
 - Model Host（`model-host`）拥有 Provider、Credential、Proxy、AI Tool Integration 和 Usage。
-- App Runtime（`natives-app-runtime`，对应 `com.natives.app_runtime` / `com.natives.local.app_runtime`）是官方内置应用的通用运行时宿主；每个活动 Built-in App 实例按需拉起一个 App Runtime Process，独占承载该模块业务、业务库和运行实例。
+- App Runtime（`natives-app-runtime`，对应 `com.natives.app_runtime` / `com.natives.local.app_runtime`）是官方内置应用的通用运行时宿主；每个活动 Built-in App 模块按需拉起一个 App Runtime Process，独占承载该模块业务、业务库和运行实例，并通过 ADR-0042 多 Surface 会话机制安全支持多个前端窗口同时访问。
 - Launcher 不拥有业务状态或业务 UI。
 - 一个 Host 不得借“复用”接管另一个 Host 的领域能力；严禁把内置应用业务编译进 Files Host（Core != App Runtime）。
 
@@ -51,20 +52,23 @@ Page entry
 - 下层不得 import 页面或 DOM。
 - Widget/背景 renderer 不得成为跨领域 backend。
 - `crates/` 只放已有两个真实调用方共享的协议、安全或领域逻辑。
+- 同一应用内部通过业务函数／已有 trait 协作；业务与后台任务不反向引用 HTTP handler。纯计算与有副作用用例、包内事务上下文及公共状态边界见 [技术 08](08-module-boundaries-and-contracts.md)，不要求把逻辑职责拆成新进程。
 
 #### R-T4 · 跨信任域只走受控通道
 
 - **等级**：MUST
-- Extension 与 Host 只走 Chrome Native Messaging 的长度前缀 JSON 帧。
-- `app.html` 先经 Core 核验，再直连由 Core 决定名称的 App Host。
+- Extension 与 Host 之间，扩展入口走 Chrome Native Messaging 的长度前缀 JSON 帧或经本地 Native Relay 转发。
+- Web 入口与 Host 之间，按 ADR-0042 走严格回环 127.0.0.1 绑定的受限 HTTP/1.1 与同源 SSE，受 Bootstrap Token/配对码、SameSite=Strict Cookie 与 CSRF 强鉴权保护。
+- `app.html` 先经 Core 核验，再由同一 Core 服务调度模块 Worker；扩展 Relay 和 Web 会话分别注入受信 Surface 身份，通过 Protocol v2 选择受信 appId。
 - App iframe 只走两阶段 `postMessage` 握手和带 bearer 的 loopback HTTP。
 - 页面不能传可执行路径、Host 名称、安装路径或任意命令。
-- 不得用本地通用 HTTP、WebSocket、UDS 或 Service Worker Port 建第二 IPC。
+- 不得用未登记的本地通用 HTTP、WebSocket、UDS 或 Service Worker Port 建第二 IPC。
+- ADR-0033 已接受的 Model Host 只读查询接口（8766）和顶栏只读库降级仅在其明确范围适用，不扩大为通用业务或跨 owner 私库通道。
 
-#### R-T5 · Native Port 拥有生命周期
+#### R-T5 · 宿主拥有受控生命周期
 
 - **等级**：MUST
-- Files/App Host 由打开页面的 Native Port 按需启动；stdin EOF 触发同一确定性 shutdown。
+- Files/App Host 在纯扩展模式下由打开页面的 Native Port 按需启动，stdin EOF 触发同一确定性 shutdown；在 ADR-0042 双入口服务模式下，通过 OS 互斥锁确保单实例运行，由活跃 Surface 租约聚合维持生命周期。当所有扩展与 Web 客户端均断开且无保护级任务，进入 60 秒宽限期，超时后优雅退出。
 - Model Host 默认相同；只有用户显式开启 resident 后允许单实例 worker 留存，且必须可关闭。
 - Service Worker 不持有 Native Port、轮询或 keepalive。
 - Host 不注册登录启动项，不演化成通用 daemon。
@@ -73,13 +77,14 @@ Page entry
 
 - **等级**：MUST
 - 只允许一个可见 `/Applications/Natives.app`。
-- Launcher 可以打开随包本地 HTML 指南、Chrome 扩展页和扩展目录；成功交接或用户关闭后退出。
+- Launcher 可以打开随包本地 HTML 指南、Chrome 扩展页、独立 Web 页面和扩展目录；成功交接或用户关闭后退出。
 - 不承载 Home、Files、Apps、AI、Usage、Settings，不运行后台服务。
 
 #### R-T7 · 内置模块运行隔离
 
 - **等级**：MUST
-- 所有官方 Built-in App 使用统一 `natives-app-runtime` executable。一个活动 App Surface 对应一个 Runtime Process。Runtime Process 一次只允许绑定一个 appId。
+- 所有官方 Built-in App 使用统一 `natives-app-runtime` executable。每个活动内置应用模块按需绑定一个 Runtime Process（Single Runtime Binary, Multi Process Instance），严禁跨模块混用进程。
+- 单个 Runtime Process 支持通过 ADR-0042 多 Surface 会话机制同时服务来自扩展与 Web 的同 appId 多个前端窗口。每个 Surface 拥有独立的 surfaceId、challenge 和 scoped bearer token。
 - 每个模块使用稳定 appId、独立数据目录（`~/.natives/apps/<appId>/`）和独立 SQLite 库；模块目录由 Runtime 注入，模块禁止自行探测产品或用户路径。
 - 通用 `app.html` 不包含模块业务分支；模块 UI 在无 `allow-same-origin` 的 sandbox iframe 中通过 127.0.0.1 动态端口 loopback 运行。
 - 模块内部职责（如持仓、账本、NAV、导入、迁移）可以拆分，但属于模块内部组件，严禁产生第二产品、第二应用卡片或第二安装对象。

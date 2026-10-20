@@ -15,6 +15,8 @@ const registryIds = registry.apps.map((a) => a.appId).sort();
 
 // 2. module.json per entry (registry <-> module directory authority)
 const moduleJsonIds = [];
+const knownCapabilities = new Set(['local-data', 'network.market.read', 'network.nav.read', 'system.notification', 'ai.inference.request', 'system.link.open', 'platform.secret']);
+const knownRequirements = new Set(['ai.usage.read', 'ai.quota.read', 'ai.quota.refresh']);
 for (const entry of registry.apps) {
   const metaPath = join(ROOT, entry.manifest);
   assert.ok(existsSync(metaPath), `missing module manifest: ${entry.manifest}`);
@@ -25,6 +27,21 @@ for (const entry of registry.apps) {
   assert.equal(typeof meta.moduleApiVersion, 'number');
   assert.equal(typeof meta.dataSchemaVersion, 'number');
   assert.equal(typeof meta.capabilityVersion, 'number');
+  assert.deepEqual(meta.permissions, meta.capabilities, `${entry.appId}: permissions must equal enforced capabilities`);
+  if (meta.views !== undefined) {
+    assert.ok(Array.isArray(meta.views), `${entry.appId}: views must be an array`);
+    for (const view of meta.views) assert.match(view, /^[a-z][a-z0-9-]{0,31}$/, `${entry.appId}: invalid view token ${view}`);
+    assert.equal(new Set(meta.views).size, meta.views.length, `${entry.appId}: views must be unique`);
+  }
+  for (const capability of meta.capabilities) assert.ok(knownCapabilities.has(capability), `${entry.appId}: unknown capability ${capability}`);
+  // ADR-0038 fail-closed：声明 platform.secret 必须伴随 capabilityVersion>=4
+  // （fund 3→4 的递增纪律）；降版保留声明即篡改。
+  if (meta.capabilities.includes('platform.secret')) {
+    assert.ok(meta.capabilityVersion >= 4, `${entry.appId}: platform.secret requires capabilityVersion >= 4 (ADR-0038)`);
+  }
+  for (const requirement of meta.requires || []) assert.ok(knownRequirements.has(requirement), `${entry.appId}: unknown requirement ${requirement}`);
+  for (const action of meta.optionalActions || []) assert.ok(knownRequirements.has(action), `${entry.appId}: unknown optional action ${action}`);
+  assert.match(entry.factory || '', /^[a-z][a-z0-9_]*::[A-Za-z][A-Za-z0-9_]*::new$/, 'registry factory must be an explicit Rust constructor');
   // entryRoute must point at this appId
   assert.equal(meta.entryRoute, `app.html?app=${entry.appId}`, 'entryRoute must match appId');
   // declared crate must exist
@@ -34,22 +51,13 @@ for (const entry of registry.apps) {
 }
 moduleJsonIds.sort();
 
-// 3. Runtime registered IDs (compiled into natives-app-runtime via register_builtin_modules)
-// 仅统计非 cfg(feature) 门控的注册（test-fixture 第二模块不属于 Release Registry，计划 §44）：
-// 剥除 #[cfg(feature = "test-fixture")] 属性行及其紧随的一行，再整体匹配多行 register 调用。
-const mainRsLines = readFileSync(join(ROOT, 'crates/app-runtime/src/main.rs'), 'utf8').split('\n');
-const releaseLines = [];
-for (let i = 0; i < mainRsLines.length; i++) {
-  if (/^\s*#\[cfg\(feature\s*=\s*"test-fixture"\)\]/.test(mainRsLines[i])) {
-    i++; // 跳过属性紧随的一行（被门控的语句）
-    continue;
-  }
-  releaseLines.push(mainRsLines[i]);
-}
-const runtimeIds = [...releaseLines.join('\n').matchAll(/registry\.register\(\s*"([a-z0-9][a-z0-9._-]*)"/g)]
-  .map((m) => m[1])
-  .sort();
-assert.ok(runtimeIds.length > 0, 'app-runtime registers no modules');
+// 3. Runtime registration is generated directly from this registry.
+const runtimeBuild = readFileSync(join(ROOT, 'crates/app-runtime/build.rs'), 'utf8');
+const runtimeMain = readFileSync(join(ROOT, 'crates/app-runtime/src/main.rs'), 'utf8');
+assert.match(runtimeBuild, /modules\/registry\.json/);
+assert.match(runtimeBuild, /module_registry\.rs/);
+assert.match(runtimeMain, /include!\(concat!\(env!\("OUT_DIR"\), "\/module_registry\.rs"\)\)/);
+const runtimeIds = [...registryIds];
 
 // 4. Module directories under modules/
 const moduleDirs = readdirSync(join(ROOT, 'modules'), { withFileTypes: true })

@@ -16,6 +16,7 @@ export function createSpaceInspector({
   updateSnapshot,
   queueWorkspaceMutation,
   onPositionEditChange,
+  getEditingWidgetId,
   onCloseFocusAnchor,
 }) {
   const inspectorEl = $('inspector');
@@ -91,6 +92,7 @@ export function createSpaceInspector({
       return result;
     },
     onPositionEditChange: (widgetId) => onPositionEditChange?.(widgetId),
+    getEditingWidgetId,
     onBackToOverview: () => {
       onPositionEditChange?.(null);
       routeTo('overview');
@@ -401,6 +403,10 @@ export function createSpaceInspector({
   }
 
   return {
+    setLanguage(next){
+      language=next;catalogCtrl.setLanguage(next);widgetSettingsCtrl.setLanguage(next);bgSettingsCtrl.setLanguage(next);
+      if(!inspectorContainer.contains(document.activeElement))renderCurrentState();
+    },
     open,
     close,
     sync,

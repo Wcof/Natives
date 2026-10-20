@@ -69,7 +69,7 @@ type aiRateBucket struct {
 // 等）仅告警并停用该增强面，不阻断 Native Messaging 主功能；ADR-0033 §2.1.4
 // 要求消费方把「8766 不可达」视为常态并自行降级，因此本侧零强依赖。
 func startAIQueryServer(engine *Engine) *aiQueryServer {
-	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", aiQueryPort))
+	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", aiQueryListenPort()))
 	if err != nil {
 		log.Warnf("AI 查询端口 8766 绑定失败，只读查询面停用：%v", err)
 		return nil
@@ -246,16 +246,21 @@ func (s *aiQueryServer) serveUsage(w http.ResponseWriter, name string, query url
 // quota.QuotaResult 反序列化重建，天然丢弃任何未知字段，保证即便文件被
 // 第三方写方污染也不会把 Secret 带进响应（ADR-0033 §2.1.3）。
 func (s *aiQueryServer) serveQuotaCache(w http.ResponseWriter) {
+	writeAIJSON(w, http.StatusOK, cachedQuotaResult())
+}
+
+// Both transport faces read the same cached projection, never credentials or upstream.
+func cachedQuotaResult() map[string]any {
 	entries := readQuotaCacheEntries()
 	status := "ready"
 	if len(entries) == 0 {
 		status = "empty" // 零假数据：从未成功探测过即返回空态
 	}
-	writeAIJSON(w, http.StatusOK, map[string]any{
+	return map[string]any{
 		"status":      status,
 		"generatedAt": time.Now().UTC().Format(time.RFC3339),
 		"entries":     entries,
-	})
+	}
 }
 
 func readQuotaCacheEntries() map[string]quota.QuotaResult {
@@ -376,6 +381,7 @@ func aiQueryStatusForCode(code string) int {
 func aiUsageFilterFromQuery(query url.Values) (json.RawMessage, error) {
 	var filter usage.Filter
 	filter.Range = strings.TrimSpace(query.Get("range"))
+	filter.SessionKey = query.Get("sessionKey")
 	filter.Timezone = strings.TrimSpace(query.Get("timezone"))
 	filter.SortBy = strings.TrimSpace(query.Get("sortBy"))
 	filter.SortDir = strings.TrimSpace(query.Get("sortDir"))

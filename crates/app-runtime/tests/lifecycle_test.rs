@@ -1,3 +1,4 @@
+mod support;
 use app_runtime_core::framing::{read_frame, write_frame};
 use app_runtime_core::protocol::{AppRequest, AppResponse, HandshakeResultV2, StartResult};
 use std::io::{Read, Write};
@@ -7,36 +8,33 @@ use std::time::{Duration, Instant};
 
 const TEST_ORIGIN: &str = "chrome-extension://abcdefghijklmnopabcdefghijklmnop/";
 
-fn setup_test_apps_root(root: &std::path::Path, app_id: &str) {
-    let app_dir = root.join(app_id);
-    std::fs::create_dir_all(&app_dir).unwrap();
+fn setup_test_apps_root(root: &std::path::Path, app_id: &str) -> std::path::PathBuf {
+    let apps_root = root.join("apps");
+    std::fs::create_dir_all(apps_root.join(app_id)).unwrap();
+    let runtime_sha = app_runtime_core::sha256_hex(&std::fs::read(bin_path()).unwrap());
     let act = serde_json::json!({
-        "receiptVersion": 2,
-        "appId": app_id,
+        "receiptVersion": 3,
         "productVersion": "0.1.0",
-        "runtimeHost": "com.natives.app_runtime",
-        "appProtocolVersion": 2,
-        "activeVersion": "0.1.0",
-        "generation": 1,
-        "activationState": "ready",
-        "enabled": true,
+        "productGeneration": 1,
+        "productManifestSha256": "0".repeat(64),
+        "runtime": { "host": "com.natives.local.app_runtime", "protocolVersion": 2, "sha256": runtime_sha },
+        "modules": {
+            "fund": { "moduleApiVersion": 1, "dataSchemaVersion": 4, "capabilityVersion": 2, "uiTreeSha256": "0".repeat(64) },
+            "tokenusage": { "moduleApiVersion": 1, "dataSchemaVersion": 2, "capabilityVersion": 2, "uiTreeSha256": "0".repeat(64) }
+        },
         "allowedOrigins": [TEST_ORIGIN]
     });
+    std::fs::create_dir_all(root.join("product")).unwrap();
     std::fs::write(
-        app_dir.join("activation.json"),
+        root.join("product/activation.json"),
         serde_json::to_vec(&act).unwrap(),
     )
     .unwrap();
+    apps_root
 }
 
 fn bin_path() -> std::path::PathBuf {
-    let mut path = std::env::current_exe().unwrap();
-    path.pop(); // drop test binary name
-    if path.ends_with("deps") {
-        path.pop();
-    }
-    path.push("natives-app-runtime");
-    path
+    support::runtime_binary()
 }
 
 #[test]
@@ -84,11 +82,11 @@ fn test_app_runtime_multi_module_registry() {
 #[test]
 fn test_app_runtime_lifecycle_roundtrip_and_fast_eof() {
     let temp = tempfile::tempdir().unwrap();
-    setup_test_apps_root(temp.path(), "fund");
+    let apps_root = setup_test_apps_root(temp.path(), "fund");
 
     let mut child = Command::new(bin_path())
         .arg(TEST_ORIGIN)
-        .env("NATIVES_APPS_ROOT", temp.path())
+        .env("NATIVES_APPS_ROOT", &apps_root)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
@@ -160,15 +158,14 @@ fn test_app_runtime_lifecycle_roundtrip_and_fast_eof() {
 }
 
 #[test]
-fn test_app_runtime_handshake_twice_rejected() {
-    // 计划 §41：Handshake twice → APP_RUNTIME_ALREADY_BOUND；
-    // 一个 Runtime Process 只能绑定一次 appId（计划 §11）。
+fn test_app_runtime_same_module_handshake_reuses_binding() {
+    // 一个 Runtime Process 只绑定一个 appId；同 appId 的后续握手复用绑定。
     let temp = tempfile::tempdir().unwrap();
-    setup_test_apps_root(temp.path(), "fund");
+    let apps_root = setup_test_apps_root(temp.path(), "fund");
 
     let mut child = Command::new(bin_path())
         .arg(TEST_ORIGIN)
-        .env("NATIVES_APPS_ROOT", temp.path())
+        .env("NATIVES_APPS_ROOT", &apps_root)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
@@ -196,15 +193,36 @@ fn test_app_runtime_handshake_twice_rejected() {
     let resp: AppResponse<HandshakeResultV2> = serde_json::from_slice(&frame).unwrap();
     assert!(resp.ok, "first handshake failed: {:?}", resp.error);
 
-    // 第二次握手（即使同 appId）必须被拒绝
+    // 同模块第二个 Surface 复用现有绑定，不重新初始化模块。
     write_frame(&mut stdin, &serde_json::to_vec(&handshake("hs-2")).unwrap()).unwrap();
     let frame = read_frame(&mut stdout)
         .unwrap()
         .expect("second handshake frame");
     let resp: AppResponse<HandshakeResultV2> = serde_json::from_slice(&frame).unwrap();
-    assert!(!resp.ok, "second handshake must be rejected");
-    let error = resp.error.expect("second handshake error body");
-    assert_eq!(error.code, "APP_RUNTIME_ALREADY_BOUND", "{error:?}");
+    assert!(
+        resp.ok,
+        "same-module handshake must reuse binding: {:?}",
+        resp.error
+    );
+    assert_eq!(resp.result.unwrap().app_id, "fund");
+
+    let other_module = AppRequest {
+        id: "hs-other".into(),
+        method: "app:handshake".into(),
+        params: serde_json::json!({
+            "protocolVersion": 2,
+            "appId": "tokenusage",
+            "productVersion": "0.1.0",
+            "activationGeneration": 1
+        }),
+    };
+    write_frame(&mut stdin, &serde_json::to_vec(&other_module).unwrap()).unwrap();
+    let frame = read_frame(&mut stdout)
+        .unwrap()
+        .expect("other-module handshake frame");
+    let resp: AppResponse<HandshakeResultV2> = serde_json::from_slice(&frame).unwrap();
+    assert!(!resp.ok, "another module must not reuse this runtime");
+    assert_eq!(resp.error.unwrap().code, "APP_RUNTIME_ALREADY_BOUND");
 
     drop(stdin);
     let status = child.wait().unwrap();
@@ -215,11 +233,11 @@ fn test_app_runtime_handshake_twice_rejected() {
 fn test_app_runtime_start_before_handshake_rejected() {
     // 计划 §41：Start before handshake → FAIL（APP_RUNTIME_NOT_INITIALIZED）。
     let temp = tempfile::tempdir().unwrap();
-    setup_test_apps_root(temp.path(), "fund");
+    let apps_root = setup_test_apps_root(temp.path(), "fund");
 
     let mut child = Command::new(bin_path())
         .arg(TEST_ORIGIN)
-        .env("NATIVES_APPS_ROOT", temp.path())
+        .env("NATIVES_APPS_ROOT", &apps_root)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
@@ -246,14 +264,14 @@ fn test_app_runtime_start_before_handshake_rejected() {
 }
 
 #[test]
-fn test_app_runtime_start_twice_rejected() {
-    // 计划 §41：Start twice → APP_RUNTIME_ALREADY_STARTED，无重复 server。
+fn test_app_runtime_start_twice_reuses_listener() {
+    // 同模块第二个 Surface 复用现有 listener，不再绑定第二个端口。
     let temp = tempfile::tempdir().unwrap();
-    setup_test_apps_root(temp.path(), "fund");
+    let apps_root = setup_test_apps_root(temp.path(), "fund");
 
     let mut child = Command::new(bin_path())
         .arg(TEST_ORIGIN)
-        .env("NATIVES_APPS_ROOT", temp.path())
+        .env("NATIVES_APPS_ROOT", &apps_root)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
@@ -294,25 +312,27 @@ fn test_app_runtime_start_twice_rejected() {
         .unwrap()
         .expect("second start frame");
     let resp: AppResponse<StartResult> = serde_json::from_slice(&frame).unwrap();
-    assert!(!resp.ok, "second start must be rejected");
-    let error = resp.error.expect("second start error body");
-    assert_eq!(error.code, "APP_RUNTIME_ALREADY_STARTED", "{error:?}");
+    assert!(
+        resp.ok,
+        "second start must reuse listener: {:?}",
+        resp.error
+    );
+    assert_eq!(resp.result.unwrap().port, port1);
 
     drop(stdin);
     let status = child.wait().unwrap();
     assert!(status.success());
-    let _ = port1;
 }
 
 #[test]
 fn test_app_runtime_app_stop_exits_promptly() {
     // 计划 §41：Stop 请求 → 确定性退出（不再等待 EOF）。
     let temp = tempfile::tempdir().unwrap();
-    setup_test_apps_root(temp.path(), "fund");
+    let apps_root = setup_test_apps_root(temp.path(), "fund");
 
     let mut child = Command::new(bin_path())
         .arg(TEST_ORIGIN)
-        .env("NATIVES_APPS_ROOT", temp.path())
+        .env("NATIVES_APPS_ROOT", &apps_root)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()
@@ -362,14 +382,14 @@ fn test_app_runtime_app_stop_exits_promptly() {
 }
 
 #[test]
-fn test_app_runtime_20_cycle_leak_test() {
+fn test_app_runtime_50_cycle_leak_test() {
     let temp = tempfile::tempdir().unwrap();
-    setup_test_apps_root(temp.path(), "fund");
+    let apps_root = setup_test_apps_root(temp.path(), "fund");
 
-    for cycle in 0..20 {
+    for cycle in 0..50 {
         let mut child = Command::new(bin_path())
             .arg(TEST_ORIGIN)
-            .env("NATIVES_APPS_ROOT", temp.path())
+            .env("NATIVES_APPS_ROOT", &apps_root)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .spawn()
@@ -390,7 +410,12 @@ fn test_app_runtime_20_cycle_leak_test() {
             }),
         };
         write_frame(&mut stdin, &serde_json::to_vec(&handshake_req).unwrap()).unwrap();
-        let frame = read_frame(&mut stdout).unwrap().expect("handshake frame");
+        let frame = read_frame(&mut stdout).unwrap().unwrap_or_else(|| {
+            panic!(
+                "cycle {cycle}: handshake EOF; child status {:?}",
+                child.wait()
+            );
+        });
         let resp: AppResponse<HandshakeResultV2> = serde_json::from_slice(&frame).unwrap();
         assert!(resp.ok, "cycle {cycle} handshake failed: {:?}", resp.error);
 

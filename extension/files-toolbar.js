@@ -17,8 +17,10 @@ export function bindFilesToolbar({
   }
 
   function syncGridControls() {
+    document.documentElement.dataset.gridSize = session.gridSize;
     document.querySelectorAll('.grid-size-button').forEach((button) => {
       button.hidden = session.viewMode !== 'grid';
+      button.setAttribute('aria-pressed', String(button.id === 'grid-' + session.gridSize));
     });
   }
 
@@ -27,13 +29,9 @@ export function bindFilesToolbar({
     session.viewMode = 'grid';
     $('list-view')?.setAttribute('aria-pressed', 'false');
     $('grid-view')?.setAttribute('aria-pressed', 'true');
-    document.documentElement.dataset.gridSize = session.gridSize;
-    for (const value of ['small', 'medium', 'large']) $('grid-' + value)?.setAttribute('aria-pressed', String(value === session.gridSize));
     storageSet('natives-grid-size', session.gridSize).catch(() => {});
     storageSet('natives-view-mode', 'grid').catch(() => {});
     renderEntries();
-    $('entries')?.classList.toggle('grid-small', session.gridSize === 'small');
-    $('entries')?.classList.toggle('grid-large', session.gridSize === 'large');
     syncGridControls();
   }
 
@@ -187,13 +185,22 @@ export function bindFilesToolbar({
     }
   };
 
+  // locate 纳入有界任务与取消机制：重复提交先取消上一个（Host 侧 locate_cancel），
+  // 不让慢查询在后台持续占用任务槽（生命周期整改 L14）。
+  let activeLocateId = null;
   if ($('path-form')) $('path-form').addEventListener('submit', async (event) => {
     const raw = normalizePathInput($('path-input')?.value);
     if (!raw || raw.includes('/') || raw.includes('\\')) return;
     event.preventDefault();
     event.stopImmediatePropagation();
+    if (activeLocateId) {
+      call('locate_cancel', { requestId: activeLocateId }).catch(() => {});
+      activeLocateId = null;
+    }
+    const requestId = crypto.randomUUID();
+    activeLocateId = requestId;
     try {
-      const result = await call('locate', { query: raw }, crypto.randomUUID());
+      const result = await call('locate', { query: raw }, requestId);
       const match = result?.entries?.[0];
       if (match?.path) {
         setPendingSelectionPath(match.path);
@@ -201,6 +208,8 @@ export function bindFilesToolbar({
       } else navigate(raw);
     } catch {
       navigate(raw);
+    } finally {
+      if (activeLocateId === requestId) activeLocateId = null;
     }
   }, true);
 

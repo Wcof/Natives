@@ -31,6 +31,10 @@ export function createFilesContextMenu({
   function openModal({ title, message = '', label = '', value = '', submit = () => {} }) {
     const dialog = $('modal');
     if (!dialog) return;
+    const active = document.activeElement;
+    let opener = active;
+    if (active?.closest('#new-popover')) opener = $('new-menu');
+    else if (active?.closest('#context-menu')) opener = document.querySelector('#entries .entry.selected') || $('entries');
     $('modal-title').textContent = title;
     $('modal-message').textContent = message;
     $('modal-field-label').textContent = label;
@@ -47,6 +51,7 @@ export function createFilesContextMenu({
       submit(next);
     };
     $('modal-cancel').onclick = () => dialog.close('cancel');
+    opener?.focus({ preventScroll: true });
     dialog.showModal();
     if (label) {
       $('modal-input').focus();

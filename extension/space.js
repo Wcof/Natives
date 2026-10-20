@@ -1,5 +1,9 @@
+import { storage } from './platform/storage.js';
+import { subscribeCoreEvents } from './platform/events.js';
 
 
+import { ensureAuthenticated } from './platform/web-session.js';
+import { isExtension } from './platform/env.js';
 import { createNativeClient } from './native-client.js';
 import { widgetPlugins, backgroundPlugins } from './space-plugins.js';
 import { createSpaceWorkspaceTree } from './space-workspace-tree.js';
@@ -9,11 +13,22 @@ import { createSpaceToolbar } from './space-toolbar.js';
 import { createSpaceNameModal } from './space-modal-name.js';
 import { createSpaceDeleteModal } from './space-modal-delete.js';
 import { createSidebarController } from './sidebar-controller.js';
-import { mountAppMenu, NAVIGATION_KIND_APP } from './app-navigation-projection.js';
+import { mountAppMenu, loadAppNavigation, onAppNavigationChange, saveAppNavigation, projectionFromApps, NAVIGATION_KIND_APP } from './app-navigation-projection.js';
 import { createEmbeddedAppSurface } from './app.js';
 import { createSettingsMenu } from './settings-menu.js';
 import { createGlobalSearchModal } from './global-search-modal.js';
 import { createWorkspaceMutationQueue } from './space-write-queue.js';
+import {
+  INVESTMENT_WIDGET_KEYS,
+  initInvestmentFeed,
+  suspendInvestmentFeed,
+  resumeInvestmentFeed,
+  invalidateInvestmentCards,
+  setInvestmentCardsPresent,
+  setInvestmentNavigationHandler,
+  setMoneyVisible,
+  isMoneyVisible,
+} from './space-investment-feed.js';
 
 let localeMessages = {};
 let selectedLanguage = 'zh_CN';
@@ -26,7 +41,7 @@ let broadcastChannel = null;
 let inspectorWidth = 360;
 
 const $ = (id) => document.getElementById(id);
-const t = (key, fallback) => localeMessages[key]?.message || fallback || key;
+const t = (key, fallback) => localeMessages[key]?.message || globalThis.chrome?.i18n?.getMessage?.(key) || fallback || key;
 
 
 const SPACE_UI_KEY = 'natives-space-ui';
@@ -69,30 +84,17 @@ function broadcastRevision() {
 }
 
 async function getStored(key, fallback) {
-  if (globalThis.chrome?.storage?.local) {
-    try {
-      const res = await chrome.storage.local.get({ [key]: fallback });
-      return res?.[key] ?? fallback;
-    } catch {}
-  }
-  try {
-    const val = localStorage.getItem(key);
-    if (val === null) return fallback;
-    try { return JSON.parse(val); } catch { return val; }
-  } catch { return fallback; }
+  const values = await storage.local.get({[key]:fallback});
+  return values[key] ?? fallback;
 }
-
-async function setStored(key, value) {
-  if (globalThis.chrome?.storage?.local) {
-    try { await chrome.storage.local.set({ [key]: value }); return; } catch {}
-  }
-  try { localStorage.setItem(key, typeof value === 'string' ? value : JSON.stringify(value)); } catch {}
-}
+async function setStored(key,value) { await storage.local.set({[key]:value}); }
 
 async function loadLocale() {
   try {
     const stored = await getStored('natives-language', '');
-    selectedLanguage = stored === 'en' || stored === 'zh_CN' ? stored : 'zh_CN';
+    selectedLanguage = stored === 'en' || stored === 'zh_CN'
+      ? stored
+      : (!isExtension && globalThis.navigator?.language && !globalThis.navigator.language.startsWith('zh') ? 'en' : 'zh_CN');
     const res = await fetch(`_locales/${selectedLanguage}/messages.json`);
     localeMessages = res.ok ? await res.json() : {};
   } catch {
@@ -114,6 +116,12 @@ function applyI18n() {
 function initNativeClient() {
   nativeClient = createNativeClient({
     host: 'com.natives.file_manager',
+    // 与 files-host-connection 一致：首包 version 握手注册来源，
+    // 否则 Host 不响应业务方法（workspace_session 等会一直挂起）。
+    handshake: {
+      method: 'version',
+      params: { extensionVersion: globalThis.chrome?.runtime?.getManifest?.().version || '' },
+    },
     writeMethods: [
       'workspace_create', 'workspace_rename', 'workspace_reorder', 'workspace_pin',
       'workspace_duplicate', 'workspace_delete', 'workspace_open_tab', 'workspace_close_tab',
@@ -164,6 +172,28 @@ function renderView() {
   dashboard.render(activeSnapshot, activeWorkspaceId, updateSnapshot);
   toolbar.sync(activeSnapshot);
   inspector.sync(activeSnapshot, activeWorkspaceId);
+  syncInvestmentCards();
+  if (embeddedAppId) showEmbeddedView(true);
+}
+
+// ADR-0036：投资卡存在性由 Workspace 快照驱动；卡片数量不改变查询次数。
+function syncInvestmentCards() {
+  const hasInvestment = (activeSnapshot?.widgets || [])
+    .some((w) => w.enabled && INVESTMENT_WIDGET_KEYS.includes(w.key));
+  setInvestmentCardsPresent(hasInvestment);
+  const moneyBtn = $('space-money-visibility-btn');
+  if (moneyBtn) {
+    moneyBtn.hidden = !hasInvestment;
+    if (hasInvestment) applyMoneyVisibilityLabel(moneyBtn);
+  }
+}
+
+function applyMoneyVisibilityLabel(button) {
+  const visible = isMoneyVisible();
+  const label = visible ? t('moneyHide', '隐藏金额') : t('moneyShow', '显示金额');
+  button.title = label;
+  button.setAttribute('aria-label', label);
+  button.setAttribute('aria-pressed', String(visible));
 }
 
 async function loadWorkspaceSnapshot(id) {
@@ -174,7 +204,7 @@ async function loadWorkspaceSnapshot(id) {
 }
 
 async function activateWorkspace(id) {
-  // 从内嵌应用视图切回空间视图：只切显示，不销毁会话（5 分钟空闲后回收）。
+  // 从内嵌应用视图切回空间视图：先释放嵌入会话（ADR-0036），再切显示。
   if (typeof embeddedAppId !== 'undefined' && embeddedAppId) leaveEmbeddedView();
   await activateWorkspaceInner(id);
 }
@@ -232,14 +262,14 @@ function initResizers() {
   };
 }
 
-async function handleSaveWorkspaceName(workspace, name) {
+async function handleSaveWorkspaceName(workspace, name, template = 'classic') {
   try {
     if (workspace) {
       await nativeCall('workspace_rename', { workspaceId: workspace.id, name, expectedRevision: workspace.revision });
       toast(t('workspaceRenamed', '空间已重命名'));
       await refreshSession();
     } else {
-      const snap = await nativeCall('workspace_create', { name });
+      const snap = await nativeCall('workspace_create', { name, template });
       activeWorkspaceId = snap.workspace.id;
       toast(t('workspaceCreated', 'Workspace 已创建'));
       await refreshSession();
@@ -303,6 +333,7 @@ async function init() {
   inspector = createSpaceInspector({
     $, t, language: selectedLanguage, nativeCall, broadcastRevision, updateSnapshot,
     queueWorkspaceMutation,
+    getEditingWidgetId:()=>dashboard.getEditingWidgetId(),
     onPositionEditChange: (widgetId) => dashboard.setEditingWidget(widgetId, activeSnapshot, activeWorkspaceId, updateSnapshot),
     onCloseFocusAnchor: () => toolbar?.settingsButton?.focus(),
   });
@@ -319,25 +350,78 @@ async function init() {
   });
   if (restoring && storedUi.widgetsHidden) toolbar.setWidgetsHidden(true);
 
-  createSettingsMenu({
+  const settingsMenu = createSettingsMenu({
     anchorButton: $('settings-entry'),
     initialLanguage: selectedLanguage, initialTheme: selectedTheme,
-    onLanguageChange: async (lang) => { await setStored('natives-language', lang); location.reload(); },
+    onLanguageChange: async (lang) => { await setStored('natives-language', lang); },
     onThemeChange: async (theme) => {
-      selectedTheme = theme;
-      document.documentElement.dataset.theme = theme;
       await setStored('natives-theme', theme);
     },
     onModelSettings: (anchor) => openModelSettings(anchor).catch((error) => toast(error.message, 'error')),
     onAppsCenter: (anchor) => openAppsCenter(anchor).catch((error) => toast(error.message, 'error')),
+    onModuleSettings:(appId,view)=>openEmbeddedApp(appId,{view}),
     t,
+  });
+  storage.onChanged.addListener(async (changes,area) => {
+    if (area !== 'local') return;
+    if (changes['natives-theme']) {
+      selectedTheme=changes['natives-theme'].newValue;
+      document.documentElement.dataset.theme=selectedTheme;
+      settingsMenu.setPreferences({theme:selectedTheme});
+    }
+    if(changes['natives-sidebar-width'])sidebarController.setWidth(changes['natives-sidebar-width'].newValue,false);
+    if(changes['natives-inspector-width']){
+      inspectorWidth=changes['natives-inspector-width'].newValue;
+      document.documentElement.style.setProperty('--inspector-width',`${inspectorWidth}px`);
+    }
+    if (changes['natives-language']) {
+      await loadLocale(); applyI18n();
+      dashboard.setLanguage(selectedLanguage);inspector.setLanguage(selectedLanguage);
+      settingsMenu.setPreferences({language:selectedLanguage});
+      renderView();
+    }
+  });
+  window.addEventListener('natives-preferences-error', () => toast(t('sharedPreferencesFailed','偏好未保存，请重试。'),'error'));
+  const settingsItems = (projection) => projection.items.map((item) => ({
+    ...item,
+    label: item.labels?.[selectedLanguage] || item.label,
+  }));
+  settingsMenu.setModules(settingsItems(await loadAppNavigation()));
+  const stopSettingsProjection=onAppNavigationChange(projection=>settingsMenu.setModules(settingsItems(projection)));
+  // Reuse the workspace's authenticated Core connection, without another Port.
+  // A fresh profile may have no App Center navigation cache yet.
+  nativeCall('apps:list').then(snapshot=>saveAppNavigation(projectionFromApps(snapshot.apps,snapshot.revision,snapshot.modules)))
+    .catch(()=>toast(t('appsNetworkError'),'error'));
+  let pageDisposed=false;
+  window.addEventListener('pagehide',(event)=>{
+    if(event.persisted||pageDisposed)return;
+    pageDisposed=true;
+    stopSettingsProjection();
+    settingsMenu.destroy();
   });
 
   // ADR-0025 D33/D36: space.html stays 0-Native-Port for apps — the
   // "应用" section renders from the projection UI cache written by the
   // App Center / files page, and tracks chrome.storage changes live.
-  mountAppMenu($('app-menu-apps'), { t }).catch(() => {});
+  // afterRender：菜单渲染（初始 + 每次 projection 刷新）后回填当前内嵌
+  // 应用的选中态——深链/刷新 ？app=fund 进入时菜单尚未渲染、握手后 revision
+  // 变更会整体重渲染，两次时机都不回填就会出现「进入投资子应用但菜单项
+  // 无高亮」。
+  mountAppMenu($('app-menu-apps'), { t, afterRender: () => setAppActive(embeddedAppId) }).catch(() => {});
   bindEmbeddedAppNavigation();
+
+  // ADR-0036：空间投资卡数据源——页面级一次短命只读投影查询。复用本页
+  // 共享 Files Host client 做 apps:get 校验；App Runtime Port 由 feed 独立
+  // 持有并在响应后立即断开。
+  initInvestmentFeed({ coreCall: (method, params) => nativeClient.call(method, params) });
+  setInvestmentNavigationHandler((view) => openEmbeddedApp('fund', { view }));
+  const moneyBtn = $('space-money-visibility-btn');
+  if (moneyBtn) {
+    moneyBtn.addEventListener('click', () => {
+      setMoneyVisible(!isMoneyVisible());
+      applyMoneyVisibilityLabel(moneyBtn);
+    });
+  }
 
   $('workspace-create').onclick = () => nameModal.open(null);
 
@@ -349,17 +433,41 @@ async function init() {
   });
 
   try { await refreshSession(); } catch (err) { toast(`${t('hostConnectionFailed', 'Native Host 连接失败')}：${err.message}`); }
+  let recovering;
+  const stopEvents=subscribeCoreEvents(event=>{
+    if ((event.type==='module_changed' && event.appId==='fund') || (event.type==='resync' && event.reason!=='unavailable')) invalidateInvestmentCards();
+    if ((event.type==='resync' && event.reason!=='unavailable') || event.type==='workspace_changed') {
+      if (!recovering) recovering=refreshSession().catch(error=>toast(error.message,'error')).finally(()=>{recovering=undefined;});
+    }
+  }, ['workspace','modules']);
+  window.addEventListener('pagehide',(event)=>{if(!event.persisted)stopEvents();});
 
   if (!broadcastChannel) broadcastChannel = new BroadcastChannel('natives-workspace');
   broadcastChannel.onmessage = (e) => { if (e.data?.type === 'revision-invalidated') refreshSession().catch(() => {}); };
-  window.addEventListener('pagehide', () => { if (nativeClient) nativeClient.disconnect(); });
+  window.addEventListener('pagehide', (event) => {
+    if (event.persisted) return;
+    if (nativeClient) nativeClient.disconnect();
+    suspendInvestmentFeed();
+  });
+  window.addEventListener('pageshow', (event) => {
+    if (!event.persisted) return;
+    // BFCache restore: the document and menu survived; reopen the Core Port,
+    // resume cards and reconcile against the authoritative snapshot.
+    clearTimeout(idleTimer);
+    try { nativeClient?.connect?.(); } catch {}
+    if (!embeddedAppId) resumeInvestmentFeed();
+    void refreshSession().catch((error) => toast(error.message, 'error'));
+  });
 
   let idleTimer;
   document.addEventListener('visibilitychange', () => {
     if (document.hidden) {
+      suspendInvestmentFeed();
       idleTimer = setTimeout(() => { if (document.hidden && nativeClient) nativeClient.disconnect(); }, 60_000);
     } else {
       clearTimeout(idleTimer);
+      try { nativeClient?.connect?.(); } catch {}
+      if (!embeddedAppId) resumeInvestmentFeed();
     }
   });
 
@@ -367,7 +475,7 @@ async function init() {
   const initialParams = new URLSearchParams(location.search);
   const targetApp = initialParams.get('app');
   if (targetApp) {
-    openEmbeddedApp(targetApp, { pushState: false });
+    openEmbeddedApp(targetApp, { pushState: false, view: initialParams.get('view') || '' });
   }
 
   // 浏览器前进/后退监听
@@ -376,7 +484,7 @@ async function init() {
     const appId = params.get('app');
     const wsId = params.get('workspace');
     if (appId) {
-      openEmbeddedApp(appId, { pushState: false });
+      openEmbeddedApp(appId, { pushState: false, view: params.get('view') || '' });
     } else {
       if (embeddedAppId) {
         leaveEmbeddedView({ pushState: false });
@@ -410,7 +518,7 @@ function showEmbeddedView(showApp) {
   const empty = $('space-empty-state');
   // 恢复时按当前快照的卡片数还原空态显示。dashboard-host 是 Shadow 宿主，
   // 光层 childElementCount 恒为 0，不能用其判断是否有卡片（会误显空态）。
-  if (empty && !showApp) empty.hidden = (activeSnapshot?.widgets || []).length > 0;
+  if (empty) empty.hidden = showApp || (activeSnapshot?.widgets || []).length > 0;
   const stage = $('app-stage');
   if (stage) stage.hidden = !showApp;
   // 工作区树与应用项互斥高亮
@@ -425,6 +533,8 @@ function showEmbeddedView(showApp) {
   if (!showApp) rememberedWsActive = undefined;
 }
 function leaveEmbeddedView({ pushState = true } = {}) {
+  const surface = embeddedSurface;
+  const wasAppId = embeddedAppId;
   embeddedSurface = undefined;
   embeddedAppId = undefined;
   showEmbeddedView(false);
@@ -437,11 +547,19 @@ function leaveEmbeddedView({ pushState = true } = {}) {
       history.pushState({ type: 'workspace', workspaceId: activeWorkspaceId }, '', url.pathname + (url.search || ''));
     }
   }
+  // ADR-0036 P0 修正：返回 Workspace 必须先明确释放嵌入会话（断开 Port、
+  // 移除本 surface 监听），完成后才允许投资卡短命查询，避免同 appId 锁
+  // 竞争和孤儿会话（旧行为只清引用不释放）。
+  Promise.resolve(surface?.dispose?.()).catch(() => {}).finally(() => {
+    if (wasAppId && !embeddedAppId) resumeInvestmentFeed();
+  });
 }
-function openEmbeddedApp(appId, { pushState = true } = {}) {
+function openEmbeddedApp(appId, { pushState = true, view = '' } = {}) {
   if (embeddedAppId === appId) {
     showEmbeddedView(true);
     setAppActive(appId);
+    // 已打开会话的二次导航：经 surface 转发纯导航意图（ADR-0036 §2.4）。
+    if (view) embeddedSurface?.navigate?.(view);
     if (pushState) {
       const url = new URL(location.href);
       url.searchParams.set('app', appId);
@@ -451,6 +569,9 @@ function openEmbeddedApp(appId, { pushState = true } = {}) {
     }
     return;
   }
+  // 新会话前先挂起投资卡查询并取消进行中的 Port（页面一次只持有一个
+  // Fund 会话 owner，方案 02 §4）。
+  suspendInvestmentFeed();
   embeddedSurface?.dispose?.();
   embeddedSurface = undefined;
   const stage = $('app-stage');
@@ -466,8 +587,12 @@ function openEmbeddedApp(appId, { pushState = true } = {}) {
     }
   }
   embeddedSurface = createEmbeddedAppSurface({
+    t,
     appId,
     stage,
+    initialView: typeof view === 'string' ? view : '',
+    // mode/T06：空间嵌入路径同样由装配层注入设置打开器（动态导入不回经 Shell）。
+    openSettings: (context) => import('./model-settings.js').then((m) => m.openModelSettings(context)),
     onClosed: () => { if (embeddedAppId === appId) leaveEmbeddedView(); },
   });
   void embeddedSurface.open();
@@ -481,7 +606,10 @@ function bindEmbeddedAppNavigation() {
     event.preventDefault();
     openEmbeddedApp(item.dataset.appId);
   });
-  globalThis.window?.addEventListener('pagehide', () => embeddedSurface?.dispose?.());
+  globalThis.window?.addEventListener('pagehide', (event) => { if (!event.persisted) embeddedSurface?.dispose?.(); });
 }
 
-init().catch((err) => toast(`${t('pageError', '页面初始化失败')}：${err.message}`));
+ensureAuthenticated().then((ok) => {
+  if (ok === false) return;
+  return init();
+}).catch((err) => toast(`${t('pageError', '页面初始化失败')}：${err.message}`));

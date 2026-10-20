@@ -1,5 +1,5 @@
-use super::json_str;
-use crate::{CONTROLLER_STATE, ControllerState, LOOPBACK_PORT};
+use super::error_json;
+use crate::{ControllerState, CONTROLLER_STATE, LOOPBACK_PORT};
 use app_runtime_core::http::{write_preflight, write_response as write_http_response, HttpRequest};
 use std::net::TcpStream;
 use std::sync::atomic::Ordering;
@@ -7,6 +7,8 @@ use std::time::Duration;
 
 pub(crate) fn handle_http_client(mut stream: TcpStream) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(30)));
+    // 写超时：慢客户端不能长期占用请求线程（响应写出同样有界）。
+    let _ = stream.set_write_timeout(Some(Duration::from_secs(30)));
     let request = match HttpRequest::read(&mut stream) {
         Ok(req) => req,
         Err(_) => return,
@@ -35,20 +37,23 @@ pub(crate) fn handle_http_client(mut stream: TcpStream) {
         return;
     }
 
-    // 短暂锁：只 clone Arc<Module> 与会话 Arc，绝不在锁内执行业务请求（计划 §17.2）。
-    let (module, sessions) = {
-        // 采用编译期已知的最小闭包持有锁作用域。
+    // 短暂状态快照：只 clone Arc<dyn ModuleService> 与会话 Arc，绝不在锁内执行业务请求（架构 Wave 4）。
+    let (service, sessions, app_id, worker_epoch, capabilities) = {
         let guard = CONTROLLER_STATE.lock().unwrap();
         match &*guard {
-            ControllerState::Ready(ready) => {
-                (ready.bound.module.clone(), Some(ready.sessions.clone()))
-            }
-            _ => return, // 未就绪：静默关闭连接（端口未对外公布）
+            ControllerState::Ready(ready) => (
+                ready.service.clone(),
+                ready.sessions.clone(),
+                ready.bound.app_id.clone(),
+                ready.bound.instance_id.clone(),
+                ready.bound.capabilities.clone(),
+            ),
+            _ => return, // 未就绪：静默关闭连接
         }
     };
 
     // 1. UI 静态资源（无需 token）
-    if let Ok(Some(resp)) = module.lock().unwrap().handle_ui(route) {
+    if let Ok(Some(resp)) = service.handle_ui(route) {
         let _ = write_http(
             &mut stream,
             resp.status_code,
@@ -59,26 +64,23 @@ pub(crate) fn handle_http_client(mut stream: TcpStream) {
         return;
     }
 
-    // 2. 业务 API：验证 sandbox origin 与 Bearer token
-    // 例外（ADR-0032）：/api/tray/state 与 /api/limits 为只读聚合，供进程外系统组件
-    // （macOS 顶栏）在无 Native Messaging 会话时轮询，免 Bearer 鉴权与
-    // sandbox origin 要求，但仍要求 loopback Host 头（上方已校验）。
-    let tray_readonly = route == "/api/tray/state" || route == "/api/limits";
-    let session_ok = tray_readonly
-        || match &sessions {
-            Some(sessions) => match sessions.lock() {
-                Ok(sessions_guard) => sessions_guard
-                    .authorize(
-                        sessions_guard.generation(),
-                        request.header("authorization").unwrap_or(""),
-                    )
-                    .is_ok(),
-                Err(_) => false,
-            },
-            None => false,
-        };
+    // 2. 业务 API：强制验证 sandbox origin 与 Bearer token
+    // ADR-0035：废除 8765 固定端口与无 Bearer 特权，所有 /api/* 一律要求有效会话与沙箱 Origin。
+    let context = sessions.lock().ok().and_then(|sessions| {
+        sessions
+            .authorized_session(request.header("authorization").unwrap_or(""))
+            .ok()
+            .map(|session| app_runtime_core::module::RequestContext {
+                principal: session.surface_id().to_string(),
+                surface_id: session.surface_id().to_string(),
+                generation: session.generation.clone(),
+                app_id,
+                worker_epoch,
+                capabilities,
+            })
+    });
 
-    if !tray_readonly && (!request.sandbox_origin() || !session_ok) {
+    if !request.sandbox_origin() || context.is_none() {
         let _ = write_http(
             &mut stream,
             401,
@@ -89,22 +91,7 @@ pub(crate) fn handle_http_client(mut stream: TcpStream) {
         return;
     }
 
-    let api_result = {
-        let module_guard = match module.lock() {
-            Ok(guard) => guard,
-            Err(_) => {
-                let _ = write_http(
-                    &mut stream,
-                    500,
-                    "Internal Server Error",
-                    "application/json",
-                    b"{\"error\":\"APP_RUNTIME_INVALID_STATE\"}",
-                );
-                return;
-            }
-        };
-        module_guard.handle_api(&request, route)
-    };
+    let api_result = service.handle_authenticated_api(&context.unwrap(), &request, route);
     match api_result {
         Ok(resp) => {
             let _ = write_http(
@@ -116,7 +103,7 @@ pub(crate) fn handle_http_client(mut stream: TcpStream) {
             );
         }
         Err((code, msg)) => {
-            let body = format!("{{\"error\":{}}}", json_str(&msg));
+            let body = error_json(&msg);
             let _ = write_http(
                 &mut stream,
                 code,
@@ -138,12 +125,38 @@ pub(crate) fn write_http(
     ctype: &str,
     body: &[u8],
 ) -> std::io::Result<()> {
-    write_http_response(
-        stream,
-        code,
-        reason,
-        ctype,
-        body,
-        "default-src 'none'; script-src 'self' 'unsafe-inline'; connect-src 'self'; style-src 'unsafe-inline'; form-action 'none'; base-uri 'none'; frame-ancestors chrome-extension:",
-    )
+    let parent = crate::PARENT_ORIGIN
+        .get()
+        .map(String::as_str)
+        .unwrap_or("'none'");
+    let web_port = std::env::var("NATIVES_PARENT_WEB_PORT")
+        .ok()
+        .and_then(|value| value.parse::<u16>().ok())
+        .filter(|port| *port != 0);
+    let csp = runtime_csp(parent, web_port);
+    write_http_response(stream, code, reason, ctype, body, &csp)
+}
+
+fn runtime_csp(parent_origin: &str, web_port: Option<u16>) -> String {
+    let web_origins = web_port
+        .map(|port| format!(" http://127.0.0.1:{port} http://localhost:{port}"))
+        .unwrap_or_default();
+    format!("default-src 'none'; script-src 'self' 'unsafe-inline'; connect-src 'self'; style-src 'self' 'unsafe-inline'; form-action 'none'; base-uri 'none'; frame-ancestors {parent_origin}{web_origins};")
+}
+
+#[cfg(test)]
+mod csp_tests {
+    use super::runtime_csp;
+
+    #[test]
+    fn only_verified_parent_and_selected_web_port_can_embed() {
+        let csp = runtime_csp(
+            "chrome-extension://abcdefghijklmnopabcdefghijklmnop",
+            Some(49152),
+        );
+        assert!(csp.contains("frame-ancestors chrome-extension://abcdefghijklmnopabcdefghijklmnop http://127.0.0.1:49152 http://localhost:49152;"));
+        assert!(!csp.contains("chrome-extension: "));
+        assert!(!csp.contains(":8770"));
+        assert!(csp.contains("style-src 'self' 'unsafe-inline';"));
+    }
 }

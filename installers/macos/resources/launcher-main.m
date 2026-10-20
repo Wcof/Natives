@@ -10,6 +10,7 @@
  * 不碰 ~/Downloads，不弹 Terminal，不创建常驻检测服务。 */
 #import <AppKit/AppKit.h>
 #import "NativesStatusBar.h"
+#import "NativesEntryChoice.h"
 #include <stdlib.h>
 #include <unistd.h>
 
@@ -104,6 +105,7 @@ static StatusController *sharedStatus = nil;
 @property(strong) NSButton *btnCancel;
 @property(strong) NSButton *btnRetry;
 @property() dispatch_block_t deadline;
+@property() BOOL webEntry;
 @end
 
 /// 两步引导：步骤 1 打开扩展管理页；步骤 2 访达定位 + 重新检测接续。
@@ -137,7 +139,7 @@ static StatusController *sharedStatus = nil;
     self.statusText = [[NSTextField alloc] initWithFrame:NSMakeRect(92, 84, 320, 40)];
     self.statusText.editable = NO; self.statusText.bezeled = NO; self.statusText.drawsBackground = NO;
     self.statusText.font = [NSFont systemFontOfSize:13.5];
-    self.statusText.stringValue = @"正在检测 Natives 扩展状态…";
+    self.statusText.stringValue = self.webEntry ? NativesEntryText(@"正在打开 Natives 独立网页…", @"Opening the Natives local website…") : @"正在检测 Natives 扩展状态…";
     [self.window.contentView addSubview:self.statusText];
 
     self.btnCancel = [[NSButton alloc] initWithFrame:NSMakeRect(24, 18, 110, 30)];
@@ -163,7 +165,7 @@ static StatusController *sharedStatus = nil;
 - (void)startDetection {
     self.btnCancel.hidden = NO;
     self.btnRetry.hidden = YES;
-    self.statusText.stringValue = @"正在检测 Natives 扩展状态…";
+    self.statusText.stringValue = self.webEntry ? NativesEntryText(@"正在打开 Natives 独立网页…", @"Opening the Natives local website…") : @"正在检测 Natives 扩展状态…";
     // 非 MRC 环境不用 __weak；block 持有 self 直到检测结束/取消，
     // 进程生命周期短暂，无泄漏风险。
     __block StatusController *blockSelf = self;
@@ -173,7 +175,7 @@ static StatusController *sharedStatus = nil;
     });
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)600 * NSEC_PER_SEC),
                    dispatch_get_main_queue(), self.deadline);
-    runHostAsync(@[@"--launcher-default"], ^(int code, NSString *output) {
+    runHostAsync(@[self.webEntry ? @"--launcher-web" : @"--launcher-default"], ^(int code, NSString *output) {
         [blockSelf hostFinished:code output:output];
     });
 }
@@ -181,9 +183,14 @@ static StatusController *sharedStatus = nil;
 - (void)hostFinished:(int)code output:(NSString *)output {
     if (self.deadline) { dispatch_block_cancel(self.deadline); self.deadline = nil; }
     NSString *step = stepFromOutput(output);
-    if (code == 0 && ([step isEqualToString:@"opened_natives"] || [step isEqualToString:@"opened_config"])) {
+    if (code == 0 && ([step isEqualToString:@"opened_natives"] || [step isEqualToString:@"opened_config"] || [step isEqualToString:@"opened_web"])) {
         // Host 已打开产品页/配置页；成功交接后 Launcher 退出。
         [NSApp terminate:nil];
+        return;
+    }
+    if (self.webEntry) {
+        self.btnRetry.hidden = NO;
+        self.statusText.stringValue = NativesEntryText(@"独立网页未能打开。请确认 Chrome 已安装，然后重试。", @"The local website could not open. Check that Chrome is installed, then retry.");
         return;
     }
     if (code == 2 && [step isEqualToString:@"setup_required"]) {
@@ -379,15 +386,19 @@ int main(int argc, char **argv) {
 
     if (statusBarOnly) {
         // 启动清场：干掉同二进制的旧实例再拉起，避免多托盘图标与僵尸面板；
-        // 注册退出清场：菜单退出/关窗/交接完成等正常退出路径兜底清扫
         NativesStatusBarSweepProjectProcesses();
-        atexit(NativesStatusBarSweepProjectProcesses);
         // 作为无 Dock 图标的系统菜单栏常驻应用运行
         [app setActivationPolicy:NSApplicationActivationPolicyAccessory];
         [[NativesStatusBar sharedBar] setupStatusItem];
         [app run];
         return 0;
     }
+
+    BOOL chooseAgain = (NSEvent.modifierFlags & NSEventModifierFlagOption) != 0;
+    for (int i = 1; i < argc; i++) if (strcmp(argv[i], "--choose-entry") == 0) chooseAgain = YES;
+    NSString *entry = NativesChooseEntry(chooseAgain);
+    if (!entry) return 0;
+    setenv("NATIVES_ENTRY", entry.UTF8String, 1);
 
     [app setActivationPolicy:NSApplicationActivationPolicyRegular];
     [app activateIgnoringOtherApps:YES];
@@ -411,6 +422,7 @@ int main(int argc, char **argv) {
     // 入口判定交给 Host（异步）：版本匹配握手 + 产品配置三态；
     // 包装进程不读旧握手文件、不读 Chrome 私有 profile（D03）。
     sharedStatus = [StatusController new];
+    sharedStatus.webEntry = [entry isEqualToString:@"web"];
     [sharedStatus setupUI];
     [sharedStatus startDetection];
     [app run];

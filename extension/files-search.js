@@ -18,48 +18,24 @@ export function createFilesSearch({
   let searchQuery = '';
   let searchTimer = null;
   let searchToken = 0;
-  let activeSearchId = undefined;
   const activeSearchIds = new Set();
   let globalSearchMode = false;
   let recursiveSearch = false;
   let searchTruncated = false;
 
-  function isGlobalMode() {
-    return globalSearchMode;
-  }
-
-  function setGlobalMode(val) {
-    globalSearchMode = Boolean(val);
-    updateSearchScopeButton();
-  }
-
-  function getSearchQuery() {
-    return searchQuery;
-  }
-
-  function setSearchQuery(val) {
-    searchQuery = String(val || '');
-  }
-
   function updateSearchScopeButton() {
     const button = $('scope-toggle');
     if (!button) return;
-    const labelKey = globalSearchMode ? 'globalSearch' : 'currentDirectorySearch';
-    const text = globalSearchMode ? t('globalSearch', '全机') : t('currentDirectorySearch', '当前目录');
-    button.replaceChildren(iconElement(globalSearchMode ? 'globe' : 'target'), document.createTextNode(` ${text}`));
-    button.title = t(labelKey, text);
-    button.setAttribute('aria-pressed', String(globalSearchMode));
+    const text = t(globalSearchMode ? 'globalSearch' : 'currentDirectorySearch');
+    button.replaceChildren(iconElement(globalSearchMode ? 'globe' : 'target'), ` ${text}`);
+    button.title = text;
+    button.ariaPressed = String(globalSearchMode);
   }
 
   function toggleSearchScope() {
     globalSearchMode = !globalSearchMode;
     updateSearchScopeButton();
-    const searchInput = $('search');
-    if (searchInput) {
-      searchInput.focus();
-      searchInput.select();
-    }
-    setStatus(t(globalSearchMode ? 'globalSearch' : 'search', globalSearchMode ? '全机搜索' : '当前目录搜索'));
+    setStatus(t(globalSearchMode ? 'globalSearch' : 'currentDirectorySearch'));
     if (searchQuery) {
       session.pageOffset = 0;
       search(searchQuery);
@@ -67,26 +43,25 @@ export function createFilesSearch({
   }
 
   function cancelActiveSearches() {
+    ++searchToken;
+    clearTimeout(searchTimer);
+    searchTimer = null;
     searchTruncated = false;
-    if (activeSearchId) {
-      call('search_cancel', { requestId: activeSearchId }).catch(() => {});
-      activeSearchId = undefined;
-    }
-    activeSearchIds.forEach((requestId) => {
+    for (const requestId of activeSearchIds) {
       call('search_cancel', { requestId }).catch(() => {});
-    });
+    }
     activeSearchIds.clear();
   }
 
   async function search(query) {
-    const token = ++searchToken;
     cancelActiveSearches();
+    const token = searchToken;
     if (globalSearchMode) return searchGlobal(query, token);
 
     const content = /^content:\s*/i.test(query);
     const normalizedQuery = query.replace(/^content:\s*/i, '').trim();
     const requestId = crypto.randomUUID();
-    activeSearchId = requestId;
+    activeSearchIds.add(requestId);
     setStatus(t('loading', '加载中…'));
 
     try {
@@ -120,7 +95,7 @@ export function createFilesSearch({
         setStatus(error.message, 'error');
       }
     } finally {
-      if (activeSearchId === requestId) activeSearchId = undefined;
+      activeSearchIds.delete(requestId);
     }
   }
 
@@ -130,7 +105,6 @@ export function createFilesSearch({
     const rootPaths = getRootPaths() || [];
     const requests = rootPaths.map((path) => ({ path, requestId: crypto.randomUUID() }));
     requests.forEach(({ requestId }) => activeSearchIds.add(requestId));
-    activeSearchId = requests[0]?.requestId;
     setStatus(t('loading', '加载中…'));
 
     try {
@@ -167,39 +141,38 @@ export function createFilesSearch({
       const unavail = results.some((r) => r?.contentUnavailable) ? ` · ${t('contentSearchUnavailable', 'PDF 文本搜索不可用')}` : '';
       setStatus(`${session.entries.length}${plus} ${t('searchResults', '个搜索结果')}${unavail}`);
     } catch (error) {
-      if (token === searchToken && error.message !== 'search cancelled') {
-        setStatus(error.message, 'error');
+      if (token === searchToken) {
+        cancelActiveSearches();
+        if (error.message !== 'search cancelled') setStatus(error.message, 'error');
       }
     } finally {
-      requests.forEach(({ requestId }) => {
-        activeSearchIds.delete(requestId);
-        call('search_cancel', { requestId }).catch(() => {});
-      });
-      activeSearchId = undefined;
+      requests.forEach(({ requestId }) => activeSearchIds.delete(requestId));
     }
   }
 
   return {
-    isGlobalMode,
-    setGlobalMode,
-    getSearchQuery,
-    setSearchQuery,
+    isGlobalMode: () => globalSearchMode,
+    setGlobalMode(val) {
+      globalSearchMode = Boolean(val);
+      updateSearchScopeButton();
+    },
+    getSearchQuery: () => searchQuery,
+    setSearchQuery: (val) => { searchQuery = String(val || ''); },
     getRecursive: () => recursiveSearch,
     setRecursive: (v) => { recursiveSearch = Boolean(v); },
     updateSearchScopeButton,
     toggleSearchScope,
     cancelActiveSearches,
     search,
-    searchGlobal,
     debounceSearch(text, delay = 180) {
+      cancelActiveSearches();
       searchQuery = text.trim();
       session.pageOffset = 0;
       session.selectedPaths.clear();
       session.lastSelectedIndex = -1;
       renderSelection();
-      clearTimeout(searchTimer);
       searchTimer = setTimeout(() => {
-        if (searchQuery) search(searchQuery); else { searchToken++; cancelActiveSearches(); loadDirectory(session.currentPath); }
+        if (searchQuery) search(searchQuery); else { cancelActiveSearches(); loadDirectory(session.currentPath); }
       }, delay);
     },
   };

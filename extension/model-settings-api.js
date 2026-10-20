@@ -1,6 +1,7 @@
 import { createNativeClient } from './native-client.js';
 
 const WRITE_METHODS = new Set([
+  'model_inference_start', 'model_inference_cancel',
   'model_provider_create', 'model_provider_update', 'model_provider_delete', 'model_provider_set_enabled',
   'model_provider_test',
   'model_oauth_start', 'model_oauth_cancel', 'model_account_set_enabled', 'model_account_reauth', 'model_account_delete',
@@ -19,7 +20,7 @@ const WRITE_METHODS = new Set([
 
 export function createModelSettingsAPI({ onEvent, onDisconnect } = {}) {
   const client = createNativeClient({
-    host: 'com.natives.model_host',
+    host: 'com.natives.file_manager',
     writeMethods: WRITE_METHODS,
     timeoutMs: 30_000,
     onEvent,
@@ -27,6 +28,11 @@ export function createModelSettingsAPI({ onEvent, onDisconnect } = {}) {
   });
 
   return {
+    surfaceEvents: () => client.call('model_surface_events'),
+    inferenceOptions: () => client.call('model_inference_options'),
+    inferenceStart: (p) => client.call('model_inference_start', p),
+    inferenceStatus: (p) => client.call('model_inference_status', p),
+    inferenceCancel: (p) => client.call('model_inference_cancel', p),
     snapshot: () => client.call('model_snapshot'),
     loadSnapshot: () => client.call('model_snapshot'),
     createProvider: (params) => client.call('model_provider_create', params),
@@ -94,6 +100,7 @@ export function createModelSettingsAPI({ onEvent, onDisconnect } = {}) {
     deleteAuthFile: (params) => client.call('model_auth_files_delete', params),
     openAuthDir: () => client.call('model_auth_files_open_dir'),
     queryQuota: (params) => client.call('model_quota_query', params),
+    getCachedQuota: () => client.call('model_quota_cached', {}),
     getAccountModels: (params) => client.call('model_account_models', params),
     updateAccountModels: (params) => client.call('model_account_models_update', params),
 

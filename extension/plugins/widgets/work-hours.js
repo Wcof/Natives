@@ -1,3 +1,4 @@
+import { subscribeWidgetClock } from '../widget-clock.js';
 export const workHoursWidget = {
   key: 'widget/workHours',
   name: 'Work Hours',
@@ -26,8 +27,8 @@ export const workHoursWidget = {
       container.append(heading);
     };
     update();
-    const intervalId = setInterval(update, 10_000);
-    return () => clearInterval(intervalId);
+    const stopClock = subscribeWidgetClock(update, 10_000);
+    return () => stopClock();
   },
   renderSettings(container, data = {}, onChange = () => {}, { t = (key, fallback) => fallback || key } = {}) {
     container.innerHTML = `

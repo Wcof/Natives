@@ -1,0 +1,40 @@
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import vm from 'node:vm';
+const scope={Fund:{}};vm.createContext(scope);vm.runInContext(readFileSync(new URL('../../modules/fund/ui/src/research-series.js',import.meta.url),'utf8'),scope);
+const normalize=value=>JSON.parse(JSON.stringify(scope.Fund.researchSeries.minute(value)));
+const data=normalize({date:'20261019',preClose:10,points:[{time:'09:30',price:10.2,vwap:10.1,volume:12},{time:'09:31',price:0,vwap:null,volume:0}]});
+assert.equal(data.date,'2026-10-19');assert.equal(data.pre_close,10);assert.deepEqual(data.times,['09:30','09:31']);assert.deepEqual(data.prices,[10.2,null]);assert.deepEqual(data.avg_prices,[10.1,null]);assert.deepEqual(data.volumes,[12,0]);
+assert.equal(normalize({preClose:0,points:[]}).pre_close,null);
+assert.throws(()=>normalize({times:[],prices:[]}));
+const options=[];scope.Fund={...scope.Fund,trends:{chart:{},state:{currentSymbol:'sh600519'},charts:{minuteChart:{getWidth:()=>800,clear(){},setOption(value){options.push(value)}},minuteVolChart:{clear(){},setOption(value){options.push(value)}}},C:{bg:'#fff',textDim:'#666',up:'#f00',down:'#080'}},themeColor:()=>12,themeRgba:()=>'',t:key=>key};
+const requests=[];scope.AbortController=AbortController;scope.document={getElementById:()=>({textContent:''})};scope.Fund.authFetch=(url,options)=>new Promise(resolve=>requests.push({url,signal:options.signal,resolve}));
+vm.runInContext(readFileSync(new URL('../../modules/fund/ui/src/trends-minute.js',import.meta.url),'utf8'),scope);
+scope.Fund.trends.chart.renderMinute(data,null);
+assert.deepEqual(JSON.parse(JSON.stringify(options[0].series[0].data)),[10.2,null]);assert.ok(options[0].yAxis.min<10&&options[0].yAxis.max>10.2);
+options.length=0;scope.Fund.trends.chart.renderMinute(normalize({preClose:10,points:[]}),null);assert.equal(options[0].title.text,'fundTrendsMinuteEmpty');
+options.length=0;scope.Fund.trends.chart.renderMinute(normalize({preClose:0,points:[{time:'09:30',price:10,volume:0}]}),null);assert.equal(options[0].title.text,'fundTrendsMinuteReferenceMissing');assert.equal(options[0].series,undefined);
+console.log('Canonical minute points, real reference, missing-value gaps, observed range and empty states passed');
+
+scope.Fund.trends.state.currentView='minute';
+const cancelled=scope.Fund.trends.chart.refreshMinuteLight('sh600519');scope.Fund.trends.chart.pauseMinute();assert.equal(requests[0].signal.aborted,true);
+const before=options.length;requests[0].resolve({ok:true,json:async()=>({preClose:10,points:[{time:'09:30',price:12,vwap:11,volume:1}]})});await cancelled;assert.equal(options.length,before,'late cancelled refresh must not replace the chart');
+const refreshed=scope.Fund.trends.chart.refreshMinuteLight('sh600519');requests[1].resolve({ok:true,json:async()=>({date:'20261019',preClose:10,points:[{time:'09:30',price:10.5,vwap:10.4,volume:5}]})});await refreshed;
+assert.equal(scope.Fund.trends.state.minuteData.prices[0],10.5);assert.equal(scope.Fund.trends.state.minuteData.date,'2026-10-19');
+console.log('Minute refresh uses canonical points and cancels its owned late response');
+
+const detailOptions=[],volumeOptions=[];
+const detailScope={Fund:{state:{},actions:{},themeColor:key=>key==='--natives-fs-secondary'?'12px':'#556677',themeRgba:()=>'',t:key=>key,researchSeries:scope.Fund.researchSeries},document:{documentElement:{getAttribute:()=>'',dataset:{theme:'archive'}}},echarts:{graphic:{LinearGradient:class{}}}};
+vm.createContext(detailScope);vm.runInContext(readFileSync(new URL('../../modules/fund/ui/src/stock-detail-chart.js',import.meta.url),'utf8'),detailScope);
+const detail=detailScope.Fund.StockDetailShared;
+detail.charts.minute={setOption:value=>detailOptions.push(value)};detail.charts.minuteVol={setOption:value=>volumeOptions.push(value)};
+detail.renderMinute({preClose:10,points:[{time:'09:30',price:10.5,vwap:null,volume:null},{time:'09:31',price:10.6,vwap:10.55,volume:0}]});
+assert.equal(detailOptions[0].series[1].data[0],null,'missing average is a gap, not the last price');assert.equal(volumeOptions[0].series[0].data[0],null,'missing volume is a gap, not zero');assert.equal(volumeOptions[0].series[0].data[1].value,0,'published zero volume remains zero');
+detailOptions.length=0;detail.renderMinute({preClose:0,points:[{time:'09:30',price:10.5}]});assert.equal(detailOptions[0].title.text,'fundTrendsMinuteReferenceMissing');assert.equal(detailOptions[0].series,undefined);
+detailOptions.length=0;detail.renderMinute({preClose:10,points:[{time:'09:30',price:0}]});assert.equal(detailOptions[0].title.text,'fundTrendsMinuteEmpty');
+console.log('Stock detail shares canonical minute gaps and never invents a previous close');
+
+detailOptions.length=0;volumeOptions.length=0;detail.charts.kline={setOption:value=>detailOptions.push(value)};detail.charts.volume={setOption:value=>volumeOptions.push(value)};
+detail.renderKline([{date:'2026-10-19',open:10,close:10.5,low:10,high:11,volume:null},{date:'2026-10-20',open:10.5,close:10,low:9,high:11,volume:0}]);
+assert.equal(volumeOptions[0].series[0].data[0],null,'missing daily volume must also remain a gap');assert.equal(volumeOptions[0].series[0].data[1].value,0);
+console.log('Daily volume preserves unknown and published zero separately');

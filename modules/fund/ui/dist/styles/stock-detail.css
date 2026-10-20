@@ -14,7 +14,7 @@
 .workspace-body.stock-detail-active .main-column {
   padding: 0 !important;
   border-right: none !important;
-  overflow: hidden !important;
+  overflow: hidden;
   height: 100% !important;
 }
 
@@ -60,7 +60,7 @@
   border-radius: 4px;
   color: var(--natives-text-primary);
   padding: 4px 10px;
-  font-size: 12px;
+  font-size: var(--natives-fs-secondary);
   font-weight: 500;
   cursor: pointer;
   transition: all 0.15s ease;
@@ -68,7 +68,7 @@
 }
 .sd-back-btn:hover {
   background: var(--natives-surface-3);
-  border-color: #444;
+  border-color: var(--natives-control);
   color: var(--natives-accent);
 }
 
@@ -84,7 +84,7 @@
   color: var(--natives-text-primary);
 }
 .sd-stock-code {
-  font-size: 12px;
+  font-size: var(--natives-fs-secondary);
   font-family: var(--font-mono);
   color: var(--natives-text-muted);
 }
@@ -102,7 +102,7 @@
   font-variant-numeric: tabular-nums;
 }
 .sd-change-num {
-  font-size: 13px;
+  font-size: var(--natives-fs-body);
   font-weight: 700;
   font-family: var(--font-mono);
 }
@@ -117,18 +117,14 @@
 }
 .sd-tags::-webkit-scrollbar { display: none; }
 .sd-tag {
-  font-size: 10px;
+  font-size: var(--natives-fs-secondary);
   padding: 2px 7px;
   border-radius: 3px;
-  background: rgba(205, 242, 75, 0.08);
-  border: 1px solid rgba(205, 242, 75, 0.22);
+  background: var(--natives-selected);
+  border: 1px solid color-mix(in srgb, var(--natives-accent) 22%, transparent);
   color: var(--natives-accent);
   letter-spacing: 0.2px;
   flex-shrink: 0;
-}
-:root[data-theme="archive"] .sd-tag {
-  background: rgba(204, 120, 92, 0.12);
-  border-color: rgba(204, 120, 92, 0.3);
 }
 
 .sd-topbar-right {
@@ -149,7 +145,7 @@
   border: 1px solid var(--natives-border);
   border-radius: 4px;
   padding: 0 8px;
-  font-size: 12px;
+  font-size: var(--natives-fs-secondary);
   color: var(--natives-text-primary);
   outline: none;
   box-sizing: border-box;
@@ -165,7 +161,7 @@
   background: var(--natives-surface);
   border: 1px solid var(--natives-border);
   border-radius: 4px;
-  box-shadow: 0 6px 18px rgba(0,0,0,0.15);
+  box-shadow: var(--natives-shadow);
   z-index: 100;
   max-height: 220px;
   overflow-y: auto;
@@ -174,7 +170,7 @@
   display: flex;
   justify-content: space-between;
   padding: 6px 10px;
-  font-size: 12px;
+  font-size: var(--natives-fs-secondary);
   color: var(--natives-text-primary);
   cursor: pointer;
 }
@@ -222,28 +218,28 @@
   white-space: nowrap;
 }
 
-/* 第一排（行情主控行）：高度 32px，允许小屏微滚动 */
+/* 两排分别滚动，聚焦末端工具不能卷走整个图表。 */
+.sd-view-row,.sd-draw-row {
+  flex-shrink: 0;
+  height: auto;
+  min-height: calc(var(--natives-space-5) + 6px);
+  overflow-x: auto;
+}
 .sd-view-row {
-  height: 32px;
   border-bottom: 1px solid var(--natives-border);
   overflow-x: auto;
 }
 .sd-view-row::-webkit-scrollbar { height: 3px; }
 .sd-view-row::-webkit-scrollbar-thumb { background: var(--natives-border); border-radius: 2px; }
 
-/* 第二排（专业画线行）：高度 30px，必须 overflow: visible 确保调色盘弹窗不被截断 */
+/* 调色面板进入浏览器顶层，不受工具栏滚动裁切。 */
 .sd-draw-row {
-  height: 30px;
-  background: rgba(0, 0, 0, 0.08);
+  background: color-mix(in srgb, var(--natives-text-primary) 4%, transparent);
   position: relative;
-  overflow: visible !important;
-}
-:root[data-theme="archive"] .sd-draw-row {
-  background: rgba(0, 0, 0, 0.03);
 }
 
 .sd-group-label {
-  font-size: 10px;
+  font-size: var(--natives-fs-secondary);
   color: var(--natives-text-muted);
   margin-right: 2px;
 }
@@ -256,6 +252,7 @@
 /* 分组胶囊 */
 .sd-draw-group,
 .sd-tb-group {
+  flex-shrink: 0;
   display: inline-flex;
   align-items: center;
   gap: 2px;
@@ -270,7 +267,7 @@
 .sd-view-row .it-btn {
   padding: 2px 7px;
   gap: 4px;
-  font-size: 11px;
+  font-size: var(--natives-fs-secondary);
   background: transparent;
   border: 1px solid transparent;
   color: var(--natives-text-muted);
@@ -288,7 +285,7 @@
 .sd-act-btn span,
 .sd-toggle-btn span,
 .sd-palette-btn span {
-  font-size: 11px;
+  font-size: var(--natives-fs-secondary);
   line-height: 1;
 }
 
@@ -316,22 +313,15 @@
 .sd-view-row .it-btn.active {
   color: var(--natives-accent);
   border-color: var(--natives-accent);
-  background: rgba(205, 242, 75, 0.12);
+  background: var(--natives-selected);
   font-weight: 500;
-}
-
-:root[data-theme="archive"] .sd-tool-btn.active,
-:root[data-theme="archive"] .sd-toggle-btn.active,
-:root[data-theme="archive"] .sd-view-row .tb-btn.active,
-:root[data-theme="archive"] .sd-view-row .it-btn.active {
-  background: rgba(204, 120, 92, 0.14);
 }
 
 /* 清空操作警示样式 */
 .sd-clear-btn:hover {
-  color: var(--color-up, #ff2d2d) !important;
-  border-color: rgba(255, 45, 45, 0.3) !important;
-  background: rgba(255, 45, 45, 0.08) !important;
+  color: var(--natives-danger);
+  border-color: color-mix(in srgb, var(--natives-danger) 30%, transparent);
+  background: var(--natives-danger-soft);
 }
 
 /* 调色盘浮层：提高 z-index 且右对齐防超出屏幕 */
@@ -353,23 +343,25 @@
   width: 11px;
   height: 11px;
   border-radius: 50%;
-  border: 1px solid rgba(120,120,120,0.3);
+  border: 1px solid var(--natives-control);
 }
 .sd-palette-pop {
-  position: absolute;
-  top: 28px;
-  right: 0;
-  left: auto;
+  position: fixed;
+  inset: auto;
+  margin: 0;
   z-index: 200;
   background: var(--natives-surface);
   border: 1px solid var(--natives-border);
   border-radius: 6px;
   padding: 8px 10px;
-  box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+  box-shadow: var(--natives-shadow);
   width: 175px;
+  max-width: calc(100vw - 16px);
+  max-height: calc(100vh - 16px);
+  overflow-y: auto;
 }
 .sd-pop-title {
-  font-size: 10px;
+  font-size: var(--natives-fs-secondary);
   color: var(--natives-text-muted);
   margin-bottom: 6px;
 }
@@ -379,12 +371,13 @@
   flex-wrap: wrap;
 }
 .sd-c-dot {
-  width: 16px;
-  height: 16px;
+  min-width: var(--natives-space-5);
+  min-height: var(--natives-space-5);
   border-radius: 50%;
   cursor: pointer;
   box-sizing: border-box;
   border: 2px solid transparent;
+  padding: 0;
   transition: transform 0.1s;
 }
 .sd-c-dot:hover { transform: scale(1.15); }
@@ -396,7 +389,7 @@
   flex-wrap: wrap;
 }
 .sd-opt-btn {
-  font-size: 10px;
+  font-size: var(--natives-fs-secondary);
   padding: 2px 6px;
   background: var(--natives-surface-2);
   border: 1px solid var(--natives-border);
@@ -426,7 +419,7 @@
   color: var(--natives-text-muted);
 }
 .sd-dash-btn span {
-  font-size: 10px;
+  font-size: var(--natives-fs-secondary);
   line-height: 1;
 }
 .sd-dash-btn.active svg {
@@ -472,7 +465,7 @@
   border: 1px solid var(--natives-accent);
   padding: 4px 6px;
   border-radius: 4px;
-  box-shadow: 0 6px 16px rgba(0,0,0,0.35);
+  box-shadow: var(--natives-shadow);
   animation: sdBzpFadeIn 0.12s ease-out;
 }
 .sd-inline-text-pop input {
@@ -483,7 +476,7 @@
   border-radius: 3px;
   padding: 0 6px;
   color: var(--natives-text-primary);
-  font-size: 11px;
+  font-size: var(--natives-fs-secondary);
   outline: none;
 }
 .sd-inline-text-pop input:focus {
@@ -496,7 +489,7 @@
   color: var(--natives-on-accent);
   border: none;
   border-radius: 3px;
-  font-size: 11px;
+  font-size: var(--natives-fs-secondary);
   font-weight: 600;
   cursor: pointer;
 }
@@ -543,7 +536,7 @@
 .sd-right-panel .side-card {
   margin: 0;
   flex-shrink: 0;
-  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.05);
+  box-shadow: var(--natives-shadow);
 }
 .sd-right-panel .metrics-grid {
   display: grid;
@@ -594,7 +587,7 @@
   align-items: center;
   background: var(--natives-surface);
   border: 1px solid var(--natives-accent);
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  box-shadow: var(--natives-shadow);
   border-radius: 20px;
   padding: 2px 4px 2px 8px;
   animation: sdBzpFadeIn 0.15s ease-out;
@@ -607,7 +600,7 @@
   background: transparent;
   border: none;
   color: var(--natives-text-primary);
-  font-size: 11px;
+  font-size: var(--natives-fs-secondary);
   font-weight: 600;
   cursor: pointer;
   display: inline-flex;
@@ -645,11 +638,11 @@
   background: var(--natives-surface);
   border: 1px solid var(--natives-border);
   color: var(--natives-text-primary);
-  font-size: 11px;
+  font-size: var(--natives-fs-secondary);
   padding: 3px 10px;
   border-radius: 14px;
   cursor: pointer;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+  box-shadow: var(--natives-shadow);
   transition: all 0.15s ease;
 }
 .sd-zoom-reset-btn:hover {
@@ -666,7 +659,7 @@
   background: var(--natives-surface);
   border: 1px solid var(--natives-border);
   border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--natives-shadow);
   animation: sdLepFadeIn 0.12s ease-out;
   padding: 10px 12px;
   box-sizing: border-box;
@@ -684,7 +677,7 @@
   margin-bottom: 8px;
 }
 .sd-lep-title {
-  font-size: 11px;
+  font-size: var(--natives-fs-secondary);
   font-weight: 600;
   color: var(--natives-text-primary);
 }
@@ -707,7 +700,7 @@
   margin-bottom: 8px;
 }
 .sd-lep-row label {
-  font-size: 10px;
+  font-size: var(--natives-fs-secondary);
   color: var(--natives-text-muted);
 }
 .sd-lep-row input[type="text"] {
@@ -717,7 +710,7 @@
   border: 1px solid var(--natives-border);
   border-radius: 4px;
   padding: 0 6px;
-  font-size: 11px;
+  font-size: var(--natives-fs-secondary);
   color: var(--natives-text-primary);
   outline: none;
   box-sizing: border-box;
@@ -744,25 +737,25 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  background: var(--natives-surface, #1e1e1e);
-  border: 1px solid var(--natives-border, #333);
+  background: var(--natives-surface);
+  border: 1px solid var(--natives-border);
   border-radius: 6px;
   padding: 10px 16px;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
-  font-size: 12px;
-  color: var(--natives-text, #eee);
+  box-shadow: var(--natives-shadow);
+  font-size: var(--natives-fs-secondary);
+  color: var(--natives-text-primary);
   pointer-events: auto;
 }
 .sd-error-text {
-  color: var(--natives-text-dim, #999);
+  color: var(--natives-text-muted);
 }
 .sd-retry-btn {
-  background: var(--natives-accent, #38bdf8);
-  color: var(--natives-bg, #111);
+  background: var(--natives-accent);
+  color: var(--natives-on-accent);
   border: none;
   border-radius: 4px;
   padding: 4px 10px;
-  font-size: 11px;
+  font-size: var(--natives-fs-secondary);
   font-weight: 600;
   cursor: pointer;
   transition: opacity 0.15s ease;
@@ -770,3 +763,8 @@
 .sd-retry-btn:hover {
   opacity: 0.85;
 }
+
+.side-card-header { width: 100%; border: 0; border-bottom: 1px solid var(--natives-border); border-radius: 0; text-align: start; font-family: inherit; color: var(--natives-text-primary); }
+.sd-search-item { display: block; width: 100%; text-align: start; border: 0; background: var(--natives-surface); color: var(--natives-text-primary); }
+.sd-search-item.active { background: var(--natives-selected); }
+#sd-draw-toolbar[hidden] { display: none; }

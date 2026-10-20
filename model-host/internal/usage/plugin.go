@@ -7,7 +7,8 @@ import (
 	"sync"
 	"time"
 
-	cliproxyusage "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
+	cliproxyusage "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/usage"
+	log "github.com/sirupsen/logrus"
 )
 
 type KeyResolver func(apiKey string) (id string, name string)
@@ -45,11 +46,18 @@ func NewNativesUsagePlugin(
 	return p
 }
 
-func (p *NativesUsagePlugin) Close() {
+// Close 停止接收新用量并按 ctx（共享退出 deadline 的剩余时间）等待排空。
+// 排空完成前已接收记录全部持久化；deadline 内未完成的剩余记录以告警显式
+// 报告数量（明确的失败状态），不静默丢弃、不无限等待（L3/L4）。
+func (p *NativesUsagePlugin) Close(ctx context.Context) {
 	p.stopOnce.Do(func() {
 		close(p.stopCh)
 	})
-	<-p.doneCh
+	select {
+	case <-p.doneCh:
+	case <-ctx.Done():
+		log.Printf("usage plugin close timeout: %d received record(s) not persisted", len(p.queue))
+	}
 }
 
 func (p *NativesUsagePlugin) HandleUsage(ctx context.Context, record cliproxyusage.Record) {

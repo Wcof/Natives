@@ -70,6 +70,8 @@ func (s *Store) migrateV2() error {
 	// Codex 累计快照基线跨 checkpoint 持久化（方案 §3.2：分批读取时
 	// delta 必须对上一批的累计值求差，不能每批从 0 重新累计）。
 	for _, col := range []string{
+		`baseline_session TEXT NOT NULL DEFAULT ''`,
+		`baseline_model TEXT NOT NULL DEFAULT ''`,
 		`baseline_in INTEGER NOT NULL DEFAULT 0`,
 		`baseline_cache INTEGER NOT NULL DEFAULT 0`,
 		`baseline_out INTEGER NOT NULL DEFAULT 0`,

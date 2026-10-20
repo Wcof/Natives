@@ -16,13 +16,24 @@ pub fn builtin_template_payload(key: &str) -> StoreResult<TemplatePayload> {
             widget_record("widget/greeting", 1),
             widget_record("widget/quote", 2),
         ],
+        // 投资概览（ADR-0036 / 方案 03 P3）：仅含已实现的投资卡布局，
+        // 不带金额样例（configJson 为空）；九宫槽位定位。
+        "investment" => vec![
+            widget_record("widget/investmentHoldings", 0),
+            widget_record("widget/investmentAssets", 1),
+            widget_record("widget/investmentGoal", 2),
+            widget_record("widget/investmentAllocation", 3),
+            widget_record("widget/investmentAllocationCheck", 4),
+        ],
         other => {
             return Err(WorkspaceError::InvalidInput(format!(
                 "unknown builtin template: {other}"
             )))
         }
     };
-    let background_json = if key == "blank" {
+    let background_json = if key == "investment" {
+        json!({ "key": "background/colour", "display": { "colour": "#101210" } })
+    } else if key == "blank" {
         json!({ "key": "background/colour", "display": { "colour": "#101010" } })
     } else {
         json!({ "key": "background/gradient", "display": { "from": "#1a1a2e", "to": "#16213e", "angle": 135 } })

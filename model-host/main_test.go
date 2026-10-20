@@ -22,7 +22,7 @@ func TestNativeClientReconnectsToSameResidentEngine(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer engine.Close()
-	hub := &clientHub{writers: make(map[*nativeio.Writer]bool), idle: make(chan struct{}, 1)}
+	hub := newClientHub()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 

@@ -18,6 +18,12 @@ pub struct FixedModule {
     pub description_zh: &'static str,
     pub description_en: &'static str,
     pub entry_route: &'static str,
+    pub module_api_version: u64,
+    pub data_schema_version: u64,
+    pub capability_version: u64,
+    pub capabilities_json: &'static str,
+    pub requires_json: &'static str,
+    pub views_json: &'static str,
 }
 
 include!(concat!(env!("OUT_DIR"), "/fixed_modules.rs"));
@@ -32,14 +38,28 @@ include!(concat!(env!("OUT_DIR"), "/fixed_modules.rs"));
 /// read the user-writable dev product source under the dev trust-root
 /// namespace (`~/.natives-local/product-source/`) so everyday iteration never
 /// needs sudo; `NATIVES_DEV_PRODUCT_SOURCE` overrides the location for tests
-/// and multi-checkout setups. Verification rules (signature, payload hashes)
-/// are identical in either layout.
+/// and multi-checkout setups — an explicit override wins over the
+/// production-vs-dev default in BOTH profiles, which is what makes Release
+/// builds testable in isolation (verification rules are identical either way).
 pub fn default_system_source() -> std::path::PathBuf {
+    // 显式 override 在两种 profile 下都优先（注释声明的 tests/multi-checkout
+    // 语义）：这让 Release 构建可以被隔离验收（perf/acceptance harness 把它
+    // 指向临时产品源）；验证规则（签名/payload hash）两种布局完全一致。
+    if let Some(dir) = std::env::var_os("NATIVES_DEV_PRODUCT_SOURCE") {
+        return std::path::PathBuf::from(dir);
+    }
     if crate::app_signing::is_production_build() {
         return std::path::PathBuf::from("/Library/Application Support/Natives");
     }
-    if let Some(dir) = std::env::var_os("NATIVES_DEV_PRODUCT_SOURCE") {
-        return std::path::PathBuf::from(dir);
+    // A locally installed Debug candidate must read its sealed root source, not
+    // an unrelated (or absent) developer source in the user's home. Repository
+    // dev binaries keep using ~/.natives-local below.
+    #[cfg(target_os = "macos")]
+    if let Ok(exe) = std::env::current_exe() {
+        let root = std::path::PathBuf::from("/Library/Application Support/Natives-Local");
+        if exe.starts_with(&root) && root.is_dir() {
+            return root;
+        }
     }
     let home = std::env::var_os("HOME")
         .map(std::path::PathBuf::from)
@@ -73,18 +93,10 @@ pub struct ModuleProjection {
 pub fn module_projection(
     module: &FixedModule,
     preference: Option<(bool, bool, i64)>,
+    present: bool,
     configured: bool,
-    apps_root: &std::path::Path,
 ) -> ModuleProjection {
     let (enabled, show_in_sidebar, sidebar_order) = preference.unwrap_or((true, true, 0));
-    let runtime = apps_root.join(module.app_id).join("runtime");
-    let present = std::fs::read_dir(&runtime)
-        .map(|entries| {
-            entries
-                .flatten()
-                .any(|entry| entry.file_type().map(|t| t.is_dir()).unwrap_or(false))
-        })
-        .unwrap_or(false);
     ModuleProjection {
         app_id: module.app_id.to_string(),
         name: serde_json::json!({ "zh_CN": module.name_zh, "en": module.name_en }),

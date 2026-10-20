@@ -7,6 +7,7 @@ export function buildDashboardStyles({ backgroundStyles = '', widgetStyles = '' 
       display: none !important;
     }
     .Widgets {
+      --space-toolbar-clearance: 72px;
       color: #ffffff;
       width: 100%;
       height: 100%;
@@ -83,40 +84,49 @@ export function buildDashboardStyles({ backgroundStyles = '', widgetStyles = '' 
       position: absolute;
       pointer-events: none;
     }
+    .Slot:not(.free-slot-wrap):not(.free) {
+      max-width: 100%;
+      max-height: calc(100% - var(--space-toolbar-clearance));
+      overflow: auto;
+      pointer-events: auto;
+    }
+    .Slot.bottomLeft, .Slot.bottomCentre, .Slot.bottomRight {
+      max-height: calc(100% - 3rem - var(--space-toolbar-clearance));
+    }
     .Slot > * {
       margin: 1rem;
       pointer-events: all;
     }
     .Slot.topLeft {
-      top: 0;
+      top: var(--space-toolbar-clearance);
       left: 0;
       text-align: left;
     }
     .Slot.topCentre {
-      top: 0;
+      top: var(--space-toolbar-clearance);
       left: 50%;
       transform: translateX(-50%);
       text-align: center;
     }
     .Slot.topRight {
-      top: 0;
+      top: var(--space-toolbar-clearance);
       right: 0;
       text-align: right;
     }
     .Slot.middleLeft {
-      top: 50%;
+      top: calc(50% + var(--space-toolbar-clearance) / 2);
       left: 0;
       transform: translateY(-50%);
       text-align: left;
     }
     .Slot.middleCentre {
-      top: 50%;
+      top: calc(50% + var(--space-toolbar-clearance) / 2);
       left: 50%;
       transform: translate(-50%, -50%);
       text-align: center;
     }
     .Slot.middleRight {
-      top: 50%;
+      top: calc(50% + var(--space-toolbar-clearance) / 2);
       right: 0;
       transform: translateY(-50%);
       text-align: right;
@@ -157,6 +167,7 @@ export function buildDashboardStyles({ backgroundStyles = '', widgetStyles = '' 
       font-weight: inherit;
     }
     .drag-selected {
+      pointer-events: auto;
       z-index: 1000 !important;
       outline: 2px dashed var(--accent, #cdf24b) !important;
       border-radius: 4px;

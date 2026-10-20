@@ -1,0 +1,6 @@
+# whitespace 例外：第三方内核 fork 的重放补丁（natives-patches/*.patch）
+# 是「仓库内的 diff 文件」——其上下文行按 unified diff 语法必须以空格开头、
+# 代码行以 +/- 加 tab 开头，git diff --check 的 C 式空白规则对其必然误报
+# （HEAD 中既有版本同样触发）。仅对补丁文件关闭 whitespace 检查，
+# 不影响任何源码、文档与脚本。
+third_party/cliproxyapi/natives-patches/*.patch -whitespace

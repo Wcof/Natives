@@ -1,0 +1,163 @@
+      <!-- 基金持仓详情（方案 P07：基础信息、关联板块、业绩走势、我的收益四部分） -->
+      <section id="view-fund-detail" hidden>
+        <div class="fund-detail-workspace">
+          <!-- 顶部行情回退与快捷切换条 -->
+          <div class="fund-detail-topbar">
+            <div class="fund-detail-topbar-left">
+
+              <div class="sd-title-wrap">
+                <span class="sd-stock-name" id="fd-fund-name" tabindex="-1">--</span>
+                <span class="sd-stock-code" id="fd-fund-code">--</span>
+              </div>
+              <span class="tag blue" id="fd-fund-kind">--</span>
+              <div id="fd-fund-themes" class="fund-theme-tags" hidden></div>
+              <span class="muted" id="fd-fund-account" style="font-size:12px">--</span>
+            </div>
+            <div class="sd-topbar-right">              <button class="btn" id="fd-btn-back" data-i18n-title="fundDetailBack">
+                <svg class="svg-icon" aria-hidden="true" style="width:14px;height:14px;"><use href="#i-arrow-left" /></svg>
+                <span data-i18n="fundTrendsUi41">返回</span>
+              </button>
+              <button type="button" class="btn" id="fd-btn-refresh" data-i18n="fundDetailRefresh"></button>
+              <button type="button" class="btn" id="fd-btn-edit" data-i18n="fundHomeEdit">编辑</button>
+              <button type="button" class="btn" id="fd-btn-buy" data-i18n="fundLedgerOtcBuyTitle">加仓</button>
+              <button type="button" class="btn" id="fd-btn-sell" data-i18n="fundLedgerOtcSellTitle">减仓</button>
+              <button type="button" class="btn" id="fd-btn-more" data-i18n="fundDetailMore">更多操作</button>
+            </div>
+          </div>
+
+          <div class="fund-detail-body">
+            <div class="detail-identity"><label><span data-i18n="fundDetailSwitchHolding"></span><select id="fd-holding-select"></select></label></div>
+            <!-- 第一部分：基础信息（常驻） -->
+            <section class="fund-basic-card" aria-labelledby="fd-basic-title">
+              <div class="between cardhead" style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px">
+                <h2 id="fd-basic-title" style="font-size:16px;font-weight:700" data-i18n="fundDetailBasicTitle">基础信息</h2>
+                <small class="muted" id="fd-basic-asof">--</small>
+              </div>
+              <div class="fund-basic-head">
+                <div>
+                  <small id="fd-head-day-label">当日涨幅</small>
+                  <strong id="fd-head-day-pct">--</strong>
+                </div>
+                <div>
+                  <small id="fd-head-year-label">近 1 年 · 净值口径</small>
+                  <strong id="fd-head-year-pct">--</strong>
+                </div>
+              </div>
+              <div class="fund-basic-grid">
+                <div><small data-i18n="fundDetailAmount">持有金额</small><strong id="fd-val-amount" class="money">--</strong><small id="fd-estimate-value" hidden></small></div>
+                <div><small data-i18n="fundDetailShares">持有份额</small><strong id="fd-val-shares">--</strong></div>
+                <div><small data-i18n="fundDetailManagedWeight"></small><strong id="fd-val-ratio">--</strong></div>
+                <div><small data-i18n="fundDetailProfit">持有收益</small><strong id="fd-val-profit" class="money">--</strong></div>
+                <div><small data-i18n="fundDetailProfitRate">持有收益率</small><strong id="fd-val-profit-rate">--</strong></div>
+                <div><small data-i18n="fundDetailUnitCost"></small><strong id="fd-val-unit-cost" class="money">--</strong></div>
+                <div><small id="fd-label-day-income" data-i18n="fundDetailDayIncome">当日收益</small><strong id="fd-val-day-income" class="money">--</strong></div>
+                <div><small id="fd-label-prev-income" data-i18n="fundDetailYesterdayIncome">昨日收益</small><strong id="fd-val-prev-income" class="money">--</strong></div>
+                <div><small data-i18n="fundDetailHoldingDays">持有天数</small><strong id="fd-val-days">-- <span>天</span></strong></div>
+              </div>
+              <p class="muted" id="fd-estimate-note" hidden></p>
+            </section>
+
+            <!-- 下方三部分：标签切换 -->
+                          <div class="fund-section-tabs" role="tablist">
+                <button type="button" class="fund-section-tab active" data-tab="holdings" id="fd-tab-holdings" role="tab" aria-controls="fd-panel-holdings" aria-selected="true" tabindex="0" data-i18n="fundDetailRelated">关联板块</button>
+                <button type="button" class="fund-section-tab" data-tab="performance" id="fd-tab-performance" role="tab" aria-controls="fd-panel-performance" aria-selected="false" tabindex="-1" data-i18n="fundDetailPerformance">业绩走势</button>
+                <button type="button" class="fund-section-tab" data-tab="profit" id="fd-tab-profit" role="tab" aria-controls="fd-panel-profit" aria-selected="false" tabindex="-1" data-i18n="fundDetailPersonalIncome">我的收益</button>
+              </div>
+<section class="fund-sections-card">
+
+
+              <!-- 关联板块容器 -->
+              <div id="fd-panel-holdings" role="tabpanel" aria-labelledby="fd-tab-holdings" class="fund-tab-panel">
+                <p id="fd-quarterly-status" role="status"></p>
+                <div class="fund-association-grid">
+                  <div class="table-wrap">
+                    <table class="data-table">
+                      <thead>
+                        <tr>
+                          <th data-i18n="fundDetailNameCode">名称 / 代码</th>
+                          <th style="text-align:right" data-i18n="fundDetailLatestChange">最新涨幅</th>
+                          <th style="text-align:right" data-i18n="fundDetailWeight">持仓占比</th>
+                          <th style="text-align:right" data-i18n="fundDetailPrevious">较上期</th>
+                        </tr>
+                      </thead>
+                      <tbody id="fd-quarterly-tbody">
+                        <tr><td colspan="4" class="empty" data-i18n="fundDetailLoading"></td></tr>
+                      </tbody>
+                    </table>
+                  </div>
+                  <div class="fund-association-detail">
+                    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+                      <strong id="fd-selected-stock-title" data-i18n="fundDetailMinuteTitle"></strong>
+                      <small class="muted" id="fd-selected-stock-asof"></small>
+                    </div>
+                    <div id="fd-stock-minute-chart" class="fund-chart-box"></div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 业绩走势容器 -->
+              <div id="fd-panel-performance" role="tabpanel" aria-labelledby="fd-tab-performance" class="fund-tab-panel" hidden>
+                <div class="fund-chart-wrap">
+                  <div class="fund-chart-toolbar">
+                    <div class="fund-range-tabs" id="fd-perf-ranges">
+                      <button type="button" class="fund-range-btn" data-range="1d" data-i18n="fundDetailDayRange">单日</button>
+                      <button type="button" class="fund-range-btn" data-range="7d" data-i18n="fundDetailWeekRange">7天</button>
+                      <button type="button" class="fund-range-btn active" data-range="1m" data-i18n="fundDetailMonthRange">1月</button>
+                      <button type="button" class="fund-range-btn" data-range="3m" data-i18n="fundDetailThreeMonthRange">3月</button>
+                      <button type="button" class="fund-range-btn" data-range="6m" data-i18n="fundDetailSixMonthRange">6月</button>
+                      <button type="button" class="fund-range-btn" data-range="1y" data-i18n="fundDetailYearRange">1年</button>
+                    </div>
+                    <small class="muted" id="fd-perf-chart-note" data-i18n="fundDetailNavChart"></small>
+                  </div>
+                  <div id="fd-perf-summary" class="fund-history-summary"></div>
+                  <div id="fd-perf-chart" class="fund-chart-box"></div>
+                  <div class="fund-table-scroll">
+                    <table class="data-table">
+                      <thead>
+                        <tr>
+                          <th data-i18n="fundDetailDate">日期</th>
+                          <th style="text-align:right" data-i18n="fundDetailNav">单位净值</th>
+                          <th style="text-align:right" data-i18n="fundDetailGrowth">日涨幅</th>
+                        </tr>
+                      </thead>
+                      <tbody id="fd-perf-tbody"></tbody>
+                    </table>
+                  </div>
+                  <nav id="fd-perf-pager" hidden></nav>
+                </div>
+              </div>
+
+              <!-- 我的收益容器 -->
+              <div id="fd-panel-profit" role="tabpanel" aria-labelledby="fd-tab-profit" class="fund-tab-panel" hidden>
+                <div class="fund-chart-wrap">
+                  <div class="fund-chart-toolbar">
+                    <div class="fund-range-tabs" id="fd-profit-ranges">
+                      <button type="button" class="fund-range-btn" data-range="1d" data-i18n="fundDetailDayRange">单日</button>
+                      <button type="button" class="fund-range-btn" data-range="7d" data-i18n="fundDetailWeekRange">7天</button>
+                      <button type="button" class="fund-range-btn active" data-range="1m" data-i18n="fundDetailMonthRange">1月</button>
+                      <button type="button" class="fund-range-btn" data-range="3m" data-i18n="fundDetailThreeMonthRange">3月</button>
+                      <button type="button" class="fund-range-btn" data-range="6m" data-i18n="fundDetailSixMonthRange">6月</button>
+                      <button type="button" class="fund-range-btn" data-range="1y" data-i18n="fundDetailYearRange">1年</button>
+                    </div>
+                    <small class="muted" id="fd-profit-chart-note" data-i18n="fundDetailIncomeChart"></small>
+                  </div>
+                  <div id="fd-profit-summary" class="fund-history-summary"></div>
+                  <div id="fd-profit-chart" class="fund-chart-box"></div>
+                  <div class="fund-table-scroll">
+                    <table class="data-table">
+                      <thead>
+                        <tr>
+                          <th data-i18n="fundDetailDate">日期</th>
+                          <th style="text-align:right" data-i18n="fundDetailPersonalDayIncome"></th>
+                        </tr>
+                      </thead>
+                      <tbody id="fd-profit-tbody"></tbody>
+                    </table>
+                  </div>
+                  <nav id="fd-profit-pager" hidden></nav>
+                </div>
+              </div>
+            </section>
+          </div>
+        </div>
+      </section>

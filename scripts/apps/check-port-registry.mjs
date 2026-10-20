@@ -1,4 +1,4 @@
-// 端口注册表门禁（ADR-0032 §2.2.3 / 审计 F-09/F-12）：
+// 端口注册表门禁（ADR-0032 §2.2.3 / ADR-0035 / 审计 F-09/F-12）：
 // 静态扫描仓库中"具备本机监听能力"的代码（Rust / Go / ObjC）里的监听端口字面量，
 // 与 docs/standards/technical/05-port-registry.md §2 的登记白名单比对，未登记即 FAIL。
 //
@@ -7,10 +7,10 @@
 //     flag "port" 默认值 / ObjC 无监听故不扫）；浏览器端 JS 无监听能力，不入范围；
 //   - Rust 的 #[cfg(test)] 内联测试、Go 的 *_test.go、*.test.mjs、testdata/fixture 不扫；
 //   - 范围覆盖 crates/ modules/ model-host/ installers/macos/resources/
-//     （market-host 与 hosts 已于 2026-09-28 退役删除，审计 F-01/F-02/A2）。
-import { readFileSync, existsSync } from 'node:fs';
+//   - 支持纯文件系统扫描（当源码包无 .git 目录时无缝降级）。
+import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 
 const ROOT = join(import.meta.dirname, '..', '..');
 const REGISTRY = join(ROOT, 'docs', 'standards', 'technical', '05-port-registry.md');
@@ -22,8 +22,8 @@ for (const line of registryText.split('\n')) {
   const m = line.match(/^\|\s*(\d{4,5})\s*\|/);
   if (m) whitelist.add(Number(m[1]));
 }
-if (!whitelist.has(8765)) {
-  throw new Error('port registry is missing the 8765 baseline entry');
+if (!whitelist.has(8766)) {
+  throw new Error('port registry is missing the 8766 baseline entry');
 }
 
 // 2) 扫描范围与排除
@@ -31,7 +31,7 @@ const SCOPES = [
   'crates', 'modules', 'model-host',
   'installers/macos/resources',
 ];
-const EXCLUDE = /(^|\/)(third_party|dist|node_modules|target|docs|archive|testdata|fixtures?)(\/|$)/;
+const EXCLUDE = /(^|\/)(third_party|dist|node_modules|target|docs|archive|tests|testdata|fixtures?)(\/|$)/;
 function inScope(file) {
   if (EXCLUDE.test(file)) return false;
   if (!SCOPES.some((s) => file === s || file.startsWith(s + '/'))) return false;
@@ -39,8 +39,30 @@ function inScope(file) {
   return /\.(?:rs|go|m|h|c)$/.test(file);
 }
 
-const tracked = execFileSync('git', ['ls-files', '-z'], { cwd: ROOT, encoding: 'utf8' }).split('\0').filter(Boolean);
-const files = tracked.filter((f) => inScope(f) && existsSync(join(ROOT, f)));
+let files = [];
+try {
+  if (process.env.NATIVES_FORCE_FILESYSTEM_SCAN === '1') throw new Error('filesystem scan requested');
+  const tracked = execFileSync('git', ['ls-files', '-z'], { cwd: ROOT, encoding: 'utf8' }).split('\0').filter(Boolean);
+  files = tracked.filter((f) => inScope(f) && existsSync(join(ROOT, f)));
+} catch {
+  // 无 .git 环境降级为文件系统递归遍历
+  function walk(dir) {
+    for (const ent of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, ent.name);
+      const rel = relative(ROOT, full);
+      if (EXCLUDE.test(rel)) continue;
+      if (ent.isDirectory()) {
+        walk(full);
+      } else if (inScope(rel)) {
+        files.push(rel);
+      }
+    }
+  }
+  for (const s of SCOPES) {
+    const p = join(ROOT, s);
+    if (existsSync(p)) walk(p);
+  }
+}
 
 // 3) 监听端口字面量模式
 const PATTERNS = [

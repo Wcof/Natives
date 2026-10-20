@@ -1,30 +1,22 @@
+/* 辅助页外壳角色由 theme.css（产品单源）定义；此处仅别名投影（DES 02）。
+   不再按 prefers-color-scheme 分支配色：主题跟随 natives-theme 投影，
+   系统明暗不覆盖明确产品偏好；截图像素与打印输出不受外壳主题影响。 */
 :root {
-  --bg: #f8f6f0;
-  --surface: #ffffff;
-  --border: #e2ddd3;
-  --text: #2c2825;
-  --text-muted: #79716b;
-  --primary: #2563eb;
-  --primary-hover: #1d4ed8;
-  --secondary: #f1ede4;
-  --secondary-hover: #e5dfd3;
-  --danger: #dc2626;
-  --danger-bg: #fee2e2;
-  --success: #16a34a;
+  --bg: var(--natives-bg);
+  --surface: var(--natives-surface);
+  --border: var(--natives-border);
+  --text: var(--natives-text-primary);
+  --text-muted: var(--natives-text-muted);
+  --primary: var(--natives-accent);
+  --primary-hover: var(--natives-accent-strong);
+  --on-primary: var(--natives-on-accent);
+  --secondary: var(--natives-surface-3);
+  --secondary-hover: var(--natives-surface-2);
+  --danger: var(--natives-danger);
+  --danger-bg: var(--natives-danger-soft);
+  --success: var(--natives-ok);
   --radius: 8px;
-  --shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #18181b;
-    --surface: #27272a;
-    --border: #3f3f46;
-    --text: #f4f4f5;
-    --text-muted: #a1a1aa;
-    --secondary: #3f3f46;
-    --secondary-hover: #52525b;
-  }
+  --shadow: var(--natives-shadow);
 }
 
 * {
@@ -54,6 +46,18 @@ body {
   background: var(--surface);
   border-bottom: 1px solid var(--border);
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+  flex-wrap: wrap;
+}
+
+@media (max-width: 480px) {
+  .screenshot-toolbar {
+    padding: 10px 12px;
+    gap: 8px;
+  }
+
+  .toolbar-progress {
+    max-width: none;
+  }
 }
 
 .toolbar-brand {
@@ -114,7 +118,7 @@ body {
 
 .btn-primary {
   background: var(--primary);
-  color: #ffffff;
+  color: var(--on-primary);
 }
 
 .btn-primary:not(:disabled):hover {

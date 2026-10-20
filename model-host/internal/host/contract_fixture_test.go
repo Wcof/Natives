@@ -120,3 +120,62 @@ func TestExportContractFixture(t *testing.T) {
 	}
 	t.Logf("contract fixture written to %s", out)
 }
+
+func TestValidateCanonicalContractsV1(t *testing.T) {
+	contractDir := filepath.Join("..", "..", "..", "contracts", "ai-usage-query", "v1")
+	if _, err := os.Stat(contractDir); os.IsNotExist(err) {
+		t.Fatalf("contracts dir not found at %s", contractDir)
+	}
+
+	// 1. Overview
+	overviewBytes, err := os.ReadFile(filepath.Join(contractDir, "overview.json"))
+	if err != nil {
+		t.Fatalf("read overview.json: %v", err)
+	}
+	var overview usage.OverviewResult
+	if err := json.Unmarshal(overviewBytes, &overview); err != nil {
+		t.Fatalf("unmarshal overview.json: %v", err)
+	}
+	if overview.Metrics.TotalTokens <= 0 {
+		t.Errorf("overview totalTokens must be > 0, got %d", overview.Metrics.TotalTokens)
+	}
+
+	// 2. Analysis
+	analysisBytes, err := os.ReadFile(filepath.Join(contractDir, "analysis.json"))
+	if err != nil {
+		t.Fatalf("read analysis.json: %v", err)
+	}
+	var analysis usage.AnalyticsResult
+	if err := json.Unmarshal(analysisBytes, &analysis); err != nil {
+		t.Fatalf("unmarshal analysis.json: %v", err)
+	}
+	if len(analysis.ByModel) == 0 {
+		t.Errorf("analysis byModel must not be empty")
+	}
+
+	// 3. Sessions
+	sessionsBytes, err := os.ReadFile(filepath.Join(contractDir, "sessions.json"))
+	if err != nil {
+		t.Fatalf("read sessions.json: %v", err)
+	}
+	var sessions usage.SessionsResult
+	if err := json.Unmarshal(sessionsBytes, &sessions); err != nil {
+		t.Fatalf("unmarshal sessions.json: %v", err)
+	}
+	if len(sessions.Sessions) == 0 {
+		t.Errorf("sessions list must not be empty")
+	}
+
+	// 4. Events
+	eventsBytes, err := os.ReadFile(filepath.Join(contractDir, "events.json"))
+	if err != nil {
+		t.Fatalf("read events.json: %v", err)
+	}
+	var events usage.EventsResult
+	if err := json.Unmarshal(eventsBytes, &events); err != nil {
+		t.Fatalf("unmarshal events.json: %v", err)
+	}
+	if len(events.Events) == 0 {
+		t.Errorf("events list must not be empty")
+	}
+}

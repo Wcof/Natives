@@ -159,6 +159,20 @@ pub fn handle_trends_request(
     request: &app_runtime_core::http::HttpRequest,
     route: &str,
 ) -> Result<String, (u16, String)> {
+    if matches!(route, "/api/trends/analyze" | "/api/trends/chanlun_daily") {
+        let fq = crate::market::query_param(&request.path, "fq").unwrap_or_else(|| "qfq".into());
+        let period =
+            crate::market::query_param(&request.path, "period").unwrap_or_else(|| "day".into());
+        if !["bf", "qfq", "hfq"].contains(&fq.as_str())
+            || !["day", "week", "month"].contains(&period.as_str())
+        {
+            return Err((
+                400,
+                serde_json::json!({"error":"APP_PARAM_INVALID","message":"unsupported fq/period"})
+                    .to_string(),
+            ));
+        }
+    }
     let subpath = route.strip_prefix("/api/trends").unwrap_or(route);
     let subpath = if subpath.is_empty() { "/" } else { subpath };
 
@@ -167,7 +181,24 @@ pub fn handle_trends_request(
         "/quote" => crate::market::api_market_detail(request),
         "/kline" => crate::market::api_market_kline(request),
         "/minute" => crate::market::api_market_minute(request),
-        "/search" => crate::market::api_market_suggest(request),
+        "/search" => {
+            // 前端 trends 发 keyword=，market suggest 契约是 input=；改写后复用
+            // api_market_suggest，并把 suggestions 以 results 别名下发（trends
+            // 前端读 data.results[].code/name）。
+            let keyword = crate::market::query_param(&request.path, "keyword")
+                .or_else(|| crate::market::query_param(&request.path, "input"))
+                .ok_or_else(|| (400, "{\"error\":\"缺少keyword参数\"}".into()))?;
+            let rewritten = app_runtime_core::http::HttpRequest::for_internal(
+                "GET",
+                &format!("/api/market/suggest?input={}", crate::market::urlencode(&keyword)),
+                Vec::new(),
+            );
+            let body = crate::market::api_market_suggest(&rewritten)?;
+            let val: serde_json::Value =
+                serde_json::from_str(&body).map_err(|e| (502, format!("{{\"error\":\"suggest 解析失败: {e}\"}}")))?;
+            let suggestions = val.get("suggestions").cloned().unwrap_or(serde_json::Value::Array(vec![]));
+            Ok(serde_json::json!({ "results": suggestions, "suggestions": suggestions }).to_string())
+        }
         "/realtime_flow" => {
             let symbol = crate::market::url_decode(
                 &crate::market::query_param(&request.path, "symbol")
@@ -184,14 +215,16 @@ pub fn handle_trends_request(
         "/chanlun_daily" => {
             let raw_symbol = crate::market::query_param(&request.path, "symbol")
                 .ok_or_else(|| (400, "{\"error\":\"缺少symbol参数\"}".into()))?;
-            let symbol = crate::market::url_decode(&raw_symbol);
+            let raw_symbol = crate::market::url_decode(&raw_symbol);
+            let symbol = crate::market::normalize_symbol(&raw_symbol);
             let period = crate::market::query_param(&request.path, "period")
                 .unwrap_or_else(|| "day".to_string());
             let count = crate::market::query_param(&request.path, "count")
                 .and_then(|c| c.parse::<usize>().ok())
                 .unwrap_or(250);
 
-            let mut bars = crate::market::fetch_kline_bars(&symbol, &period, "qfq")?;
+            let fq = crate::market::query_param(&request.path, "fq").unwrap_or_else(|| "qfq".into());
+            let (mut bars,source) = crate::market::fetch_kline_data(&symbol, &period, &fq)?;
             if bars.len() < 10 {
                 return Ok(format!("{{\"error\":\"K线数据不足（仅{}根）\"}}", bars.len()));
             }
@@ -209,7 +242,9 @@ pub fn handle_trends_request(
                 volumes: bars.iter().map(|b| b.volume).collect(),
             };
             let result = chanlun_daily::analyze_chanlun_daily(&input);
-            let dict = chanlun_daily::daily_result_to_dict(&result);
+            let mut dict = chanlun_daily::daily_result_to_dict(&result);
+            dict["marketDataSource"] = serde_json::json!(source);
+            dict["queryIdentity"] = serde_json::json!({"symbol":symbol,"period":period,"fq":fq,"source":source,"from":bars.first().map(|b| &b.date),"to":bars.last().map(|b| &b.date),"count":bars.len()});
             Ok(dict.to_string())
         }
         "/chanlun_minute" => {
@@ -233,7 +268,10 @@ pub fn handle_trends_request(
                 .unwrap_or_else(|| "day".to_string());
             let norm = crate::market::normalize_symbol(&symbol);
 
-            let mut bars = crate::market::fetch_kline_bars(&symbol, &period, "qfq")?;
+            // 腾讯 fqkline 上游要求 sh/sz/bj 前缀；前端趋势分析入口默认传裸 6 位
+            // 代码（历史记录/600519 兜底），缺失归一化时上游返回空 → 前端整页空白。
+            let fq = crate::market::query_param(&request.path, "fq").unwrap_or_else(|| "qfq".into());
+            let (mut bars,source) = crate::market::fetch_kline_data(&norm, &period, &fq)?;
             if bars.len() < 10 {
                 return Ok(format!("{{\"error\":\"K线数据不足（仅{}根）\"}}", bars.len()));
             }
@@ -269,7 +307,7 @@ pub fn handle_trends_request(
             postprocess::apply_signal_optimization(&mut result, &bars, quote.as_ref());
             let signal_data = serialize::signal_to_dict(&result);
 
-            let recent_klines_start = if bars.len() > 120 { bars.len() - 120 } else { 0 };
+            let recent_klines_start = 0;
             let klines_val: Vec<serde_json::Value> = bars[recent_klines_start..]
                 .iter()
                 .map(serialize::kline_to_dict)
@@ -280,6 +318,8 @@ pub fn handle_trends_request(
 
             let resp = serde_json::json!({
                 "symbol": symbol,
+                "marketDataSource":source,
+                "queryIdentity": {"symbol":norm,"period":period,"fq":fq,"source":source,"from":bars.get(recent_klines_start).map(|b| &b.date),"to":bars.last().map(|b| &b.date),"count":klines_val.len()},
                 "name": name,
                 "quote": quote_val,
                 "signal": signal_data,

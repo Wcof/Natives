@@ -1,0 +1,452 @@
+      <!-- 8. 独立股票详情与专业看盘工作台（双栏：左侧 ECharts 大图区含图二画图工具 + 右侧原始 Dashboard 卡片） -->
+      <section id="view-stock-detail" hidden>
+        <div class="sd-workspace">
+          <!-- 顶部行情回退与快捷切换条 -->
+          <div class="sd-topbar">
+            <div class="sd-topbar-left">
+              <button class="sd-back-btn" id="sd-btn-back" title="返回上一页" data-i18n-title="fundDetailStockUiBackHint">
+                <svg class="svg-icon" aria-hidden="true" style="width:14px;height:14px;"><use href="#i-arrow-left" /></svg><span data-i18n="fundTrendsUi41">返回</span></button>
+              <div class="sd-title-wrap">
+                <span class="sd-stock-name" id="sd-stock-name">--</span>
+                <span class="sd-stock-code" id="sd-stock-code">--</span>
+              </div>
+              <div class="sd-price-badge">
+                <span class="sd-price-num up" id="sd-stock-price">--</span>
+                <span class="sd-change-num up" id="sd-stock-change">--</span>
+              </div>
+              <div class="sd-tags" id="sd-tags"></div>
+            </div>
+            <div class="sd-topbar-right">
+              <div class="sd-search-wrap">
+                <input type="text" id="sd-search-input" placeholder="输入代码 / 名称切换..." autocomplete="off" data-i18n-placeholder="fundDetailStockUiSearchHint">
+                <div class="sd-search-results" id="sd-search-results" style="display:none"></div>
+              </div>
+              <button class="btn btn-accent" id="sd-btn-star" title="加入/移除自选" data-i18n-title="fundDetailStockUiWatchHint">
+                <svg class="svg-icon" aria-hidden="true"><use href="#i-star" /></svg> <span id="sd-star-text"><span data-i18n="fundTrendsUi4">自选</span></span>
+              </button>
+              <button type="button" class="btn" id="sd-ai-review" data-i18n="fundTrendsAiReview">AI 复核</button>
+              <button type="button" class="btn" id="sd-btn-focus" data-i18n="fundFocusBadge">专注模式</button>
+              <button class="btn icon-btn" id="sd-btn-refresh" title="立即刷新行情" data-i18n-title="fundDetailStockUiRefreshHint">
+                <svg class="svg-icon" aria-hidden="true"><use href="#i-refresh" /></svg>
+              </button>
+            </div>
+          </div>
+
+          <!-- 双栏主体：左侧 ECharts 大图区 + 右侧 1:1 复刻原始 dashboard（无 AI 功能） -->
+          <section id="sd-holding-context" hidden></section>
+          <div class="sd-main" id="sd-holding-research">
+            <!-- ===== 左侧：ECharts 大图区与同花顺风格双排工具栏 ===== -->
+            <div class="sd-left-panel">
+              <!-- 工具栏容器：两排式专业看盘工具栏 -->
+              <div class="sd-chart-toolbar-wrap">
+                <!-- 第一排：行情与周期主控栏 (Period, Range, Indicators, Adjustment) -->
+                <div class="sd-toolbar-row sd-view-row">
+                  <!-- 1. 周期切换 -->
+                  <div class="sd-tb-group sd-period-group">
+                    <button class="tb-btn active" id="sd-view-minute"><span data-i18n="fundTrendsUi14">分时</span></button>
+                    <button class="tb-btn" id="sd-view-dayk"><span data-i18n="fundTrendsUi11">日K</span></button>
+                    <button class="tb-btn" id="sd-view-week"><span data-i18n="fundTrendsUi12">周K</span></button>
+                    <button class="tb-btn" id="sd-view-month"><span data-i18n="fundTrendsUi13">月K</span></button>
+                  </div>
+
+                  <div class="tb-sep" id="sd-sep-range" style="display:none"></div>
+
+                  <!-- 2. 缩放范围（K线模式展示） -->
+                  <div class="sd-tb-group" id="sd-range-group" style="display:none">
+                    <span class="sd-group-label" data-i18n="fundChartRange">范围</span>
+                    <button class="tb-btn" data-range="20"><span data-i18n="fundTrendsUi15">1月</span></button>
+                    <button class="tb-btn active" data-range="60"><span data-i18n="fundTrendsUi16">3月</span></button>
+                    <button class="tb-btn" data-range="120"><span data-i18n="fundTrendsUi17">半年</span></button>
+                    <button class="tb-btn" data-range="250"><span data-i18n="fundTrendsUi18">1年</span></button>
+                    <button class="tb-btn" data-range="0"><span data-i18n="fundTrendsUi19">全部</span></button>
+                  </div>
+
+                  <div class="tb-sep" id="sd-sep-ind" style="display:none"></div>
+
+                  <!-- 3. 副图技术指标（并入顶排） -->
+                  <div class="sd-tb-group sd-indicator-bar" id="sd-indicator-bar" style="display:none">
+                    <span class="sd-group-label" data-i18n="fundChartIndicators">副图</span>
+                    <button class="it-btn active" data-ind="none" data-i18n="fundChartOff">关</button>
+                    <button class="it-btn" data-ind="macd">MACD</button>
+                    <button class="it-btn" data-ind="rsi">RSI</button>
+                    <button class="it-btn" data-ind="kdj">KDJ</button>
+                    <button class="it-btn" data-ind="boll">BOLL</button>
+                    <button class="it-btn" data-ind="wr">WR</button>
+                  </div>
+
+                  <!-- 弹性占位符 -->
+                  <div class="sd-toolbar-spacer"></div>
+
+                  <!-- 4. 右侧复权方式 -->
+                  <div class="sd-tb-group sd-fq-group" id="sd-fq-group" style="display:none">
+                    <span class="sd-group-label"><span data-i18n="fundDetailStockUiAdjustment">复权:</span></span>
+                    <button class="tb-btn active" data-fq="qfq" title="前复权：保持当前最新价连续真实" data-i18n-title="fundDetailStockUiQfqHint"><span data-i18n="fundDetailStockUiQfq">前复权</span></button>
+                    <button class="tb-btn" data-fq="hfq" title="后复权：反映历史真实累积收益" data-i18n-title="fundDetailStockUiHfqHint"><span data-i18n="fundDetailStockUiHfq">后复权</span></button>
+                    <button class="tb-btn" data-fq="bf" title="不复权：显示历史除权真实走势" data-i18n-title="fundDetailStockUiUnadjustedHint"><span data-i18n="fundDetailStockUiUnadjusted">不复权</span></button>
+                  </div>
+                </div>
+
+                <!-- 第二排：同花顺风格专业划线工具栏 (图文结合、分段清晰、一目了然) -->
+                <div class="sd-toolbar-row sd-draw-row sd-drawings-toolbar" id="sd-draw-toolbar">
+                  <!-- 组1：选择 -->
+                  <div class="sd-draw-group">
+                    <button class="tb-btn sd-tool-btn active" data-tool="cursor" title="光标选择工具（选择、拉伸、移动已画线条）" data-i18n-title="fundDetailStockUiSelectHint">
+                      <svg class="svg-icon" aria-hidden="true"><use href="#i-cursor" /></svg>
+                      <span><span data-i18n="fundDetailStockUiSelect">选择</span></span>
+                    </button>
+                  </div>
+
+                  <div class="tb-sep"></div>
+
+                  <!-- 组2：基础线型 -->
+                  <div class="sd-draw-group">
+                    <button class="tb-btn sd-tool-btn" data-tool="trendline" title="趋势线（两点连接支撑阻力斜线）" data-i18n-title="fundDetailStockUiTrendHint">
+                      <svg class="svg-icon" aria-hidden="true"><use href="#i-trendline" /></svg>
+                      <span><span data-i18n="fundTrendsUi21">趋势线</span></span>
+                    </button>
+                    <button class="tb-btn sd-tool-btn" data-tool="horizontal" title="水平线（单击一键放置关键支撑阻力价位横线）" data-i18n-title="fundDetailStockUiHorizontalHint">
+                      <svg class="svg-icon" aria-hidden="true"><use href="#i-hline" /></svg>
+                      <span><span data-i18n="fundTrendsUi22">水平线</span></span>
+                    </button>
+                    <button class="tb-btn sd-tool-btn" data-tool="channel" title="通道线（两点基线 + 第三点平行线）" data-i18n-title="fundDetailStockUiChannelHint">
+                      <svg class="svg-icon" aria-hidden="true"><path d="M3 17l13-13M8 21l13-13" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+                      <span><span data-i18n="fundDetailStockUiChannel">通道线</span></span>
+                    </button>
+                    <button class="tb-btn sd-tool-btn" data-tool="polyline" title="折线（连续点击连线，双击或回车结束）" data-i18n-title="fundDetailStockUiPolylineHint">
+                      <svg class="svg-icon" aria-hidden="true"><path d="M3 18l5-10 6 7 7-11" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                      <span><span data-i18n="fundDetailStockUiPolyline">折线</span></span>
+                    </button>
+                  </div>
+
+                  <div class="tb-sep"></div>
+
+                  <!-- 组3：形态区间 -->
+                  <div class="sd-draw-group">
+                    <button class="tb-btn sd-tool-btn" data-tool="rectangle" title="矩形箱体（两点对角框选震荡盘整区间）" data-i18n-title="fundDetailStockUiBoxHint">
+                      <svg class="svg-icon" aria-hidden="true"><use href="#i-rect" /></svg>
+                      <span><span data-i18n="fundDetailStockUiBox">箱体</span></span>
+                    </button>
+                    <button class="tb-btn sd-tool-btn" data-tool="circle" title="异动圆（两点定圆，圈定形态异动）" data-i18n-title="fundDetailStockUiEllipseHint">
+                      <svg class="svg-icon" aria-hidden="true"><ellipse cx="12" cy="12" rx="9" ry="7" fill="none" stroke="currentColor" stroke-width="1.8"/></svg>
+                      <span><span data-i18n="fundDetailStockUiEllipse">椭圆</span></span>
+                    </button>
+                  </div>
+
+                  <div class="tb-sep"></div>
+
+                  <!-- 组4：比例量度 -->
+                  <div class="sd-draw-group">
+                    <button class="tb-btn sd-tool-btn" data-tool="fibonacci" title="黄金分割线（高低极值点，自动计算0.236/0.382/0.5/0.618/0.786）" data-i18n-title="fundDetailStockUiFibonacciHint">
+                      <svg class="svg-icon" aria-hidden="true"><path d="M3 5h18M3 9h18M3 12h18M3 15h18M3 19h18" stroke="currentColor" stroke-width="1.4"/></svg>
+                      <span><span data-i18n="fundDetailStockUiFibonacci">黄金分割</span></span>
+                    </button>
+                    <button class="tb-btn sd-tool-btn" data-tool="measure" title="价格标尺（测算区间涨跌额、涨跌幅%及K线根数）" data-i18n-title="fundDetailStockUiMeasureHint">
+                      <svg class="svg-icon" aria-hidden="true"><path d="M4 8h16v8H4zM8 8v3M12 8v5M16 8v3" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
+                      <span><span data-i18n="fundDetailStockUiMeasure">标尺</span></span>
+                    </button>
+                  </div>
+
+                  <div class="tb-sep"></div>
+
+                  <!-- 组5：文字标注 -->
+                  <div class="sd-draw-group">
+                    <button class="tb-btn sd-tool-btn" data-tool="text" title="文字便签（在K线图上任意位置放置备忘文字）" data-i18n-title="fundDetailStockUiTextHint">
+                      <span style="font-weight:900;font-size:var(--natives-fs-secondary);font-family:serif;">Aa</span>
+                      <span><span data-i18n="fundMarketUiAnnotation">便签</span></span>
+                    </button>
+                  </div>
+
+                  <div class="tb-sep"></div>
+
+                  <!-- 组6：辅助开关 -->
+                  <div class="sd-draw-group">
+                    <button class="tb-btn sd-toggle-btn" id="sd-draw-magnet" title="轻微辅助吸附（开启时轻触吸附K线极值，再次点击切换强磁吸）" data-i18n-title="fundDetailStockUiSnapHint">
+                      <svg class="svg-icon" aria-hidden="true"><use href="#i-magnet" /></svg>
+                      <span><span data-i18n="fundDetailStockUiSnap">磁吸</span></span>
+                    </button>
+                    <button class="tb-btn sd-toggle-btn" id="sd-draw-lock" title="锁定所有划线（禁止移动/拖拽）" data-i18n-title="fundDetailStockUiLockHint">
+                      <svg class="svg-icon" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M8 11V7a4 4 0 018 0v4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+                      <span><span data-i18n="fundDetailStockUiLock">锁定</span></span>
+                    </button>
+                  </div>
+
+                  <div class="tb-sep"></div>
+
+                  <!-- 组7：调色与样式 -->
+                  <div class="sd-draw-group">
+                    <div class="sd-palette-wrap">
+                      <button class="tb-btn sd-palette-btn" id="sd-palette-btn" title="划线颜色与线宽设置" aria-haspopup="true" aria-expanded="false" data-i18n-title="fundDetailStockUiStyleHint">
+                        <span class="sd-color-preview" id="sd-color-preview" style="background:#38bdf8"></span>
+                        <span><span data-i18n="fundDetailStockUiStyle">调色</span></span>
+                        <svg class="svg-icon" style="width:8px;height:8px;margin-left:1px" aria-hidden="true"><path d="M4 6l4 4 4-4" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+                      </button>
+                      <div class="sd-palette-pop" id="sd-palette-pop" popover>
+                        <div class="sd-pop-title"><span data-i18n="fundDetailStockUiDrawingColor">划线颜色</span></div>
+                        <div class="sd-color-grid">
+                          <button type="button" class="sd-c-dot active" data-color="#38bdf8" style="background:#38bdf8" title="天蓝(默认)" data-i18n-title="fundDetailStockUiDefaultBlue" data-i18n-aria-label="fundDetailStockUiDefaultBlue"></button>
+                          <button type="button" class="sd-c-dot" data-color="#f59e0b" style="background:#f59e0b" title="琥珀金" data-i18n-title="fundDetailStockUiAmber" data-i18n-aria-label="fundDetailStockUiAmber"></button>
+                          <button type="button" class="sd-c-dot" data-color="#cdf24b" style="background:#cdf24b" title="Volt绿" data-i18n-title="fundDetailStockUiVoltGreen" data-i18n-aria-label="fundDetailStockUiVoltGreen"></button>
+                          <button type="button" class="sd-c-dot" data-color="#ff2d2d" style="background:#ff2d2d" title="看涨红" data-i18n-title="fundDetailStockUiUpRed" data-i18n-aria-label="fundDetailStockUiUpRed"></button>
+                          <button type="button" class="sd-c-dot" data-color="#00b35c" style="background:#00b35c" title="看跌绿" data-i18n-title="fundDetailStockUiDownGreen" data-i18n-aria-label="fundDetailStockUiDownGreen"></button>
+                          <button type="button" class="sd-c-dot" data-color="#e040fb" style="background:#e040fb" title="紫罗兰" data-i18n-title="fundDetailStockUiViolet" data-i18n-aria-label="fundDetailStockUiViolet"></button>
+                          <button type="button" class="sd-c-dot" data-color="#ffffff" style="background:#ffffff" title="纯白" data-i18n-title="fundDetailStockUiWhite" data-i18n-aria-label="fundDetailStockUiWhite"></button>
+                        </div>
+                        <div class="sd-pop-title" style="margin-top:8px"><span data-i18n="fundMarketUiLineWidth">线条粗细</span></div>
+                        <div class="sd-line-opts">
+                          <button class="sd-opt-btn active" data-width="1.8"><span data-i18n="fundDetailStockUiThinLine">细线</span></button>
+                          <button class="sd-opt-btn" data-width="3.0"><span data-i18n="fundDetailStockUiThickLine">粗线</span></button>
+                        </div>
+                        <div class="sd-pop-title" style="margin-top:8px"><span data-i18n="fundMarketUiLineStyle">线条类型</span></div>
+                        <div class="sd-line-opts">
+                          <button class="sd-opt-btn sd-dash-btn active" data-dash="solid" title="实线" data-i18n-title="fundDetailStockUiSolidLine">
+                            <svg viewBox="0 0 26 6" aria-hidden="true"><line x1="1" y1="3" x2="25" y2="3" stroke="currentColor" stroke-width="2"/></svg>
+                            <span><span data-i18n="fundDetailStockUiSolidLine">实线</span></span>
+                          </button>
+                          <button class="sd-opt-btn sd-dash-btn" data-dash="dashed-dense" title="短虚线（间隔密）" data-i18n-title="fundDetailStockUiDenseDashHint">
+                            <svg viewBox="0 0 26 6" aria-hidden="true"><line x1="1" y1="3" x2="25" y2="3" stroke="currentColor" stroke-width="2" stroke-dasharray="2 2"/></svg>
+                            <span><span data-i18n="fundDetailStockUiDenseDash">短虚线</span></span>
+                          </button>
+                          <button class="sd-opt-btn sd-dash-btn" data-dash="dashed" title="常规虚线" data-i18n-title="fundDetailStockUiDashHint">
+                            <svg viewBox="0 0 26 6" aria-hidden="true"><line x1="1" y1="3" x2="25" y2="3" stroke="currentColor" stroke-width="2" stroke-dasharray="4 3"/></svg>
+                            <span><span data-i18n="fundDetailStockUiDash">虚线</span></span>
+                          </button>
+                          <button class="sd-opt-btn sd-dash-btn" data-dash="dashed-sparse" title="长虚线（间隔疏）" data-i18n-title="fundDetailStockUiSparseDashHint">
+                            <svg viewBox="0 0 26 6" aria-hidden="true"><line x1="1" y1="3" x2="25" y2="3" stroke="currentColor" stroke-width="2" stroke-dasharray="7 4"/></svg>
+                            <span><span data-i18n="fundDetailStockUiSparseDash">长虚线</span></span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <!-- 弹性占位符 -->
+                  <div class="sd-toolbar-spacer"></div>
+
+                  <!-- 组8：动作与清理 -->
+                  <div class="sd-draw-group sd-ops-group">
+                    <button class="tb-btn sd-act-btn" id="sd-draw-undo" title="撤销上一次划线" data-i18n-title="fundDetailStockUiUndoHint">
+                      <svg class="svg-icon" aria-hidden="true"><path d="M9 14L4 9l5-5M4 9h11a5 5 0 015 5v3" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                      <span><span data-i18n="fundDetailStockUiUndo">撤销</span></span>
+                    </button>
+                    <button class="tb-btn sd-act-btn" id="sd-draw-delete" title="删除选中划线 (Delete)" data-i18n-title="fundDetailStockUiDeleteHint">
+                      <svg class="svg-icon" aria-hidden="true"><use href="#i-trash" /></svg>
+                      <span><span data-i18n="fundTrendsUi25">删除</span></span>
+                    </button>
+                    <button class="tb-btn sd-act-btn sd-clear-btn" id="sd-draw-clear-all" title="清空当前标的全部划线" data-i18n-title="fundDetailStockUiClearHint">
+                      <span><span data-i18n="fundTrendsUi9">清空</span></span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 图表主舞台：ECharts 容器池 -->
+              <div class="sd-chart-stage">
+                <!-- 1. 分时走势区 -->
+                <div id="sd-minute-chart" style="width:100%;flex:1;min-height:160px;"></div>
+                <div id="sd-minute-vol" style="width:100%;height:80px;flex-shrink:0;"></div>
+
+                <!-- 2. K 线走势区 -->
+                <div id="sd-kline-chart" style="width:100%;flex:1;min-height:160px;display:none;"></div>
+                <div id="sd-volume-chart" style="width:100%;height:80px;flex-shrink:0;display:none;"></div>
+
+                <!-- 3. 副图技术指标容器 -->
+                <div id="sd-indicator-chart" style="width:100%;height:80px;flex-shrink:0;display:none;"></div>
+
+                <!-- 加载菊花与悬浮提示 -->
+                <div class="loading-overlay" id="sd-loading" style="display:none;"><div class="spinner"></div></div>
+
+                <!-- 行情加载异常与重试提示 -->
+                <div class="sd-chart-error" id="sd-chart-error" style="display:none;">
+                  <span class="sd-error-text" id="sd-error-text"><span data-i18n="fundDetailStockUiLoadTimeout">数据加载超时</span></span>
+                  <button class="sd-retry-btn" id="sd-retry-btn"><span data-i18n="fundDetailStockUiRetry">点击重试</span></button>
+                </div>
+
+                <!-- 内嵌便签输入框（点击便签工具放置时即时弹出，回车保存，彻底取代原生 window.prompt） -->
+                <div class="sd-inline-text-pop" id="sd-inline-text-pop" style="display:none;">
+                  <input type="text" id="sd-itp-input" placeholder="输入便签文字，按 Enter 完成..." maxlength="25" autocomplete="off"  data-i18n-placeholder="fundDetailStockUiNoteHint"/>
+                  <button class="sd-itp-btn" id="sd-itp-ok"><span data-i18n="fundDetailStockUiConfirm">确定</span></button>
+                  <button class="sd-itp-btn sd-itp-cancel" id="sd-itp-cancel"><span data-i18n="fundDetailStockUiCancel">取消</span></button>
+                </div>
+
+                <!-- 框选局部放大浮动按钮：拖拽画框时出现，点击切换至局部 K 线 -->
+                <div class="sd-box-zoom-prompt" id="sd-box-zoom-prompt" style="display:none;">
+                  <button class="sd-bzp-btn" id="sd-bzp-btn" title="将 K 线放大切换至该区间" data-i18n-title="fundDetailStockUiZoomRangeHint">
+                    <svg class="svg-icon" style="width:12px;height:12px;" aria-hidden="true"><use href="#i-bolt"/></svg><span data-i18n="fundMarketUiViewThisRange">查看这部分</span></button>
+                  <button class="sd-bzp-close" id="sd-bzp-close" title="关闭提示" data-i18n-title="fundDetailStockUiCloseHint">&times;</button>
+                </div>
+
+                <!-- 恢复全部视窗浮动按钮 -->
+                <button class="sd-zoom-reset-btn" id="sd-zoom-reset-btn" style="display:none;" title="恢复显示全部 K 线" data-i18n-title="fundDetailStockUiResetZoomHint">
+                  <svg class="svg-icon" style="width:11px;height:11px;" aria-hidden="true"><use href="#i-refresh"/></svg><span data-i18n="fundMarketUiShowAllAvailableBars">恢复全部 K 线</span></button>
+
+                <!-- 划线右键进入的编辑浮层：设置线条名称、粗细、颜色及删除 -->
+                <div class="sd-line-edit-pop" id="sd-line-edit-pop" style="display:none;">
+                  <div class="sd-lep-head">
+                    <span class="sd-lep-title"><span data-i18n="fundDetailStockUiDrawingProperties">设置划线属性</span></span>
+                    <button class="sd-lep-close" id="sd-lep-close">&times;</button>
+                  </div>
+                  <div class="sd-lep-body">
+                    <div class="sd-lep-row">
+                      <label><span data-i18n="fundMarketUiNameNote">名称备注</span></label>
+                      <input type="text" id="sd-lep-name" placeholder="如: 支撑线 / 突破位" maxlength="20" autocomplete="off"  data-i18n-placeholder="fundDetailStockUiDrawingNameHint"/>
+                    </div>
+                    <div class="sd-lep-row">
+                      <label><span data-i18n="fundDetailStockUiLineColor">线条颜色</span></label>
+                      <div class="sd-color-grid" id="sd-lep-colors">
+                        <button type="button" class="sd-c-dot" data-color="#38bdf8" style="background:#38bdf8" title="天蓝" data-i18n-title="fundDetailStockUiBlue" data-i18n-aria-label="fundDetailStockUiBlue"></button>
+                        <button type="button" class="sd-c-dot" data-color="#f59e0b" style="background:#f59e0b" title="琥珀金" data-i18n-title="fundDetailStockUiAmber" data-i18n-aria-label="fundDetailStockUiAmber"></button>
+                        <button type="button" class="sd-c-dot" data-color="#cdf24b" style="background:#cdf24b" title="Volt绿" data-i18n-title="fundDetailStockUiVoltGreen" data-i18n-aria-label="fundDetailStockUiVoltGreen"></button>
+                        <button type="button" class="sd-c-dot" data-color="#ff2d2d" style="background:#ff2d2d" title="看涨红" data-i18n-title="fundDetailStockUiUpRed" data-i18n-aria-label="fundDetailStockUiUpRed"></button>
+                        <button type="button" class="sd-c-dot" data-color="#00b35c" style="background:#00b35c" title="看跌绿" data-i18n-title="fundDetailStockUiDownGreen" data-i18n-aria-label="fundDetailStockUiDownGreen"></button>
+                        <button type="button" class="sd-c-dot" data-color="#e040fb" style="background:#e040fb" title="紫罗兰" data-i18n-title="fundDetailStockUiViolet" data-i18n-aria-label="fundDetailStockUiViolet"></button>
+                        <button type="button" class="sd-c-dot" data-color="#ffffff" style="background:#ffffff" title="纯白" data-i18n-title="fundDetailStockUiWhite" data-i18n-aria-label="fundDetailStockUiWhite"></button>
+                      </div>
+                    </div>
+                    <div class="sd-lep-row">
+                      <label><span data-i18n="fundMarketUiLineWidth">线条粗细</span></label>
+                      <div class="sd-line-opts" id="sd-lep-widths">
+                        <button class="sd-opt-btn" data-width="1.2"><span data-i18n="fundDetailStockUiThinWidth">细(1px)</span></button>
+                        <button class="sd-opt-btn active" data-width="2.0"><span data-i18n="fundDetailStockUiMediumWidth">中(2px)</span></button>
+                        <button class="sd-opt-btn" data-width="3.5"><span data-i18n="fundDetailStockUiThickWidth">粗(4px)</span></button>
+                      </div>
+                    </div>
+                    <div class="sd-lep-row">
+                      <label><span data-i18n="fundMarketUiLineStyle">线条类型</span></label>
+                      <div class="sd-line-opts" id="sd-lep-styles">
+                        <button class="sd-opt-btn sd-dash-btn active" data-dash="solid" title="实线" data-i18n-title="fundDetailStockUiSolidLine">
+                          <svg viewBox="0 0 26 6" aria-hidden="true"><line x1="1" y1="3" x2="25" y2="3" stroke="currentColor" stroke-width="2"/></svg>
+                          <span><span data-i18n="fundDetailStockUiSolidLine">实线</span></span>
+                        </button>
+                        <button class="sd-opt-btn sd-dash-btn" data-dash="dashed-dense" title="短虚线（间隔密）" data-i18n-title="fundDetailStockUiDenseDashHint">
+                          <svg viewBox="0 0 26 6" aria-hidden="true"><line x1="1" y1="3" x2="25" y2="3" stroke="currentColor" stroke-width="2" stroke-dasharray="2 2"/></svg>
+                          <span><span data-i18n="fundDetailStockUiDenseDash">短虚线</span></span>
+                        </button>
+                        <button class="sd-opt-btn sd-dash-btn" data-dash="dashed" title="常规虚线" data-i18n-title="fundDetailStockUiDashHint">
+                          <svg viewBox="0 0 26 6" aria-hidden="true"><line x1="1" y1="3" x2="25" y2="3" stroke="currentColor" stroke-width="2" stroke-dasharray="4 3"/></svg>
+                          <span><span data-i18n="fundDetailStockUiDash">虚线</span></span>
+                        </button>
+                        <button class="sd-opt-btn sd-dash-btn" data-dash="dashed-sparse" title="长虚线（间隔疏）" data-i18n-title="fundDetailStockUiSparseDashHint">
+                          <svg viewBox="0 0 26 6" aria-hidden="true"><line x1="1" y1="3" x2="25" y2="3" stroke="currentColor" stroke-width="2" stroke-dasharray="7 4"/></svg>
+                          <span><span data-i18n="fundDetailStockUiSparseDash">长虚线</span></span>
+                        </button>
+                      </div>
+                    </div>
+                    <div class="sd-lep-foot">
+                      <button class="btn btn-accent" id="sd-lep-save" style="font-size:var(--natives-fs-secondary);padding:3px 10px;"><span data-i18n="fundDetailStockUiDone">完成</span></button>
+                      <button class="btn" id="sd-lep-del" style="font-size:var(--natives-fs-secondary);padding:3px 10px;color:var(--color-up);"><span data-i18n="fundDetailStockUiDeleteLine">删除此线</span></button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- 拖拽调宽分隔条：拖动调整右侧看板宽度 -->
+            <div class="sd-side-resizer" id="sd-side-resizer" role="separator" aria-orientation="vertical" tabindex="0" title="拖动调整看板宽度" data-i18n-title="fundDetailStockUiResizePanelHint"></div>
+
+            <!-- ===== 右侧：1:1 复刻原始 Dashboard 卡片面板（无 AI 模块） ===== -->
+            <div class="sd-right-panel">
+              <!-- 1. 标的报价卡 -->
+              <div class="side-card quote-summary-card">
+                <div class="symbol-title-row">
+                  <div>
+                    <span class="symbol-name" id="sd-dash-name">–</span>
+                    <span class="symbol-code" id="sd-dash-code">–</span>
+                  </div>
+                  <div>
+                    <button class="btn" id="sd-btn-dash-fav"><svg class="svg-icon" aria-hidden="true"><use href="#i-star" /></svg><span data-i18n="fundTrendsUi4">自选</span></button>
+                  </div>
+                </div>
+                <div class="price-large-row">
+                  <span class="price-large up" id="sd-dash-price">–</span>
+                  <span class="up" id="sd-dash-change">–</span>
+                </div>
+                <!-- 涨跌停与均价辅助速览 -->
+                <div class="sd-limit-row" style="display:flex;gap:12px;margin-top:6px;font-size:var(--natives-fs-secondary);color:var(--natives-text-muted);">
+                  <span><span data-i18n="fundDetailStockUiLimitUp">涨停:</span> <b class="up" id="sd-limit-up">–</b></span>
+                  <span><span data-i18n="fundDetailStockUiLimitDown">跌停:</span> <b class="down" id="sd-limit-down">–</b></span>
+                  <span><span data-i18n="fundDetailStockUiAveragePrice">均价:</span> <b id="sd-avg-price">–</b></span>
+                </div>
+              </div>
+
+              <!-- 2. 公司市值与估值股本卡片（全量展开） -->
+              <div class="side-card valuation-card">
+                <button type="button" class="side-card-header" aria-expanded="true"><span data-i18n="fundDetailStockUiValuation">市值与估值股本</span><span class="sc-arrow">▼</span></button>
+                <div class="metrics-grid">
+                  <div class="metric-box"><span class="metric-label"><span data-i18n="fundMarketUiMarketCap100Million">总市值(亿)</span></span><span class="metric-val" id="sd-v-mktcap">-</span></div>
+                  <div class="metric-box"><span class="metric-label"><span data-i18n="fundMarketUiFreeFloatCap100Million">流通市值(亿)</span></span><span class="metric-val" id="sd-v-circ-mktcap">-</span></div>
+                  <div class="metric-box"><span class="metric-label"><span data-i18n="fundMarketUiPEDynamic">市盈率(PE动)</span></span><span class="metric-val" id="sd-v-pe">-</span></div>
+                  <div class="metric-box"><span class="metric-label"><span data-i18n="fundMarketUiPB">市净率(PB)</span></span><span class="metric-val" id="sd-v-pb">-</span></div>
+                  <div class="metric-box"><span class="metric-label"><span data-i18n="fundMarketUiDividendYield">股息率%</span></span><span class="metric-val" id="sd-v-div">-</span></div>
+                  <div class="metric-box"><span class="metric-label"><span data-i18n="fundMarketUiFreeFloatShares100Million">流通股本(亿)</span></span><span class="metric-val" id="sd-v-circ-shares">-</span></div>
+                  <div class="metric-box"><span class="metric-label"><span data-i18n="fundMarketUiShares100Million">总股本(亿)</span></span><span class="metric-val" id="sd-v-total-shares">-</span></div>
+                  <div class="metric-box"><span class="metric-label"><span data-i18n="fundMarketUiAveragePrice">当日均价</span></span><span class="metric-val" id="sd-v-avg">-</span></div>
+                </div>
+              </div>
+
+              <!-- 3. 五档盘口 & 深度力量卡片（全量展开） -->
+              <div class="side-card depth-card">
+                <button type="button" class="side-card-header" aria-expanded="true"><span data-i18n="fundDetailStockUiDepth">五档盘口与深度力量</span><span class="sc-arrow">▼</span></button>
+                <div class="depth-grid">
+                  <div class="depth-side" id="sd-depth-asks">
+                    <div class="depth-row"><span class="depth-label"><span data-i18n="fundMarketUiAsk5">卖五</span></span><span class="num down">-</span><span class="num">-</span></div>
+                    <div class="depth-row"><span class="depth-label"><span data-i18n="fundMarketUiAsk4">卖四</span></span><span class="num down">-</span><span class="num">-</span></div>
+                    <div class="depth-row"><span class="depth-label"><span data-i18n="fundMarketUiAsk3">卖三</span></span><span class="num down">-</span><span class="num">-</span></div>
+                    <div class="depth-row"><span class="depth-label"><span data-i18n="fundMarketUiAsk2">卖二</span></span><span class="num down">-</span><span class="num">-</span></div>
+                    <div class="depth-row"><span class="depth-label"><span data-i18n="fundMarketUiAsk1">卖一</span></span><span class="num down">-</span><span class="num">-</span></div>
+                  </div>
+                  <div class="depth-side" id="sd-depth-bids">
+                    <div class="depth-row"><span class="depth-label"><span data-i18n="fundMarketUiBid1">买一</span></span><span class="num up">-</span><span class="num">-</span></div>
+                    <div class="depth-row"><span class="depth-label"><span data-i18n="fundMarketUiBid2">买二</span></span><span class="num up">-</span><span class="num">-</span></div>
+                    <div class="depth-row"><span class="depth-label"><span data-i18n="fundMarketUiBid3">买三</span></span><span class="num up">-</span><span class="num">-</span></div>
+                    <div class="depth-row"><span class="depth-label"><span data-i18n="fundMarketUiBid4">买四</span></span><span class="num up">-</span><span class="num">-</span></div>
+                    <div class="depth-row"><span class="depth-label"><span data-i18n="fundMarketUiBid5">买五</span></span><span class="num up">-</span><span class="num">-</span></div>
+                  </div>
+                </div>
+                <div class="power-bar-wrap">
+                  <div class="power-bar-title">
+                    <span><span data-i18n="fundDetailStockUiBids">买盘:</span> <b id="sd-bid-vol-text">0</b></span>
+                    <span><span data-i18n="fundDetailStockUiDepthRatio">力量比:</span> <b id="sd-bid-ratio-text">50%</b></span>
+                    <span><span data-i18n="fundDetailStockUiAsks">卖盘:</span> <b id="sd-ask-vol-text">0</b></span>
+                  </div>
+                  <div class="power-bar">
+                    <div class="power-bar-fill" id="sd-power-bar-fill" style="width: 50%;"></div>
+                  </div>
+                </div>
+              </div>
+
+              <!-- 4. 核心指标简况网格卡片（全量展开） -->
+              <div class="side-card metrics-card">
+                <button type="button" class="side-card-header" aria-expanded="true"><span data-i18n="fundMarketUiOrderBookMetrics">盘口关键指标</span><span class="sc-arrow">▼</span></button>
+                <div class="metrics-grid">
+                  <div class="metric-box"><span class="metric-label"><span data-i18n="fundCharthigh">最高</span></span><span class="metric-val" id="sd-m-high">-</span></div>
+                  <div class="metric-box"><span class="metric-label"><span data-i18n="fundChartlow">最低</span></span><span class="metric-val" id="sd-m-low">-</span></div>
+                  <div class="metric-box"><span class="metric-label"><span data-i18n="fundMarketUiOpen">今开</span></span><span class="metric-val" id="sd-m-open">-</span></div>
+                  <div class="metric-box"><span class="metric-label"><span data-i18n="fundMarketUiPreviousClose">昨收</span></span><span class="metric-val" id="sd-m-prev">-</span></div>
+                  <div class="metric-box"><span class="metric-label"><span data-i18n="fundMarketUiTurnover100Million">成交额(亿)</span></span><span class="metric-val" id="sd-m-amount">-</span></div>
+                  <div class="metric-box"><span class="metric-label"><span data-i18n="fundMarketUiTurnover">换手%</span></span><span class="metric-val" id="sd-m-turnover">-</span></div>
+                  <div class="metric-box"><span class="metric-label"><span data-i18n="fundMarketUiVolumeRatio">量比</span></span><span class="metric-val" id="sd-m-vol-ratio">-</span></div>
+                  <div class="metric-box"><span class="metric-label"><span data-i18n="fundMarketUiAmplitude">振幅%</span></span><span class="metric-val" id="sd-m-amplitude">-</span></div>
+                  <div class="metric-box"><span class="metric-label"><span data-i18n="fundMarketUiOrderImbalance">委比%</span></span><span class="metric-val" id="sd-m-weibi">-</span></div>
+                  <div class="metric-box"><span class="metric-label"><span data-i18n="fundMarketUiOrderImbalanceLots">委差(手)</span></span><span class="metric-val" id="sd-m-weicha">-</span></div>
+                </div>
+              </div>
+
+              <!-- 5. 标的异动预警卡片 -->
+              <div class="side-card alert-card">
+                <button type="button" class="side-card-header" aria-expanded="true"><span data-i18n="fundDetailStockUiAlerts">标的异动预警 (Alerts)</span><span class="sc-arrow">▼</span></button>
+                <div class="alert-body">
+                  <div class="alert-controls">
+                    <span><span data-i18n="fundDetailStockUiAlertThreshold">涨跌幅突破 ±</span></span>
+                    <input type="number" id="sd-alert-threshold" step="0.5" value="3.0">
+                    <span>%</span>
+                    <button class="btn btn-accent" id="sd-btn-set-alert"><span data-i18n="fundMarketUiSetAlert">设预警</span></button>
+                  </div>
+                  <div style="font-size:var(--natives-fs-secondary); color: var(--natives-text-muted); margin-top: 6px;">
+                    <span data-i18n="fundDetailStockUiStatus">状态:</span> <span id="sd-alert-status" class="up"><span data-i18n="fundMarketUiReady">已就绪</span></span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>

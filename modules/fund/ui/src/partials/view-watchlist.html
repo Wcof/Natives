@@ -1,0 +1,74 @@
+      <!-- 1. 自选模块 (Overview) -->
+      <section id="view-watchlist">
+        <header class="investment-page-head"><div><h2 data-i18n="fundLedgerNavWatchlist">自选行情</h2><p data-i18n="fundWatchlistScope">默认展示全部自选，也可按分组筛选；不计入持仓资产。</p></div></header>
+        <!-- 核心 KPI 4 宫格卡片 (token-monitor 1:1 复刻) -->
+        <details class="card watchlist-monitor"><summary data-i18n="fundWatchMonitorSummary"></summary><div class="kpi-cards-grid" id="kpi-cards">
+          <div class="kpi-card">
+            <div class="kpi-card-title"><span><span data-i18n="fundMarketUiWatchlistInstruments">监控标的数</span></span><span id="kpi-up-down"><span data-i18n="fundMarketUi0Up0Down">0涨 / 0跌</span></span></div>
+            <div class="kpi-card-value" id="kpi-total-count">0</div>
+            <div class="kpi-sub" id="kpi-bull-bear-ratio">–</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-card-title"><span><span data-i18n="fundMarketUiTopGainer">领涨龙头</span></span><span class="up" id="kpi-top-gainer-pct">–</span></div>
+            <div class="kpi-card-value up" id="kpi-top-gainer-name">–</div>
+            <div class="kpi-sub" id="kpi-top-gainer-price">现价: –</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-card-title"><span><span data-i18n="fundMarketUiTopLoser">领跌标的</span></span><span class="down" id="kpi-top-loser-pct">–</span></div>
+            <div class="kpi-card-value down" id="kpi-top-loser-name">–</div>
+            <div class="kpi-sub" id="kpi-top-loser-price">现价: –</div>
+          </div>
+          <div class="kpi-card">
+            <div class="kpi-card-title"><span><span data-i18n="fundMarketUiTriggeredAlerts">异动预警总数</span></span><span class="up" id="kpi-alerts-count"><span data-i18n="fundMarketUi0Events">0 次</span></span></div>
+            <div class="kpi-card-value" id="kpi-active-alerts">0</div>
+            <div class="kpi-sub" data-i18n="fundHomeNotificationScope"></div>
+          </div>
+        </div>
+
+        </details>
+        <div class="watchlist-main">
+        <div class="watchlist-toolbar">
+          <div class="group-tabs" id="watchlist-groups" role="tablist" data-i18n-aria-label="fundWatchlistGroups"></div>
+          <div class="watchlist-tools">
+          <div class="watchlist-group-actions">
+          <button class="btn" type="button" id="watchlist-create-group" data-i18n="fundHomeAddGroup">新增分组</button>
+          <button class="btn" type="button" id="watchlist-manage-group" data-i18n="fundWatchManage">管理分组</button>
+          <label><input type="checkbox" id="watchlist-detail-columns"><span data-i18n="fundWatchDetailedColumns">详细指标</span></label>
+          </div>
+          <div class="search-box">
+            <input type="text" id="add-symbol-input" data-i18n-placeholder="fundWatchSearchPlaceholder" data-i18n-aria-label="fundWatchSearchPlaceholder">
+            <button class="btn btn-accent" id="add-symbol-btn" data-i18n="fundLedgerWatchAdd">添加自选</button>
+          </div>
+          </div>
+        </div>
+        <div id="add-symbol-msg" style="font-size:var(--natives-fs-secondary); min-height:14px; margin-bottom:4px;"></div>
+        <p id="watchlist-status" role="status"></p>
+        <div class="watchlist-selection">
+          <label><input type="checkbox" id="watchlist-select-all"><span data-i18n="fundWatchSelectAll">全选当前列表</span></label>
+          <span id="watchlist-selection-count" role="status"></span>
+          <button type="button" class="btn" id="watchlist-move-selected" data-i18n="fundWatchBulkMove" disabled>批量移动分组</button>
+          <button type="button" class="btn" id="watchlist-clear-selected" data-i18n="fundWatchClearSelection" disabled>清除选择</button>
+        </div>
+        <div class="home-table-scroll" tabindex="0"><table class="data-table" id="watchlist-table">
+          <thead>
+            <tr>
+              <th class="sortable" data-key="symbol"><span data-i18n="fundLedgerColCode">代码</span></th>
+              <th class="sortable" data-key="name"><span data-i18n="fundWatchNameColumn">标的名称</span></th>
+              <th class="num sortable" data-key="price"><span data-i18n="fundWatchPriceColumn">最新价</span></th>
+              <th class="num sortable" data-key="changePct"><span data-i18n="fundWatchChangeColumn">涨跌幅</span></th>
+              <th class="num sortable" data-key="change"><span data-i18n="fundWatchChangeAmountColumn">涨跌额</span></th>
+              <th class="num sortable" data-key="speed"><span data-i18n="fundMarketSpeed">涨速</span></th>
+              <th><span data-i18n="fundLedgerNavTrends">微缩走势</span></th>
+              <th class="num sortable" data-key="volume"><span data-i18n="fundMarketUiVolumeLots">成交量(手)</span></th>
+              <th class="num sortable" data-key="turnover"><span data-i18n="fundMarketUiTurnover">换手%</span></th>
+              <th class="num sortable" data-key="amplitude"><span data-i18n="fundMarketUiAmplitude">振幅%</span></th>
+              <th class="num sortable" data-key="volumeRatio"><span data-i18n="fundMarketUiVolumeRatio">量比</span></th>
+              <th><span data-i18n="fundWatchAlertColumn">预警</span></th>
+              <th data-i18n="fundWatchGroupsColumn"></th>
+              <th><span data-i18n="fundWatchActionsColumn">操作</span></th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table></div>
+          </div><!-- /watchlist-main -->
+      </section>

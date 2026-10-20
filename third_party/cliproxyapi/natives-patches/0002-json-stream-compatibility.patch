@@ -1,0 +1,140 @@
+.../runtime/executor/openai_compat_executor.go     |  8 ++++
+ .../runtime/executor/openai_compat_json_stream.go  | 45 ++++++++++++++++++++++
+ 2 files changed, 53 insertions(+)
+
+diff --git a/internal/runtime/executor/openai_compat_executor.go b/internal/runtime/executor/openai_compat_executor.go
+index b63f125..7b97f46 100644
+--- a/internal/runtime/executor/openai_compat_executor.go
++++ b/internal/runtime/executor/openai_compat_executor.go
+@@ -427,6 +427,14 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
+ 		err = newOpenAICompatStatusError(httpResp.StatusCode, httpResp.Header, b)
+ 		return nil, err
+ 	}
++	// Some compatible providers ignore stream and return one JSON completion.
++	if responseFormat == sdktranslator.FormatOpenAI && strings.Contains(strings.ToLower(httpResp.Header.Get("Content-Type")), "application/json") {
++		body, convertErr := openAICompatJSONStream(httpResp.Body)
++		if convertErr != nil {
++			return nil, convertErr
++		}
++		httpResp.Body = io.NopCloser(bytes.NewReader(body))
++	}
+ 	out := make(chan cliproxyexecutor.StreamChunk)
+ 	go func() {
+ 		defer close(out)
+diff --git a/internal/runtime/executor/openai_compat_json_stream.go b/internal/runtime/executor/openai_compat_json_stream.go
+new file mode 100644
+index 0000000..9124e35
+--- /dev/null
++++ b/internal/runtime/executor/openai_compat_json_stream.go
+@@ -0,0 +1,45 @@
++package executor
++
++import (
++	"encoding/json"
++	"fmt"
++	"io"
++)
++
++// Convert an ignored stream request without replaying or billing a second request.
++func openAICompatJSONStream(body io.ReadCloser) ([]byte, error) {
++	defer body.Close()
++	data, err := io.ReadAll(io.LimitReader(body, 1024*1024+1))
++	if err != nil {
++		return nil, err
++	}
++	if len(data) > 1024*1024 {
++		return nil, fmt.Errorf("upstream completion exceeds stream conversion limit")
++	}
++	var completion map[string]any
++	if json.Unmarshal(data, &completion) != nil {
++		return nil, fmt.Errorf("invalid upstream JSON completion")
++	}
++	choices, ok := completion["choices"].([]any)
++	if !ok || len(choices) == 0 || len(choices) > 32 {
++		return nil, fmt.Errorf("upstream JSON completion has no usable choices")
++	}
++	for _, raw := range choices {
++		choice, ok := raw.(map[string]any)
++		if !ok {
++			return nil, fmt.Errorf("invalid upstream completion choice")
++		}
++		message, ok := choice["message"].(map[string]any)
++		if !ok {
++			return nil, fmt.Errorf("upstream completion has no message")
++		}
++		choice["delta"] = message
++		delete(choice, "message")
++	}
++	completion["object"] = "chat.completion.chunk"
++	data, err = json.Marshal(completion)
++	if err != nil {
++		return nil, err
++	}
++	return append(append([]byte("data: "), data...), []byte("\n\ndata: [DONE]\n\n")...), nil
++}
+
+Changes:
+
+internal/runtime/executor/openai_compat_executor.go
+  @@ -427,6 +427,14 @@ func (e *OpenAICompatExecutor) ExecuteStream(ctx context.Context, auth *cliproxy
+  +	// Some compatible providers ignore stream and return one JSON completion.
+  +	if responseFormat == sdktranslator.FormatOpenAI && strings.Contains(strings.ToLower(httpResp.Header.Get("Content-Type")), "application/json") {
+  +		body, convertErr := openAICompatJSONStream(httpResp.Body)
+  +		if convertErr != nil {
+  +			return nil, convertErr
+  +		}
+  +		httpResp.Body = io.NopCloser(bytes.NewReader(body))
+  +	}
+   	out := make(chan cliproxyexecutor.StreamChunk)
+   	go func() {
+   		defer close(out)
+  +8 -0
+
+internal/runtime/executor/openai_compat_json_stream.go
+  @@ -0,0 +1,45 @@
+  +package executor
+  +
+  +import (
+  +	"encoding/json"
+  +	"fmt"
+  +	"io"
+  +)
+  +
+  +// Convert an ignored stream request without replaying or billing a second request.
+  +func openAICompatJSONStream(body io.ReadCloser) ([]byte, error) {
+  +	defer body.Close()
+  +	data, err := io.ReadAll(io.LimitReader(body, 1024*1024+1))
+  +	if err != nil {
+  +		return nil, err
+  +	}
+  +	if len(data) > 1024*1024 {
+  +		return nil, fmt.Errorf("upstream completion exceeds stream conversion limit")
+  +	}
+  +	var completion map[string]any
+  +	if json.Unmarshal(data, &completion) != nil {
+  +		return nil, fmt.Errorf("invalid upstream JSON completion")
+  +	}
+  +	choices, ok := completion["choices"].([]any)
+  +	if !ok || len(choices) == 0 || len(choices) > 32 {
+  +		return nil, fmt.Errorf("upstream JSON completion has no usable choices")
+  +	}
+  +	for _, raw := range choices {
+  +		choice, ok := raw.(map[string]any)
+  +		if !ok {
+  +			return nil, fmt.Errorf("invalid upstream completion choice")
+  +		}
+  +		message, ok := choice["message"].(map[string]any)
+  +		if !ok {
+  +			return nil, fmt.Errorf("upstream completion has no message")
+  +		}
+  +		choice["delta"] = message
+  +		delete(choice, "message")
+  +	}
+  +	completion["object"] = "chat.completion.chunk"
+  +	data, err = json.Marshal(completion)
+  +	if err != nil {
+  +		return nil, err
+  +	}
+  +	return append(append([]byte("data: "), data...), []byte("\n\ndata: [DONE]\n\n")...), nil
+  +}
+  +45 -0

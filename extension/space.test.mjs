@@ -16,11 +16,11 @@ import { createSpaceDeleteModal } from './space-modal-delete.js';
 console.log('--- Space Plugin Registry & Modals Test ---');
 
 // 1. Check registry completeness and consistency
-assert.equal(WIDGET_KEYS.length, 32, 'Must have exactly 32 Chromium widgets (25 legacy + 7 independent AI components)');
+assert.equal(WIDGET_KEYS.length, 37, 'Must have exactly 37 widgets (25 legacy + 7 AI + 5 investment, ADR-0036)');
 assert.equal(BACKGROUND_KEYS.length, 9, 'Must have exactly 9 backgrounds');
 assert.equal(POSITIONS.length, 10, 'Must have 9-grid + free layout positions');
 
-assert.equal(Object.keys(widgetPlugins).length, 32, 'widgetPlugins must contain 32 entries');
+assert.equal(Object.keys(widgetPlugins).length, 37, 'widgetPlugins must contain 37 entries');
 assert.equal(Object.keys(backgroundPlugins).length, 9, 'backgroundPlugins must contain 9 entries');
 
 for (const key of WIDGET_KEYS) {
@@ -354,7 +354,7 @@ const initialSnapshot = {
     { id: 'w-alpha', key: 'widget/probe', enabled: true, configJson: { id: 'alpha' }, displayJson: { position: 'middleCentre' } },
     { id: 'w-beta', key: 'widget/probe', enabled: true, configJson: { id: 'beta' }, displayJson: { position: 'middleCentre' } },
     { id: 'w-gamma', key: 'widget/probe', enabled: true, configJson: { id: 'gamma' }, displayJson: { position: 'middleCentre' } },
-  ],
+  ].map((widget, order) => ({ ...widget, order })),
 };
 
 reorderDashboard.render(initialSnapshot, 'ws-1', () => {});
@@ -362,6 +362,12 @@ const middleCentreSlot = reorderHost.shadowRoot.querySelector('.middleCentre');
 assert.ok(middleCentreSlot, 'middleCentre slot must exist');
 let slotChildrenIds = middleCentreSlot.children.map((c) => c.dataset.probeId);
 assert.deepEqual(slotChildrenIds, ['alpha', 'beta', 'gamma'], 'Initial slot order must match initial snapshot');
+
+const appendSlot = middleCentreSlot.append.bind(middleCentreSlot);
+let moves = 0;
+middleCentreSlot.append = (...nodes) => { moves++; return appendSlot(...nodes); };
+reorderDashboard.render({ ...initialSnapshot, revision: 2, widgets: initialSnapshot.widgets.map(widget => ({ ...widget, configJson: { ...widget.configJson, value: 1 } })) }, 'ws-1', () => {});
+assert.equal(moves, 0, 'Saving widget content must not reinsert unchanged slot children and lose input focus');
 
 // Reorder widgets: gamma, alpha, beta
 const reorderedSnapshot = {
@@ -371,7 +377,7 @@ const reorderedSnapshot = {
     { id: 'w-gamma', key: 'widget/probe', enabled: true, configJson: { id: 'gamma' }, displayJson: { position: 'middleCentre' } },
     { id: 'w-alpha', key: 'widget/probe', enabled: true, configJson: { id: 'alpha' }, displayJson: { position: 'middleCentre' } },
     { id: 'w-beta', key: 'widget/probe', enabled: true, configJson: { id: 'beta' }, displayJson: { position: 'middleCentre' } },
-  ],
+  ].map((widget, order) => ({ ...widget, order })),
 };
 
 reorderDashboard.render(reorderedSnapshot, 'ws-1', () => {});

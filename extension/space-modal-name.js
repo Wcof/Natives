@@ -13,19 +13,32 @@ export function createSpaceNameModal({ $, t, onSaveWorkspaceName }) {
     if (input) {
       input.value = workspace?.name || '';
     }
+    // 模板选择仅新建时可见（ADR-0036 / P3：模板只含布局，不覆盖已有空间）。
+    const templateRow = document.getElementById('ws-template-row');
+    const templateSelect = document.getElementById('ws-template-select');
+    const investmentDesc = document.getElementById('ws-template-investment-desc');
+    if (templateRow) templateRow.hidden = Boolean(workspace);
+    if (templateSelect) templateSelect.value = 'classic';
+    if (investmentDesc) investmentDesc.hidden = true;
+    if (templateSelect && investmentDesc) {
+      templateSelect.onchange = () => { investmentDesc.hidden = templateSelect.value !== 'investment'; };
+    }
     if (modal) {
+      $('ws-name-cancel').onclick = () => modal.close('cancel');
       modal.returnValue = '';
       if (!modal.open && typeof modal.showModal === 'function') {
         modal.showModal();
       }
       if (input) {
-        if (typeof input.focus === 'function') input.focus();
-        if (typeof input.select === 'function') input.select();
+        input.focus();
+        input.select();
       }
       modal.onclose = () => {
+        $(workspace ? `workspace-menu-${workspace.id}` : 'workspace-create')?.focus();
         const name = input?.value?.trim() || '';
         if (!name || modal.returnValue !== 'default') return;
-        onSaveWorkspaceName(workspace, name);
+        const template = templateSelect?.value || 'classic';
+        onSaveWorkspaceName(workspace, name, template);
       };
     }
   }

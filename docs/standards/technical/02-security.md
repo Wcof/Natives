@@ -18,6 +18,7 @@
 - 长度前缀、最大帧、字段类型、字符串/数组长度和方法白名单在 Host 边界校验。
 - 未知方法、未知字段、越界值、坏 JSON 和超大帧必须在产生副作用前拒绝。
 - 写方法需要显式 request id、revision 或等价冲突保护；不得信任页面的 verified 标记。
+- **卡片投影命令（ADR-0036）**：`app:card_snapshot` 仅接受 `instanceId`/`generation` 两个参数且必须匹配当前 Ready 会话；响应上限 64 KiB（窄于 Native 帧 512 KiB），超限按错误处理；`app:data_status` 必须给出真实 `readiness`，缺库/打不开库/解析失败不得回退为「当前 schema 即 ready」。
 
 #### R-S3 · 文件能力最小化
 
@@ -25,6 +26,7 @@
 - Files Host 只允许用户授权 root 内的路径；所有 canonicalize、symlink/reparse point、`..`、绝对路径和竞态检查在 Host 完成。
 - 页面不得获得任意进程、SQLite、Keychain 或明文 Secret 能力。
 - 预览、搜索、导入和写入继续遵守尺寸、类型、并发与取消上限。
+- ADR-0043 限定例外：仅 Host 校验后的 PDF Blob iframe 不设 sandbox，由 Chrome 内置阅读器隔离内容；扩展 `frame-src` 仅增加 `blob:`。HTML 与业务 App 沙箱不适用此例外，详见 ADR-0043。
 
 #### R-S4 · Secret 只由 OS Keychain 持有
 

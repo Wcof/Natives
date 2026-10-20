@@ -4,11 +4,13 @@
     {
       "appId": "fund",
       "crate": "fund-module",
+      "factory": "fund_module::FundModule::new",
       "manifest": "modules/fund/module.json"
     },
     {
       "appId": "tokenusage",
       "crate": "tokenusage-module",
+      "factory": "tokenusage_module::TokenUsageModule::new",
       "manifest": "modules/tokenusage/module.json"
     }
   ]

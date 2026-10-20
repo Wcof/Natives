@@ -31,11 +31,19 @@ pub struct ModuleContext {
     pub cache_root: PathBuf,
     pub logs_root: PathBuf,
     pub keychain_namespace: String,
+    /// 模块 Secret 的 OS Keychain 窄能力（ADR-0038）；明文只在该进程内短时经
+    /// `reveal` 取用，绝不进协议响应、日志或 DB。
+    pub secrets: std::sync::Arc<crate::secrets::SecretStore>,
     pub activation_generation: u64,
     /// 长任务（网络/导入/同步）必须轮询的取消信号；进程关闭时由 Runtime 触发。
     pub cancellation: std::sync::Arc<crate::cancellation::CancellationToken>,
     /// 资源硬门（HTTP/并发/超时/关闭期限）。
     pub limits: crate::limits::RuntimeLimits,
+}
+
+/// 模块 Keychain service 命名空间（R-A9 / ADR-0038 的单一拼接口径）。
+pub fn app_keychain_namespace(app_id: &str) -> String {
+    format!("com.natives.app.{app_id}")
 }
 
 impl ModuleContext {
@@ -48,7 +56,8 @@ impl ModuleContext {
             imports_root: app_root.join("imports"),
             cache_root: app_root.join("cache"),
             logs_root: app_root.join("logs"),
-            keychain_namespace: format!("com.natives.app.{app_id}"),
+            keychain_namespace: app_keychain_namespace(app_id),
+            secrets: std::sync::Arc::new(crate::secrets::SecretStore::for_app(app_id)),
             activation_generation: generation,
             cancellation: std::sync::Arc::new(crate::cancellation::CancellationToken::new()),
             limits: crate::limits::RuntimeLimits::default(),
@@ -94,17 +103,18 @@ impl ModuleHttpResponse {
     }
 }
 
-/// 官方内置应用契约 trait
-pub trait BuiltInAppModule: Send + Sync {
-    /// 模块描述符
-    fn descriptor(&self) -> ModuleDescriptor;
+/// 官方内置应用服务接口（无锁请求处理对象，生命周期与服务分离）。
+#[derive(Clone, Debug)]
+pub struct RequestContext {
+    pub principal: String,
+    pub surface_id: String,
+    pub app_id: String,
+    pub worker_epoch: String,
+    pub generation: String,
+    pub capabilities: Vec<String>,
+}
 
-    /// 使用 Runtime 注入的上下文初始化
-    fn initialize(&mut self, context: &ModuleContext) -> Result<(), String>;
-
-    /// 启动模块业务状态（启动 store、准备监听）
-    fn start(&mut self) -> Result<(), String>;
-
+pub trait ModuleService: Send + Sync {
     /// 处理 UI 静态资源请求（无需 Bearer token，初始化页面使用）
     fn handle_ui(&self, path: &str) -> Result<Option<ModuleHttpResponse>, String>;
 
@@ -114,6 +124,40 @@ pub trait BuiltInAppModule: Send + Sync {
         req: &HttpRequest,
         route: &str,
     ) -> Result<ModuleHttpResponse, (u16, String)>;
+
+    /// Only Runtime constructs this context from its verified bearer map.
+    fn handle_authenticated_api(
+        &self,
+        _context: &RequestContext,
+        _req: &HttpRequest,
+        _route: &str,
+    ) -> Result<ModuleHttpResponse, (u16, String)> {
+        Err((403, "APP_REQUEST_CONTEXT_REQUIRED".into()))
+    }
+
+    fn release_surface(&self, _surface_id: &str) {}
+
+    fn protected_task_count(&self) -> usize {
+        0
+    }
+
+    /// 白名单只读卡片投影（ADR-0036）：默认「不支持」；实现了卡片协议的模块
+    /// 复用内部同一查询函数派生响应，不新开数据库 writer，不复制业务到 Core。
+    fn card_snapshot(&self) -> Result<crate::protocol::CardSnapshotResult, (u16, String)> {
+        Err((501, "APP_CARD_SNAPSHOT_UNSUPPORTED".into()))
+    }
+}
+
+/// 官方内置应用契约 trait（生命周期与服务分离，ADR-0031 / 架构 Wave 4）
+pub trait BuiltInAppModule: Send + Sync {
+    /// 模块描述符
+    fn descriptor(&self) -> ModuleDescriptor;
+
+    /// 使用 Runtime 注入的上下文初始化
+    fn initialize(&mut self, context: &ModuleContext) -> Result<(), String>;
+
+    /// 启动模块业务状态并产出无锁服务对象
+    fn start(&mut self) -> Result<std::sync::Arc<dyn ModuleService>, String>;
 
     /// 数据状态查询
     fn data_status(&self) -> Result<DataStatusResult, String>;
@@ -164,6 +208,20 @@ impl ModuleRegistry {
 mod tests {
     use super::*;
 
+    struct DummyService;
+    impl ModuleService for DummyService {
+        fn handle_ui(&self, _path: &str) -> Result<Option<ModuleHttpResponse>, String> {
+            Ok(Some(ModuleHttpResponse::ok_html("<h1>test</h1>")))
+        }
+        fn handle_api(
+            &self,
+            _req: &HttpRequest,
+            _route: &str,
+        ) -> Result<ModuleHttpResponse, (u16, String)> {
+            Ok(ModuleHttpResponse::ok_json("{\"ok\":true}"))
+        }
+    }
+
     struct DummyModule;
     impl BuiltInAppModule for DummyModule {
         fn descriptor(&self) -> ModuleDescriptor {
@@ -178,18 +236,8 @@ mod tests {
         fn initialize(&mut self, _ctx: &ModuleContext) -> Result<(), String> {
             Ok(())
         }
-        fn start(&mut self) -> Result<(), String> {
-            Ok(())
-        }
-        fn handle_ui(&self, _path: &str) -> Result<Option<ModuleHttpResponse>, String> {
-            Ok(Some(ModuleHttpResponse::ok_html("<h1>test</h1>")))
-        }
-        fn handle_api(
-            &self,
-            _req: &HttpRequest,
-            _route: &str,
-        ) -> Result<ModuleHttpResponse, (u16, String)> {
-            Ok(ModuleHttpResponse::ok_json("{\"ok\":true}"))
+        fn start(&mut self) -> Result<std::sync::Arc<dyn ModuleService>, String> {
+            Ok(std::sync::Arc::new(DummyService))
         }
         fn data_status(&self) -> Result<DataStatusResult, String> {
             Ok(DataStatusResult {
@@ -198,6 +246,7 @@ mod tests {
                 last_data_writer_version: "1.0.0".into(),
                 has_committed_new_writes: false,
                 previous_version_compatible: true,
+                readiness: Some("ready".into()),
             })
         }
         fn health(&self) -> Result<AppHealth, String> {

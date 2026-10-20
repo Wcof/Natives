@@ -1,0 +1,36 @@
+  </div>
+
+  <!-- 专注模式三栏工作台：左=上下文资产列表，中=图表区（进入时由 focus.js 搬入
+       chart-control-bar/chart-container/compare 卡），右=盘口看板（搬入 side-header/
+       alert-box/depth-section/metrics-grid）。退出时搬回原位。 -->
+  <div class="focus-workspace" id="focus-workspace" hidden>
+    <aside class="focus-left" id="focus-left">
+      <div class="focus-left-head">
+        <select id="focus-source" data-i18n-title="fundFocusContext">
+          <option value="watchlist" data-i18n="fundLedgerNavWatchlist">自选股</option>
+          <option value="history" data-i18n="fundFocusHistory">研究历史</option>
+        </select>
+      </div>
+      <div class="focus-asset-list" id="focus-asset-list" role="listbox" aria-label="标的列表"></div>
+    </aside>
+    <div class="focus-resizer" id="focus-resizer" role="separator" aria-orientation="vertical" aria-valuemin="180" aria-valuemax="360" tabindex="0" data-i18n-title="fundFocusResize" data-i18n-aria-label="fundFocusResize"></div>
+    <section class="focus-center" id="focus-center">
+      <div class="focus-exit-row">
+        <button class="btn" id="focus-exit-btn" data-i18n="fundFocusExit">退出专注模式</button>
+        <button class="btn" id="focus-list-btn" data-i18n="fundFocusContext">标的列表</button>
+        <button class="btn" id="focus-evidence-btn" data-i18n="fundFocusEvidence">研究信息</button>
+        <span class="focus-badge" id="focus-badge">专注模式</span>
+      </div>
+    </section>
+    <aside class="focus-right" id="focus-right"></aside>
+  </div>
+
+  <dialog id="focus-list-dialog" class="focus-list-dialog" data-i18n-aria-label="fundFocusContext">
+    <button class="btn" id="focus-list-close" data-i18n="fundHomeClose">关闭</button>
+  </dialog>
+  <dialog id="focus-evidence-dialog" class="focus-list-dialog" data-i18n-aria-label="fundFocusEvidence">
+    <button class="btn" id="focus-evidence-close" data-i18n="fundHomeClose">关闭</button>
+  </dialog>
+  <!-- 信号变更提醒浮层 -->
+  <div class="toast-container" id="toast-container"></div>
+<!-- 源文件按能力域拆分于 ui/dist/*.js；此处单次加载由 Host 编译期拼接的 bundle -->

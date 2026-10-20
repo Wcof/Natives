@@ -8,11 +8,13 @@ export function createSpaceWidgetSettings({
   onUpdateWidget,
   onRemoveWidget,
   onPositionEditChange,
+  getEditingWidgetId=()=>null,
   onBackToOverview,
 }) {
-  let isEditingPosition = false;
+
 
   function render(container, snapshot, workspaceId, widgetId) {
+    const isEditingPosition=getEditingWidgetId()===widgetId;
     const widget = (snapshot?.widgets || []).find((w) => w.id === widgetId);
     if (!widget) {
       onBackToOverview();
@@ -40,7 +42,6 @@ export function createSpaceWidgetSettings({
     `;
     header.querySelector('.inspector-back').onclick = () => {
       if (isEditingPosition) {
-        isEditingPosition = false;
         onPositionEditChange?.(null);
       }
       onBackToOverview();
@@ -113,7 +114,6 @@ export function createSpaceWidgetSettings({
       const isFree = posSelect.value === 'free';
       freeControls.hidden = !isFree;
       if (!isFree && isEditingPosition) {
-        isEditingPosition = false;
         onPositionEditChange?.(null);
       }
       onUpdateWidget({ ...widget, displayJson: { ...disp, position: posSelect.value } });
@@ -121,9 +121,9 @@ export function createSpaceWidgetSettings({
 
     if (editPosBtn) {
       editPosBtn.onclick = () => {
-        isEditingPosition = !isEditingPosition;
-        editPosBtn.textContent = isEditingPosition ? t('doneEditingPosition', '完成调整') : t('editPosition', '调整位置');
-        onPositionEditChange?.(isEditingPosition ? widget.id : null);
+        const editing=getEditingWidgetId()!==widget.id;
+        editPosBtn.textContent = editing ? t('doneEditingPosition', '完成调整') : t('editPosition', '调整位置');
+        onPositionEditChange?.(editing ? widget.id : null);
       };
     }
 
@@ -251,7 +251,6 @@ export function createSpaceWidgetSettings({
       confirmCard.querySelector('.confirm-btn').onclick = () => {
         confirmCard.remove();
         if (isEditingPosition) {
-          isEditingPosition = false;
           onPositionEditChange?.(null);
         }
         onRemoveWidget(widget.id);
@@ -262,5 +261,5 @@ export function createSpaceWidgetSettings({
     container.append(header, body);
   }
 
-  return { render };
+  return { render, setLanguage(next){language=next;} };
 }

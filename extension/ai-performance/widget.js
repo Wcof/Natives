@@ -231,12 +231,14 @@ export const aiPerformanceWidget = {
 
     const api = acquireModelApi();
     let cancelled = false;
+    let loadGeneration = 0;
+    let viewSignal = null;
 
     // T7：查询经共享层合并（同参并发只发 1 次）+ revision 缓存；
     // Host 推送 model_usage_updated 后自动补查一次。
     const sharedApi = new Proxy(api, {
       get(target, prop) {
-        if (prop === 'getUsageOverview' || prop === 'getUsageAnalysis' || prop === 'getUsageEvents') {
+        if (typeof prop === 'string' && (prop.startsWith('getUsage') || prop === 'getCachedQuota')) {
           return (params) => sharedCall(target, prop, params);
         }
         return target[prop];
@@ -244,42 +246,31 @@ export const aiPerformanceWidget = {
     });
     const unsubscribe = subscribeModelEvents((evt) => {
       if (cancelled) return;
-      if (evt?.type === 'model_usage_updated' || evt?.method === 'model_usage_updated') {
-        // R3（§3.2）：非 usage 视图由 views.js 接管刷新，事件回调不得把
-        // 内容换回旧指标的 usage 渲染。
-        if (normalizeView(config.view) === 'usage') {
-          load();
-        }
-      }
+      if (['model_usage_updated', 'model_quota_updated','model_changed'].includes(evt?.type || evt?.method) || (evt?.type==='resync' && evt.reason!=='unavailable')) load();
     });
 
     // T7b：view≠usage 的固定视图由 views.js 接管（tools/billing/attention/…）。
     const view = normalizeView(config.view);
-    if (view !== 'usage') {
-      root.classList.remove('is-loading');
-      root.querySelector('.ai-perf-status')?.remove();
-      // render 保持同步契约：异步渲染用 then/catch，不 await。
-      renderView(view, root, sharedApi, t, { aborted: false }).catch((err) => {
-        if (cancelled) return;
-        root.innerHTML = `<div class="ai-perf-error">${escapeHtml(t('aiPerfLoadFailed', '用量数据加载失败'))}: ${escapeHtml(err?.message || String(err))}</div>`;
-      });
-      return () => {
-        cancelled = true;
-        unsubscribe();
-        releaseModelApi();
-        container.replaceChildren();
-      };
-    }
-
     async function load() {
+      const generation = ++loadGeneration;
+      if (viewSignal) viewSignal.aborted = true;
+      viewSignal = { aborted: false };
       root.classList.add('is-loading');
       try {
+        if (view !== 'usage') {
+          await renderView(view, root, api, t, viewSignal);
+          if (!cancelled && generation === loadGeneration) root.classList.remove('is-loading');
+          return;
+        }
         const dataset = await fetchDataset(sharedApi, metric, config.range, CHART_NEEDS[config.chart], {
           dimension: config.dimension,
           subMetric: config.subMetric,
           toolIds: config.toolIds,
+          startTime: config.startTime,
+          endTime: config.endTime,
         });
-        if (cancelled) return;
+        if (cancelled || generation !== loadGeneration) return;
+        root.classList.remove('is-loading');
         if (dataset.empty) {
           root.innerHTML = `<div class="ai-perf-empty">${escapeHtml(t('aiPerfEmpty', '当前统计范围暂无 AI 用量记录'))}</div>`;
           return;
@@ -288,9 +279,9 @@ export const aiPerformanceWidget = {
         root.querySelector('.ai-perf-status')?.remove();
         chart.render(root, dataset, ui);
       } catch (err) {
-        if (cancelled) return;
+        if (cancelled || generation !== loadGeneration) return;
         root.classList.remove('is-loading');
-        root.innerHTML = `<div class="ai-perf-error">${escapeHtml(t('aiPerfLoadFailed', '用量数据加载失败'))}: ${escapeHtml(err?.message || String(err))}</div>`;
+        root.innerHTML = `<div class="ai-perf-error">${escapeHtml(t('aiPerfLoadFailed', '用量数据加载失败'))}</div>`;
       }
     }
 
@@ -298,6 +289,7 @@ export const aiPerformanceWidget = {
 
     return () => {
       cancelled = true;
+      if (viewSignal) viewSignal.aborted = true;
       unsubscribe();
       releaseModelApi();
       container.replaceChildren();

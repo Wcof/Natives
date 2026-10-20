@@ -129,6 +129,24 @@ assert.equal(syncedNavA.querySelectorAll('.app-menu-section').length, 0);
 unA();
 unFiles();
 
+// 4b. A shared language change relabels the already-mounted module menu
+// without a projection rewrite or page reload.
+const localeNav = document.createElement('nav');
+await saveAppNavigation({
+  revision: 7,
+  items: [{ appId: 'fund', label: '投资', labels: { zh_CN: '投资', en: 'Invest' }, icon: 'grid', route: 'app.html?app=fund', order: 0 }],
+}, storage);
+let localeRenders = 0;
+const unLocale = await mountAppMenu(localeNav, { t, storage, language: 'zh_CN', afterRender: () => { localeRenders += 1; } });
+assert.ok(localeNav.textContent.includes('投资'), '初始语言使用投影 label');
+const beforeLanguageRender = localeRenders;
+await storage.local.set({ 'natives-language': 'en' });
+assert.ok(localeNav.textContent.includes('Invest'), '语言切到英文后菜单立即更新');
+assert.ok(localeRenders > beforeLanguageRender, '语言切换后重新应用视图层回填');
+await storage.local.set({ 'natives-language': 'zh_CN' });
+assert.ok(localeNav.textContent.includes('投资'), '语言切回中文后菜单恢复');
+unLocale();
+
 // 5. No visible module means no navigation section.
 const zeroNav = document.createElement('nav');
 renderAppMenuInto(zeroNav, { revision: 1, items: [] }, { t });

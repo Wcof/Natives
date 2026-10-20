@@ -1,6 +1,6 @@
 # 前端 02 · 状态、数据与生命周期
 
-> 版本：4.0.0 · 日期：2026-09-14
+> 版本：4.1.0 · 日期：2026-10-04
 
 #### R-E8 · 持久状态来自 owner
 
@@ -8,6 +8,7 @@
 - 页面启动先加载 Host snapshot/query，再建立事件订阅；DOM 和内存对象只是投影。
 - Chrome storage 只保存语言、外观、视图等前端偏好，不保存 Host 业务状态、Secret 或计费权威。
 - 主题持久值当前为 `archive | volt`；非法值回退 `archive`。
+- 应用内共享展示状态与私有 draft／快照／图表分开；公开 selector／操作有唯一 writer 和 action owner，不用隐式覆盖装配。规则正文见 [技术 08](../technical/08-module-boundaries-and-contracts.md)。
 
 #### R-E9 · 草稿与提交分离
 

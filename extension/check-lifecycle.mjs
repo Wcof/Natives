@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { distributableFiles } from '../scripts/extension-package.mjs';
 
-const [manifest, background, files, nativeClient, filesHtml, filesBootstrap, filesCss, launch, dev, en, zh, spaceHtml, spaceScript, filesIcons, filesDiskUsage, filesOperations, filesPreviewControllers, filesSearch, filesShortcuts, filesEntriesRenderer, filesContextMenu, filesPreferences, filesPreviewLayout, filesToolbar, filesWorkspaceBindings, filesEditorBindings, filesEntryEffects, filesHostConnection, filesFeedback, filesWatchController, filesPaths, protocol, mainRs, workspaceStore, workspaceSchema, spacePlugins, spaceDashboard, spaceWidgetTime, spaceWidgetGreeting, spaceCss, spaceTree, sidebarController, filesSidebar] = await Promise.all([
+const [manifest, background, files, nativeClient, filesHtml, filesBootstrap, filesCss, baseThemeCss, launch, dev, en, zh, spaceHtml, spaceScript, filesIcons, filesDiskUsage, filesOperations, filesPreviewControllers, filesSearch, filesShortcuts, filesEntriesRenderer, filesContextMenu, filesPreferences, filesPreviewLayout, filesToolbar, filesWorkspaceBindings, filesEditorBindings, filesEntryEffects, filesHostConnection, filesFeedback, filesWatchController, filesPaths, protocol, mainRs, workspaceStore, workspaceSchema, spacePlugins, spaceDashboard, spaceWidgetTime, spaceWidgetGreeting, spaceCss, spaceTree, sidebarController, filesSidebar] = await Promise.all([
   readFile(new URL('./manifest.json', import.meta.url), 'utf8'),
   readFile(new URL('./background.js', import.meta.url), 'utf8'),
   readFile(new URL('./files.js', import.meta.url), 'utf8'),
@@ -11,6 +11,7 @@ const [manifest, background, files, nativeClient, filesHtml, filesBootstrap, fil
   readFile(new URL('./files.html', import.meta.url), 'utf8'),
   readFile(new URL('./files-bootstrap.js', import.meta.url), 'utf8'),
   readFile(new URL('./files.css', import.meta.url), 'utf8'),
+  readFile(new URL('./theme.css', import.meta.url), 'utf8'),
   readFile(new URL('./launch-natives.mjs', import.meta.url), 'utf8'),
   readFile(new URL('./dev.mjs', import.meta.url), 'utf8'),
   readFile(new URL('./_locales/en/messages.json', import.meta.url), 'utf8'),
@@ -78,9 +79,13 @@ for (const relPath of declaredPaths) {
   assert.ok(existsSync(new URL(`./${relPath}`, import.meta.url)), `manifest referenced file must exist: ${relPath}`);
 }
 assert.match(filesBundle, /document\.documentElement\.lang = (?:selectedLanguage|language) === 'en'/);
-assert.match(filesBundle, /chrome\.storage\?\.onChanged\?\.addListener/);
+assert.match(filesBundle, /storage\.onChanged\?\.addListener/);
 assert.doesNotMatch(files, /new Promise\([^\n]+chrome\.storage\.local\.(?:get|set)/, 'storage bootstrap must not hang behind callback-wrapped Chrome APIs');
-assert.match(filesBundle, /await Promise\.race\(\[\s*chrome\.storage\.local\.get/, 'storage bootstrap must bound the MV3 Promise API');
+const platformStorage=await readFile(new URL('./platform/storage.js',import.meta.url),'utf8');
+assert.match(platformStorage,/return browserStorage\(\(\)=>chrome\.storage\.local\.get/, 'local projections retain bounded MV3 reads');
+assert.match(platformStorage,/await Promise\.race/);
+assert.match(platformStorage,/clearTimeout\(timer\)/, 'settled browser storage leaves no timeout');
+assert.match(platformStorage,/call\('preferences_get'\)/, 'shared display preferences read the Core authority');
 assert.match(filesBundle, /filesSidebar\?\.setPreferences/, 'theme and language preferences must sync into the settings menu');
 assert.match(filesBundle, /event\.key\.toLowerCase\(\) !== 'l'[\s\S]*openLanguageSettings/, 'files page Alt+L must open the settings menu on language');
 assert.match(filesBundle, /t\('movePreviewSide'[^\n]*t\('movePreviewBelow'/, 'preview layout labels must be localized');
@@ -107,7 +112,8 @@ assert.doesNotMatch(files, /__MSG_[^*]+__/);
 assert.match(filesBundle, /data-i18n/);
 assert.match(filesBundle, /data-i18n-title/);
 assert.match(filesBundle, /data-i18n-placeholder/);
-assert.match(filesBundle, /stored === 'en' \|\| stored === 'zh_CN' \? stored : 'zh_CN'/, 'first launch must use the Chinese manifest locale');
+assert.match(filesBundle, /!isExtension && globalThis\.navigator\?\.language/, 'standalone Web may use the browser language on first launch');
+assert.match(filesBundle, /\? 'en' : 'zh_CN'/, 'extension first launch must retain the Chinese manifest locale');
 assert.match(filesBundle, /element\.textContent = t/);
 assert.match(filesHtml, /id="breadcrumb"/);
 assert.doesNotMatch(filesHtml, /id="path-input"/, 'path-input must be removed in favor of breadcrumb navigation');
@@ -240,7 +246,7 @@ assert.match(filesCss, /@media \(max-width:560px\)[\s\S]*\.entry-meta,\.entry-so
 assert.match(filesBundle, /function toggleSearchScope/, 'search scope must be keyboard and button controllable');
 assert.match(filesBundle, /event\.shiftKey && shortcut === 'g'.*viewMode = viewMode === 'grid' \? 'list' : 'grid'/, 'view mode must toggle from the keyboard');
 assert.match(filesBundle, /currentDirectorySearch/, 'search scope labels must be bilingual and semantically distinct');
-assert.match(filesBundle, /event\.key === 'Tab' && !event\.shiftKey/, 'search scope must support forward Tab shortcut');
+assert.doesNotMatch(filesShortcuts, /event\.key === 'Tab'/, 'Tab must retain native focus navigation instead of trapping focus in the search field');
 assert.match(filesBundle, /storageSet\('natives-sort-by', session\.sortBy\)/, 'sort selection must persist');
 assert.match(filesBundle, /storageSet\('natives-view-mode', 'list'\)/, 'list view must persist');
 assert.match(filesBundle, /storageSet\('natives-view-mode', 'grid'\)/, 'grid view must persist');
@@ -259,15 +265,17 @@ assert.match(filesBundle, /excerpt\.click\(\)/, 'search match summaries must act
 assert.match(filesBundle, /event\.key === 'Enter'[\s\S]{0,120}dispatchEvent\(new MouseEvent\('dblclick'/, 'Enter on a match must open preview context');
 assert.match(filesBundle, /entry-source/, 'global search results must expose source paths');
 assert.match(filesBundle, /searchTruncated/, 'search truncation must be tracked and surfaced');
-assert.match(filesBundle, /if \(searchQuery\) search\(searchQuery\); else \{ searchToken\+\+; cancelActiveSearches\(\); loadDirectory\(session\.currentPath\); \}/, 'clearing search must cancel stale requests before loading directory');
+assert.match(filesSearch, /function cancelActiveSearches\(\)\s*\{\s*\+\+searchToken;\s*clearTimeout\(searchTimer\)/, 'every cancellation must invalidate late responses and release pending debounce');
+assert.match(filesSearch, /if \(searchQuery\) search\(searchQuery\); else \{ cancelActiveSearches\(\); loadDirectory\(session\.currentPath\); \}/, 'clearing search must cancel stale requests before loading directory');
+assert.match(filesWorkspaceBindings, /addEventListener\('pagehide', \(\) => searchController\.cancelActiveSearches\(\)\)/, 'leaving the surface must release search ownership');
 assert.match(filesBundle, /call\('extract_archive'/, 'archive extraction must use the Native Host');
 assert.match(filesBundle, /if \(!item && session\.currentPath\)/, 'blank-area context menu must expose directory actions');
 assert.match(filesBundle, /dataset\.action = 'importFiles'/, 'blank-area context menu must expose file import');
-assert.match(filesBundle, /previous\.dataset\.action = 'pdfPrevious'/, 'PDF preview must expose previous-page control');
-assert.match(filesBundle, /nextButton\.dataset\.action = 'pdfNext'/, 'PDF preview must expose next-page control');
-assert.match(filesBundle, /frame\.src = `\$\{previewObjectUrl\}#page=\$\{page\}/, 'PDF paging must update the controlled viewer anchor');
-assert.match(filesBundle, /previous\.disabled = page <= 1/, 'PDF previous-page control must disable at the first page');
-assert.match(filesBundle, /nextButton\.disabled = totalPages > 0 && page >= totalPages/, 'PDF next-page control must disable at the last known page');
+const pdfRenderer = filesBundle.slice(filesBundle.indexOf('async function renderPdfPreview'), filesBundle.indexOf('async function renderMediaPreview'));
+assert.match(pdfRenderer, /navigator\.pdfViewerEnabled === false/, 'disabled native PDF reader must expose the failure path');
+assert.match(pdfRenderer, /result\.mimeType !== 'application\/pdf'/, 'PDF must validate the fixed MIME');
+assert.match(pdfRenderer, /#page=1&view=FitH&toolbar=1/, 'ADR-0043 native toolbar owns paging, search and zoom');
+assert.doesNotMatch(pdfRenderer, /setAttribute\('sandbox'|pageMatches|totalPages/, 'PDF must not use a broken sandbox or guessed page count');
 assert.match(filesBundle, /extractArchive/, 'archive context action must be exposed');
 assert.match(filesBundle, /function createZip/, 'archive creation function must be wired');
 assert.match(filesBundle, /call\('create_zip'/, 'archive creation must use the Native Host');
@@ -299,7 +307,6 @@ assert.match(filesBundle, /restore:\s*\{ selection: \[\.\.\.importSelection\], s
 assert.match(filesBundle, /dataset\.action = 'createArchive'/, 'archive creation must be available from context menus');
 assert.match(filesBundle, /event\.key !== 'Enter'[\s\S]*session\.selectedPaths\.size !== 1[\s\S]*openEditorSelected/, 'Cmd/Ctrl+Enter must open the selected item in an editor');
 assert.match(filesBundle, /activeElement\?\.classList\.contains\('pdf-preview'\)/, 'PDF viewer must retain native find shortcut');
-assert.match(filesBundle, /findButton\.dataset\.action = 'pdf-find'/, 'PDF viewer must expose a visible find action');
 assert.match(filesBundle, /const pageStep = Math\.max\(1, Math\.floor\(\(entries\.clientHeight/, 'entry paging must follow viewport size');
 assert.doesNotMatch(files, /recentModified|recent-modified|recent_files/, 'recent-modified feature must stay removed');
 assert.match(filesBundle, /const watchedDirectory = session\.currentPath/, 'watch refresh must capture the watched directory');
@@ -321,14 +328,16 @@ for (const key of ['rotateLeft', 'rotateRight', 'flipHorizontal', 'flipVertical'
   assert.ok(JSON.parse(zh)[key]?.message, `${key} must be localized in zh`);
 }
 assert.doesNotMatch(files, /refreshTreeNode|expandedTreePaths|treeRefreshers|function treeNode/, 'directory-tree production code must stay removed');
-assert.match(filesCss, /:root\[data-theme="volt"\][\s\S]*color-scheme:dark/, 'files surface must provide the fixed dark Volt theme');
-assert.match(filesCss, /:root\[data-theme="archive"\][\s\S]*color-scheme:light/, 'files surface must provide the warm Archive theme');
+// DES 02：主题角色收敛到单源 theme.css；Surface 仅 alias 消费，不自带主题块。
+assert.match(baseThemeCss, /:root\[data-theme="volt"\]\s*\{\s*color-scheme:\s*dark\s*;/, 'base theme must provide the fixed dark Volt roles');
+assert.match(baseThemeCss, /:root\s*\{\s*color-scheme:\s*light\s*;/, 'base theme must default to Archive light');
+assert.doesNotMatch(filesCss, /color-scheme:\s*dark/, 'files surface must not re-declare theme color-scheme');
 assert.match(filesHtml, /<html lang="zh-CN" data-theme="archive">/, 'the first paint must match the warm files design baseline');
 assert.match(filesBundle, /let selectedTheme = 'archive'/, 'the files design baseline must default to Archive');
 assert.match(filesBundle, /className = 'list-head'/, 'list view must expose the design column header without creating a false file option');
 assert.match(filesCss, /\.entries\.grid \.entry-icon \.rich-glyph \{ width:64px; height:64px;/, 'medium grid file glyphs must match the design scale');
 assert.match(filesCss, /\.entries\.grid \.entry \{[\s\S]*?border:1px solid transparent;[\s\S]*?background:transparent;/, 'grid items must use the flat design surface');
-assert.match(filesCss, /:root\[data-theme="archive"\] body \{[\s\S]*?background-size:4px 4px;/, 'Archive must keep the frozen paper texture');
+assert.doesNotMatch(filesCss, /background-size:4px 4px;/, 'DES 02: Archive paper texture must stay removed');
 assert.doesNotMatch(filesCss, /:root\[data-theme="index"\]/, 'Index theme must stay removed');
 assert.match(filesCss, /@media \(max-width:1180px\)/, 'files toolbar must reflow at medium widths');
 assert.match(filesHtml, /class="nav-buttons"/, 'files toolbar must group navigation controls');
@@ -382,7 +391,9 @@ assert.match(filesBundle, /parseOpenMarkdownUrl/, 'files.js must validate open p
 assert.match(launch, /files\.html/);
 assert.match(dev, /fs\/promises/);
 assert.match(dev, /buildExtension\(devExtension\)/, 'dev must use the same distribution bytes as the release budget');
-assert.match(dev, /generateKeyPairSync/);
+// ID 唯一来源：manifest 固定 key（与 Rust STABLE_EXTENSION_ID 同源）；禁止 dev key 覆盖。
+assert.doesNotMatch(dev, /manifest\.key\s*=/, 'dev must not overwrite manifest.key (NM allowlist ID drift)');
+assert.match(dev, /extensionId\(Buffer\.from\(manifest\.key/);
 assert.match(dev, /install-native-host\.mjs/);
 assert.match(dev, /Chrome will start the Host on demand/);
 assert.match(dev, /setInterval\(\(\) => \{\}, 2 \*\* 31 - 1\)/, 'dev must stay alive until explicitly stopped');

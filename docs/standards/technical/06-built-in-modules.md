@@ -1,6 +1,6 @@
 # 技术 06 · 内置模块
 
-> 版本：5.0.0 · 日期：2026-09-14
+> 版本：5.1.0 · 日期：2026-10-04
 > 依据：ADR-0027、ADR-0029、ADR-0031、[`../../contracts/managed-app-contract.md`](../../contracts/managed-app-contract.md)
 
 #### R-A1 · 模块随完整产品交付
@@ -37,15 +37,16 @@
 - **等级**：MUST
 - 所有官方 Built-in App 共享且仅使用唯一受签名的 `natives-app-runtime` 可执行文件；整个产品在操作系统 Native Messaging 目录仅注册唯一的 App Runtime Native Host（`com.natives.app_runtime`，本地开发为 `com.natives.local.app_runtime`）。
 - 严禁为任何内置应用生成或注册独立 Native Messaging Host（如废弃的 `com.natives.app.a<hash>`）。
-- 每个打开的内置应用实例按需启动一个独立的 `natives-app-runtime` 进程实例（Single Runtime Binary / Multi Process Instance）。一个 Runtime 进程一次只能激活并承载一个 appId。
+- 每个活动 `appId` 按需启动一个 `natives-app-runtime` 进程实例；同模块的扩展／Web Shell 与短命摘要 Surface 共用该 Worker。一个 Runtime 进程一次只能承载一个 appId。
 - 每 appId 至多一个业务实例，同用户至多四个活动 App Runtime 进程。
-- App Runtime 进程通过 Native Port 按需启动，在 `127.0.0.1:0` 动态端口提供受鉴权业务与 UI；不得访问 Core DB。
+- Core 经受信私有通道按需启动 App Runtime，在 `127.0.0.1:0` 动态端口提供受鉴权业务与 UI；Runtime 不得访问 Core DB。
 - 未被当前进程激活的模块不占用任何专用堆内存或系统资源（≈0 dedicated runtime memory）。
 
 #### R-A6 · 通用 owner page 与 Protocol v2 握手
 
 - **等级**：MUST
-- `extension/app.html` 只按 appId 查询登记、核验状态、连接统一 App Runtime Host（`com.natives.app_runtime` / `com.natives.local.app_runtime`），通过 App Runtime Protocol v2 的 `app:handshake` 显式选定模块并承载 sandbox iframe。
+- 通用 Shell 只按 appId 查询登记、核验状态，经 Core Relay／认证 Web RPC 申请独立 Surface，再以 Protocol v2 的 `app:handshake` 选择模块并承载 sandbox iframe。Core 注入的 Surface 身份不能由页面参数覆盖。
+- **空间卡片只读投影例外（ADR-0036）**：`space.html` 页面 controller 在页面可见、存在未隐藏投资卡、无本页嵌入详情会话时，可作为 `fund` 的一次性只读投影查询 owner：Core `apps:get` 校验先行 → `app:handshake` → `app:data_status` 的 `readiness=ready` 前置 → `app:start` → 固定 `app:card_snapshot`（参数仅 `instanceId`/`generation`，响应 ≤64 KiB）→ 立即断开 Port。禁止 readiness 非 ready 时 `app:start`、禁止广播停机抢占其他标签页会话、禁止后台轮询与持久化快照；返回 Workspace 前必须先释放同页嵌入会话。
 - Extension/Files Host 不包含基金或其他模块的业务分支。
 - App iframe 精确使用 `allow-scripts allow-forms`，遵守 `02-security.md` 的 handshake、CORS、token 和限额。
 
@@ -53,8 +54,8 @@
 
 - **等级**：MUST
 - 安装后不自动运行；打开 UI 才启动实例。
-- hidden 60 秒、pagehide、显式停止和 Native Port 断开（stdin EOF）进入同一取消/关闭路径。
-- **硬指标：Native Port 断开（stdin EOF）到 App Runtime Process 退出时间 $\le 2$ 秒**。
+- hidden 60 秒、pagehide、显式停止和对应 Native Relay EOF 仅释放当前 Surface 的令牌、任务和租约，不停止其他 Surface 共用的 Worker。
+- 最后租约释放且无保护任务后按 ADR-0042 保留 60 秒宽限期；到期进入统一关闭，Worker shutdown／私有管道 EOF 到进程退出仍须 $\le 2$ 秒。
 - 进程退出后，操作系统直接回收全部资源：Module Process = 0, Listener = 0, Timer = 0, Worker Thread = 0, SQLite Connection = 0, Network Client = 0。
 - 20 次打开/关闭循环测试无孤儿进程、无孤儿端口、无锁泄漏。
 
@@ -65,6 +66,7 @@
 - 模块所有工作目录由 Runtime 注入，禁止模块自行探测系统或推导用户目录。
 - Core 只拥有登记、偏好、activation 和产品收据，不创建业务表。
 - 内部模块（如持仓、账本、NAV、导入等）通过包内窄接口协作，不拥有安装记录、卡片、生命周期或数据库 authority。
+- 所属应用保留统一事务和资源 owner；内部职责边界、公共状态与扩展验收按 [技术 08](08-module-boundaries-and-contracts.md) 执行。
 
 #### R-A9 · 迁移与清数据
 
@@ -83,7 +85,7 @@
 ## 接入步骤
 
 1. 在 `modules/<appId>/` 内实现业务与构建期 UI，Rust 侧实现为 Library crate。
-2. 实现统一 `BuiltInAppModule` 契约，注册进 App Runtime 的编译期 `ModuleRegistry`。
+2. 实现统一 `BuiltInAppModule` 生命周期和 `ModuleService` 服务契约，注册进 App Runtime 的编译期 `ModuleRegistry`；准确签名以技术 07 与生产定义为准。
 3. 声明 appId、协议、权限、版本、数据 schema 和 Product Manifest v2 条目。
 4. 静态编译入 `natives-app-runtime`，严禁产出独立模块 executable 或独立 Native Host。
 5. 验证首次初始化、迁移、回退、清数据、隐藏/关闭回收（$\le 2$ 秒退出）和真实浏览器 UI。
@@ -96,3 +98,10 @@
 - [ ] App Center 中模块可见且状态真实。
 - [ ] Core、Extension 无模块业务逻辑。
 - [ ] 运行和数据隔离、退出 ≤2 秒彻底回收。
+
+## 模块推理与外链代理（ADR-0037）
+
+- `ai.inference.request` 和 `system.link.open` 必须进入已核验产品清单的 capabilities/permissions。
+- 推理只经 Native Messaging Model Host；Shell 校验 source、generation、challenge 与有界请求，页面取消／回收释放任务和客户端。
+- Model Host 不把密钥或管理地址给模块，不以只读 8766 接口承载推理。
+- 外链仅用户点击时打开新的 Chrome 标签；不改变 iframe sandbox。

@@ -333,3 +333,168 @@ fn timeline_oversell_rejected_at_write_time() {
         .unwrap();
     assert_eq!(tx_count, 0, "时序超卖事务必须完整回滚");
 }
+
+// ---------------------------------------------------------------------------
+// 期初登记（方案 01 §5.1）与 pending 确认（方案 03 §2）。
+// ---------------------------------------------------------------------------
+
+fn opening(
+    store: &Store,
+    account: &str,
+    code: &str,
+    qty: &str,
+    as_of: &str,
+    total_cost: Option<&str>,
+) -> Result<i64, LedgerError> {
+    super::record_opening(
+        store,
+        &super::OpeningInput {
+            account_name: account.into(),
+            fund_code: code.into(),
+            fund_name: "期初基金".into(),
+            quantity: Fixed::parse(qty, SCALE_SHARE).unwrap(),
+            as_of: as_of.into(),
+            total_cost: total_cost.map(|c| Fixed::parse(c, 2).unwrap()),
+        },
+        "2026-10-02",
+    )
+}
+
+#[test]
+fn opening_registration_replays_into_position() {
+    let store = Store::open_in_memory().unwrap();
+    opening(
+        &store,
+        "账户A",
+        "000001",
+        "1000",
+        "2026-09-30",
+        Some("10000.00"),
+    )
+    .unwrap();
+    // 期初直接形成持仓。
+    let pos = store
+        .with_read(|conn| crate::portfolio::replay_position(conn, 1, 1))
+        .unwrap()
+        .unwrap();
+    assert_eq!(pos.quantity_raw, 10_000_000); // 1000 份 × 10^4。
+    assert_eq!(pos.cost_raw, 1_000_000); // 10000 元 × 10^2。
+    assert!(!pos.cost_unknown);
+    // 期初后可正常交易并回放。
+    buy(
+        &store,
+        "账户A",
+        "000001",
+        "100",
+        "2.00",
+        "0.00",
+        "2026-10-01",
+        "r1",
+    );
+    let pos = store
+        .with_read(|conn| crate::portfolio::replay_position(conn, 1, 1))
+        .unwrap()
+        .unwrap();
+    assert_eq!(pos.quantity_raw, 11_000_000);
+}
+
+#[test]
+fn opening_duplicate_and_post_tx_rejected() {
+    let store = Store::open_in_memory().unwrap();
+    opening(&store, "账户A", "000001", "1000", "2026-09-30", None).unwrap();
+    // 账户+标的不能重复登记期初。
+    assert!(matches!(
+        opening(&store, "账户A", "000001", "500", "2026-09-30", None),
+        Err(LedgerError::Conflict(_))
+    ));
+    // 已有流水后不能补登期初。
+    let store2 = Store::open_in_memory().unwrap();
+    buy(
+        &store2,
+        "账户B",
+        "000002",
+        "100",
+        "1.00",
+        "0.00",
+        "2026-10-01",
+        "r1",
+    );
+    assert!(matches!(
+        opening(&store2, "账户B", "000002", "500", "2026-09-30", None),
+        Err(LedgerError::Conflict(_))
+    ));
+}
+
+#[test]
+fn opening_validation_rejects_bad_input() {
+    let store = Store::open_in_memory().unwrap();
+    // 零/负数量。
+    assert!(matches!(
+        opening(&store, "账户A", "000001", "0", "2026-09-30", None),
+        Err(LedgerError::Invalid(_))
+    ));
+    // 非法日历日。
+    assert!(matches!(
+        opening(&store, "账户A", "000001", "10", "2026-02-31", None),
+        Err(LedgerError::Invalid(_))
+    ));
+    // 未来日期。
+    assert!(matches!(
+        opening(&store, "账户A", "000001", "10", "2026-10-03", None),
+        Err(LedgerError::Invalid(_))
+    ));
+    // 未知成本显式进入 cost_unknown，不当作 0。
+    opening(&store, "账户A", "000001", "10", "2026-09-30", None).unwrap();
+    let pos = store
+        .with_read(|conn| crate::portfolio::replay_position(conn, 1, 1))
+        .unwrap()
+        .unwrap();
+    assert!(pos.cost_unknown, "缺省总成本必须是未知成本状态");
+}
+
+#[test]
+fn pending_confirm_is_one_shot_and_idempotent() {
+    let store = Store::open_in_memory().unwrap();
+    // pending 交易不参与回放。
+    let (tid, _) = record_transaction(
+        &store,
+        &TransactionInput::manual(
+            "账户C".into(),
+            "000003".into(),
+            "测试基金".into(),
+            TYPE_BUY.into(),
+            STATE_PENDING.into(),
+            Fixed::parse("100", SCALE_SHARE).unwrap(),
+            Fixed::parse("1.00", SCALE_SHARE).unwrap(),
+            Fixed::zero(2),
+            "2026-10-01".into(),
+            "p1".into(),
+        ),
+    )
+    .unwrap();
+    let none = store
+        .with_read(|conn| crate::portfolio::replay_position(conn, 1, 1))
+        .unwrap();
+    assert!(none.is_none(), "pending 交易不产生持仓");
+    // 确认生效一次。
+    let created = super::confirm_transaction(&store, tid).unwrap();
+    assert!(created);
+    let pos = store
+        .with_read(|conn| crate::portfolio::replay_position(conn, 1, 1))
+        .unwrap()
+        .unwrap();
+    assert_eq!(pos.quantity_raw, 1_000_000); // 100 份 × 10^4。
+                                             // 重复确认幂等。
+    assert!(!super::confirm_transaction(&store, tid).unwrap());
+    // 不存在交易 404。
+    assert!(matches!(
+        super::confirm_transaction(&store, 999),
+        Err(LedgerError::NotFound(_))
+    ));
+    // 确认后删除 → 再确认拒绝（软删除保护）。
+    crate::corrections::delete_transaction(&store, tid, "误录", "2026-10-02").unwrap();
+    assert!(matches!(
+        super::confirm_transaction(&store, tid),
+        Err(LedgerError::Invalid(_))
+    ));
+}

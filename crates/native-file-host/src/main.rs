@@ -28,6 +28,7 @@ mod launcher_setup;
 mod preview;
 mod protocol;
 mod search;
+pub mod service;
 mod session;
 mod watch;
 mod workspace_dispatch;
@@ -38,11 +39,12 @@ mod tests;
 
 use app_store::AppStore;
 use batch::{emit_archive_progress, run_batch};
+mod sql_diag;
 use dispatch::handle;
 use import::handle_import;
 use preview::run_preview;
 use protocol::{read_frame, respond, safe_error, validate_request, Request, Response};
-use search::run_search;
+use search::{run_locate, run_search};
 use session::{reap_finished_jobs, shutdown_jobs, ActiveJobs};
 use watch::WatchManager;
 use workspace_store::WorkspaceStore;
@@ -58,6 +60,25 @@ fn main() -> io::Result<()> {
     // Launcher 引导流：检测/准备受管 Extension 目录、打开 Chrome 扩展页 +
     // Finder、有界轮询握手标记后退出（不常驻，方案 §Launcher）。
     let cli_args: Vec<String> = std::env::args().skip(1).collect();
+    if cli_args.first().map(String::as_str) == Some("--launcher-web") {
+        let result = if cli_args.len() > 2 {
+            Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "unknown launcher arguments",
+            ))
+        } else {
+            service::launcher::open_web(cli_args.get(1).map(String::as_str).unwrap_or("space"))
+        };
+        match result {
+            Ok(()) => println!("{{\"step\":\"opened_web\"}}"),
+            Err(_) => {
+                eprintln!("Natives: local Web handoff failed");
+                println!("{{\"step\":\"web_open_failed\"}}");
+                std::process::exit(1);
+            }
+        }
+        return Ok(());
+    }
     if cli_args.first().map(String::as_str) == Some("--launcher-setup")
         || cli_args.first().map(String::as_str) == Some("--reveal-extension-dir")
     {
@@ -69,9 +90,59 @@ fn main() -> io::Result<()> {
         // 据此转入 --launcher-setup 引导）。
         std::process::exit(launcher_setup::run_launcher_default(&cli_args));
     }
+    if cli_args.first().map(String::as_str) == Some("--pair") {
+        let port = cli_args
+            .iter()
+            .position(|a| a == "--port")
+            .and_then(|idx| cli_args.get(idx + 1))
+            .and_then(|p| p.parse::<u16>().ok())
+            .unwrap_or_else(service::default_port);
+        if !service::relay::check_service_health(port) {
+            eprintln!("natives: service is not running on port {port}.");
+            std::process::exit(1);
+        }
+        let secret = service::read_relay_secret().unwrap_or_default();
+        match service::request_pairing_code(port, &secret) {
+            Ok(code) => {
+                println!("Natives Web 配对码: {code} (5 分钟有效)");
+                println!("浏览器访问: http://127.0.0.1:{port}/");
+                std::process::exit(0);
+            }
+            Err(e) => {
+                eprintln!("natives: failed to generate pairing code: {e}");
+                std::process::exit(1);
+            }
+        }
+    }
+    if cli_args.contains(&"--service".to_string()) {
+        let port = cli_args
+            .iter()
+            .position(|a| a == "--port")
+            .and_then(|idx| cli_args.get(idx + 1))
+            .and_then(|p| p.parse::<u16>().ok());
+        let bootstrap = cli_args
+            .iter()
+            .position(|a| a == "--bootstrap")
+            .and_then(|idx| cli_args.get(idx + 1))
+            .cloned();
+        return service::run_service(port, bootstrap);
+    }
+    if cli_args.contains(&"--relay".to_string()) {
+        let port = cli_args
+            .iter()
+            .position(|a| a == "--port")
+            .and_then(|idx| cli_args.get(idx + 1))
+            .and_then(|p| p.parse::<u16>().ok());
+        return service::relay::run_relay_loop(port.unwrap_or_else(service::default_port));
+    }
     #[cfg(debug_assertions)]
     if std::env::args().nth(1).as_deref() == Some("--app-fixture") {
         return app_fixture::run();
+    }
+    // 当 Chrome 通过 Native Messaging 启动本进程时，确保单一 Writer：
+    // 优先启动/连接受 OS 锁保护的服务并走轻量级 Relay（ADR-0042）。
+    if !cfg!(debug_assertions) || std::env::var("NATIVES_DISABLE_RELAY").as_deref() != Ok("1") {
+        return service::ensure_service_and_run_relay(None);
     }
     let mut input = io::stdin().lock();
     let writer = Arc::new(Mutex::new(io::stdout()));
@@ -132,6 +203,7 @@ fn main() -> io::Result<()> {
         if request.method == "search_cancel"
             || request.method == "preview_cancel"
             || request.method == "batch_cancel"
+            || request.method == "locate_cancel"
         {
             let target = request
                 .params
@@ -231,6 +303,7 @@ fn main() -> io::Result<()> {
             continue;
         }
         if request.method == "search"
+            || request.method == "locate"
             || request.method == "read_file"
             || request.method == "archive_list"
             || request.method == "extract_archive"
@@ -262,9 +335,13 @@ fn main() -> io::Result<()> {
                     request.method.as_str(),
                     "copy_batch" | "move_batch" | "trash_batch" | "duplicate_batch"
                 ) {
-                    run_batch(&request, &token, Some(&writer))
+                    run_batch(&request, &token, Some(&writer), None)
                 } else if request.method == "search" {
                     run_search(&request, Some(&token))
+                } else if request.method == "locate" {
+                    // locate 从同步 dispatch 移入有界任务：可取消、受并发上限
+                    // 约束，不再阻塞主读取循环（F6/L14）。
+                    run_locate(&request, Some(&token))
                 } else if request.method == "extract_archive" {
                     match (
                         request.params.get("path").and_then(Value::as_str),

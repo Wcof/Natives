@@ -1,56 +1,58 @@
       <!-- 2. 热门板块模块（上下联动布局：上面是板块，下面是该板块所在股票，去除分钟K线） -->
       <section id="view-market" hidden>
+        <header class="investment-page-head"><div><h2 data-i18n="fundMarketDiscovery">市场发现</h2><p data-i18n="fundMarketScope">按来源行情显示板块与成分股，涨跌不代表个人收益。</p></div></header>
+        <p id="market-status" role="status" aria-live="polite"></p>
         <div class="sectors-layout">
           <!-- 上半部分：热门板块列表 -->
           <div class="toolbar-bar">
             <div class="group-tabs" id="sector-category-tabs">
-              <div class="group-tab active" data-type="all">全部板块</div>
-              <div class="group-tab" data-type="concept">概念板块</div>
-              <div class="group-tab" data-type="industry">行业板块</div>
-              <div class="group-tab" data-type="region">地域板块</div>
+              <button type="button" class="group-tab active" data-type="all" data-i18n="fundMarketCategoryAll">全部板块</button>
+              <button type="button" class="group-tab" data-type="concept" data-i18n="fundMarketCategoryConcept">概念板块</button>
+              <button type="button" class="group-tab" data-type="industry" data-i18n="fundMarketCategoryIndustry">行业板块</button>
+              <button type="button" class="group-tab" data-type="region" data-i18n="fundMarketCategoryRegion">地域板块</button>
             </div>
-            <div style="font-size: 12px; color: var(--natives-text-muted);">
-              实时板块轮动监控 · 点击板块查看对应股票
-            </div>
+            <div style="font-size: 12px; color: var(--natives-text-muted);"><span data-i18n="fundMarketUiSectorsSelectASectorToViewConstituents">板块行情 · 选择板块查看成分股</span></div>
           </div>
-          <div class="sector-table-wrap">
+          <p class="investment-card-tip" data-i18n="fundMarketResearchScope"></p>
+          <div id="market-candidates" class="investment-asset-grid"></div>
+          <details class="card market-details"><summary data-i18n="fundMarketDetailedQuotes"></summary><div class="sector-table-wrap">
             <table class="data-table" id="sectors-table">
               <thead>
                 <tr>
-                  <th style="width: 44px;">序号</th>
-                  <th class="sortable" data-key="name">板块名称</th>
-                  <th class="num sortable" data-key="changePct">涨幅%</th>
-                  <th class="num sortable" data-key="speed">涨速%</th>
-                  <th class="sortable" data-key="topStockName">领涨股</th>
-                  <th class="num sortable" data-key="topStockPrice">领涨股现价</th>
-                  <th class="num sortable" data-key="topStockChangePct">领涨股涨幅</th>
-                  <th class="num sortable" data-key="changePct5">5日涨幅%</th>
-                  <th class="num sortable" data-key="changePct20">20日涨幅%</th>
+                  <th style="width: 44px;"><span data-i18n="fundMarketUiNo">序号</span></th>
+                  <th class="sortable" data-key="name"><span data-i18n="fundMarketSectorName">板块名称</span></th>
+                  <th class="num sortable" data-key="changePct"><span data-i18n="fundMarketChangePercent">涨幅%</span></th>
+                  <th class="num sortable" data-key="speed"><span data-i18n="fundMarketSpeed">涨速%</span></th>
+                  <th class="sortable" data-key="topStockName"><span data-i18n="fundMarketUiTopGainer">领涨股</span></th>
+                  <th class="num sortable" data-key="topStockPrice"><span data-i18n="fundMarketTopPrice">领涨股现价</span></th>
+                  <th class="num sortable" data-key="topStockChangePct"><span data-i18n="fundMarketTopChange">领涨股涨幅</span></th>
+                  <th class="num sortable" data-key="changePct5"><span data-i18n="fundMarketFiveDay">5日涨幅%</span></th>
+                  <th class="num sortable" data-key="changePct20"><span data-i18n="fundMarketTwentyDay">20日涨幅%</span></th>
                 </tr>
               </thead>
               <tbody></tbody>
             </table>
-          </div>
+          </div></details>
 
           <!-- 中间提示栏与下半部分：该板块所在股票列表 -->
           <div class="sector-stocks-header">
-            <span id="sector-stocks-title"><b>文化传媒</b> 板块个股</span>
-            <span class="sector-stocks-hint">点击个股行切换右侧盘口看板</span>
+            <span id="sector-stocks-title" data-i18n="fundMarketSelectSector">选择板块查看成分股</span>
+            <span class="sector-stocks-hint" data-i18n="fundMarketStockHint">点击个股行切换右侧盘口看板</span>
           </div>
           <div class="sector-stocks-table-wrap">
             <table class="data-table" id="sector-stocks-table">
               <thead>
                 <tr>
-                  <th style="width: 44px;">序号</th>
-                  <th class="sortable" data-key="code">代码</th>
-                  <th class="sortable" data-key="name">名称</th>
-                  <th class="num sortable" data-key="price">现价</th>
-                  <th class="num sortable" data-key="changePct">涨幅%</th>
-                  <th class="num sortable" data-key="change">涨跌</th>
-                  <th class="num sortable" data-key="volume">总量(手)</th>
-                  <th class="num sortable" data-key="turnover">换手%</th>
-                  <th class="num sortable" data-key="amplitude">振幅%</th>
-                  <th class="num sortable" data-key="volumeRatio">量比</th>
+                  <th style="width: 44px;"><span data-i18n="fundMarketUiNo">序号</span></th>
+                  <th class="sortable" data-key="code"><span data-i18n="fundLedgerColCode">代码</span></th>
+                  <th class="sortable" data-key="name"><span data-i18n="fundChartDrawingName">名称</span></th>
+                  <th class="num sortable" data-key="price"><span data-i18n="fundLedgerColPrice">现价</span></th>
+                  <th class="num sortable" data-key="changePct"><span data-i18n="fundMarketUiChange">涨幅%</span></th>
+                  <th class="num sortable" data-key="change"><span data-i18n="fundMarketUiChange">涨跌</span></th>
+                  <th class="num sortable" data-key="volume"><span data-i18n="fundMarketUiVolumeLots">总量(手)</span></th>
+                  <th class="num sortable" data-key="turnover"><span data-i18n="fundMarketUiTurnover">换手%</span></th>
+                  <th class="num sortable" data-key="amplitude"><span data-i18n="fundMarketUiAmplitude">振幅%</span></th>
+                  <th class="num sortable" data-key="volumeRatio"><span data-i18n="fundMarketUiVolumeRatio">量比</span></th>
                 </tr>
               </thead>
               <tbody></tbody>
@@ -58,4 +60,3 @@
           </div>
         </div>
       </section>
-

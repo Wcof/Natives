@@ -4,6 +4,7 @@
 mod cleanup;
 pub mod mutation;
 pub mod product;
+mod product_origin;
 pub mod query;
 pub mod schema;
 pub mod types;

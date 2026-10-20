@@ -1,0 +1,407 @@
+{
+ "donor": "src/modules/strategy/strategy_engine.py::_compute_rank_score",
+ "commit": "00b345b05145705afea9ea9d5cecc090c009d83c",
+ "adaptation": "quality_bonus=0;source_bonus=0;status=active;risk=medium → rank=clamp(base*weight,0,100)",
+ "cases": [
+  {
+   "base": 0,
+   "weightPpm": 950000,
+   "rank": 0
+  },
+  {
+   "base": 0,
+   "weightPpm": 1000000,
+   "rank": 0
+  },
+  {
+   "base": 0,
+   "weightPpm": 1050000,
+   "rank": 0
+  },
+  {
+   "base": 0,
+   "weightPpm": 1100000,
+   "rank": 0
+  },
+  {
+   "base": 0,
+   "weightPpm": 1150000,
+   "rank": 0
+  },
+  {
+   "base": 0,
+   "weightPpm": 1180000,
+   "rank": 0
+  },
+  {
+   "base": 0,
+   "weightPpm": 2000000,
+   "rank": 0
+  },
+  {
+   "base": 0,
+   "weightPpm": 3000000,
+   "rank": 0
+  },
+  {
+   "base": 1,
+   "weightPpm": 950000,
+   "rank": 0
+  },
+  {
+   "base": 1,
+   "weightPpm": 1000000,
+   "rank": 1
+  },
+  {
+   "base": 1,
+   "weightPpm": 1050000,
+   "rank": 1
+  },
+  {
+   "base": 1,
+   "weightPpm": 1100000,
+   "rank": 1
+  },
+  {
+   "base": 1,
+   "weightPpm": 1150000,
+   "rank": 1
+  },
+  {
+   "base": 1,
+   "weightPpm": 1180000,
+   "rank": 1
+  },
+  {
+   "base": 1,
+   "weightPpm": 2000000,
+   "rank": 2
+  },
+  {
+   "base": 1,
+   "weightPpm": 3000000,
+   "rank": 3
+  },
+  {
+   "base": 15,
+   "weightPpm": 950000,
+   "rank": 14
+  },
+  {
+   "base": 15,
+   "weightPpm": 1000000,
+   "rank": 15
+  },
+  {
+   "base": 15,
+   "weightPpm": 1050000,
+   "rank": 15
+  },
+  {
+   "base": 15,
+   "weightPpm": 1100000,
+   "rank": 16
+  },
+  {
+   "base": 15,
+   "weightPpm": 1150000,
+   "rank": 17
+  },
+  {
+   "base": 15,
+   "weightPpm": 1180000,
+   "rank": 17
+  },
+  {
+   "base": 15,
+   "weightPpm": 2000000,
+   "rank": 30
+  },
+  {
+   "base": 15,
+   "weightPpm": 3000000,
+   "rank": 45
+  },
+  {
+   "base": 52,
+   "weightPpm": 950000,
+   "rank": 49
+  },
+  {
+   "base": 52,
+   "weightPpm": 1000000,
+   "rank": 52
+  },
+  {
+   "base": 52,
+   "weightPpm": 1050000,
+   "rank": 54
+  },
+  {
+   "base": 52,
+   "weightPpm": 1100000,
+   "rank": 57
+  },
+  {
+   "base": 52,
+   "weightPpm": 1150000,
+   "rank": 59
+  },
+  {
+   "base": 52,
+   "weightPpm": 1180000,
+   "rank": 61
+  },
+  {
+   "base": 52,
+   "weightPpm": 2000000,
+   "rank": 100
+  },
+  {
+   "base": 52,
+   "weightPpm": 3000000,
+   "rank": 100
+  },
+  {
+   "base": 70,
+   "weightPpm": 950000,
+   "rank": 66
+  },
+  {
+   "base": 70,
+   "weightPpm": 1000000,
+   "rank": 70
+  },
+  {
+   "base": 70,
+   "weightPpm": 1050000,
+   "rank": 73
+  },
+  {
+   "base": 70,
+   "weightPpm": 1100000,
+   "rank": 77
+  },
+  {
+   "base": 70,
+   "weightPpm": 1150000,
+   "rank": 80
+  },
+  {
+   "base": 70,
+   "weightPpm": 1180000,
+   "rank": 82
+  },
+  {
+   "base": 70,
+   "weightPpm": 2000000,
+   "rank": 100
+  },
+  {
+   "base": 70,
+   "weightPpm": 3000000,
+   "rank": 100
+  },
+  {
+   "base": 72,
+   "weightPpm": 950000,
+   "rank": 68
+  },
+  {
+   "base": 72,
+   "weightPpm": 1000000,
+   "rank": 72
+  },
+  {
+   "base": 72,
+   "weightPpm": 1050000,
+   "rank": 75
+  },
+  {
+   "base": 72,
+   "weightPpm": 1100000,
+   "rank": 79
+  },
+  {
+   "base": 72,
+   "weightPpm": 1150000,
+   "rank": 82
+  },
+  {
+   "base": 72,
+   "weightPpm": 1180000,
+   "rank": 84
+  },
+  {
+   "base": 72,
+   "weightPpm": 2000000,
+   "rank": 100
+  },
+  {
+   "base": 72,
+   "weightPpm": 3000000,
+   "rank": 100
+  },
+  {
+   "base": 78,
+   "weightPpm": 950000,
+   "rank": 74
+  },
+  {
+   "base": 78,
+   "weightPpm": 1000000,
+   "rank": 78
+  },
+  {
+   "base": 78,
+   "weightPpm": 1050000,
+   "rank": 81
+  },
+  {
+   "base": 78,
+   "weightPpm": 1100000,
+   "rank": 85
+  },
+  {
+   "base": 78,
+   "weightPpm": 1150000,
+   "rank": 89
+  },
+  {
+   "base": 78,
+   "weightPpm": 1180000,
+   "rank": 92
+  },
+  {
+   "base": 78,
+   "weightPpm": 2000000,
+   "rank": 100
+  },
+  {
+   "base": 78,
+   "weightPpm": 3000000,
+   "rank": 100
+  },
+  {
+   "base": 87,
+   "weightPpm": 950000,
+   "rank": 82
+  },
+  {
+   "base": 87,
+   "weightPpm": 1000000,
+   "rank": 87
+  },
+  {
+   "base": 87,
+   "weightPpm": 1050000,
+   "rank": 91
+  },
+  {
+   "base": 87,
+   "weightPpm": 1100000,
+   "rank": 95
+  },
+  {
+   "base": 87,
+   "weightPpm": 1150000,
+   "rank": 100
+  },
+  {
+   "base": 87,
+   "weightPpm": 1180000,
+   "rank": 100
+  },
+  {
+   "base": 87,
+   "weightPpm": 2000000,
+   "rank": 100
+  },
+  {
+   "base": 87,
+   "weightPpm": 3000000,
+   "rank": 100
+  },
+  {
+   "base": 99,
+   "weightPpm": 950000,
+   "rank": 94
+  },
+  {
+   "base": 99,
+   "weightPpm": 1000000,
+   "rank": 99
+  },
+  {
+   "base": 99,
+   "weightPpm": 1050000,
+   "rank": 100
+  },
+  {
+   "base": 99,
+   "weightPpm": 1100000,
+   "rank": 100
+  },
+  {
+   "base": 99,
+   "weightPpm": 1150000,
+   "rank": 100
+  },
+  {
+   "base": 99,
+   "weightPpm": 1180000,
+   "rank": 100
+  },
+  {
+   "base": 99,
+   "weightPpm": 2000000,
+   "rank": 100
+  },
+  {
+   "base": 99,
+   "weightPpm": 3000000,
+   "rank": 100
+  },
+  {
+   "base": 100,
+   "weightPpm": 950000,
+   "rank": 95
+  },
+  {
+   "base": 100,
+   "weightPpm": 1000000,
+   "rank": 100
+  },
+  {
+   "base": 100,
+   "weightPpm": 1050000,
+   "rank": 100
+  },
+  {
+   "base": 100,
+   "weightPpm": 1100000,
+   "rank": 100
+  },
+  {
+   "base": 100,
+   "weightPpm": 1150000,
+   "rank": 100
+  },
+  {
+   "base": 100,
+   "weightPpm": 1180000,
+   "rank": 100
+  },
+  {
+   "base": 100,
+   "weightPpm": 2000000,
+   "rank": 100
+  },
+  {
+   "base": 100,
+   "weightPpm": 3000000,
+   "rank": 100
+  }
+ ]
+}

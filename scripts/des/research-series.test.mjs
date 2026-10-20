@@ -1,0 +1,13 @@
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import vm from 'node:vm';
+const calls=[];
+const context={Fund:{api:async(method,path)=>{calls.push(path);return path.includes('beforeDate')?{nav:[{navDate:'2026-09-04',unitNav:'1.0200',source:'provider'}]}:{nav:[{navDate:'2026-09-07',unitNav:'1.0300',source:'provider'}],nextCursor:'2026-09-07'};},themeColor:key=>key,t:key=>key}};
+vm.runInNewContext(readFileSync(new URL('../../modules/fund/ui/src/research-series.js',import.meta.url),'utf8'),context);
+const research=context.Fund.researchSeries;
+assert.equal(research.kind('jj005827'),'fund');assert.equal(research.kind('sz000001'),'stock');assert.equal(research.kind('sh510300'),'etf');
+const rows=await research.nav('jj005827');assert.equal(rows.length,2);assert.deepEqual(Array.from(rows,r=>r.navDate),['2026-09-04','2026-09-07']);assert.equal(calls.length,2);assert.match(calls[0],/code=005827&/);assert.doesNotMatch(calls[0],/code=jj/);assert.match(calls[1],/beforeDate=2026-09-07/);
+assert.deepEqual(Array.from(research.navRows(rows,'month'),r=>r.navDate),['2026-09-07']);
+assert.deepEqual(Array.from(research.navRows(rows,'week'),r=>r.navDate),['2026-09-04','2026-09-07']);
+const option=research.navOption([...rows,{navDate:'2026-09-08',unitNav:'NaN'}]);assert.equal(option.series.length,1);assert.equal(option.series[0].type,'line');assert.equal(option.series[0].data[2],null);assert.equal(option.xAxis.data[0],'2026-09-04');
+console.log('research series: qualified type, paged actual dates, week/month last NAV and missing-value gap passed');

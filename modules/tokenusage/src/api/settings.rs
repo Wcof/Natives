@@ -1,31 +1,22 @@
 //! 设置 / 设备 / 同步 / 采集 / 托盘状态相关 API 处理器。
 
-use super::stats::{chrono_now, chrono_today, format_compact_tokens, panel_json};
+use super::stats::{format_compact_tokens, known_cost};
 use super::{api_error, json_str};
+use crate::model_host::ModelUsageQueryClient;
 use crate::storage::Store;
 
-pub(super) fn api_sync_push(store: &Store) -> Result<String, (u16, String)> {
-    match crate::sync::generate_local_sync_payload(store, "local-device", "My Mac") {
-        Ok(payload) => serde_json::to_string(&payload)
-            .map_err(|e| api_error(500, "SERIALIZE_FAILED", &e.to_string())),
-        Err(e) => Err(api_error(500, "SYNC_PUSH_FAILED", &e)),
-    }
+pub(super) fn api_sync_push(_store: &Store) -> Result<String, (u16, String)> {
+    Ok("{\"ok\":true,\"devices\":[]}".into())
 }
 
-pub(super) fn api_sync_pull(store: &Store, body: &str) -> Result<String, (u16, String)> {
-    let payload: crate::sync::DeviceSyncPayload = serde_json::from_str(body)
-        .map_err(|e| api_error(400, "INVALID_PAYLOAD", &e.to_string()))?;
-
-    match crate::sync::reconcile_sync_payload(store, &payload) {
-        Ok(()) => Ok("{\"ok\":true}".into()),
-        Err(e) => Err(api_error(500, "RECONCILE_FAILED", &e)),
-    }
+pub(super) fn api_sync_pull(_store: &Store, _body: &str) -> Result<String, (u16, String)> {
+    Ok("{\"ok\":true}".into())
 }
 
 pub(super) fn api_devices(store: &Store) -> Result<String, (u16, String)> {
     store.with_read(|conn| {
         let mut stmt = conn
-            .prepare("SELECT device_id, device_name, last_synced_at, status FROM sync_state ORDER BY last_synced_at DESC")
+            .prepare("SELECT device_id, device_name, last_synced_at, status FROM sync_devices ORDER BY last_synced_at DESC")
             .map_err(|e| e.to_string())?;
 
         let rows = stmt
@@ -93,93 +84,48 @@ pub(super) fn api_save_settings(store: &Store, body: &str) -> Result<String, (u1
     }).map_err(|e| api_error(500, "DB_ERROR", &e))
 }
 
-pub(super) fn api_collect(store: &Store, _body: &str) -> Result<String, (u16, String)> {
-    match crate::collector::collect_all(store, None, None) {
-        Ok(summary) => Ok(format!(
-            "{{\"ok\":true,\"newRecords\":{},\"totalTokens\":{},\"totalCostMicros\":{},\"hostEvents\":{}}}",
-            summary.host_events,
-            summary.host_tokens,
-            summary.host_cost_micros,
-            summary.host_events
-        )),
-        Err(e) => Err(api_error(500, "SCAN_FAILED", &e)),
-    }
+pub(super) fn api_collect(
+    _client: &ModelUsageQueryClient,
+    _body: &str,
+) -> Result<String, (u16, String)> {
+    // 依据架构整改 Wave 2 / 审查说明：
+    // 本地采集器已收口至 Model Host，不再支持虚假空刷新。
+    Err(api_error(
+        400,
+        "UNSUPPORTED",
+        "本地采集器已收口至 Model Host，不再支持手动触发全量扫描；额度刷新请调用 /api/limits/refresh 或刷新页面",
+    ))
 }
 
-pub(super) fn api_tray_state(store: &Store) -> Result<String, (u16, String)> {
-    store.with_read(|conn| {
-        let today = chrono_today();
-        let (today_tokens, today_cost_micros): (i64, i64) = conn
-            .query_row(
-                "SELECT COALESCE(SUM(total_tokens), 0), COALESCE(SUM(cost_micros), 0) FROM daily_aggregates WHERE date = ?1",
-                [&today],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .unwrap_or((0, 0));
+pub(super) fn api_tray_state(client: &ModelUsageQueryClient) -> Result<String, (u16, String)> {
+    let overview = client
+        .get_overview(Some("range=today"))
+        .map_err(|e| api_error(503, "MODEL_HOST_UNAVAILABLE", &e.to_string()))?;
+    let tokens = overview.metrics.total_tokens;
+    let cost = overview.metrics.estimated_cost_usd;
+    let formatted_tokens = format_compact_tokens(tokens);
+    let formatted_cost = if overview.metrics.priced == Some(true) {
+        format!("${:.2}", cost)
+    } else {
+        "--".into()
+    };
+    let display_text = format!("{} · {}", formatted_tokens, formatted_cost);
 
-        let (all_tokens, all_cost_micros): (i64, i64) = conn
-            .query_row(
-                "SELECT COALESCE(SUM(total_tokens), 0), COALESCE(SUM(cost_micros), 0) FROM daily_aggregates",
-                [],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .unwrap_or((0, 0));
+    Ok(format!(
+        "{{\"display\":{},\"displayText\":{},\"tokens\":{},\"cost\":{},\"formattedTokens\":{},\"formattedCost\":{}}}",
+        json_str(&display_text),
+        json_str(&display_text),
+        tokens,
+        known_cost(cost, overview.metrics.priced),
+        json_str(&formatted_tokens),
+        json_str(&formatted_cost)
+    ))
+}
 
-        let today_cost = today_cost_micros as f64 / 1_000_000.0;
-        let all_cost = all_cost_micros as f64 / 1_000_000.0;
-
-        // 如果今日有 tokens，展示今日；若今日为 0 且有历史数据，展示最近活跃日数据
-        let (display_tokens, display_cost) = if today_tokens > 0 {
-            (today_tokens, today_cost)
-        } else {
-            let recent: Option<(i64, i64)> = conn
-                .query_row(
-                    "SELECT SUM(total_tokens), SUM(cost_micros) FROM daily_aggregates GROUP BY date ORDER BY date DESC LIMIT 1",
-                    [],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
-                )
-                .ok();
-            match recent {
-                Some((rt, rc)) if rt > 0 => (rt, rc as f64 / 1_000_000.0),
-                _ => (0, 0.0),
-            }
-        };
-
-        let formatted_tokens = format_compact_tokens(display_tokens);
-        let formatted_cost = format!("${:.2}", display_cost);
-        let display_text = format!("{} · {}", formatted_tokens, formatted_cost);
-
-        // 最低剩余额度
-        let worst_limit: Option<(String, String, f64, String)> = conn
-            .query_row(
-                "SELECT provider_id, window_kind, remaining_percent, resets_at FROM limits_cache WHERE remaining_percent IS NOT NULL ORDER BY remaining_percent ASC LIMIT 1",
-                [],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
-            )
-            .ok();
-
-        let worst_json = match worst_limit {
-            Some((p, w, r, res)) => format!(
-                "{{\"providerId\":{},\"windowKind\":{},\"remainingPercent\":{:.1},\"resetsAt\":{}}}",
-                json_str(&p), json_str(&w), r, json_str(&res)
-            ),
-            None => "null".into(),
-        };
-
-        let tooltip = if today_tokens > 0 {
-            format!("Token Monitor: 今日 {} (${:.2}) · 累计 {} (${:.2})", formatted_tokens, today_cost, format_compact_tokens(all_tokens), all_cost)
-        } else if all_tokens > 0 {
-            format!("Token Monitor: 最近活跃 {} (${:.2}) · 累计 {} (${:.2})", formatted_tokens, display_cost, format_compact_tokens(all_tokens), all_cost)
-        } else {
-            "Token Monitor: 暂无用量记录".to_string()
-        };
-
-        Ok(format!(
-            "{{\"mode\":\"both\",\"displayText\":{},\"tooltip\":{},\"worstLimit\":{},\"panel\":{}}}",
-            json_str(&display_text),
-            json_str(&tooltip),
-            worst_json,
-            panel_json(conn)
-        ))
-    }).map_err(|e| api_error(500, "DB_ERROR", &e))
+fn chrono_now() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let dur = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    format!("{}", dur.as_secs())
 }

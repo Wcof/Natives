@@ -115,7 +115,11 @@ func (s *Store) InsertEvent(e *Event) error {
 func (s *Store) InsertEventIfAbsent(e *Event) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	return insertEventIfAbsent(e, s.db.Exec)
+}
 
+// 调用方持有 Store 锁；采集事务与普通事件写入共享同一入库路径。
+func insertEventIfAbsent(e *Event, exec func(string, ...any) (sql.Result, error)) (bool, error) {
 	if e.ID == "" {
 		e.ID = fmt.Sprintf("evt_%d_%d", time.Now().UnixNano(), time.Now().Nanosecond()%1000)
 	}
@@ -143,7 +147,7 @@ func (s *Store) InsertEventIfAbsent(e *Event) (bool, error) {
 			?, ?, ?, ?
 		)
 		`
-	result, err := s.db.Exec(
+	result, err := exec(
 		query,
 		e.ID, e.RequestedAt.Format(time.RFC3339Nano), e.LatencyMs, e.TTFTMs, e.Provider, e.AccountID,
 		e.Model, e.ModelAlias, e.Source, e.Endpoint, e.AccessKeyID, e.AccessKeyName,
@@ -158,7 +162,7 @@ func (s *Store) InsertEventIfAbsent(e *Event) (bool, error) {
 			return false, resultErr
 		}
 		if inserted > 0 {
-			_, err = s.db.Exec("UPDATE usage_metadata SET usage_revision = usage_revision + 1 WHERE id = 1")
+			_, err = exec("UPDATE usage_metadata SET usage_revision = usage_revision + 1 WHERE id = 1")
 		}
 		return inserted > 0, err
 	}
@@ -174,6 +178,17 @@ func (s *Store) buildFilterWhere(f Filter) (string, []interface{}) {
 func (s *Store) buildFilterWhereIn(f Filter, loc *time.Location) (string, []interface{}) {
 	var clauses []string
 	var args []interface{}
+	if f.SessionKey != "" {
+		parts := strings.SplitN(f.SessionKey, "|", 3)
+		if len(parts) != 3 {
+			clauses = append(clauses, "0")
+		} else {
+			clauses = append(clauses, "tool_id = ? AND source_instance_id = ? AND session_id = ?")
+			for _, part := range parts {
+				args = append(args, part)
+			}
+		}
+	}
 
 	now := time.Now().UTC()
 	switch f.Range {
@@ -256,8 +271,6 @@ func (s *Store) GetOverview(f Filter) (*OverviewResult, error) {
 		return nil, err
 	}
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	where, args := s.buildFilterWhereIn(f, loc)
 
 	var totalReqs, totalTokens, succCount, inputToks, outputToks, readToks, writeToks, reasToks, costMicro int64
@@ -285,12 +298,83 @@ func (s *Store) GetOverview(f Filter) (*OverviewResult, error) {
 		&costMicro, &minReq, &maxReq,
 	)
 	if err != nil {
+		s.mu.RUnlock()
+		return nil, err
+	}
+
+	// 本地采集的用量 cost_micro=0（无计费），零成本部分按 (provider, model)
+	// 聚合 token 分量，锁外按价格目录动态估算（FindPrice 内部再取读锁，
+	// 非重入锁在持锁期间调用会死锁——与 GetPricingCatalog 同一纪律）。
+	zeroRows, err := s.zeroCostRowsLocked("''", where, args)
+	if err != nil {
+		s.mu.RUnlock()
 		return nil, err
 	}
 
 	var allCount int64
-	s.db.QueryRow("SELECT COUNT(*) FROM usage_events").Scan(&allCount)
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM usage_events").Scan(&allCount); err != nil {
+		s.mu.RUnlock()
+		return nil, err
+	}
 
+	// 历史口径（T0）：按范围选桶，序列必须覆盖整个请求范围，不做 LIMIT 截断。
+	// 短范围（4h/24h/today）用小时桶（≤24 点）；长范围（7d/30d/all/custom）
+	// 用日桶（30d=30 点，all 有界为日粒度）。旧的固定小时桶 + LIMIT 400
+	// 在满负载 30 天（720 小时）时会从第 400 小时处截断且总数对不上。
+	// 整改 E2 §4.2：提供用户时区时，小时/日桶按该时区真实夏令时边界分桶。
+	bucketExpr := trendBucketSQLExpr(nil, false)
+	if f.Range == "7d" || f.Range == "30d" || f.Range == "all" || f.Range == "custom" || f.Range == "" {
+		bucketExpr = trendBucketSQLExpr(s.tzSegmentsForFilter(f, loc), true)
+	} else if loc != time.UTC {
+		bucketExpr = trendBucketSQLExpr(s.tzSegmentsForFilter(f, loc), false)
+	}
+	trendQuery := fmt.Sprintf(`
+		SELECT
+			%s as bucket,
+			COUNT(*),
+			SUM(total_tokens),
+			SUM(cost_micro)
+		FROM usage_events %s
+		GROUP BY bucket
+		ORDER BY bucket ASC
+	`, bucketExpr, where)
+
+	rows, err := s.db.Query(trendQuery, args...)
+	if err != nil {
+		s.mu.RUnlock()
+		return nil, err
+	}
+	var trend []TrendPoint
+	if err == nil {
+		for rows.Next() {
+			var p TrendPoint
+			var cMicro int64
+			if err := rows.Scan(&p.Timestamp, &p.Requests, &p.Tokens, &cMicro); err != nil {
+				rows.Close()
+				s.mu.RUnlock()
+				return nil, err
+			}
+			p.CostUSD = float64(cMicro) / 1000000.0
+			trend = append(trend, p)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			s.mu.RUnlock()
+			return nil, err
+		}
+		rows.Close()
+	}
+	s.mu.RUnlock()
+	metricsPriced := true
+	var zeroCostMicro int64
+	estimates, err := estimateZeroCostByGroup(s, zeroRows)
+	if err != nil {
+		return nil, err
+	}
+	for _, v := range estimates {
+		zeroCostMicro += v.Micro
+		metricsPriced = metricsPriced && v.Priced
+	}
 	status := "ready"
 	if allCount == 0 {
 		status = "empty"
@@ -318,42 +402,6 @@ func (s *Store) GetOverview(f Filter) (*OverviewResult, error) {
 		}
 	}
 
-	// 历史口径（T0）：按范围选桶，序列必须覆盖整个请求范围，不做 LIMIT 截断。
-	// 短范围（4h/24h/today）用小时桶（≤24 点）；长范围（7d/30d/all/custom）
-	// 用日桶（30d=30 点，all 有界为日粒度）。旧的固定小时桶 + LIMIT 400
-	// 在满负载 30 天（720 小时）时会从第 400 小时处截断且总数对不上。
-	// 整改 E2 §4.2：提供用户时区时，小时/日桶按该时区真实夏令时边界分桶。
-	bucketExpr := trendBucketSQLExpr(nil, false)
-	if f.Range == "7d" || f.Range == "30d" || f.Range == "all" || f.Range == "custom" || f.Range == "" {
-		bucketExpr = trendBucketSQLExpr(s.tzSegmentsForFilter(f, loc), true)
-	} else if loc != time.UTC {
-		bucketExpr = trendBucketSQLExpr(s.tzSegmentsForFilter(f, loc), false)
-	}
-	trendQuery := fmt.Sprintf(`
-		SELECT
-			%s as bucket,
-			COUNT(*),
-			SUM(total_tokens),
-			SUM(cost_micro)
-		FROM usage_events %s
-		GROUP BY bucket
-		ORDER BY bucket ASC
-	`, bucketExpr, where)
-
-	rows, err := s.db.Query(trendQuery, args...)
-	var trend []TrendPoint
-	if err == nil {
-		defer rows.Close()
-		for rows.Next() {
-			var p TrendPoint
-			var cMicro int64
-			if err := rows.Scan(&p.Timestamp, &p.Requests, &p.Tokens, &cMicro); err == nil {
-				p.CostUSD = float64(cMicro) / 1000000.0
-				trend = append(trend, p)
-			}
-		}
-	}
-
 	return &OverviewResult{
 		Status:           status,
 		TotalEventsCount: allCount,
@@ -363,7 +411,8 @@ func (s *Store) GetOverview(f Filter) (*OverviewResult, error) {
 			SuccessRate:      successRate,
 			TPS:              tps,
 			CacheHitRate:     cacheHitRate,
-			EstimatedCostUSD: float64(costMicro) / 1000000.0,
+			EstimatedCostUSD: float64(costMicro+zeroCostMicro) / 1000000.0,
+			Priced:           metricsPriced,
 		},
 		Trend: trend,
 		Tokens: TokenComposition{
@@ -382,10 +431,9 @@ func (s *Store) GetAnalytics(f Filter) (*AnalyticsResult, error) {
 		return nil, err
 	}
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	where, args := s.buildFilterWhereIn(f, loc)
 
+	var rankError error
 	runRankQuery := func(column, aliasCol string) []RankItem {
 		q := fmt.Sprintf(`
 			SELECT
@@ -402,7 +450,8 @@ func (s *Store) GetAnalytics(f Filter) (*AnalyticsResult, error) {
 
 		rows, err := s.db.Query(q, args...)
 		if err != nil {
-			return []RankItem{}
+			rankError = err
+			return nil
 		}
 		defer rows.Close()
 
@@ -411,11 +460,18 @@ func (s *Store) GetAnalytics(f Filter) (*AnalyticsResult, error) {
 		for rows.Next() {
 			var it RankItem
 			var cMicro int64
-			if err := rows.Scan(&it.Key, &it.Name, &it.Requests, &it.Tokens, &cMicro); err == nil {
+			if err := rows.Scan(&it.Key, &it.Name, &it.Requests, &it.Tokens, &cMicro); err != nil {
+				rankError = err
+				return nil
+			} else {
 				it.CostUSD = float64(cMicro) / 1000000.0
 				sumReqs += it.Requests
 				list = append(list, it)
 			}
+		}
+		if err := rows.Err(); err != nil {
+			rankError = err
+			return nil
 		}
 		for i := range list {
 			if sumReqs > 0 {
@@ -425,14 +481,88 @@ func (s *Store) GetAnalytics(f Filter) (*AnalyticsResult, error) {
 		return list
 	}
 
+	byModel, byModelZeroRows, err := s.analyticsByModelLocked(where, args)
+	if err != nil {
+		s.mu.RUnlock()
+		return nil, err
+	}
+	byProvider := runRankQuery("provider", "provider")
+	bySource := runRankQuery("source", "source")
+	byAccessKey := runRankQuery("access_key_id", "COALESCE(NULLIF(access_key_name, ''), access_key_id)")
+	byHour := runRankQuery("strftime('%H', requested_at)", "strftime('%H', requested_at) || ':00'")
+	s.mu.RUnlock()
+	if rankError != nil {
+		return nil, rankError
+	}
+
+	// 锁外按价格目录估算零成本行（FindPrice 内部会再取读锁，非重入）
+	byKeyCost, err := estimateZeroCostByGroup(s, byModelZeroRows)
+	if err != nil {
+		return nil, err
+	}
+	for i := range byModel {
+		if est, ok := byKeyCost[byModel[i].Key]; ok {
+			byModel[i].CostUSD += float64(est.Micro) / 1000000.0
+			byModel[i].Priced = est.Priced
+		}
+	}
+
 	return &AnalyticsResult{
 		Status:      "ready",
-		ByModel:     runRankQuery("model", "COALESCE(NULLIF(model_alias, ''), model)"),
-		ByProvider:  runRankQuery("provider", "provider"),
-		BySource:    runRankQuery("source", "source"),
-		ByAccessKey: runRankQuery("access_key_id", "COALESCE(NULLIF(access_key_name, ''), access_key_id)"),
-		ByHour:      runRankQuery("strftime('%H', requested_at)", "strftime('%H', requested_at) || ':00'"),
+		ByModel:     byModel,
+		ByProvider:  byProvider,
+		BySource:    bySource,
+		ByAccessKey: byAccessKey,
+		ByHour:      byHour,
 	}, nil
+}
+
+// analyticsByModelLocked 为「使用情况」的模型聚合（读锁内调用）：显示名（别名
+// 优先）分组、按 token 降序，并返回零成本行的 (provider, model) token 分量
+// （Key=显示名）供调用方解锁后按价格目录估算金额。返回的两个切片均已完成扫描。
+func (s *Store) analyticsByModelLocked(where string, args []any) ([]RankItem, []zeroCostRow, error) {
+	q := fmt.Sprintf(`
+		SELECT COALESCE(NULLIF(model_alias, ''), model) as k,
+			COUNT(*) as reqs,
+			COALESCE(SUM(total_tokens), 0) as toks,
+			COALESCE(SUM(cost_micro), 0) as cost
+		FROM usage_events %s
+		GROUP BY k
+		ORDER BY toks DESC
+		LIMIT 100
+	`, where)
+	var list []RankItem
+	rows, err := s.db.Query(q, args...)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err == nil {
+		for rows.Next() {
+			var it RankItem
+			var cMicro int64
+			if err := rows.Scan(&it.Key, &it.Requests, &it.Tokens, &cMicro); err != nil {
+				rows.Close()
+				return nil, nil, err
+			} else {
+				it.Name = it.Key
+				it.CostUSD = float64(cMicro) / 1000000.0
+				it.Priced = true
+				list = append(list, it)
+			}
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return nil, nil, err
+		}
+		rows.Close()
+	}
+
+	zeroRows, err := s.zeroCostRowsLocked("COALESCE(NULLIF(model_alias, ''), model)", where, args)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	return list, zeroRows, nil
 }
 
 func (s *Store) GetEvents(f Filter) (*EventsResult, error) {
@@ -446,7 +576,9 @@ func (s *Store) GetEvents(f Filter) (*EventsResult, error) {
 	where, args := s.buildFilterWhereIn(f, loc)
 
 	var total int64
-	s.db.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM usage_events %s", where), args...).Scan(&total)
+	if err := s.db.QueryRow(fmt.Sprintf("SELECT COUNT(*) FROM usage_events %s", where), args...).Scan(&total); err != nil {
+		return nil, err
+	}
 
 	limit := f.Limit
 	if limit <= 0 || limit > 100 {
@@ -479,7 +611,8 @@ func (s *Store) GetEvents(f Filter) (*EventsResult, error) {
 			model, model_alias, source, endpoint, access_key_id, access_key_name,
 			result, http_status, error_code, error_summary,
 			input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
-			reasoning_tokens, total_tokens, cost_micro, service_tier, created_at
+			reasoning_tokens, total_tokens, cost_micro, service_tier, created_at,
+			session_id, tool_id, source_instance_id
 		FROM usage_events %s
 		ORDER BY %s %s
 		LIMIT ? OFFSET ?
@@ -501,12 +634,17 @@ func (s *Store) GetEvents(f Filter) (*EventsResult, error) {
 			&e.Result, &e.HTTPStatus, &e.ErrorCode, &e.ErrorSummary,
 			&e.InputTokens, &e.OutputTokens, &e.CacheReadTokens, &e.CacheWriteTokens,
 			&e.ReasoningTokens, &e.TotalTokens, &e.CostMicro, &e.ServiceTier, &creStr,
+			&e.SessionID, &e.ToolID, &e.SourceInstanceID,
 		)
-		if err == nil {
-			e.RequestedAt, _ = time.Parse(time.RFC3339Nano, reqStr)
-			e.CreatedAt, _ = time.Parse(time.RFC3339Nano, creStr)
-			events = append(events, e)
+		if err != nil {
+			return nil, err
 		}
+		e.RequestedAt, _ = time.Parse(time.RFC3339Nano, reqStr)
+		e.CreatedAt, _ = time.Parse(time.RFC3339Nano, creStr)
+		events = append(events, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
 	}
 
 	page := (offset / limit) + 1
@@ -531,8 +669,9 @@ func (s *Store) GetSessions(f Filter) (*SessionsResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	// 读锁只覆盖查询阶段；会话金额的动态计价（FindPrice 内部再取读锁，非重入）
+	// 在解锁后进行。
 	s.mu.RLock()
-	defer s.mu.RUnlock()
 
 	where, args := s.buildFilterWhereIn(f, loc)
 	sessKey := "tool_id || '|' || source_instance_id || '|' || session_id"
@@ -545,11 +684,15 @@ func (s *Store) GetSessions(f Filter) (*SessionsResult, error) {
 		FROM usage_events %s
 	`, sessKey, where), args...).Scan(&totalSessions, &unattributed)
 	if err != nil {
+		s.mu.RUnlock()
 		return nil, err
 	}
 
 	var allCount int64
-	s.db.QueryRow("SELECT COUNT(*) FROM usage_events").Scan(&allCount)
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM usage_events").Scan(&allCount); err != nil {
+		s.mu.RUnlock()
+		return nil, err
+	}
 	status := "ready"
 	if allCount == 0 {
 		status = "empty"
@@ -573,17 +716,29 @@ func (s *Store) GetSessions(f Filter) (*SessionsResult, error) {
 			GROUP BY day, sk
 		) GROUP BY day ORDER BY day ASC
 	`, dayExpr, sessKey, sessWhere), args...)
+	if err != nil {
+		s.mu.RUnlock()
+		return nil, err
+	}
 	var byDay []DayCount
 	activeDays := int64(0)
 	if err == nil {
 		defer dayRows.Close()
 		for dayRows.Next() {
 			var d DayCount
-			if err := dayRows.Scan(&d.Date, &d.Sessions); err == nil {
+			if err := dayRows.Scan(&d.Date, &d.Sessions); err != nil {
+				s.mu.RUnlock()
+				return nil, err
+			} else {
 				byDay = append(byDay, d)
 				activeDays++
 			}
 		}
+		if err := dayRows.Err(); err != nil {
+			s.mu.RUnlock()
+			return nil, err
+		}
+		dayRows.Close()
 	}
 
 	// 按工具排名：每个工具的 distinct 三元会话数。
@@ -593,6 +748,10 @@ func (s *Store) GetSessions(f Filter) (*SessionsResult, error) {
 		FROM usage_events %s
 		GROUP BY tool_id ORDER BY sessions DESC LIMIT 100
 	`, sessKey, sessWhere), args...)
+	if err != nil {
+		s.mu.RUnlock()
+		return nil, err
+	}
 	var bySource []RankItem
 	if err == nil {
 		defer srcRows.Close()
@@ -601,16 +760,26 @@ func (s *Store) GetSessions(f Filter) (*SessionsResult, error) {
 			var cMicro int64
 			var sessions int64
 			// RankItem.Requests 在此承载 distinct 会话数；Tokens 承载该工具总 Token。
-			if err := srcRows.Scan(&it.Key, &it.Name, &sessions, &it.Requests, &it.Tokens, &cMicro); err == nil {
+			if err := srcRows.Scan(&it.Key, &it.Name, &sessions, &it.Requests, &it.Tokens, &cMicro); err != nil {
+				s.mu.RUnlock()
+				return nil, err
+			} else {
 				it.Requests = sessions
 				it.Name = it.Key
 				it.CostUSD = float64(cMicro) / 1000000.0
 				bySource = append(bySource, it)
 			}
 		}
+		if err := srcRows.Err(); err != nil {
+			s.mu.RUnlock()
+			return nil, err
+		}
+		srcRows.Close()
 	}
 
-	// 会话明细（分页）：三元键逐一展开。
+	// 会话明细（分页）：三元键逐一展开；标题取 usage_subjects（kind=session，
+	// 由来源适配器显式注册），零成本行按 (会话, provider, model) 细分以供
+	// 解锁后按价格目录动态估算金额。
 	limit := f.Limit
 	if limit <= 0 || limit > 100 {
 		limit = 50
@@ -620,26 +789,65 @@ func (s *Store) GetSessions(f Filter) (*SessionsResult, error) {
 		offset = 0
 	}
 	sessRows, err := s.db.Query(fmt.Sprintf(`
-		SELECT %s as sk, tool_id, source_instance_id, COUNT(*) as reqs,
-			COALESCE(SUM(total_tokens),0) as toks, COALESCE(SUM(cost_micro),0) as cost,
-			MIN(requested_at), MAX(requested_at)
-		FROM usage_events %s
-		GROUP BY sk ORDER BY MAX(requested_at) DESC
-		LIMIT ? OFFSET ?
+		SELECT s.sk, s.tool_id, s.source_instance_id, s.reqs, s.toks, s.cost,
+			s.first_at, s.last_at, COALESCE(us.label, '')
+		FROM (
+			SELECT %s as sk, tool_id, source_instance_id, COUNT(*) as reqs,
+				COALESCE(SUM(total_tokens),0) as toks, COALESCE(SUM(cost_micro),0) as cost,
+				MIN(requested_at) as first_at, MAX(requested_at) as last_at, session_id
+			FROM usage_events %s
+			GROUP BY sk ORDER BY MAX(requested_at) DESC
+			LIMIT ? OFFSET ?
+		) s
+		LEFT JOIN usage_subjects us ON us.kind = 'session' AND us.id = s.session_id
 	`, sessKey, sessWhere), append(args, limit, offset)...)
+	if err != nil {
+		s.mu.RUnlock()
+		return nil, err
+	}
 	var sessions []SessionStat
 	if err == nil {
-		defer sessRows.Close()
 		for sessRows.Next() {
 			var st SessionStat
 			var cMicro int64
 			var firstStr, lastStr string
-			if err := sessRows.Scan(&st.Key, &st.ToolID, &st.SourceInstanceID, &st.Requests, &st.Tokens, &cMicro, &firstStr, &lastStr); err == nil {
+			if err := sessRows.Scan(&st.Key, &st.ToolID, &st.SourceInstanceID, &st.Requests, &st.Tokens, &cMicro, &firstStr, &lastStr, &st.Title); err != nil {
+				sessRows.Close()
+				s.mu.RUnlock()
+				return nil, err
+			} else {
 				st.CostUSD = float64(cMicro) / 1000000.0
+				st.Priced = true
 				st.FirstAt = firstStr
 				st.LastAt = lastStr
 				sessions = append(sessions, st)
 			}
+		}
+		if err := sessRows.Err(); err != nil {
+			sessRows.Close()
+			s.mu.RUnlock()
+			return nil, err
+		}
+		sessRows.Close()
+	}
+
+	// 零成本 token 分量按 (会话三元键, provider, model) 聚合，Key=sk
+	zeroRows, err := s.zeroCostRowsLocked(sessKey, sessWhere, args)
+	if err != nil {
+		s.mu.RUnlock()
+		return nil, err
+	}
+
+	s.mu.RUnlock()
+
+	byKeyCost, err := estimateZeroCostByGroup(s, zeroRows)
+	if err != nil {
+		return nil, err
+	}
+	for i := range sessions {
+		if est, ok := byKeyCost[sessions[i].Key]; ok {
+			sessions[i].CostUSD += float64(est.Micro) / 1000000.0
+			sessions[i].Priced = est.Priced
 		}
 	}
 

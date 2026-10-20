@@ -20,6 +20,7 @@ extension/files.html ──┴─ NativeClient ── native-file-host ── fi
 - 目录分页、列表/网格、排序、隐藏文件、搜索、收藏、最近记录和受控目录树。
 - 新建、写入、重命名、复制、移动、批量操作、废纸篓、归档、导入和 Watcher。
 - 文本、代码、Markdown、JSON、媒体、图片、PDF、CSV 与归档只读预览；编辑保存使用 mtime 乐观锁。
+- PDF 按 [ADR-0043](../adr/0043-native-chrome-pdf-preview.md) 使用 Chrome 内置阅读器；仅此 PDF Blob iframe 无额外 sandbox，页码、搜索和缩放由原生工具栏提供。HTML 预览与 App iframe 的沙箱保持独立。关闭／切换撤销 Object URL，禁用阅读器显示失败与系统打开入口。
 - 所有高频请求有大小、并发、取消和超时边界；归档与预览拒绝路径穿越、符号链接越权和伪造 MIME。
 - 中英文 locale 必须同步；空间主题只通过现有 Extension token 切换。
 

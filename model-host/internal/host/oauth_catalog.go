@@ -1,18 +1,17 @@
 package host
 
 import (
-	"context"
 	"slices"
 	"strings"
 
+	clipadapter "github.com/ldh/natives/model-host/internal/cliproxy"
 	"github.com/ldh/natives/model-host/internal/domain"
-	clipcore "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy"
 )
 
-type oauthCatalogHook struct{ engine *Engine }
-
-func (hook oauthCatalogHook) OnModelsRegistered(_ context.Context, _ string, accountID string, models []*clipcore.ModelInfo) {
-	current, err := hook.engine.repo.Load()
+// catalogUpdate 是模型目录的项目侧回调（mode/T07）：SDK hook 对象与
+// ModelInfo→项目类型转换留在 cliproxy 适配层，这里只消费项目类型。
+func catalogUpdate(engine *Engine, accountID string, models []clipadapter.ModelInfo) {
+	current, err := engine.repo.Load()
 	if err != nil {
 		return
 	}
@@ -20,7 +19,7 @@ func (hook oauthCatalogHook) OnModelsRegistered(_ context.Context, _ string, acc
 	if err != nil || !account.Enabled {
 		return
 	}
-	snapshot, err := hook.engine.repo.Update(nil, func(snapshot *domain.Snapshot) error {
+	snapshot, err := engine.repo.Update(nil, func(snapshot *domain.Snapshot) error {
 		account, findErr := findAccount(snapshot, accountID)
 		if findErr != nil || !account.Enabled {
 			return findErr
@@ -55,13 +54,13 @@ func (hook oauthCatalogHook) OnModelsRegistered(_ context.Context, _ string, acc
 		return nil
 	})
 	if err == nil {
-		hook.engine.emitSnapshot("model_catalog_changed", snapshot)
+		engine.emitSnapshot("model_catalog_changed", snapshot)
 	}
 }
 
 // Runtime restarts unregister and re-register the same account asynchronously.
-// The next registration replaces that account's catalog; account disable/delete removes it explicitly.
-func (oauthCatalogHook) OnModelsUnregistered(context.Context, string, string) {}
+// The next registration replaces that account's catalog; account disable/delete removes it explicitly
+// （SDK 的 OnModelsUnregistered 空实现同样留在适配层）。
 
 func removeAccountModels(snapshot *domain.Snapshot, accountID string) {
 	for providerIndex := range snapshot.Providers {

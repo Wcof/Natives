@@ -1,3 +1,4 @@
+import { storage } from './platform/storage.js';
 import { createFilesSession } from './files-session.js';
 import { createFilesSidebar } from './files-sidebar.js';
 import { createFilesHomeView } from './files-home-view.js';
@@ -95,10 +96,17 @@ async function openAppsCenter(returnFocus) {
   await module.openModelSettings({ t, language: filesLocale.language, returnFocus, initialPage: 'apps' });
 }
 
-chrome.storage?.onChanged?.addListener((changes, area) => {
+storage.onChanged?.addListener((changes, area) => {
   if (area !== 'local') return;
+  if (changes['natives-theme']) applyTheme(changes['natives-theme'].newValue, false);
   const next = changes['natives-language']?.newValue;
-  if ((next === 'en' || next === 'zh_CN') && next !== filesLocale.language) switchLanguage(next);
+  if ((next === 'en' || next === 'zh_CN') && next !== filesLocale.language) filesLocale.switchLanguage(next, false);
+  if(Object.keys(changes).some(key=>key.startsWith('natives-') && !['natives-theme','natives-language','natives-last-path','natives-app-navigation'].includes(key))){
+    void loadUiState().then(()=>{
+      if(session.currentPath)loadDirectory(session.currentPath);
+      else renderEntries();
+    }).catch(error=>setStatus(error.message,'error'));
+  }
 });
 
 const watchController = createFilesWatchController({
@@ -144,6 +152,7 @@ async function loadUiState() {
     $, session, searchController, syncSortTabs, updateSortDirection,
     applySidebarCollapsed, syncPreviewLayoutControls,
   });
+  toolbar.syncGridControls();
 }
 
 function syncSortTabs() {
@@ -254,24 +263,28 @@ function sortEntries(list) {
 }
 
 async function loadDirectory(path) {
+  const query = searchController.getSearchQuery();
+  if (query) return searchController.search(query);
   const token = ++directoryToken;
+  const isCurrent = () => token === directoryToken && session.currentPath === path && !searchController.getSearchQuery();
   const viewport = document.querySelector('.content');
   const scrollTop = pendingScrollTop ?? (viewport?.scrollTop || 0);
   pendingScrollTop = undefined;
   setStatus(t('loading', '加载中…'));
   if ($('empty')) $('empty').hidden = true;
   $('entries')?.setAttribute('aria-busy', 'true');
+  const read = () => call('list_dir', {
+    path,
+    offset: session.pageOffset,
+    limit: PAGE_SIZE,
+    sortBy: session.sortBy,
+    sortDir: session.sortDirection,
+    showHidden: session.showHidden,
+  });
 
   try {
-    const result = await call('list_dir', {
-      path,
-      offset: session.pageOffset,
-      limit: PAGE_SIZE,
-      sortBy: session.sortBy,
-      sortDir: session.sortDirection,
-      showHidden: session.showHidden,
-    });
-    if (token !== directoryToken || session.currentPath !== path) return;
+    const result = await read();
+    if (!isCurrent()) return;
     session.entries = sortEntries(result.entries || []);
     const visiblePaths = new Set(session.entries.map((item) => item.path));
     session.selectedPaths = new Set([...session.selectedPaths].filter((p) => visiblePaths.has(p)));
@@ -303,22 +316,15 @@ async function loadDirectory(path) {
     }
     await watchController.applyPendingFollow(path);
   } catch (error) {
-    if (token !== directoryToken || session.currentPath !== path) return;
+    if (!isCurrent()) return;
     // macOS TCC：首次进入桌面/文稿/下载等受保护目录时，read_dir 立即返回
     // EPERM 并异步弹授权框；用户点"允许"后本次调用已失败。授权即时生效，
     // 无需重启进程——自动重试一次，让授权后的首次浏览直接出结果。
     const denied = /denied|permission|eperm|eacc/i.test(String(error?.message || ''));
     if (denied) {
       try {
-        const retry = await call('list_dir', {
-          path,
-          offset: session.pageOffset,
-          limit: PAGE_SIZE,
-          sortBy: session.sortBy,
-          sortDir: session.sortDirection,
-          showHidden: session.showHidden,
-        });
-        if (token === directoryToken && session.currentPath === path) {
+        const retry = await read();
+        if (isCurrent()) {
           session.entries = sortEntries(retry.entries || []);
           renderEntries();
           renderStatusBar();
@@ -385,6 +391,7 @@ const entriesRenderer = createFilesEntriesRenderer({
 
 function renderEntries() {
   entriesRenderer.render(renderHomeWelcome);
+  applyQuickFilter();
 }
 
 function applyQuickFilter() {
@@ -412,6 +419,7 @@ function closeQuickFilter() {
 
 function renderSelection(options) {
   document.querySelectorAll('.entry').forEach((row) => {
+    if (row.hidden) session.selectedPaths.delete(row.dataset.path);
     const selected = session.selectedPaths.has(row.dataset.path);
     row.classList.toggle('selected', selected);
     row.setAttribute('aria-selected', String(selected));
@@ -611,7 +619,7 @@ async function refreshAppProjection() {
         revision = listResult?.revision || 0;
       } catch {}
     }
-    const projection = projectionFromApps(apps, revision);
+    const projection = projectionFromApps(apps, revision, listResult?.modules || []);
     const nav = $('app-menu-apps');
     if (nav) {
       renderAppMenuInto(nav, projection, { t });
@@ -738,7 +746,7 @@ bindFilesShortcuts({
   syncGridControls: toolbar.syncGridControls,
   storageSet, renderEntries, renderSelection, openItemFromDoubleClick: ops.openItemFromDoubleClick, selectEntry,
   renameSelected: ops.renameSelected, trashSelected: ops.trashSelected, openQuickFilter, closeQuickFilter,
-  applyQuickFilter, openSearchDialog, setStatus, t,
+  applyQuickFilter, openSearchDialog,
 });
 
 bindFilesWorkspaceInteractions({
@@ -847,8 +855,11 @@ function openEmbeddedApp(appId, { pushState = true } = {}) {
     }
   }
   embeddedSurface = createEmbeddedAppSurface({
+    t,
     appId,
     stage,
+    // mode/T06：嵌入路径由页面装配层注入设置打开器，Shell/Broker 不回导设置页。
+    openSettings: (context) => import('./model-settings.js').then((m) => m.openModelSettings(context)),
     onClosed: () => { if (embeddedAppId === appId) leaveEmbeddedView(); },
   });
   void embeddedSurface.open();
@@ -862,7 +873,7 @@ function bindEmbeddedAppNavigation() {
     event.preventDefault();
     openEmbeddedApp(item.dataset.appId);
   });
-  globalThis.window?.addEventListener('pagehide', () => embeddedSurface?.dispose?.());
+  globalThis.window?.addEventListener('pagehide', (event) => { if (!event.persisted) embeddedSurface?.dispose?.(); });
 }
 
 async function bootstrap() {

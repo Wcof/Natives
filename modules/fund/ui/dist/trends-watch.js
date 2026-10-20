@@ -1,25 +1,21 @@
 (() => {
-const { state, actions, authFetch } = globalThis.Fund;
+const { state, actions } = globalThis.Fund;
 const trends = (globalThis.Fund.trends = globalThis.Fund.trends || {});
 const tState = trends.state;
 const C = trends.C;
 
-const STORAGE_WATCH = 'qs_watchlist';
 const STORAGE_HISTORY = 'qs_history';
 const STORAGE_SIGNALS = 'qs_signal_records';
 const MAX_HISTORY = 30;
 const MAX_SIGNAL_RECORDS = 200;
 let _currentTab = 'watch';
 let _panelOpen = false;
-let _scanTimer = null;
+let overviewRequest=null,overviewGeneration=0,overviewRows=null;
+
+function cancelOverview() { overviewRequest?.abort();overviewRequest=null;++overviewGeneration; }
 
 // --- localStorage 读写 ---
-function getWatchlist() {
-  try { return JSON.parse(localStorage.getItem(STORAGE_WATCH) || '[]'); } catch(e) { return []; }
-}
-function saveWatchlist(list) {
-  try { localStorage.setItem(STORAGE_WATCH, JSON.stringify(list)); } catch(e) {}
-}
+function getWatchlist() { return (state.watchlistItems || []).map(item=>({...item,code:item.symbol})); }
 function getHistory() {
   try { return JSON.parse(localStorage.getItem(STORAGE_HISTORY) || '[]'); } catch(e) { return []; }
 }
@@ -28,37 +24,24 @@ function saveHistory(list) {
 }
 
 // --- 自选股操作 ---
-function toggleStar() {
-  if (!tState.currentSymbol) return;
-  const list = getWatchlist();
-  const idx = list.findIndex(s => s.code === tState.currentSymbol);
-  if (idx >= 0) {
-    list.splice(idx, 1);
-  } else {
-    const name = tState.currentStockName || tState.currentSymbol;
-    list.unshift({ code: tState.currentSymbol, name: name, addedAt: Date.now() });
-  }
-  saveWatchlist(list);
-  updateStarButton(tState.currentSymbol);
-  renderWatchlist();
-  updateBadges();
+let membershipBusy=false;
+async function setMember(code,name,included) {
+  if(membershipBusy)return;membershipBusy=true;
+  const button=document.getElementById('star-btn');button.disabled=true;
+  try {await actions.setWatchlistMember({symbol:code,name,assetType:Fund.researchSeries.kind(code)},included);}
+  catch(error){document.getElementById('quote-bar').textContent=error.message || Fund.t('fundHomeRequestFailed');}
+  finally {membershipBusy=false;button.disabled=false;updateStarButton(tState.currentSymbol);renderWatchlist();updateBadges();}
 }
-
-function removeFromWatchlist(code) {
-  const list = getWatchlist().filter(s => s.code !== code);
-  saveWatchlist(list);
-  updateStarButton(tState.currentSymbol);
-  renderWatchlist();
-  updateBadges();
-}
-
+function toggleStar() {if(tState.currentSymbol)return setMember(tState.currentSymbol,tState.currentStockName,!getWatchlist().some(item=>item.code===tState.currentSymbol));}
+function removeFromWatchlist(code) {return setMember(code,'',false);}
 function updateStarButton(symbol) {
   const btn = document.getElementById('star-btn');
   if (!btn || !symbol) return;
   const inWatch = getWatchlist().some(s => s.code === symbol);
   btn.textContent = inWatch ? '★' : '☆';
   btn.classList.toggle('starred', inWatch);
-  btn.title = inWatch ? '从自选中移除' : '加入自选';
+  btn.title = Fund.t(inWatch ? 'fundTrendsWatchRemove' : 'fundLedgerWatchAdd');
+  btn.setAttribute('aria-label',btn.title);
 }
 
 // --- 历史记录操作 ---
@@ -79,44 +62,20 @@ function clearHistory() {
 }
 
 // --- 渲染 ---
-function renderWatchlist() {
-  const el = document.getElementById('wp-content-watch');
-  if (!el) return;
-  const list = getWatchlist();
-  if (!list.length) {
-    el.innerHTML = '<div class="wp-empty"><span class="wp-empty-icon">☆</span>还没有自选股<br>分析股票后点击 ☆ 添加</div>';
-    return;
+function renderList(container, rows, removable) {
+  const el=document.getElementById(container);if(!el)return;el.replaceChildren();
+  if(!rows.length){const hint=document.createElement('p');hint.className='wp-empty';hint.textContent=Fund.t('fundLedgerNoResults');el.append(hint);return;}
+  for(const item of rows){
+    const row=document.createElement('div');row.className='wp-item';
+    const open=document.createElement('button');open.type='button';open.className='wp-open';open.textContent=[item.code,item.name].filter(Boolean).join(' · ');
+    open.onclick=()=>{trends.coordinator.selectStock(item.code,item.name,'',item.assetType);closePanel();};row.append(open);
+    if(removable){const remove=document.createElement('button');remove.type='button';remove.className='remove';remove.textContent='×';remove.setAttribute('aria-label',Fund.t('fundHomeRemoveFavorite'));remove.onclick=()=>removeFromWatchlist(item.code);row.append(remove);}
+    else {const time=document.createElement('span');time.className='time';time.textContent=fmtTime(item.time);row.append(time);}
+    el.append(row);
   }
-  el.innerHTML = list.map(s => {
-    const tag = sigTag(s.action, s.score);
-    return `<div class="wp-item" onclick="analyze('${s.code}');closePanel()">
-      <span class="code">${s.code}</span>
-      <span class="name">${escHtml(s.name)}</span>
-      ${tag}
-      <button class="remove" onclick="event.stopPropagation();removeFromWatchlist('${s.code}')" title="移除">×</button>
-    </div>`;
-  }).join('');
 }
-
-function renderHistory() {
-  const el = document.getElementById('wp-content-history');
-  if (!el) return;
-  const list = getHistory();
-  if (!list.length) {
-    el.innerHTML = '<div class="wp-empty"><span class="wp-empty-icon">🕐</span>暂无历史记录<br>分析过的股票会显示在这里</div>';
-    return;
-  }
-  el.innerHTML = list.map(s => {
-    const tag = sigTag(s.action, s.score);
-    const t = fmtTime(s.time);
-    return `<div class="wp-item" onclick="analyze('${s.code}');closePanel()">
-      <span class="code">${s.code}</span>
-      <span class="name">${escHtml(s.name)}</span>
-      ${tag}
-      <span class="time">${t}</span>
-    </div>`;
-  }).join('');
-}
+function renderWatchlist() {renderList('wp-content-watch',getWatchlist(),true);}
+function renderHistory() {renderList('wp-content-history',getHistory(),false);}
 
 function sigTag(action, score) {
   if (!action) return '<span class="sig-tag none">--</span>';
@@ -129,14 +88,15 @@ function fmtTime(ts) {
   const d = new Date(ts);
   const now = new Date();
   const diff = now - d;
-  if (diff < 60000) return '刚刚';
-  if (diff < 3600000) return Math.floor(diff / 60000) + '分钟前';
+  const locale=state.language==='en'?'en':'zh-CN',relative=new Intl.RelativeTimeFormat(locale,{numeric:'auto'});
+  if (Math.abs(diff) < 60000) return relative.format(0,'second');
+  if (Math.abs(diff) < 3600000) return relative.format(-Math.floor(diff / 60000),'minute');
   if (d.toDateString() === now.toDateString()) {
-    return `今天 ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+    return Fund.t('fundHomeToday')+' '+d.toLocaleTimeString(locale,{hour:'2-digit',minute:'2-digit'});
   }
   const yest = new Date(now); yest.setDate(yest.getDate() - 1);
-  if (d.toDateString() === yest.toDateString()) return '昨天';
-  return `${d.getMonth()+1}/${d.getDate()}`;
+  if (d.toDateString() === yest.toDateString()) return relative.format(-1,'day');
+  return d.toLocaleDateString(locale,{month:'numeric',day:'numeric'});
 }
 
 function escHtml(s) {
@@ -146,17 +106,17 @@ function escHtml(s) {
 
 // --- 面板控制 ---
 function closePanel() {
+  cancelOverview();
   const panel = document.getElementById('wp-panel');
   if (panel) panel.classList.remove('show');
   _panelOpen = false;
   const wb = document.getElementById('watch-btn');
-  if (wb) wb.classList.remove('active');
+  if (wb) {wb.classList.remove('active');wb.setAttribute('aria-expanded','false');}
   const hb = document.getElementById('history-btn');
-  if (hb) hb.classList.remove('active');
+  if (hb) {hb.classList.remove('active');hb.setAttribute('aria-expanded','false');}
 }
 
 function togglePanel(tab) {
-  _currentTab = tab;
   const panel = document.getElementById('wp-panel');
   if (!panel) return;
   if (_panelOpen && panel.classList.contains('show')) {
@@ -172,6 +132,7 @@ function togglePanel(tab) {
 }
 
 function switchTab(tab) {
+  if(tab!=='overview')cancelOverview();
   _currentTab = tab;
   document.querySelectorAll('.wp-tab').forEach(t => {
     t.classList.toggle('active', t.dataset.tab === tab);
@@ -183,9 +144,9 @@ function switchTab(tab) {
   const wco = document.getElementById('wp-content-overview');
   if (wco) wco.style.display = tab === 'overview' ? 'block' : 'none';
   const wb = document.getElementById('watch-btn');
-  if (wb) wb.classList.toggle('active', tab === 'watch');
+  if (wb) {wb.classList.toggle('active', tab === 'watch');wb.setAttribute('aria-expanded',String(_panelOpen));}
   const hb = document.getElementById('history-btn');
-  if (hb) hb.classList.toggle('active', tab === 'history');
+  if (hb) {hb.classList.toggle('active', tab === 'history');hb.setAttribute('aria-expanded',String(_panelOpen));}
   if (tab === 'watch') renderWatchlist();
   else if (tab === 'history') renderHistory();
   else if (tab === 'overview') loadOverview();
@@ -196,10 +157,10 @@ function switchTab(tab) {
       footer.style.display = 'flex';
       const fInfo = document.getElementById('wp-footer-info');
       if (fInfo) fInfo.textContent = tab === 'watch'
-        ? `共 ${list.length} 只自选股`
-        : `共 ${list.length} 条记录`;
+        ? Fund.t('fundTrendsWatchCount',{n:list.length})
+        : Fund.t('fundTrendsHistoryCount',{n:list.length});
       const cBtn = document.getElementById('wp-clear-btn');
-      if (cBtn) cBtn.textContent = tab === 'watch' ? '清空自选' : '清空历史';
+      if (cBtn) cBtn.textContent = Fund.t(tab === 'watch' ? 'fundTrendsClearWatch' : 'fundTrendsClearHistory');
     } else {
       footer.style.display = 'none';
     }
@@ -207,9 +168,10 @@ function switchTab(tab) {
   if (tab === 'overview') clearWatchChangeBadge();
 }
 
-function clearCurrentTab() {
+async function clearCurrentTab() {
   if (_currentTab === 'watch') {
-    saveWatchlist([]);
+    if(!await Fund.home.confirm(Fund.t('fundTrendsClearWatchConfirm')))return;
+    for(const item of getWatchlist())await setMember(item.code,item.name,false);
     renderWatchlist();
     updateStarButton(tState.currentSymbol);
   } else {
@@ -236,46 +198,46 @@ function updateBadges() {
 
 // ===== 多股一览 =====
 async function loadOverview() {
-  const el = document.getElementById('wp-content-overview');
-  if (!el) return;
-  const list = getWatchlist();
-  if (!list.length) {
-    el.innerHTML = '<div class="wp-empty"><span class="wp-empty-icon">📊</span>还没有自选股<br>添加自选后可查看多股一览</div>';
-    return;
-  }
-  el.innerHTML = '<div class="wp-ov-loading">正在获取行情数据...</div>';
-
-  const results = await Promise.all(list.map(async s => {
-    try {
-      const r = await authFetch(`/api/trends/quote?symbol=${s.code}`);
-      const q = await r.json();
-      if (q.error) return { code: s.code, name: s.name, error: true };
-      return {
-        code: s.code, name: q.name || s.name,
-        price: q.price, pct: q.pct, volume: q.volume,
-        action: s.action || '', score: s.score || 0,
-      };
-    } catch(e) {
-      return { code: s.code, name: s.name, error: true };
+  cancelOverview();overviewRows=null;
+  const el=document.getElementById('wp-content-overview'),list=getWatchlist();
+  if(!el)return;
+  if(!list.length){renderOverview([]);return;}
+  const request=new AbortController(),generation=overviewGeneration;
+  overviewRequest=request;
+  el.textContent=Fund.t('fundTrendsOverviewLoading');
+  try {
+    const supported=list.filter(row=>/^(sh|sz|bj)\d{6}$|^us[a-z\d]+$/i.test(row.code)),quotes=new Map();
+    for(let start=0;start<supported.length;start+=60){
+      const result=await Fund.api('GET','/api/market/quotes?codes='+encodeURIComponent(supported.slice(start,start+60).map(row=>row.code).join(',')),null,{signal:request.signal});
+      if(request.signal.aborted||generation!==overviewGeneration)return;
+      if(!Array.isArray(result.quotes))throw Error('QUOTES_RESPONSE');
+      for(const quote of result.quotes)quotes.set(quote.code,quote);
     }
-  }));
+    if(request.signal.aborted||generation!==overviewGeneration)return;
+    overviewRows=list.map(row=>({...row,name:quotes.get(row.code)?.name||row.name,pct:quotes.get(row.code)?.changePct??null}));
+    renderOverview(overviewRows);
+  }catch(error){
+    if(request.signal.aborted||generation!==overviewGeneration)return;
+    const message=document.createElement('p');message.setAttribute('role','alert');message.textContent=Fund.t('fundHomeRequestFailed');
+    const retry=document.createElement('button');retry.type='button';retry.textContent=Fund.t('fundLedgerRetry');retry.onclick=loadOverview;el.replaceChildren(message,retry);
+  }finally{if(overviewRequest===request)overviewRequest=null;}
+}
 
-  results.sort((a, b) => (b.pct || -999) - (a.pct || -999));
-
-  el.innerHTML = results.map(s => {
-    const pctCls = s.pct > 0 ? 'up' : s.pct < 0 ? 'down' : 'flat';
-    const pctStr = s.pct != null ? (s.pct > 0 ? '+' : '') + s.pct.toFixed(2) + '%' : '--';
-    const sigTag = s.action ? `<span class="wp-ov-sig-tag ${s.action === '买入' ? 'buy' : s.action === '卖出' ? 'sell' : 'watch'}">${s.action}</span>` : '<span class="wp-ov-sig-tag none">--</span>';
-    const scoreStr = s.score ? s.score : '--';
-    const scoreColor = s.score >= 60 ? C.up : s.score >= 40 ? '#ffc107' : s.score > 0 ? C.down : '#666';
-    return `<div class="wp-ov-item" onclick="analyze('${s.code}');closePanel()">
-      <span class="wp-ov-code">${s.code}</span>
-      <span class="wp-ov-name">${escHtml(s.name)}</span>
-      <span class="wp-ov-pct ${pctCls}">${pctStr}</span>
-      <span class="wp-ov-score" style="color:${scoreColor}">${scoreStr}</span>
-      <span class="wp-ov-sig">${sigTag}</span>
-    </div>`;
-  }).join('');
+function renderOverview(results) {
+  const el=document.getElementById('wp-content-overview');if(!el)return;el.replaceChildren();
+  if(!results.length){el.textContent=Fund.t('fundTrendsOverviewEmpty');return;}
+  const sorted=[...results].sort((a,b)=>(Number.isFinite(b.pct)?b.pct:-Infinity)-(Number.isFinite(a.pct)?a.pct:-Infinity));
+  for(const item of sorted){
+    const row=document.createElement('button');row.type='button';row.className='wp-ov-item';
+    row.onclick=()=>{trends.coordinator.selectStock(item.code,item.name,'',item.assetType);closePanel();document.getElementById('search-input')?.focus({preventScroll:true});};
+    for(const [cls,text]of [['code',item.code],['name',item.name],['pct',Number.isFinite(item.pct)?(item.pct>0?'+':'')+item.pct.toFixed(2)+'%':'--'],['score',item.score??'--'],['sig',item.action?actionLabel(item.action):'--']]){
+      const cell=document.createElement('span');cell.className='wp-ov-'+cls;cell.textContent=text;row.append(cell);
+      if(cls==='pct'){cell.classList.add(item.pct>0?'up':item.pct<0?'down':'flat');if(!Number.isFinite(item.pct))cell.title=Fund.t('fundHomeOpportunityObsMissingPrice');}
+      if(cls==='sig'){const tag=document.createElement('span');tag.className='wp-ov-sig-tag '+(!item.action?'none':item.action==='买入'?'buy':item.action==='卖出'?'sell':'watch');tag.textContent=text;cell.replaceChildren(tag);}
+      if(cls==='score')cell.style.color=item.score>=60?C.up:item.score>=40?Fund.themeColor('--natives-warning'):item.score>0?C.down:Fund.themeColor('--natives-text-muted');
+    }
+    el.append(row);
+  }
 }
 
 // ===== 信号准确率统计 =====
@@ -290,86 +252,11 @@ function recordSignal(code, name, action, score, price) {
   records.unshift({ code, name, action, score, price, time: Date.now() });
   saveSignalRecords(records);
 }
-function calcSignalAccuracy(code) {
-  const records = getSignalRecords().filter(r => r.code === code);
-  if (records.length < 2) return null;
-  let correct = 0, total = 0;
-  const details = [];
-  for (let i = 0; i < records.length - 1; i++) {
-    const cur = records[i];
-    const prev = records[i + 1];
-    if (!prev.price || !cur.price) continue;
-    const priceChange = (cur.price - prev.price) / prev.price * 100;
-    let isCorrect = false;
-    if (prev.action === '买入' && priceChange > 0) isCorrect = true;
-    else if (prev.action === '卖出' && priceChange < 0) isCorrect = true;
-    else if (prev.action === '观望') isCorrect = Math.abs(priceChange) < 3;
-    total++;
-    if (isCorrect) correct++;
-    if (details.length < 5) {
-      details.push({
-        action: prev.action, price: prev.price,
-        nextPrice: cur.price, change: priceChange,
-        correct: isCorrect, time: prev.time,
-      });
-    }
-  }
-  if (total === 0) return null;
-  return {
-    accuracy: Math.round(correct / total * 100),
-    total, correct,
-    buyCount: records.filter(r => r.action === '买入').length,
-    sellCount: records.filter(r => r.action === '卖出').length,
-    watchCount: records.filter(r => r.action === '观望').length,
-    details: details.reverse(),
-  };
-}
 function renderSignalAccuracy(code) {
-  const card = document.getElementById('accuracy-card');
-  const stats = calcSignalAccuracy(code);
-  if (!card) return;
-  if (!stats) {
-    card.style.display = 'none';
-    return;
-  }
-  card.style.display = 'block';
-  const accColor = stats.accuracy >= 60 ? C.up : stats.accuracy >= 40 ? '#ffc107' : C.down;
-  const saStats = document.getElementById('sa-stats');
-  if (saStats) {
-    saStats.innerHTML = `
-      <div class="sa-item">
-        <span class="sa-val" style="color:${accColor}">${stats.accuracy}%</span>
-        <span class="sa-label">准确率</span>
-      </div>
-      <div class="sa-item">
-        <span class="sa-val" style="color:#ddd">${stats.total}</span>
-        <span class="sa-label">信号次数</span>
-      </div>
-      <div class="sa-item">
-        <span class="sa-val" style="color:${C.up}">${stats.buyCount}</span>
-        <span class="sa-label">买入</span>
-      </div>
-      <div class="sa-item">
-        <span class="sa-val" style="color:${C.down}">${stats.sellCount}</span>
-        <span class="sa-label">卖出</span>
-      </div>
-      <div class="sa-item">
-        <span class="sa-val" style="color:#ffc107">${stats.watchCount}</span>
-        <span class="sa-label">观望</span>
-      </div>
-    `;
-  }
-  const detailHtml = stats.details.map(d => {
-    const cls = d.correct ? 'up' : 'down';
-    const sign = d.change > 0 ? '+' : '';
-    return `<div style="padding:2px 0">
-      <span style="color:${d.action === '买入' ? C.up : d.action === '卖出' ? C.down : '#ffc107'}">${d.action}</span>
-      @ ${d.price.toFixed(2)} → 后续 <span class="${cls}">${sign}${d.change.toFixed(1)}%</span>
-      <span style="color:${d.correct ? C.up : C.down}">${d.correct ? '✓' : '✗'}</span>
-    </div>`;
-  }).join('');
-  const saDetail = document.getElementById('sa-detail');
-  if (saDetail) saDetail.innerHTML = detailHtml;
+  const card=document.getElementById('accuracy-card');if(!card)return;
+  const records=getSignalRecords().filter(row=>row.code===code);card.style.display=records.length?'block':'none';
+  const stats=document.getElementById('sa-stats');stats.textContent=Fund.t('fundTrendsSignalObservation',{n:records.length});
+  document.getElementById('sa-detail').textContent=Fund.t('fundTrendsSignalNotBacktest');
 }
 
 // ===== 信号变更提醒 =====
@@ -394,18 +281,23 @@ function showToast(name, code, oldAction, newAction, price) {
   const container = document.getElementById('toast-container');
   if (!container) return;
   const cls = newAction === '买入' ? 'buy' : newAction === '卖出' ? 'sell' : '';
-  const oldColor = oldAction === '买入' ? C.up : oldAction === '卖出' ? C.down : '#ffc107';
-  const newColor = newAction === '买入' ? C.up : newAction === '卖出' ? C.down : '#ffc107';
+  const oldColor = oldAction === '买入' ? C.up : oldAction === '卖出' ? C.down : Fund.themeColor('--natives-warning');
+  const newColor = newAction === '买入' ? C.up : newAction === '卖出' ? C.down : Fund.themeColor('--natives-warning');
   const toast = document.createElement('div');
   toast.className = `toast ${cls}`;
   toast.onclick = () => removeToast(toast);
   toast.innerHTML = `
     <div style="font-weight:bold;font-size:14px;margin-bottom:4px">${escHtml(name)} (${code})</div>
-    <div>信号变更：<span style="color:${oldColor}">${oldAction}</span> → <span style="color:${newColor};font-weight:bold">${newAction}</span></div>
-    <div style="font-size:11px;color:#666;margin-top:4px">当前价 ${price ? price.toFixed(2) : '--'}</div>
+    <div>${Fund.t('fundTrendsSignalChange')}: <span style="color:${oldColor}">${escHtml(actionLabel(oldAction))}</span> → <span style="color:${newColor};font-weight:bold">${escHtml(actionLabel(newAction))}</span></div>
+    <div style="font-size:var(--natives-fs-secondary);color:var(--natives-text-muted);margin-top:4px">${Fund.t('fundTrendsCurrentPrice')} ${Number.isFinite(price) ? price.toFixed(2) : '--'}</div>
   `;
   container.appendChild(toast);
   setTimeout(() => removeToast(toast), 8000);
+}
+
+function actionLabel(action) {
+  const key={'买入':'fundLedgerTypeBuy','卖出':'fundLedgerTypeSell','观望':'fundTrendsActionWatch','谨慎买入':'fundTrendsActionCautious','强烈买入':'fundTrendsActionStrongBuy'}[action];
+  return key?Fund.t(key):action;
 }
 
 function removeToast(el) {
@@ -431,10 +323,19 @@ window.togglePanel = togglePanel;
 window.switchTab = switchTab;
 window.clearCurrentTab = clearCurrentTab;
 
+document.addEventListener('fund:watchlist-changed',()=>{updateStarButton(tState.currentSymbol);updateBadges();if(_panelOpen)switchTab(_currentTab);});
+document.addEventListener('fund:language-changed',()=>{updateStarButton(tState.currentSymbol);if(_panelOpen){if(_currentTab==='overview'&&overviewRows)renderOverview(overviewRows);else if(_currentTab!=='overview')switchTab(_currentTab);}document.getElementById('toast-container')?.replaceChildren();});
+window.addEventListener('pagehide',closePanel);
+
 const watchBtn = document.getElementById('watch-btn');
 if (watchBtn) watchBtn.addEventListener('click', () => togglePanel('watch'));
 const historyBtn = document.getElementById('history-btn');
 if (historyBtn) historyBtn.addEventListener('click', () => togglePanel('history'));
+for(const button of [watchBtn,historyBtn])if(button){button.setAttribute('aria-controls','wp-panel');button.setAttribute('aria-expanded','false');}
+document.addEventListener('keydown',event=>{
+  if(event.key!=='Escape'||!_panelOpen||document.querySelector('dialog[open]'))return;
+  event.preventDefault();event.stopPropagation();const button=_currentTab==='history'?historyBtn:watchBtn;closePanel();button?.focus({preventScroll:true});
+});
 const starBtn = document.getElementById('star-btn');
 if (starBtn) starBtn.addEventListener('click', toggleStar);
 const clearBtn = document.getElementById('wp-clear-btn');
@@ -454,7 +355,6 @@ if (wpPanel) wpPanel.addEventListener('click', e => e.stopPropagation());
 
 trends.watch = {
   getWatchlist,
-  saveWatchlist,
   getHistory,
   toggleStar,
   removeFromWatchlist,
@@ -469,7 +369,6 @@ trends.watch = {
   updateBadges,
   loadOverview,
   recordSignal,
-  calcSignalAccuracy,
   renderSignalAccuracy,
   checkSignalChange,
   openScan: (...args) => trends.scan?.openScan(...args),

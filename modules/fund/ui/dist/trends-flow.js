@@ -5,6 +5,7 @@ const tState = trends.state;
 const charts = trends.charts;
 const C = trends.C;
 
+let realtimeData = null;
 // ===== 资金流与盘中实时流动模块 (Trends Flow) =====
 // 职责：负责日级资金流与分时盘中资金流图表渲染、实时数据拉取及模式切换
 function renderFlow(flows) {
@@ -36,16 +37,16 @@ function _renderDailyFlow(flows) {
   charts.flowChart.setOption({
     backgroundColor: C.bg,
     animation: false,
-    legend: { data: ['主力净流入', '超大单'], textStyle: { color: C.textDim, fontSize: 10 }, top: 2, itemWidth: 12, itemHeight: 8 },
+    legend: { data: ['主力净流入', '超大单'], textStyle: { color: C.textDim, fontSize: parseFloat(Fund.themeColor('--natives-fs-secondary')) }, top: 2, itemWidth: 12, itemHeight: 8 },
     xAxis: { type: 'category', data: dates, axisLabel: { color: C.textDim, fontSize: 9 }, axisLine: { lineStyle: { color: C.axis } } },
     yAxis: { type: 'value', axisLabel: { color: C.textDim, fontSize: 9 }, splitLine: { lineStyle: { color: C.grid } } },
     grid: { left: 50, right: 20, top: 22, bottom: 18 },
     series: [
-      { name: '主力净流入', type: 'bar', data: mainNet.map(v => ({ value: v, itemStyle: { color: v >= 0 ? C.up + '88' : C.down + '88' } })) },
+      { name: '主力净流入', type: 'bar', data: mainNet.map(v => ({ value: v, itemStyle: { color: Fund.themeRgba(v >= 0 ? '--color-up' : '--color-down', 0.53) } })) },
       { name: '超大单', type: 'line', data: superLarge, symbol: 'circle', symbolSize: 3, lineStyle: { color: C.ma20, width: 1 } },
     ],
     tooltip: { trigger: 'axis', formatter: p => {
-      let html = `<div style="font-size:11px">${p[0].axisValue}</div>`;
+      let html = `<div style="font-size:var(--natives-fs-secondary)">${p[0].axisValue}</div>`;
       for (const x of p) html += `<div><span style="color:${x.color}">●</span> ${x.seriesName}: ${x.value>=0?'+':''}${x.value.toFixed(2)}亿</div>`;
       return html;
     }},
@@ -66,19 +67,16 @@ function switchFlowMode(mode) {
   }
 }
 
-async function loadRealtimeFlow(symbol) {
-  if (!symbol) return;
-  try {
-    const r = await authFetch(`/api/trends/realtime_flow?symbol=${symbol}`);
-    const data = await r.json();
-    renderRealtimeFlow(data);
-  } catch(e) {
-    const fs = document.getElementById('flow-summary');
-    if (fs) fs.textContent = '实时资金流获取失败';
-  }
+function loadRealtimeFlow() {
+  realtimeData = { unsupported: true };
+  const fs = document.getElementById('flow-summary');
+  if (fs) fs.textContent = Fund.t('fundTrendsRealtimeUnsupported');
+  charts.flowChart?.setOption({ title: { text: Fund.t('fundTrendsRealtimeUnsupported'), left: 'center', top: 'center', textStyle: { color: C.textDim, fontSize: 12 } } }, true);
 }
 
 function renderRealtimeFlow(data) {
+  if (data.unsupported) { loadRealtimeFlow(); return; }
+  realtimeData = data;
   const fs = document.getElementById('flow-summary');
   if (!fs || !charts.flowChart) return;
   if (data.error || !data.flows || !data.flows.length) {
@@ -100,16 +98,16 @@ function renderRealtimeFlow(data) {
   charts.flowChart.setOption({
     backgroundColor: C.bg,
     animation: false,
-    legend: { data: ['主力净流入(累计)', '超大单(累计)'], textStyle: { color: C.textDim, fontSize: 10 }, top: 2, itemWidth: 12, itemHeight: 8 },
+    legend: { data: ['主力净流入(累计)', '超大单(累计)'], textStyle: { color: C.textDim, fontSize: parseFloat(Fund.themeColor('--natives-fs-secondary')) }, top: 2, itemWidth: 12, itemHeight: 8 },
     xAxis: { type: 'category', data: times, axisLabel: { color: C.textDim, fontSize: 9, interval: 29 }, axisLine: { lineStyle: { color: C.axis } } },
     yAxis: { type: 'value', axisLabel: { color: C.textDim, fontSize: 9 }, splitLine: { lineStyle: { color: C.grid } } },
     grid: { left: 50, right: 20, top: 22, bottom: 18 },
     series: [
-      { name: '主力净流入(累计)', type: 'bar', data: mainNet.map(v => ({ value: v, itemStyle: { color: v >= 0 ? C.up + '88' : C.down + '88' } })) },
+      { name: '主力净流入(累计)', type: 'bar', data: mainNet.map(v => ({ value: v, itemStyle: { color: Fund.themeRgba(v >= 0 ? '--color-up' : '--color-down', 0.53) } })) },
       { name: '超大单(累计)', type: 'line', data: superLarge, symbol: 'none', lineStyle: { color: C.ma20, width: 1 } },
     ],
     tooltip: { trigger: 'axis', formatter: p => {
-      let html = `<div style="font-size:11px">${p[0].axisValue}</div>`;
+      let html = `<div style="font-size:var(--natives-fs-secondary)">${p[0].axisValue}</div>`;
       for (const x of p) html += `<div><span style="color:${x.color}">●</span> ${x.seriesName}: ${x.value>=0?'+':''}${x.value.toFixed(3)}亿</div>`;
       return html;
     }},
@@ -126,6 +124,10 @@ window.switchFlowMode = switchFlowMode;
 
 trends.flow = {
   renderFlow,
+  reloadTheme() {
+    if (tState.flowMode === 'realtime') { if (realtimeData) renderRealtimeFlow(realtimeData); }
+    else _renderDailyFlow(tState.dailyFlows);
+  },
   switchFlowMode,
   loadRealtimeFlow,
   renderRealtimeFlow,

@@ -2,6 +2,15 @@ import { setupScreenshotListeners } from './screenshot-coordinator.js';
 
 const SPACE_URL = chrome.runtime.getURL('space.html');
 
+function isAppSender(sender) {
+  if (sender?.id !== chrome.runtime.id) return false;
+  try {
+    const actual = new URL(sender.url);
+    const allowed = new URL(chrome.runtime.getURL('app.html'));
+    return actual.protocol === allowed.protocol && actual.host === allowed.host && actual.pathname === allowed.pathname;
+  } catch { return false; }
+}
+
 setupScreenshotListeners();
 
 // 首次拖拽装载扩展后（或者用户安装后首次启动），默认打开空间（首页）：
@@ -28,28 +37,39 @@ chrome.action.onClicked.addListener(async () => {
 });
 
 chrome.runtime.onMessage.addListener((message, sender) => {
-  // 预警联动（审计 F-07/C1 链路终点）：fund 模块经父页转发的异动预警。
-  // badge 变色 + 系统通知（通知文案走 _locales，R-I1/F-16）。
-  if (message?.type === 'invest:alert') {
-    if (chrome.action?.setBadgeText) {
-      chrome.action.setBadgeText({ text: message.badgeText || '' });
-      chrome.action.setBadgeBackgroundColor({ color: message.isUp ? '#e07b7b' : '#6cc29a' });
+  // 通用应用通知 Broker（架构 Wave 7 / 审计 A-06）：
+  // 处理各内置模块通过通用 natives:notification 发送的通知与 Badge 更新。
+  // 不解析任何业务领域专有模型，只消费通用文本与指示色。
+  if (message?.type === 'natives:notification-status') {
+    if (!isAppSender(sender)) return;
+    return chrome.notifications.getPermissionLevel().then(permission=>({permission})).catch(()=>({permission:'unknown'}));
+  }
+  if (message?.type === 'natives:notification') {
+    if (!isAppSender(sender)) return;
+    const p = message.payload;
+    if (p && typeof p === 'object') {
+      if (p.badge?.text !== undefined && chrome.action?.setBadgeText) {
+        chrome.action.setBadgeText({ text: String(p.badge.text).slice(0, 16) });
+        const toneColors = {
+          danger: '#e07b7b',
+          warning: '#f0ad4e',
+          success: '#6cc29a',
+          info: '#49a3b0',
+          neutral: '#888888',
+        };
+        const color = toneColors[p.badge.tone] || '#49a3b0';
+        chrome.action.setBadgeBackgroundColor({ color });
+      }
+      if (p.title && chrome.notifications?.create) {
+        return new Promise(resolve=>chrome.notifications.create({
+          type: 'basic',
+          iconUrl: 'icons/folder-32.png',
+          title: String(p.title).slice(0, 64),
+          message: String(p.body || '').slice(0, 200),
+        }, id=>resolve({delivered:!chrome.runtime.lastError&&Boolean(id)})));
+      }
     }
-    if (chrome.notifications?.create) {
-      const title = chrome.i18n.getMessage('investAlertNotifyTitle') || 'Investment Alert';
-      const body = chrome.i18n.getMessage('investAlertNotifyBody', [
-        String(message.symbol || ''),
-        String(message.name || ''),
-        String(message.badgeText || ''),
-      ]) || `${message.symbol} ${message.badgeText}`;
-      chrome.notifications.create({
-        type: 'basic',
-        iconUrl: 'icons/folder-32.png',
-        title,
-        message: body.slice(0, 200),
-      }, () => void chrome.runtime.lastError);
-    }
-    return;
+    return Promise.resolve({delivered:false});
   }
   if (message?.type !== 'open-markdown-file') return;
   if (!sender?.tab?.id) return;
@@ -65,5 +85,3 @@ chrome.runtime.onMessage.addListener((message, sender) => {
     console.error('[Natives] Failed to redirect file URL to files page:', err);
   }
 });
-
-

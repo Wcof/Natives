@@ -10,7 +10,7 @@ import (
 	"github.com/ldh/natives/model-host/internal/authfiles"
 	"github.com/ldh/natives/model-host/internal/domain"
 	"github.com/ldh/natives/model-host/internal/secrets"
-	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
+	coreauth "github.com/router-for-me/CLIProxyAPI/v8/sdk/cliproxy/auth"
 )
 
 func TestOAuthAccountAppearsInCredentialListAndProvidesQuotaMetadata(t *testing.T) {
@@ -63,18 +63,22 @@ func TestOAuthAccountAppearsInCredentialListAndProvidesQuotaMetadata(t *testing.
 		t.Fatalf("matched account must not emit a duplicate keychain row: %#v", items)
 	}
 
-	token, metadata, accountLabel, matched := oauthQuotaCredential([]*coreauth.Auth{{
-		ID: "antigravity-user.json", Provider: "antigravity", Label: "tester@example.com",
-		Metadata: map[string]any{"access_token": "secret-token", "project_id": "project-123"},
-	}}, "antigravity", "antigravity-user.json")
+	// 与原内联夹具同口径：先落一条 Keychain 凭据，再经适配层意图操作取数。
+	if _, err := engine.authStore.Save(context.Background(), &coreauth.Auth{ID: "antigravity-user.json", Provider: "antigravity", Label: "tester@example.com", Metadata: map[string]any{"access_token": "secret-token", "project_id": "project-123"}}); err != nil {
+		t.Fatal(err)
+	}
+	token, metadata, accountLabel, matched, qErr := engine.authStore.OAuthQuotaCredential(context.Background(), "antigravity", "antigravity-user.json")
+	if qErr != nil {
+		t.Fatal(qErr)
+	}
 	if token != "secret-token" || metadata != `{"project_id":"project-123"}` {
 		t.Fatalf("quota credential was not extracted: token=%q metadata=%q", token, metadata)
 	}
 	if accountLabel != "tester@example.com" {
 		t.Fatalf("expected credential label as account, got %q", accountLabel)
 	}
-	if matched == nil {
-		t.Fatal("expected matched credential object")
+	if matched != "antigravity-user.json" {
+		t.Fatalf("expected matched credential id, got %q", matched)
 	}
 }
 
@@ -110,12 +114,12 @@ func TestAccountModelsPersistExclusionsToOAuthCredential(t *testing.T) {
 	if _, err = engine.updateAccountModels(input); err != nil {
 		t.Fatal(err)
 	}
-	saved, err := engine.accountCredential(context.Background(), "ag.json")
+	saved, err := engine.accountView(context.Background(), "ag.json")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if saved.Attributes["excluded_models"] == "" || matchesAnyRule(models[0].ID, credentialExcludedModels(saved)) {
-		t.Fatalf("model exclusions were not persisted correctly: %#v", saved.Attributes)
+	if len(saved.ExcludedModels) == 0 || matchesAnyRule(models[0].ID, saved.ExcludedModels) {
+		t.Fatalf("model exclusions were not persisted correctly: %#v", saved.ExcludedModels)
 	}
 }
 

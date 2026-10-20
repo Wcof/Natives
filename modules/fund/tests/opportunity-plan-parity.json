@@ -1,0 +1,42 @@
+{
+  "donor": "00b345b05145705afea9ea9d5cecc090c009d83c",
+  "symbol": "_build_plan",
+  "cases": [
+    {
+      "action": "buy",
+      "entryRange": [
+        99.0,
+        101.0
+      ],
+      "target": 118.8,
+      "below": 88.65
+    },
+    {
+      "action": "add",
+      "entryRange": [
+        99.0,
+        101.0
+      ],
+      "target": 118.8,
+      "below": 88.65
+    },
+    {
+      "action": "watch",
+      "entryRange": null,
+      "target": 118.8,
+      "below": 88.2
+    },
+    {
+      "action": "hold",
+      "entryRange": null,
+      "target": 118.8,
+      "below": 88.2
+    },
+    {
+      "action": "avoid",
+      "entryRange": null,
+      "target": null,
+      "below": null
+    }
+  ]
+}

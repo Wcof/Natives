@@ -13,8 +13,9 @@ import (
 	"time"
 
 	"github.com/ldh/natives/model-host/internal/authfiles"
+	clipadapter "github.com/ldh/natives/model-host/internal/cliproxy"
 	"github.com/ldh/natives/model-host/internal/domain"
-	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
+	"github.com/ldh/natives/model-host/internal/nativeio"
 )
 
 // Google Antigravity 公共 OAuth client 标识：Google 公开发布、随上游
@@ -26,7 +27,8 @@ import (
 const (
 	antigravityOAuthClientIDEnv     = "NATIVES_ANTIGRAVITY_OAUTH_CLIENT_ID"
 	antigravityOAuthClientSecretEnv = "NATIVES_ANTIGRAVITY_OAUTH_CLIENT_SECRET"
-	antigravityOAuthClientIDDefault = "OAUTH_CLIENT_ID_PLACEHOLDER"
+	// Antigravity OAuth client ID 是公开标识；secret 不入库，必须由本机环境变量提供。
+	antigravityOAuthClientIDDefault = "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com"
 	antigravityOAuthClientSecretDef = "GOCSPX-LOCAL-ONLY-REDACTED"
 )
 
@@ -231,14 +233,15 @@ func (e *Engine) queryQuota(ctx context.Context, raw json.RawMessage) (any, erro
 	}
 
 	// OAuth credentials are stored as one JSON payload in Keychain.
+	// mode/T07：凭据查找与令牌短时取用经适配层意图操作，SDK 对象不进本包。
 	accountLabel := ""
-	var matchedCred *coreauth.Auth
+	matchedID := ""
 	if token == "" {
-		credentials, err := e.authStore.List(ctx)
-		if err != nil {
-			return nil, err
+		var credErr error
+		token, extraJSON, accountLabel, matchedID, credErr = e.authStore.OAuthQuotaCredential(ctx, p.Provider, p.AccountID)
+		if credErr != nil {
+			return nil, credErr
 		}
-		token, extraJSON, accountLabel, matchedCred = oauthQuotaCredential(credentials, p.Provider, p.AccountID)
 	}
 	if strings.TrimSpace(token) == "" {
 		return nil, &SafeError{Code: "secret_not_configured", Message: "账户凭证不存在，请重新授权"}
@@ -246,9 +249,8 @@ func (e *Engine) queryQuota(ctx context.Context, raw json.RawMessage) (any, erro
 	result, queryErr := e.quotaClient.Query(ctx, p.Provider, p.Name, token, extraJSON)
 	// 如果查询遇到 401（未认证/token过期），且为 antigravity 且有 refresh_token，自动换发新令牌重试并写回 Keychain
 	if (queryErr != nil || (result != nil && result.Status == "error" && strings.Contains(result.Error, "401"))) &&
-		strings.EqualFold(p.Provider, "antigravity") && matchedCred != nil {
-		if newTok, rErr := refreshAntigravityOAuthToken(ctx, matchedCred); rErr == nil && newTok != "" {
-			_, _ = e.authStore.Save(ctx, matchedCred)
+		strings.EqualFold(p.Provider, "antigravity") && matchedID != "" {
+		if newTok, rErr := refreshAntigravityOAuthToken(ctx, e.authStore, matchedID); rErr == nil && newTok != "" {
 			result, queryErr = e.quotaClient.Query(ctx, p.Provider, p.Name, newTok, extraJSON)
 		}
 	}
@@ -258,15 +260,20 @@ func (e *Engine) queryQuota(ctx context.Context, raw json.RawMessage) (any, erro
 		}
 		// 真实结果写入额度缓存：顶栏面板读取展示最近一次真实余额
 		saveQuotaCacheEntry(result)
+		if result.Status == "success" && e.emit != nil {
+			e.emit(nativeio.Response{OK: true, Event: "model_quota_updated"})
+		}
 	}
 	return result, queryErr
 }
 
-func refreshAntigravityOAuthToken(ctx context.Context, cred *coreauth.Auth) (string, error) {
-	if cred == nil || cred.Metadata == nil {
-		return "", errors.New("missing credential metadata")
+// refreshAntigravityOAuthToken 用存储中的 refresh token 换发新访问令牌并
+// 写回（mode/T07：令牌读取/写回经适配层意图操作，HTTP 换发留在本文件）。
+func refreshAntigravityOAuthToken(ctx context.Context, store *clipadapter.AuthStore, accountID string) (string, error) {
+	refreshToken, err := store.RefreshToken(ctx, accountID)
+	if err != nil {
+		return "", err
 	}
-	refreshToken, _ := cred.Metadata["refresh_token"].(string)
 	if strings.TrimSpace(refreshToken) == "" {
 		return "", errors.New("missing refresh token")
 	}
@@ -309,35 +316,16 @@ func refreshAntigravityOAuthToken(ctx context.Context, cred *coreauth.Auth) (str
 		return "", errors.New("invalid token refresh response")
 	}
 
-	cred.Metadata["access_token"] = data.AccessToken
 	now := time.Now()
-	cred.Metadata["timestamp"] = now.UnixMilli()
+	values := map[string]any{
+		"access_token": data.AccessToken,
+		"timestamp":    now.UnixMilli(),
+	}
 	if data.ExpiresIn > 0 {
-		cred.Metadata["expired"] = now.Add(time.Duration(data.ExpiresIn) * time.Second).Format(time.RFC3339)
+		values["expired"] = now.Add(time.Duration(data.ExpiresIn) * time.Second).Format(time.RFC3339)
+	}
+	if err := store.SaveRefreshedTokens(ctx, accountID, values); err != nil {
+		return "", err
 	}
 	return data.AccessToken, nil
-}
-
-func oauthQuotaCredential(credentials []*coreauth.Auth, provider, accountID string) (string, string, string, *coreauth.Auth) {
-	accountLabel := ""
-	for _, credential := range credentials {
-		if accountID != "" && credential.ID != accountID {
-			continue
-		}
-		if accountID == "" && !strings.EqualFold(credential.Provider, provider) {
-			continue
-		}
-		token, _ := credential.Metadata["access_token"].(string)
-		projectID, _ := credential.Metadata["project_id"].(string)
-		accountLabel = credential.Label
-		if projectID == "" {
-			return token, "", accountLabel, credential
-		}
-		project, err := json.Marshal(map[string]string{"project_id": projectID})
-		if err != nil {
-			return token, "", accountLabel, credential
-		}
-		return token, string(project), accountLabel, credential
-	}
-	return "", "", accountLabel, nil
 }

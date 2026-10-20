@@ -256,9 +256,21 @@ macro_rules! modules_ab_case {
     };
 }
 
-modules_ab_case!(ab_modules_600519, "daily_600519.json", "modules_600519_golden.json");
-modules_ab_case!(ab_modules_300750, "daily_300750.json", "modules_300750_golden.json");
-modules_ab_case!(ab_modules_601318, "daily_601318.json", "modules_601318_golden.json");
+modules_ab_case!(
+    ab_modules_600519,
+    "daily_600519.json",
+    "modules_600519_golden.json"
+);
+modules_ab_case!(
+    ab_modules_300750,
+    "daily_300750.json",
+    "modules_300750_golden.json"
+);
+modules_ab_case!(
+    ab_modules_601318,
+    "daily_601318.json",
+    "modules_601318_golden.json"
+);
 
 macro_rules! signal_ab_case {
     ($fn_name:ident, $fx_name:literal, $golden_name:literal) => {
@@ -282,11 +294,21 @@ macro_rules! signal_ab_case {
     };
 }
 
-signal_ab_case!(ab_signal_600519, "daily_600519.json", "signal_600519_golden.json");
-signal_ab_case!(ab_signal_300750, "daily_300750.json", "signal_300750_golden.json");
-signal_ab_case!(ab_signal_601318, "daily_601318.json", "signal_601318_golden.json");
-
-
+signal_ab_case!(
+    ab_signal_600519,
+    "daily_600519.json",
+    "signal_600519_golden.json"
+);
+signal_ab_case!(
+    ab_signal_300750,
+    "daily_300750.json",
+    "signal_300750_golden.json"
+);
+signal_ab_case!(
+    ab_signal_601318,
+    "daily_601318.json",
+    "signal_601318_golden.json"
+);
 
 #[test]
 fn golden_files_cover_expected_counts() {
@@ -295,4 +317,93 @@ fn golden_files_cover_expected_counts() {
     assert_eq!(fx["dates"].as_array().unwrap().len(), 250);
     let minute_fx = frozen_json!("minute_synth_boundary.json");
     assert!(minute_fx["times"].as_array().unwrap().len() > 500);
+}
+
+/// `/api/trends/*` 路由活数据契约：前端 K 线主图（`klines`）与右侧 AI 决策
+/// 卡片流（`signal` 的 action/module_scores/trade_plan）数据源必须非空。
+/// 回归背景一：任一字段缺失时，趋势分析页 K 线与右侧栏整体空白。
+/// 回归背景二：前端趋势入口默认传裸 6 位代码（如 600519），`fetch_kline_bars`
+/// 缺交易所前缀归一化时上游返回空 → `K线数据不足（仅0根）` → 整页空白；
+/// `/search` 参数名（keyword vs input）与响应形状（results）错配时搜索恒 400。
+#[test]
+fn trends_routes_serve_frontend_contract_live() {
+    use app_runtime_core::http::HttpRequest;
+
+    // analyze：裸 6 位代码（前端默认入口形状）必须与带前缀等价
+    for symbol in ["600519", "sh600519"] {
+        let analyze_path = format!("/api/trends/analyze?symbol={symbol}");
+        let req = HttpRequest::for_internal("GET", &analyze_path, Vec::new());
+        // 运行链契约（client.rs）：route 为剥掉 query 的纯路径，query 从 request.path 取。
+        let body = super::handle_trends_request(&req, "/api/trends/analyze").unwrap_or_else(|e| {
+            panic!("/api/trends/analyze?symbol={symbol} 应成功（真实上游行情）: {e:?}")
+        });
+        let data: Value = serde_json::from_str(&body).unwrap();
+        assert!(
+            data.get("error").is_none(),
+            "analyze({symbol}) 返回错误: {body}"
+        );
+        let klines = data["klines"]
+            .as_array()
+            .expect("klines 必须为数组（K线主图数据源）");
+        assert!(
+            klines.len() >= 10,
+            "klines({symbol}) 应非空，实际 {} 根",
+            klines.len()
+        );
+        for key in ["date", "open", "close", "high", "low", "volume"] {
+            assert!(
+                klines[0].get(key).is_some(),
+                "klines({symbol})[0] 缺少前端渲染必需字段 {key}"
+            );
+        }
+        let signal = &data["signal"];
+        assert!(
+            signal["action"].as_str().is_some_and(|s| !s.is_empty()),
+            "signal.action 缺失（右侧结论卡数据源）"
+        );
+        assert!(signal["score"].is_number(), "signal.score 缺失");
+        assert!(
+            signal["module_scores"]
+                .as_object()
+                .is_some_and(|m| !m.is_empty()),
+            "module_scores 缺失（模块评分卡数据源）"
+        );
+        assert!(signal["buy_signals"].is_array(), "buy_signals 缺失");
+        assert!(signal["sell_signals"].is_array(), "sell_signals 缺失");
+        assert!(
+            signal.get("trade_plan").is_some(),
+            "trade_plan 键必须存在（操作计划卡依赖）"
+        );
+    }
+
+    // search：前端发 keyword=，应返回 results[{code,name}]（搜索联想契约）
+    let search_path = "/api/trends/search?keyword=600519";
+    let req = HttpRequest::for_internal("GET", search_path, Vec::new());
+    let body = super::handle_trends_request(&req, "/api/trends/search")
+        .expect("/api/trends/search 应成功（真实上游 smartbox）");
+    let data: Value = serde_json::from_str(&body).unwrap();
+    let results = data["results"].as_array().expect("results 必须为数组");
+    assert!(
+        results
+            .iter()
+            .any(|r| r["code"] == "600519" || r["symbol"] == "sh600519"),
+        "results 应命中 600519，实际: {body}"
+    );
+    assert!(
+        results
+            .iter()
+            .all(|r| r.get("code").is_some() && r.get("name").is_some()),
+        "results 元素必须含 code/name（前端 selectStock 契约）"
+    );
+
+    let chanlun_path = "/api/trends/chanlun_daily?symbol=600519";
+    let req = HttpRequest::for_internal("GET", chanlun_path, Vec::new());
+    let body = super::handle_trends_request(&req, "/api/trends/chanlun_daily")
+        .expect("/api/trends/chanlun_daily 应成功（真实上游行情）");
+    let cl: Value = serde_json::from_str(&body).unwrap();
+    assert!(cl.get("error").is_none(), "chanlun_daily 返回错误: {body}");
+    assert!(
+        cl.get("signals").is_some(),
+        "缠论日线必须输出 signals（缠论卡数据源）"
+    );
 }

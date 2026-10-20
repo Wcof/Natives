@@ -1,0 +1,15 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>投资终端</title>
+<script>
+/* 首帧主题前移：宿主建帧 URL 携带 ?theme=（volt|archive），在任意绘制
+   发生前同步设置 data-theme，消除沙箱内默认浅色首帧（深色用户开页白闪）。
+   运行期主题切换仍以握手 init/theme 消息为权威（app.js applyGlobalTheme）。 */
+try {
+  var t = new URLSearchParams(location.search).get("theme");
+  if (t === "volt" || t === "archive") document.documentElement.dataset.theme = t;
+} catch (e) {}
+</script>

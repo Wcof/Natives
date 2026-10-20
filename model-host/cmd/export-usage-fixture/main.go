@@ -8,6 +8,7 @@ package main
 // 产物仅用于浏览器截图验收，不进生产数据；不持久化 Prompt/正文。
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -38,7 +39,7 @@ func main() {
 	}
 	defer store.Close()
 
-	summary, err := store.CollectSources()
+	summary, err := store.CollectSources(context.Background())
 	if err != nil {
 		fatal("CollectSources: %v", err)
 	}

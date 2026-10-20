@@ -1,221 +1,65 @@
 (() => {
-const { state, actions, authFetch, api, themeColor } = globalThis.Fund;
+const { state, actions, authFetch, api, t } = globalThis.Fund;
 
 // Fund 股票详情子系统：看盘全屏双栏工作台控制器（Stock Detail Controller）
 // 核心职责：
-// 1. 管理左侧 ECharts 大图区（分时 + VWAP、日/周/月 K 线、成交量副图、技术指标）
-// 2. 挂载图二专业画图工具引擎（Stock Drawings Engine）
-// 3. 1:1 驱动右侧盘口卡片流（复用 actions.renderDepth 共享渲染与算法）
-// 4. 严禁任何硬编码 mock 数据，全动态驱动；切换 Tab 时自动暂停轮询防泄漏
+// 1. 驱动右侧盘口卡片流（复用 actions.renderDepth 共享渲染与算法）
+// 2. 行情数据加载流水线（防闪烁静默刷新、超时与竞态防护）
+// 3. 交易时段自适应轮询调度与生命周期（open/exit/pause/resume）
+// 4. UI 事件绑定（周期/指标/复权/搜索/侧栏/拖拽）
+// 图表渲染层（ECharts 初始化、option 构建、缩放联动、主题重绘）已按职责
+// 拆分至 stock-detail-chart.js，共享状态挂载在 StockDetailShared。
 
-const sdState = {
-  active: false,
-  symbol: '',
-  name: '',
-  period: 'minute', // minute | dayk | week | month
-  range: 60,        // 20 | 60 | 120 | 250 | 0
-  indicator: 'none',// none | macd | rsi | kdj | boll | wr
-  fq: 'qfq',        // qfq | hfq | bf
-  previousTab: 'watchlist',
-  klineData: [],
-  minuteData: null,
-  detail: null,
-};
+const S = globalThis.Fund.StockDetailShared;
+const sdState = S.sdState;
+const C = S.charts;
 
-let minuteChart = null;
-let minuteVolChart = null;
-let klineChart = null;
-let volumeChart = null;
-let indicatorChart = null;
-let drawingsCtrl = null;
 let _refreshTimer = null;
 let _loadSeq = 0;
+let _lastMinuteSig = null;
+let _lastKlineSig = null;
+let _chartAbortCtrl = null;
+let returnView = null;
+let cancelSideResize = () => {};
 
-function getThemeColors() {
-  const isLight = document.documentElement.dataset.theme === 'archive';
-  const isIntl = document.documentElement.getAttribute('data-color-mode') === 'intl' || state.colorMode === 'intl';
-  const colorUp = isIntl ? '#00b35c' : '#ff2d2d';
-  const colorDown = isIntl ? '#ff2d2d' : '#00b35c';
-  return {
-    isLight,
-    isIntl,
-    colorUp,
-    colorDown,
-    axis: isLight ? '#d8cfbe' : '#262626',
-    grid: isLight ? '#e8dfce' : '#141414',
-    text: isLight ? '#1a1a18' : '#aaa',
-    textDim: isLight ? '#6b6355' : '#666',
-    avgLine: isLight ? '#cc785c' : '#cdf24b',
-  };
-}
-
-function getCurrentZoom(chartInstance) {
-  if (!chartInstance) return { start: 0, end: 100 };
+function safeDecode(str) {
+  if (!str) return '';
   try {
-    const opt = chartInstance.getOption();
-    if (opt && opt.dataZoom && opt.dataZoom[0]) {
-      const dz = opt.dataZoom[0];
-      return {
-        start: dz.start != null ? dz.start : 0,
-        end: dz.end != null ? dz.end : 100,
-      };
-    }
-  } catch (e) {}
-  return { start: 0, end: 100 };
-}
-
-let _isZoomSyncing = false;
-function bindMultiChartZoomSync() {
-  const chartList = [
-    { source: klineChart, targets: () => [volumeChart, indicatorChart] },
-    { source: volumeChart, targets: () => [klineChart, indicatorChart] },
-    { source: indicatorChart, targets: () => [klineChart, volumeChart] },
-    { source: minuteChart, targets: () => [minuteVolChart] },
-    { source: minuteVolChart, targets: () => [minuteChart] },
-  ];
-
-  chartList.forEach(({ source, targets }) => {
-    if (!source || source._zoomSyncBound) return;
-    source._zoomSyncBound = true;
-    source.on('datazoom', () => {
-      if (_isZoomSyncing) return;
-      _isZoomSyncing = true;
-      try {
-        const { start, end } = getCurrentZoom(source);
-        targets().forEach(t => {
-          if (t && typeof t.dispatchAction === 'function') {
-            t.dispatchAction({ type: 'dataZoom', start, end });
-          }
-        });
-      } finally {
-        _isZoomSyncing = false;
-      }
-    });
-  });
-}
-
-// ---------- ECharts 初始化 ----------
-function initCharts() {
-  if (minuteChart && klineChart) return true;
-  if (typeof echarts === 'undefined') return false;
-
-  const mEl = document.getElementById('sd-minute-chart');
-  const mvEl = document.getElementById('sd-minute-vol');
-  const kEl = document.getElementById('sd-kline-chart');
-  const vEl = document.getElementById('sd-volume-chart');
-  const indEl = document.getElementById('sd-indicator-chart');
-  if (!mEl || !kEl) return false;
-
-  const tc = getThemeColors();
-  const baseOpts = {
-    backgroundColor: 'transparent',
-    textStyle: { color: tc.text, fontFamily: 'Microsoft YaHei, sans-serif' },
-    categoryAxis: {
-      axisLine: { lineStyle: { color: tc.axis } },
-      axisLabel: { color: tc.textDim, fontSize: 10 },
-      splitLine: { show: false },
-    },
-    valueAxis: {
-      axisLine: { lineStyle: { color: tc.axis } },
-      axisLabel: { color: tc.textDim, fontSize: 10 },
-      splitLine: { lineStyle: { color: tc.grid } },
-    },
-    tooltip: {
-      backgroundColor: tc.isLight ? 'rgba(250,246,239,0.95)' : 'rgba(20,20,20,0.92)',
-      borderColor: tc.axis,
-      textStyle: { color: tc.text, fontSize: 11 },
-    },
-  };
-
-  minuteChart = echarts.init(mEl);
-  minuteVolChart = echarts.init(mvEl);
-  klineChart = echarts.init(kEl);
-  volumeChart = echarts.init(vEl);
-  indicatorChart = echarts.init(indEl);
-
-  minuteChart.setOption(baseOpts);
-  minuteVolChart.setOption(baseOpts);
-  klineChart.setOption(baseOpts);
-  volumeChart.setOption(baseOpts);
-  indicatorChart.setOption(baseOpts);
-
-  // 多图光标十字轴联动
-  try {
-    echarts.connect([minuteChart, minuteVolChart]);
-    echarts.connect([klineChart, volumeChart, indicatorChart]);
-  } catch (e) {}
-
-  // 多图 dataZoom 实时双向精确同步（彻底解决副图与主图错位不对应问题）
-  bindMultiChartZoomSync();
-
-  window.addEventListener('resize', resizeAllCharts);
-
-  // 初始化画图控制器（传入 onZoomToRange 回调）
-  drawingsCtrl = globalThis.Fund.createStockDrawings({
-    getKlineData: () => (sdState.period === 'minute' ? ((sdState.minuteData && (sdState.minuteData.points || sdState.minuteData.items)) || []) : sdState.klineData),
-    getSymbol: () => sdState.symbol,
-    getPeriod: () => sdState.period,
-    onZoomToRange: (d1, d2) => zoomToRange(d1, d2),
-  });
-
-  return true;
-}
-
-actions.resizeStockDetailCharts = resizeAllCharts;
-
-// ---------- 局部框选缩放与全景重置 ----------
-function zoomToRange(d1, d2) {
-  const data = sdState.klineData;
-  if (!data || !data.length || !klineChart) return;
-  const idx1 = data.findIndex(k => (k.date || k.time) === d1);
-  const idx2 = data.findIndex(k => (k.date || k.time) === d2);
-  if (idx1 < 0 && idx2 < 0) return;
-  const i1 = idx1 >= 0 ? idx1 : 0;
-  const i2 = idx2 >= 0 ? idx2 : data.length - 1;
-  const minI = Math.min(i1, i2);
-  const maxI = Math.max(i1, i2);
-  const total = data.length;
-  const startPct = Math.max(0, (minI / total) * 100);
-  const endPct = Math.min(100, ((maxI + 1) / total) * 100);
-
-  klineChart.dispatchAction({ type: 'dataZoom', start: startPct, end: endPct });
-  if (volumeChart) volumeChart.dispatchAction({ type: 'dataZoom', start: startPct, end: endPct });
-  if (indicatorChart) indicatorChart.dispatchAction({ type: 'dataZoom', start: startPct, end: endPct });
-
-  const resetBtn = document.getElementById('sd-zoom-reset-btn');
-  if (resetBtn) resetBtn.style.display = 'inline-flex';
-}
-
-function resetZoomAll() {
-  sdState.range = 0;
-  if (klineChart) klineChart.dispatchAction({ type: 'dataZoom', start: 0, end: 100 });
-  if (volumeChart) volumeChart.dispatchAction({ type: 'dataZoom', start: 0, end: 100 });
-  if (indicatorChart) indicatorChart.dispatchAction({ type: 'dataZoom', start: 0, end: 100 });
-  const resetBtn = document.getElementById('sd-zoom-reset-btn');
-  if (resetBtn) resetBtn.style.display = 'none';
-
-  const rangeGroup = document.getElementById('sd-range-group');
-  if (rangeGroup) {
-    rangeGroup.querySelectorAll('button[data-range]').forEach(b => {
-      b.classList.toggle('active', b.dataset.range === '0');
-    });
+    return decodeURIComponent(str);
+  } catch (e) {
+    return str;
   }
 }
 
-function resizeAllCharts() {
-  [minuteChart, minuteVolChart, klineChart, volumeChart, indicatorChart].forEach(c => {
-    if (c && typeof c.resize === 'function') c.resize();
-  });
-  // graphic 元素是像素坐标，图表尺寸变化后立即按新坐标系重挂，防止画线飘移
-  if (drawingsCtrl) drawingsCtrl.render();
+function showChartError(text) {
+  const errEl = document.getElementById('sd-chart-error');
+  const txtEl = document.getElementById('sd-error-text');
+  if (errEl && txtEl) {
+    txtEl.textContent = text || t('fundDetailLoadFailed');
+    errEl.style.display = 'flex';
+  }
+}
+
+function hideChartError() {
+  const errEl = document.getElementById('sd-chart-error');
+  if (errEl) errEl.style.display = 'none';
 }
 
 // ---------- 视图与周期切换 ----------
 function switchPeriod(p) {
+  if(p!==sdState.period){sdState.klineData=[];sdState.minuteData=null;sdState.navData=[];S.drawingsCtrl?.cancelDraft();document.dispatchEvent(new Event('fund:detail-selection-changed'));}
   sdState.period = p;
+  const navMode = sdState.instrumentKind === 'fund';
+  document.getElementById('sd-view-minute').disabled = navMode;
+  document.getElementById('sd-draw-toolbar').hidden = navMode;
+  document.getElementById('sd-right-research-status')?.remove();
+  const right = document.querySelector('.sd-right-panel') || document.querySelector('#focus-right .sd-right-panel');
+  if (right) right.querySelectorAll('.side-card').forEach(card=>card.hidden=navMode || (sdState.instrumentKind==='etf' && card.classList.contains('valuation-card')));
+  if (right && navMode) { const status=document.createElement('p');status.id='sd-right-research-status';status.className='evidence-hint';status.textContent=Fund.t('fundTrendsNavCapability');right.prepend(status); }
+  document.querySelectorAll('#view-stock-detail .sd-tb-group button[data-ind]').forEach(button=>button.disabled=navMode);
 
   // 更新周期按钮状态
-  const group = document.querySelector('.sd-chart-toolbar');
+  const group = document.querySelector('.sd-chart-toolbar-wrap');
   if (group) {
     group.querySelectorAll('.sd-tb-group .tb-btn').forEach(btn => {
       btn.classList.toggle('active', btn.id === 'sd-view-' + p);
@@ -247,15 +91,20 @@ function switchPeriod(p) {
     if (vEl) vEl.style.display = 'none';
     if (indEl) indEl.style.display = 'none';
 
-    if (drawingsCtrl && minuteChart) {
-      drawingsCtrl.attachChart(minuteChart);
+    // 清空非当前周期实例，杜绝周期切换竞态下的旧图残影叠加
+    if (C.kline) C.kline.clear();
+    if (C.volume) C.volume.clear();
+    if (C.indicator) C.indicator.clear();
+
+    if (S.drawingsCtrl && C.minute) {
+      S.drawingsCtrl.attachChart(C.minute);
     }
   } else {
     if (rangeGroup) rangeGroup.style.display = 'inline-flex';
     if (sepRange) sepRange.style.display = 'inline-block';
     if (indBar) indBar.style.display = 'inline-flex';
     if (sepInd) sepInd.style.display = 'inline-block';
-    if (fqGroup) fqGroup.style.display = 'inline-flex';
+    if (fqGroup) fqGroup.style.display = navMode ? 'none' : 'inline-flex';
 
     if (mEl) mEl.style.display = 'none';
     if (mvEl) mvEl.style.display = 'none';
@@ -263,375 +112,17 @@ function switchPeriod(p) {
     if (vEl) vEl.style.display = 'block';
     if (indEl) indEl.style.display = sdState.indicator !== 'none' ? 'block' : 'none';
 
-    if (drawingsCtrl && klineChart) {
-      drawingsCtrl.attachChart(klineChart);
+    // 同上：切回日K周期时清空分时实例
+    if (C.minute) C.minute.clear();
+    if (C.minuteVol) C.minuteVol.clear();
+
+    if (S.drawingsCtrl && C.kline) {
+      S.drawingsCtrl.attachChart(C.kline);
     }
   }
 
-  resizeAllCharts();
+  S.resizeAllCharts();
   loadChartData(true);
-}
-
-// ---------- 渲染分时图 ----------
-function renderMinute(data) {
-  if (!minuteChart || !minuteVolChart || !data) return;
-  const points = (data && (data.points || data.items)) || [];
-  const tc = getThemeColors();
-
-  if (!points.length) {
-    minuteChart.setOption({
-      title: { text: '暂无分时数据', left: 'center', top: 'center', textStyle: { color: tc.textDim, fontSize: 13 } }
-    }, true);
-    minuteVolChart.setOption({}, true);
-    return;
-  }
-
-  const preClose = data.preClose || (sdState.detail ? Number(sdState.detail.prevClose) : (points[0] ? Number(points[0].price) : 100));
-  const times = points.map(d => d.time);
-  const prices = points.map(d => Number(d.price));
-  const vwaps = points.map(d => Number(d.vwap || d.price));
-  const vols = points.map(d => Number(d.volume || 0));
-
-  let minP = Infinity, maxP = -Infinity;
-  prices.concat(vwaps).forEach(p => {
-    if (p != null && !isNaN(p)) { minP = Math.min(minP, p); maxP = Math.max(maxP, p); }
-  });
-  const maxDiff = Math.max(Math.abs(maxP - preClose), Math.abs(minP - preClose), preClose * 0.01);
-  const yMin = preClose - maxDiff;
-  const yMax = preClose + maxDiff;
-
-  const minOpt = {
-    animation: false,
-    grid: { left: 55, right: 35, top: 10, bottom: 6 },
-    xAxis: {
-      type: 'category',
-      data: times,
-      axisLine: { lineStyle: { color: tc.axis } },
-      axisLabel: { color: tc.textDim, fontSize: 10 },
-      splitLine: { show: false },
-    },
-    yAxis: [
-      {
-        type: 'value',
-        min: yMin, max: yMax,
-        axisLine: { lineStyle: { color: tc.axis } },
-        splitLine: { lineStyle: { color: tc.grid } },
-        axisLabel: {
-          color: function(val) {
-            return val > preClose ? tc.colorUp : (val < preClose ? tc.colorDown : tc.textDim);
-          },
-          formatter: val => val.toFixed(2),
-        },
-      },
-      {
-        type: 'value',
-        min: -((maxDiff / preClose) * 100),
-        max: (maxDiff / preClose) * 100,
-        position: 'right',
-        splitLine: { show: false },
-        axisLabel: {
-          color: val => val > 0 ? tc.colorUp : (val < 0 ? tc.colorDown : tc.textDim),
-          formatter: val => val.toFixed(2) + '%',
-        },
-      },
-    ],
-    series: [
-      {
-        name: '现价',
-        type: 'line',
-        data: prices,
-        showSymbol: false,
-        lineStyle: { width: 1.5, color: '#38bdf8' },
-        areaStyle: {
-          color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-            { offset: 0, color: 'rgba(56, 189, 248, 0.25)' },
-            { offset: 1, color: 'rgba(56, 189, 248, 0.0)' },
-          ]),
-        },
-      },
-      {
-        name: '均价',
-        type: 'line',
-        data: vwaps,
-        showSymbol: false,
-        lineStyle: { width: 1.2, color: tc.avgLine, type: 'dashed' },
-      },
-    ],
-  };
-
-  const volColors = prices.map((p, i) => {
-    const prev = i === 0 ? preClose : prices[i-1];
-    return p >= prev ? tc.colorUp : tc.colorDown;
-  });
-
-  const volOpt = {
-    animation: false,
-    grid: { left: 55, right: 35, top: 4, bottom: 16 },
-    xAxis: {
-      type: 'category',
-      data: times,
-      axisLine: { lineStyle: { color: tc.axis } },
-      axisLabel: { show: false },
-    },
-    yAxis: {
-      type: 'value',
-      splitLine: { lineStyle: { color: tc.grid } },
-      axisLabel: { color: tc.textDim, fontSize: 9, formatter: v => (v >= 1e4 ? (v / 1e4).toFixed(0) + '万' : v) },
-    },
-    series: [
-      {
-        name: '成交量',
-        type: 'bar',
-        data: vols.map((v, i) => ({ value: v, itemStyle: { color: volColors[i] } })),
-      },
-    ],
-  };
-
-  minuteChart.setOption(minOpt, { notMerge: true });
-  minuteVolChart.setOption(volOpt, { notMerge: true });
-}
-
-// ---------- 渲染 K 线与技术指标 ----------
-function renderKline(klines) {
-  if (!klineChart || !volumeChart || !klines) return;
-  const tc = getThemeColors();
-
-  if (!klines.length) {
-    klineChart.setOption({
-      title: { text: '暂无K线数据', left: 'center', top: 'center', textStyle: { color: tc.textDim, fontSize: 13 } }
-    }, true);
-    volumeChart.setOption({}, true);
-    return;
-  }
-
-  const dates = klines.map(d => d.date);
-  const ohlc = klines.map(d => [d.open, d.close, d.low, d.high]);
-  const vols = klines.map(d => d.volume || 0);
-
-  // 计算 MA5, MA10, MA20, MA30, MA60
-  function calcMA(days) {
-    const res = [];
-    for (let i = 0; i < klines.length; i++) {
-      if (i < days - 1) { res.push(null); continue; }
-      let sum = 0;
-      for (let j = 0; j < days; j++) sum += klines[i - j].close;
-      res.push(Number((sum / days).toFixed(2)));
-    }
-    return res;
-  }
-
-  const ma5 = calcMA(5);
-  const ma10 = calcMA(10);
-  const ma20 = calcMA(20);
-  const ma30 = calcMA(30);
-  const ma60 = calcMA(60);
-
-  let startIdx = 0;
-  if (sdState.range > 0 && klines.length > sdState.range) {
-    startIdx = Math.round(((klines.length - sdState.range) / klines.length) * 100);
-  } else {
-    startIdx = 0;
-  }
-
-  const klineOpt = {
-    animation: false,
-    grid: { left: 55, right: 35, top: 12, bottom: 6 },
-    xAxis: {
-      type: 'category',
-      data: dates,
-      axisLine: { lineStyle: { color: tc.axis } },
-      axisLabel: { color: tc.textDim, fontSize: 10 },
-      splitLine: { show: false },
-    },
-    yAxis: {
-      type: 'value',
-      scale: true,
-      axisLine: { lineStyle: { color: tc.axis } },
-      splitLine: { lineStyle: { color: tc.grid } },
-      axisLabel: { color: tc.textDim, fontSize: 10, formatter: v => v.toFixed(2) },
-    },
-    dataZoom: [
-      { type: 'inside', start: startIdx, end: 100, zoomOnMouseWheel: true, moveOnMouseMove: true, xAxisIndex: [0] },
-    ],
-    series: [
-      {
-        name: 'K线',
-        type: 'candlestick',
-        data: ohlc,
-        itemStyle: {
-          color: tc.colorUp,
-          color0: tc.colorDown,
-          borderColor: tc.colorUp,
-          borderColor0: tc.colorDown,
-        },
-      },
-      { name: 'MA5', type: 'line', data: ma5, showSymbol: false, lineStyle: { width: 1.2, color: '#ffeb3b' } },
-      { name: 'MA10', type: 'line', data: ma10, showSymbol: false, lineStyle: { width: 1.2, color: '#e040fb' } },
-      { name: 'MA20', type: 'line', data: ma20, showSymbol: false, lineStyle: { width: 1.2, color: '#4fc3f7' } },
-      { name: 'MA30', type: 'line', data: ma30, showSymbol: false, lineStyle: { width: 1.2, color: '#00e676' } },
-      { name: 'MA60', type: 'line', data: ma60, showSymbol: false, lineStyle: { width: 1.2, color: '#ff9800' } },
-    ],
-  };
-
-  const volBarColors = klines.map(d => (d.close >= d.open ? tc.colorUp : tc.colorDown));
-  const volOpt = {
-    animation: false,
-    grid: { left: 55, right: 35, top: 4, bottom: 16 },
-    xAxis: {
-      type: 'category',
-      data: dates,
-      axisLine: { lineStyle: { color: tc.axis } },
-      axisLabel: { show: false },
-    },
-    yAxis: {
-      type: 'value',
-      splitLine: { lineStyle: { color: tc.grid } },
-      axisLabel: { color: tc.textDim, fontSize: 9, formatter: v => (v >= 1e4 ? (v / 1e4).toFixed(0) + '万' : v) },
-    },
-    dataZoom: [
-      { type: 'inside', start: startIdx, end: 100, zoomOnMouseWheel: true, moveOnMouseMove: true, xAxisIndex: [0] },
-    ],
-    series: [
-      {
-        name: '成交量',
-        type: 'bar',
-        data: vols.map((v, i) => ({ value: v, itemStyle: { color: volBarColors[i] } })),
-      },
-    ],
-  };
-
-  klineChart.setOption(klineOpt, { notMerge: true });
-  volumeChart.setOption(volOpt, { notMerge: true });
-
-  // 渲染副图指标（复用 Fund.indicators，严格同步主图缩放范围）
-  renderSubIndicator(klines);
-}
-
-function renderSubIndicator(klines) {
-  if (!indicatorChart) return;
-  const indEl = document.getElementById('sd-indicator-chart');
-  if (sdState.indicator === 'none') {
-    if (indEl) indEl.style.display = 'none';
-    resizeAllCharts();
-    return;
-  }
-  if (indEl) indEl.style.display = 'block';
-
-  // 读取当前主图 K 线的实际数据缩放区间，保证副图与主图严格同步对齐！
-  const zoom = getCurrentZoom(klineChart);
-  const tc = getThemeColors();
-  const dates = klines.map(d => d.date);
-  const ind = sdState.indicator;
-  const indEngine = globalThis.Fund.indicators;
-  if (!indEngine) return;
-
-  const closes = klines.map(d => d.close);
-  const highs = klines.map(d => d.high);
-  const lows = klines.map(d => d.low);
-
-  let series = [];
-  if (ind === 'macd') {
-    const r = indEngine.calcMACD(closes);
-    series = [
-      { name: 'DIF', type: 'line', data: r.dif, showSymbol: false, lineStyle: { width: 1.2, color: '#4fc3f7' } },
-      { name: 'DEA', type: 'line', data: r.dea, showSymbol: false, lineStyle: { width: 1.2, color: '#e040fb' } },
-      {
-        name: 'MACD', type: 'bar',
-        data: r.macd.map(v => ({ value: v, itemStyle: { color: v >= 0 ? tc.colorUp : tc.colorDown } })),
-      },
-    ];
-  } else if (ind === 'kdj') {
-    const r = indEngine.calcKDJ(highs, lows, closes);
-    series = [
-      { name: 'K', type: 'line', data: r.k, showSymbol: false, lineStyle: { width: 1.2, color: tc.colorUp } },
-      { name: 'D', type: 'line', data: r.d, showSymbol: false, lineStyle: { width: 1.2, color: '#4fc3f7' } },
-      { name: 'J', type: 'line', data: r.j, showSymbol: false, lineStyle: { width: 1.2, color: '#e040fb' } },
-    ];
-  } else if (ind === 'rsi') {
-    const rsi14 = indEngine.calcRSI(closes, 14);
-    series = [
-      { name: 'RSI(14)', type: 'line', data: rsi14, showSymbol: false, lineStyle: { width: 1.2, color: '#38bdf8' } },
-    ];
-  } else if (ind === 'wr') {
-    const wr = indEngine.calcWR(highs, lows, closes, 14);
-    series = [
-      { name: 'WR(14)', type: 'line', data: wr, showSymbol: false, lineStyle: { width: 1.2, color: '#f59e0b' } },
-    ];
-  } else if (ind === 'boll') {
-    const boll = indEngine.calcBOLL(closes, 20);
-    series = [
-      { name: 'UP', type: 'line', data: boll.upper, showSymbol: false, lineStyle: { width: 1, color: '#4fc3f7', type: 'dashed' } },
-      { name: 'MID', type: 'line', data: boll.mid, showSymbol: false, lineStyle: { width: 1, color: '#ffeb3b' } },
-      { name: 'LOW', type: 'line', data: boll.lower, showSymbol: false, lineStyle: { width: 1, color: '#4fc3f7', type: 'dashed' } },
-    ];
-  }
-
-  const opt = {
-    animation: false,
-    grid: { left: 55, right: 35, top: 4, bottom: 16 },
-    xAxis: { type: 'category', data: dates, axisLine: { lineStyle: { color: tc.axis } }, axisLabel: { color: tc.textDim, fontSize: 9 } },
-    yAxis: { type: 'value', scale: true, splitLine: { lineStyle: { color: tc.grid } }, axisLabel: { color: tc.textDim, fontSize: 9 } },
-    dataZoom: [{ type: 'inside', start: zoom.start, end: zoom.end, zoomOnMouseWheel: true, moveOnMouseMove: true, xAxisIndex: [0] }],
-    series: series,
-  };
-  indicatorChart.setOption(opt, { notMerge: true });
-  setTimeout(resizeAllCharts, 30);
-}
-
-function reloadStockDetailTheme() {
-  if (minuteChart && klineChart) {
-    const tc = getThemeColors();
-    const baseOpts = {
-      textStyle: { color: tc.text },
-      categoryAxis: {
-        axisLine: { lineStyle: { color: tc.axis } },
-        axisLabel: { color: tc.textDim },
-      },
-      valueAxis: {
-        axisLine: { lineStyle: { color: tc.axis } },
-        axisLabel: { color: tc.textDim },
-        splitLine: { lineStyle: { color: tc.grid } },
-      },
-    };
-    [minuteChart, minuteVolChart, klineChart, volumeChart, indicatorChart].forEach(c => {
-      if (c && typeof c.setOption === 'function') c.setOption(baseOpts);
-    });
-  }
-  if (sdState.active && sdState.symbol) {
-    if (sdState.period === 'minute' && sdState.minuteData) {
-      renderMinute(sdState.minuteData);
-    } else if (sdState.klineData && sdState.klineData.length) {
-      renderKline(sdState.klineData);
-    }
-  }
-}
-actions.reloadStockDetailTheme = reloadStockDetailTheme;
-
-function safeDecode(str) {
-  if (!str) return '';
-  try {
-    return decodeURIComponent(str);
-  } catch (e) {
-    return str;
-  }
-}
-
-let _lastMinuteSig = null;
-let _lastKlineSig = null;
-let _chartAbortCtrl = null;
-
-function showChartError(text) {
-  const errEl = document.getElementById('sd-chart-error');
-  const txtEl = document.getElementById('sd-error-text');
-  if (errEl && txtEl) {
-    txtEl.textContent = text || '行情加载失败';
-    errEl.style.display = 'flex';
-  }
-}
-
-function hideChartError() {
-  const errEl = document.getElementById('sd-chart-error');
-  if (errEl) errEl.style.display = 'none';
 }
 
 // ---------- 1:1 驱动右侧原始 Dashboard 卡片（复用 actions.renderDepth） ----------
@@ -707,13 +198,13 @@ function updateDetailPanel(detail) {
   const tagsEl = document.getElementById('sd-tags');
   if (tagsEl) {
     const liveTags = [];
-    if (detail.pe && detail.pe > 0 && detail.pe < 28) liveTags.push(`低估值(PE:${detail.pe.toFixed(1)})`);
-    if (detail.turnover && detail.turnover > 3.0) liveTags.push(`活跃换手(${detail.turnover.toFixed(1)}%)`);
-    if (detail.volumeRatio && detail.volumeRatio > 1.6) liveTags.push(`温和放量(量比:${detail.volumeRatio.toFixed(1)})`);
+    if (detail.pe && detail.pe > 0 && detail.pe < 28) liveTags.push(t('fundDetailStockTagLowPE',{value:detail.pe.toFixed(1)}));
+    if (detail.turnover && detail.turnover > 3.0) liveTags.push(t('fundDetailStockTagTurnover',{value:detail.turnover.toFixed(1)}));
+    if (detail.volumeRatio && detail.volumeRatio > 1.6) liveTags.push(t('fundDetailStockTagVolume',{value:detail.volumeRatio.toFixed(1)}));
     if (detail.changePct != null && Math.abs(detail.changePct) >= 2.5) {
-      liveTags.push(detail.changePct > 0 ? `日内强势(+${detail.changePct.toFixed(1)}%)` : `日内走弱(${detail.changePct.toFixed(1)}%)`);
+      liveTags.push(detail.changePct > 0 ? t('fundDetailStockTagStrength',{value:detail.changePct.toFixed(1)}) : t('fundDetailStockTagWeakness',{value:detail.changePct.toFixed(1)}));
     }
-    if (detail.amplitude && detail.amplitude >= 3.5) liveTags.push(`宽幅震荡(${detail.amplitude.toFixed(1)}%)`);
+    if (detail.amplitude && detail.amplitude >= 3.5) liveTags.push(t('fundDetailStockTagAmplitude',{value:detail.amplitude.toFixed(1)}));
     const tagSig = liveTags.join('|');
     if (tagsEl._lastSig !== tagSig) {
       tagsEl._lastSig = tagSig;
@@ -724,11 +215,13 @@ function updateDetailPanel(detail) {
   // 2. 公司市值与估值股本（全量展开）
   function fmtShares(v) {
     if (v == null || isNaN(v) || v === 0) return '-';
-    return (v / 1e8).toFixed(2) + '亿';
+    return t('fundDetailStockHundredMillionShares',{value:(v/1e8).toFixed(2)});
   }
   setVal('sd-v-mktcap', detail.marketCap ? Number(detail.marketCap).toFixed(2) : '-');
   setVal('sd-v-circ-mktcap', detail.circMarketCap ? Number(detail.circMarketCap).toFixed(2) : '-');
-  setVal('sd-v-pe', detail.pe ? Number(detail.pe).toFixed(2) : '-');
+  // 卡片标签为「市盈率(PE动)」：优先 PE 动（peDyn），上游缺失时回退 TTM pe
+  const peShown = detail.peDyn != null && Number(detail.peDyn) > 0 ? Number(detail.peDyn) : (detail.pe ? Number(detail.pe) : null);
+  setVal('sd-v-pe', peShown ? peShown.toFixed(2) : '-');
   setVal('sd-v-pb', detail.pb ? Number(detail.pb).toFixed(2) : '-');
   setVal('sd-v-div', detail.dividendYield ? Number(detail.dividendYield).toFixed(2) + '%' : '-');
   setVal('sd-v-circ-shares', fmtShares(detail.circShares));
@@ -749,6 +242,9 @@ function updateDetailPanel(detail) {
   setVal('sd-m-turnover', detail.turnover != null ? Number(detail.turnover).toFixed(2) + '%' : '-');
   setVal('sd-m-vol-ratio', detail.volumeRatio != null ? Number(detail.volumeRatio).toFixed(2) : '-');
   setVal('sd-m-amplitude', detail.amplitude != null ? Number(detail.amplitude).toFixed(2) + '%' : '-');
+  // 委比%（(买五总-卖五总)/(买五总+卖五总)×100）与委差（手，上游委托差位）
+  setVal('sd-m-weibi', detail.weiBi != null ? Number(detail.weiBi).toFixed(2) + '%' : '-');
+  setVal('sd-m-weicha', detail.weiCha != null ? Number(detail.weiCha).toFixed(0) : '-');
 
   // 同步自选按钮文字
   updateFavButtons();
@@ -761,36 +257,27 @@ function updateFavButtons() {
   const dashFav = document.getElementById('sd-btn-dash-fav');
 
   if (topText) {
-    const str = isFav ? '已自选' : '自选';
+    const str = Fund.t(isFav?'fundWatchAdded':'fundTrendsUi4');
     if (topText.textContent !== str) topText.textContent = str;
   }
   if (topStar) topStar.classList.toggle('btn-accent', !isFav);
   if (dashFav) {
     const favHtml = isFav
-      ? '<svg class="svg-icon" aria-hidden="true"><use href="#i-star" /></svg> 已自选'
-      : '<svg class="svg-icon" aria-hidden="true"><use href="#i-star" /></svg> 自选';
+      ? '<svg class="svg-icon" aria-hidden="true"><use href="#i-star" /></svg> '+Fund.t('fundWatchAdded')
+      : '<svg class="svg-icon" aria-hidden="true"><use href="#i-star" /></svg> '+Fund.t('fundTrendsUi4');
     if (dashFav.innerHTML !== favHtml) dashFav.innerHTML = favHtml;
     dashFav.classList.toggle('btn-accent', !isFav);
   }
 }
+document.addEventListener('fund:language-changed',()=>{updateFavButtons();if(sdState.active){updateDetailPanel(sdState.detail);actions.reloadStockDetailTheme?.();}});
 
-function toggleFav() {
-  const isFav = state.watchlistItems && state.watchlistItems.some(i => i.symbol === sdState.symbol);
-  if (isFav) {
-    api('DELETE', '/api/watchlists/items?watchlistId=' + state.activeGroup + '&symbol=' + sdState.symbol).then(() => {
-      actions.refreshWatchlist();
-      updateFavButtons();
-    });
-  } else {
-    api('POST', '/api/watchlists/items', {
-      watchlistId: state.activeGroup,
-      symbol: sdState.symbol,
-      name: sdState.name,
-    }).then(() => {
-      actions.refreshWatchlist();
-      updateFavButtons();
-    });
-  }
+let detailMembershipBusy=false;
+async function toggleFav() {
+  if(detailMembershipBusy)return;detailMembershipBusy=true;
+  const buttons=[document.getElementById('sd-btn-star'),document.getElementById('sd-btn-dash-fav')].filter(Boolean);buttons.forEach(button=>button.disabled=true);
+  try {await actions.setWatchlistMember({symbol:sdState.symbol,name:sdState.name,assetType:sdState.instrumentKind},!state.watchlistItems.some(item=>item.symbol===sdState.symbol));updateFavButtons();}
+  catch(error){showChartError(error.message || Fund.t('fundHomeRequestFailed'));}
+  finally {detailMembershipBusy=false;buttons.forEach(button=>button.disabled=false);}
 }
 
 // ---------- 加载数据核心流水线（带防闪烁静默刷新保护） ----------
@@ -819,6 +306,18 @@ async function loadChartData(showLoading = false) {
   }, 10000);
 
   try {
+    if (sdState.instrumentKind === 'fund') {
+      const rows = await Fund.researchSeries.nav(sdState.symbol.replace(/^jj/, ''), currentCtrl.signal);
+      if (seq !== _loadSeq || !sdState.active) return;
+      sdState.navData = rows;
+      C.kline?.setOption(Fund.researchSeries.navOption(Fund.researchSeries.navRows(rows, sdState.period)), true);
+      document.getElementById('sd-volume-chart').style.display = 'none';
+      document.getElementById('sd-indicator-chart').style.display = 'none';
+      const latest = rows.at(-1);
+      document.getElementById('sd-stock-price').textContent = latest?.unitNav || '–';
+      document.getElementById('sd-stock-change').textContent = latest?.navDate || Fund.t('fundTrendsNavEmpty');
+      hideChartError(); return;
+    }
     if (sdState.period === 'minute') {
       const res = await authFetch('/api/market/minute?symbol=' + encodeURIComponent(sdState.symbol), {
         signal: currentCtrl.signal,
@@ -828,7 +327,7 @@ async function loadChartData(showLoading = false) {
 
       if (!res.ok || (json && json.error)) {
         if (showLoading && !sdState.minuteData) {
-          showChartError((json && json.message) || '分时数据获取失败');
+          showChartError(Fund.localizeApiError(res.status,json?.error));
         }
         return;
       }
@@ -843,11 +342,11 @@ async function loadChartData(showLoading = false) {
       _lastMinuteSig = sig;
 
       sdState.minuteData = json;
-      renderMinute(json);
+      S.renderMinute(json);
       // renderMinute 内部 notMerge:true 会整体擦掉 graphic 层，立即用内存
       // 画线重挂；否则轮询期间（showLoading=false）划线会闪没
-      if (drawingsCtrl) drawingsCtrl.render();
-      if (showLoading) setTimeout(resizeAllCharts, 40);
+      if (S.drawingsCtrl) S.drawingsCtrl.render();
+      if (showLoading) setTimeout(S.resizeAllCharts, 40);
     } else {
       const p = sdState.period === 'week' ? 'week' : (sdState.period === 'month' ? 'month' : 'day');
       const res = await authFetch(`/api/market/kline?symbol=${encodeURIComponent(sdState.symbol)}&period=${p}&fq=${sdState.fq}`, {
@@ -858,12 +357,13 @@ async function loadChartData(showLoading = false) {
 
       if (!res.ok || (json && json.error)) {
         if (showLoading && (!sdState.klineData || !sdState.klineData.length)) {
-          showChartError((json && json.message) || 'K线数据获取失败');
+          showChartError(Fund.localizeApiError(res.status,json?.error));
         }
         return;
       }
 
       hideChartError();
+      sdState.seriesSource=json.source || 'unknown';
       const rawList = (json && (json.candles || json.klines)) || [];
       const last = rawList.length ? rawList[rawList.length - 1] : null;
       const sig = last ? `${sdState.symbol}_${p}_${last.time || last.date}_${last.close}_${last.high || 0}_${last.low || 0}_${last.volume || 0}_${rawList.length}` : '';
@@ -880,21 +380,21 @@ async function loadChartData(showLoading = false) {
         low: Number(c.low),
         volume: Number(c.volume || 0),
       }));
-      renderKline(sdState.klineData);
+      S.renderKline(sdState.klineData);
       // 同上：renderKline notMerge 擦除后先以内存画线秒级恢复，reload 异步对账
-      if (drawingsCtrl) drawingsCtrl.render();
-      if (showLoading) setTimeout(resizeAllCharts, 40);
+      if (S.drawingsCtrl) S.drawingsCtrl.render();
+      if (showLoading) setTimeout(S.resizeAllCharts, 40);
     }
 
-    if (showLoading && drawingsCtrl) {
-      drawingsCtrl.reload();
+    if (showLoading && S.drawingsCtrl) {
+      S.drawingsCtrl.reload();
     }
   } catch (e) {
     if (seq === _loadSeq && showLoading) {
       if (e.name === 'AbortError' || currentCtrl.signal.aborted) {
-        showChartError('行情数据加载超时，点击重试');
+        showChartError(t('fundDetailStockQuoteTimeout'));
       } else {
-        showChartError('行情数据连接异常，点击重试');
+        showChartError(t('fundDetailStockQuoteConnection'));
       }
     }
   } finally {
@@ -906,29 +406,47 @@ async function loadChartData(showLoading = false) {
   }
 }
 
+let detailQuoteController=null, detailQuoteGeneration=0;
 async function loadDetailQuote() {
-  try {
-    const res = await authFetch('/api/market/detail?symbol=' + encodeURIComponent(sdState.symbol) + '&name=' + encodeURIComponent(sdState.name));
-    const json = await res.json();
-    updateDetailPanel(json);
-  } catch (e) {}
+  detailQuoteController?.abort(); detailQuoteController=new AbortController();const signal=detailQuoteController.signal,seq=++detailQuoteGeneration,symbol=sdState.symbol;
+  try { const json=await api('GET','/api/market/detail?symbol='+encodeURIComponent(symbol)+'&name='+encodeURIComponent(sdState.name),null,{signal});if(seq!==detailQuoteGeneration||!sdState.active||symbol!==sdState.symbol)return;updateDetailPanel(json); }
+  catch(e) { if(!signal.aborted&&seq===detailQuoteGeneration&&sdState.active)showChartError(Fund.localizeApiError(e.status||500,e.code)); }
 }
 
 // ---------- 外部主入口：openStockDetail ----------
-function openStockDetail(symbol, name) {
+function openStockDetail(symbol, name, instrumentKind, holdingContext) {
   if (!symbol) return;
+  Fund.leaveFundDetail?.();
+  Fund.holdingSummary?.set(holdingContext);
+  if (!sdState.active) {
+    const section = [...document.querySelectorAll(".main-column > section")].find(node => !node.hidden);
+    returnView = { focus: document.activeElement, scroll: [document.scrollingElement, section, ...(section?.querySelectorAll("*") || [])].filter(node => node && (node.scrollTop || node.scrollLeft)).map(node => ({node, top:node.scrollTop, left:node.scrollLeft})) };
+  }
+  if (actions.leavePositions) actions.leavePositions();
+  actions.leaveAssets?.();actions.leaveTx?.();
+  const wasActive = sdState.active, changed = sdState.symbol !== symbol;
+  sdState.instrumentKind = Fund.researchSeries.kind(symbol, '', instrumentKind);
+  if (sdState.instrumentKind === 'fund' && sdState.period === 'minute') sdState.period = 'dayk';
+  if (changed) {
+    sdState.klineData = []; sdState.minuteData = null; sdState.navData = []; sdState.detail = null;
+    Object.values(C).forEach(chart => chart?.clear());
+    document.getElementById('sd-stock-name').textContent = name || symbol;
+    document.getElementById('sd-stock-code').textContent = symbol;
+    document.getElementById('sd-stock-price').textContent = '–';
+    document.getElementById('sd-stock-change').textContent = '–';
+  }
+  S.drawingsCtrl?.cancelDraft();
   sdState.active = true;
   sdState.symbol = symbol;
+  document.dispatchEvent(new Event('fund:detail-selection-changed'));
   sdState.name = safeDecode(name || symbol);
   _lastMinuteSig = null;
   _lastKlineSig = null;
   hideChartError();
 
   // 记录先前的页签
-  const activeTabBtn = document.querySelector('nav.main-nav button[aria-selected="true"]');
-  if (activeTabBtn) {
-    sdState.previousTab = activeTabBtn.id.replace('tab-', '');
-  }
+  const activeView=document.querySelector('.main-column > section:not([hidden])');
+  if(activeView&&!wasActive)sdState.previousTab=activeView.id.replace('view-','');
 
   // 隐藏其他所有普通视图
   document.querySelectorAll('.main-column > section').forEach(sec => {
@@ -951,7 +469,7 @@ function openStockDetail(symbol, name) {
   if (sideToggleBtn) {
     sideToggleBtn.setAttribute('aria-pressed', 'false');
     sideToggleBtn.classList.remove('active');
-    sideToggleBtn.title = '折叠右侧看板 (⌘B)';
+    sideToggleBtn.dataset.i18nTitle='fundDetailStockUiCollapsePanel';sideToggleBtn.title=t(sideToggleBtn.dataset.i18nTitle);
   }
 
   const v = document.getElementById('view-stock-detail');
@@ -959,10 +477,18 @@ function openStockDetail(symbol, name) {
 
   // 确保 DOM 展开完成并计算出真实像素尺寸后再初始化图表
   requestAnimationFrame(() => {
-    initCharts();
-    switchPeriod(sdState.period || 'minute');
-    resumeStockDetail();
-    setTimeout(resizeAllCharts, 60);
+    const { ensureEcharts } = globalThis.Fund;
+    const boot = () => {
+      S.initCharts();
+      switchPeriod(sdState.period || 'minute');
+      resumeStockDetail();
+      setTimeout(S.resizeAllCharts, 60);
+    };
+    if (ensureEcharts) {
+      ensureEcharts().catch(() => {}).then(boot);
+    } else {
+      boot();
+    }
   });
 }
 
@@ -980,6 +506,10 @@ function isSessionOpen() {
 }
 
 function pauseStockDetail() {
+  cancelSideResize();
+  _chartAbortCtrl?.abort(); ++_loadSeq;
+  S.drawingsCtrl?.pause();
+  detailQuoteController?.abort(); ++detailQuoteGeneration;
   if (_refreshTimer) {
     clearTimeout(_refreshTimer);
     clearInterval(_refreshTimer);
@@ -992,8 +522,8 @@ function resumeStockDetail() {
   if (!sdState.active || !sdState.symbol) return;
 
   // 1. 无论开闭市，进入或激活个股详情时必然请求一次最新数据
-  loadDetailQuote();
-  loadChartData(false);
+  if (sdState.instrumentKind !== 'fund') loadDetailQuote();
+  loadChartData(true);
 
   // 2. 自适应调度：
   //    - 开市期间：3000ms 秒级平滑静默刷新
@@ -1001,11 +531,11 @@ function resumeStockDetail() {
   function scheduleNextTick() {
     if (!sdState.active || !sdState.symbol) return;
     const open = isSessionOpen();
-    const delay = open ? 3000 : 60000;
+    const delay = open ? ([3,10,30,60].includes(Fund.state.quoteRefreshSeconds)?Fund.state.quoteRefreshSeconds:3)*1000 : 60000;
 
     _refreshTimer = setTimeout(() => {
       if (!sdState.active || !sdState.symbol) return;
-      if (isSessionOpen()) {
+      if (isSessionOpen() && sdState.instrumentKind !== 'fund') {
         loadDetailQuote();
         loadChartData(false);
       }
@@ -1018,7 +548,10 @@ function resumeStockDetail() {
 
 // ---------- 返回上一页 ----------
 function exitStockDetail() {
+  actions.exitFocusMode?.();
+  S.drawingsCtrl?.pause();
   sdState.active = false;
+  Fund.holdingSummary?.clear();
   pauseStockDetail();
   hideChartError();
   if (_chartAbortCtrl) {
@@ -1041,6 +574,11 @@ function exitStockDetail() {
   const targetTab = document.getElementById('tab-' + (sdState.previousTab || 'watchlist'));
   if (targetTab) {
     targetTab.click();
+    requestAnimationFrame(() => {
+      returnView?.scroll.forEach(({node,top,left}) => {if(node.isConnected){node.scrollTop=top;node.scrollLeft=left;}});
+      (returnView?.focus?.isConnected ? returnView.focus : targetTab).focus({preventScroll:true});
+      returnView=null;
+    });
   }
 }
 
@@ -1050,7 +588,7 @@ function bindEvents() {
   if (backBtn) backBtn.addEventListener('click', exitStockDetail);
 
   const resetBtn = document.getElementById('sd-zoom-reset-btn');
-  if (resetBtn) resetBtn.addEventListener('click', resetZoomAll);
+  if (resetBtn) resetBtn.addEventListener('click', S.resetZoomAll);
 
   const starBtn = document.getElementById('sd-btn-star');
   if (starBtn) starBtn.addEventListener('click', toggleFav);
@@ -1087,14 +625,16 @@ function bindEvents() {
         btn.classList.add('active');
         sdState.range = parseInt(btn.dataset.range, 10) || 0;
         if (sdState.range === 0) {
-          resetZoomAll();
+          S.resetZoomAll();
         } else {
-          const total = sdState.klineData.length;
-          if (total > 0 && klineChart) {
-            const startPct = Math.max(0, (1 - sdState.range / total) * 100);
-            klineChart.dispatchAction({ type: 'dataZoom', start: startPct, end: 100 });
-            if (volumeChart) volumeChart.dispatchAction({ type: 'dataZoom', start: startPct, end: 100 });
-            if (indicatorChart) indicatorChart.dispatchAction({ type: 'dataZoom', start: startPct, end: 100 });
+          const rows=detailRows(),total=rows.length;
+          if (total > 0 && C.kline) {
+            const latest=new Date(rows.at(-1).date+'T00:00:00Z'),months={20:1,60:3,120:6,250:12}[sdState.range];
+            let first=0;if(months&&Number.isFinite(latest.getTime())){latest.setUTCMonth(latest.getUTCMonth()-months);first=Math.max(0,rows.findIndex(row=>row.date>=latest.toISOString().slice(0,10)));}
+            const startPct=first/Math.max(1,total-1)*100;
+            C.kline.dispatchAction({ type: 'dataZoom', start: startPct, end: 100 });
+            if (C.volume) C.volume.dispatchAction({ type: 'dataZoom', start: startPct, end: 100 });
+            if (C.indicator) C.indicator.dispatchAction({ type: 'dataZoom', start: startPct, end: 100 });
           }
         }
       });
@@ -1109,7 +649,7 @@ function bindEvents() {
         indBar.querySelectorAll('.it-btn').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
         sdState.indicator = btn.dataset.ind || 'none';
-        renderSubIndicator(sdState.klineData);
+        S.renderSubIndicator(sdState.klineData);
       });
     });
   }
@@ -1122,54 +662,38 @@ function bindEvents() {
         fqGroup.querySelectorAll('button[data-fq]').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
         sdState.fq = btn.dataset.fq || 'qfq';
+        sdState.klineData=[];C.kline?.clear();S.drawingsCtrl?.cancelDraft();document.dispatchEvent(new Event('fund:detail-selection-changed'));
         loadChartData(true);
       });
     });
   }
 
-  // 搜索框联想与切换标的
-  const searchInput = document.getElementById('sd-search-input');
-  const searchResults = document.getElementById('sd-search-results');
-  let searchTimer = null;
-  if (searchInput && searchResults) {
-    searchInput.addEventListener('input', () => {
-      clearTimeout(searchTimer);
-      const kw = searchInput.value.trim();
-      if (!kw) { searchResults.style.display = 'none'; return; }
-      searchTimer = setTimeout(async () => {
-        try {
-          const res = await authFetch('/api/market/suggest?input=' + encodeURIComponent(kw));
-          const list = await res.json();
-          if (list && list.length) {
-            searchResults.innerHTML = list.map(item => `
-              <div class="sd-search-item" data-code="${item.code}" data-name="${item.name}">
-                <span>${item.name}</span>
-                <span style="color:#777;font-family:var(--font-mono)">${item.code}</span>
-              </div>
-            `).join('');
-            searchResults.style.display = 'block';
-            searchResults.querySelectorAll('.sd-search-item').forEach(el => {
-              el.addEventListener('click', () => {
-                const code = el.dataset.code;
-                const name = el.dataset.name;
-                searchInput.value = '';
-                searchResults.style.display = 'none';
-                openStockDetail(code, name);
-              });
-            });
-          } else {
-            searchResults.style.display = 'none';
-          }
-        } catch (e) {}
-      }, 200);
-    });
-
-    document.addEventListener('click', e => {
-      if (!e.target.closest('.sd-search-wrap')) {
-        searchResults.style.display = 'none';
-      }
-    });
-  }
+  // Explicit result selection; stale search replies cannot change the current instrument.
+  const searchInput = document.getElementById('sd-search-input'), searchResults = document.getElementById('sd-search-results');
+  let searchTimer, searchController, searchGeneration=0, hits=[], selectedHit=-1;
+  const closeSearch = () => { clearTimeout(searchTimer); searchController?.abort(); ++searchGeneration; hits=[]; selectedHit=-1; searchResults.replaceChildren(); searchResults.hidden=true; searchInput.setAttribute('aria-expanded','false'); searchInput.removeAttribute('aria-activedescendant'); };
+  const searchStatus = key => { searchResults.replaceChildren(); const p=document.createElement('p');p.textContent=Fund.t(key);searchResults.append(p);searchResults.hidden=false;searchResults.style.display='block';searchInput.setAttribute('aria-expanded','true'); };
+  const choose = hit => { const kind=Fund.researchSeries.kind(hit.symbol||hit.code,hit.market); closeSearch();searchInput.value=[hit.code,hit.name].filter(Boolean).join(' ');openStockDetail(hit.symbol||hit.code,hit.name,kind); };
+  const search = async keyword => {
+    searchController?.abort();searchController=new AbortController();const signal=searchController.signal,seq=++searchGeneration;
+    searchStatus('fundFocusSearchLoading');
+    try { const res=await api('GET','/api/market/suggest?input='+encodeURIComponent(keyword),null,{signal});if(seq!==searchGeneration||searchInput.value.trim()!==keyword)return;
+      hits=(res.suggestions||[]).slice(0,50);selectedHit=-1;
+      if(!hits.length){searchStatus('fundLedgerNoResults');return;}
+      searchResults.replaceChildren();searchResults.hidden=false;
+      hits.forEach((hit,index)=>{const button=document.createElement('button');button.type='button';button.className='sd-search-item';button.id='detail-search-'+index;button.setAttribute('role','option');button.setAttribute('aria-selected','false');button.textContent=[hit.name,hit.code,hit.market].filter(Boolean).join(' · ');button.onclick=()=>choose(hit);searchResults.append(button);});
+    } catch(e) { if(!signal.aborted&&seq===searchGeneration)searchStatus('fundFocusSearchFailed'); }
+  };
+  searchInput.setAttribute('role','combobox');searchInput.setAttribute('aria-controls','sd-search-results');searchInput.setAttribute('aria-autocomplete','list');searchInput.setAttribute('aria-expanded','false');searchResults.setAttribute('role','listbox');
+  searchInput.addEventListener('input',()=>{closeSearch();const keyword=searchInput.value.trim();if(keyword)searchTimer=setTimeout(()=>search(keyword),250);});
+  searchInput.addEventListener('keydown',event=>{
+    if(event.key==='Escape'){event.preventDefault();event.stopPropagation();closeSearch();}
+    else if(['ArrowDown','ArrowUp'].includes(event.key)&&hits.length){event.preventDefault();selectedHit=selectedHit<0?(event.key==='ArrowDown'?0:hits.length-1):(selectedHit+(event.key==='ArrowDown'?1:hits.length-1))%hits.length;[...searchResults.children].forEach((button,i)=>{button.classList.toggle('active',i===selectedHit);button.setAttribute('aria-selected',String(i===selectedHit));});searchInput.setAttribute('aria-activedescendant','detail-search-'+selectedHit);}
+    else if(event.key==='Enter'){event.preventDefault();if(hits[selectedHit])choose(hits[selectedHit]);else if(searchInput.value.trim()){clearTimeout(searchTimer);search(searchInput.value.trim());}}
+  });
+  document.addEventListener('click',event=>{if(!event.target.closest('.sd-search-wrap'))closeSearch();});
+  window.addEventListener('pagehide',closeSearch);
+  document.addEventListener('fund:language-changed',()=>{closeSearch();searchInput.setAttribute('aria-label',Fund.t('fundFocusSearchLabel'));searchInput.placeholder=Fund.t('fundFocusSearchLabel');});
 
   // 右栏折叠统一由顶栏 #btn-toggle-side 接管（app.js 统一分发点击与 ⌘B）：
   // 个股详情激活时切换单独的右栏（sd-side-collapsed），不触碰外层侧栏状态
@@ -1181,10 +705,10 @@ function bindEvents() {
     if (btn) {
       btn.setAttribute('aria-pressed', String(collapsed));
       btn.classList.toggle('active', collapsed);
-      btn.title = (collapsed ? '展开右侧看板' : '折叠右侧看板') + ' (⌘B)';
+      btn.dataset.i18nTitle=collapsed?'fundDetailStockUiExpandPanel':'fundDetailStockUiCollapsePanel';btn.title=t(btn.dataset.i18nTitle);
     }
-    resizeAllCharts();
-    setTimeout(resizeAllCharts, 50);
+    S.resizeAllCharts();
+    setTimeout(S.resizeAllCharts, 50);
   }
   actions.isStockDetailActive = () => sdState.active;
   actions.toggleStockDetailSide = () => {
@@ -1198,43 +722,33 @@ function bindEvents() {
     const collapsed = document.querySelector('.workspace-body')?.classList.contains('side-collapsed');
     btn.setAttribute('aria-pressed', String(!!collapsed));
     btn.classList.toggle('active', !!collapsed);
-    btn.title = (collapsed ? '展开看板' : '折叠看板') + ' (⌘B)';
+    btn.dataset.i18nTitle=collapsed?'fundDetailStockUiExpandPanel':'fundDetailStockUiCollapsePanel';btn.title=t(btn.dataset.i18nTitle);
   };
 
   // 左右双栏拖拽调宽分隔条 (#sd-side-resizer)
   const sdResizer = document.getElementById('sd-side-resizer');
   if (sdResizer) {
-    let sdResizing = false;
-    sdResizer.addEventListener('mousedown', e => {
-      sdResizing = true;
-      sdResizer.classList.add('dragging');
-      document.body.style.cursor = 'col-resize';
-      document.body.style.userSelect = 'none';
-      e.preventDefault();
-    });
-    document.addEventListener('mousemove', e => {
-      if (!sdResizing) return;
-      const newW = window.innerWidth - e.clientX;
-      const boundedW = Math.max(260, Math.min(680, newW));
-      document.documentElement.style.setProperty('--fund-side-width', boundedW + 'px');
-      resizeAllCharts();
-    });
-    document.addEventListener('mouseup', () => {
-      if (!sdResizing) return;
-      sdResizing = false;
-      sdResizer.classList.remove('dragging');
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
-      const w = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--fund-side-width'), 10);
-      try { if (!isNaN(w)) localStorage.setItem('natives-fund-side-width', String(w)); } catch (e) {}
-      resizeAllCharts();
-    });
+    let gesture = null;
+    const width = () => parseInt(getComputedStyle(document.documentElement).getPropertyValue('--fund-side-width'),10) || 320;
+    const apply = value => {const next=Math.max(260,Math.min(680,value));document.documentElement.style.setProperty('--fund-side-width',next+'px');sdResizer.setAttribute('aria-valuenow',String(next));S.resizeAllCharts();return next;};
+    const persist = () => {try{localStorage.setItem('natives-fund-side-width',String(width()));}catch{}};
+    const end = commit => {if(!gesture)return;const current=gesture;gesture=null;if(!commit)apply(current.width);else persist();sdResizer.classList.remove('dragging');document.body.style.cursor='';document.body.style.userSelect='';if(sdResizer.hasPointerCapture(current.id))sdResizer.releasePointerCapture(current.id);};
+    cancelSideResize = () => end(false);
+    sdResizer.setAttribute('aria-valuemin','260');sdResizer.setAttribute('aria-valuemax','680');sdResizer.setAttribute('aria-valuenow',String(width()));
+    sdResizer.addEventListener('pointerdown',event=>{if(event.button!==0)return;gesture={id:event.pointerId,width:width(),x:event.clientX};sdResizer.setPointerCapture(event.pointerId);sdResizer.classList.add('dragging');document.body.style.cursor='col-resize';document.body.style.userSelect='none';event.preventDefault();});
+    sdResizer.addEventListener('pointermove',event=>{if(gesture?.id===event.pointerId)apply(gesture.width+gesture.x-event.clientX);});
+    sdResizer.addEventListener('pointerup',event=>{if(gesture?.id===event.pointerId)end(true);});
+    sdResizer.addEventListener('pointercancel',cancelSideResize);
+    sdResizer.addEventListener('lostpointercapture',cancelSideResize);
+    window.addEventListener('blur',cancelSideResize);window.addEventListener('pagehide',cancelSideResize);
+    document.addEventListener('keydown',event=>{if(event.key==='Escape'&&gesture){event.preventDefault();cancelSideResize();}});
+    sdResizer.addEventListener('keydown',event=>{if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;event.preventDefault();apply(event.key==='Home'?260:event.key==='End'?680:width()+(event.key==='ArrowLeft'?20:-20));persist();});
   }
 
   // 右侧盘口卡片流折叠手风琴交互
   document.querySelectorAll('.sd-right-panel .side-card-header').forEach(header => {
     header.addEventListener('click', () => {
-      header.closest('.side-card')?.classList.toggle('collapsed');
+      const card=header.closest('.side-card');card?.classList.toggle('collapsed');header.setAttribute('aria-expanded',String(!card?.classList.contains('collapsed')));
     });
   });
 }
@@ -1243,6 +757,19 @@ function bindEvents() {
 actions.openStockDetail = openStockDetail;
 actions.openStockDetailView = openStockDetail;
 actions.exitStockDetail = exitStockDetail;
+actions.stockDetailSelection = () => ({ symbol: sdState.symbol, name: sdState.name, instrumentKind:sdState.instrumentKind });
+const detailRows=()=>sdState.instrumentKind==='fund'?Fund.researchSeries.navRows(sdState.navData||[],sdState.period).map(row=>({...row,date:row.navDate})):sdState.period==='minute'?(sdState.minuteData?.points||[]).map(row=>({...row,date:[sdState.minuteData.date,row.time].filter(Boolean).join(' ')})):sdState.klineData;
+const detailReader=Fund.researchSeries.reader({id:'sd',toolbar:document.querySelector('.sd-chart-toolbar-wrap'),rows:detailRows,chart:()=>sdState.period==='minute'?C.minute:C.kline,keys:()=>sdState.instrumentKind==='fund'?['date','unitNav','source','fetchedAt']:sdState.period==='minute'?['date','price','volume']:['date','open','high','low','close','volume'],chartNodes:[document.getElementById('sd-kline-chart'),document.getElementById('sd-minute-chart')]});
+document.addEventListener('fund:detail-selection-changed',detailReader.reset);
+document.getElementById('sd-ai-review').addEventListener('click',()=>{
+  const identity=()=>JSON.stringify({symbol:sdState.symbol,period:sdState.period,fq:sdState.fq,range:(sdState.period==='minute'?C.minute:C.kline)?.getOption().dataZoom?.[0]});
+  Fund.home.openAI({research:{identity,capture:()=>{
+    const nav=sdState.instrumentKind==='fund',minute=sdState.period==='minute';
+    const rows=nav?Fund.researchSeries.navRows(sdState.navData || [],sdState.period).map(row=>({date:row.navDate,unitNav:row.unitNav})):minute?(sdState.minuteData?.points || []).map(row=>({date:[sdState.minuteData.date,row.time].filter(Boolean).join(' '),price:row.price,volume:row.volume})):sdState.klineData;
+    return Fund.researchSeries.capture({symbol:sdState.symbol,period:sdState.period,fq:nav?'not-applicable':minute?'bf':sdState.fq,seriesKind:nav?'NAV':minute?'minute':'OHLC'},rows,minute?C.minute:C.kline,nav?sdState.navData?.at(-1)?.source:sdState.seriesSource);
+  }}});
+});
+actions.cancelStockDetailDrawing = () => S.drawingsCtrl?.cancelDraft();
 actions.pauseStockDetail = pauseStockDetail;
 actions.resumeStockDetail = resumeStockDetail;
 

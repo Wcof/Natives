@@ -102,7 +102,8 @@ func (e *Engine) Restore(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if !snapshot.Gateway.Resident {
+	restoreUpdatedGateway := snapshot.Gateway.State == "running" && kernelVersionLess(snapshot.Gateway.KernelVersion, getLocalKernelVersion())
+	if !snapshot.Gateway.Resident && !restoreUpdatedGateway {
 		if snapshot.Gateway.State != "stopped" {
 			_, err = e.repo.Update(&snapshot.Revision, resetGateway)
 		}
@@ -246,7 +247,7 @@ func (e *Engine) createGatewayKey(raw json.RawMessage) (map[string]any, error) {
 		return nil, err
 	}
 
-	reconfigured, err := e.reconfigureGateway(snapshot, nil)
+	reconfigured, err := e.reconfigureGatewayLocked(snapshot, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -342,7 +343,7 @@ func (e *Engine) deleteGatewayKey(raw json.RawMessage) (domain.Snapshot, error) 
 	if secretRefToDelete != "" {
 		_ = e.secrets.Delete(secretRefToDelete)
 	}
-	return e.reconfigureGateway(snapshot, nil)
+	return e.reconfigureGatewayLocked(snapshot, nil)
 }
 
 func (e *Engine) rotateGatewayKeyByID(raw json.RawMessage) (map[string]any, error) {

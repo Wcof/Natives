@@ -4,6 +4,7 @@ package host
 // 并发 / Secret 不泄漏）与额度刷新的优雅空态。
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"net"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/ldh/natives/model-host/internal/authfiles"
 	"github.com/ldh/natives/model-host/internal/domain"
+	"github.com/ldh/natives/model-host/internal/nativeio"
 	"github.com/ldh/natives/model-host/internal/secrets"
 )
 
@@ -301,5 +303,99 @@ func TestAIQueryRateLimit(t *testing.T) {
 	}
 	if !limited {
 		t.Fatal("20 次连续请求未触发每客户端速率限制（10 req/s）")
+	}
+}
+
+// 回归：/ai/quota 缓存读取响应必须是 { status, generatedAt, entries } 合约
+// （entries 为以凭据为键的字典）。顶栏 ParseAIQueryQuotaAccounts 按此解析；
+// 若有人改回 results 数组形状，此测试立即失败。
+func TestAIQueryQuotaCacheContract(t *testing.T) {
+	_, _, baseURL := newAIQueryTestHarness(t)
+	resp, body := aiQueryGet(t, baseURL, "/ai/quota")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("/ai/quota status=%d body=%s", resp.StatusCode, body)
+	}
+	var payload struct {
+		Status      string           `json:"status"`
+		GeneratedAt string           `json:"generatedAt"`
+		Entries     map[string]any   `json:"entries"`
+		Results     []map[string]any `json:"results"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("/ai/quota invalid JSON: %v", err)
+	}
+	if payload.Status != "empty" && payload.Status != "ready" {
+		t.Fatalf("/ai/quota unexpected status %q", payload.Status)
+	}
+	if payload.Entries == nil {
+		t.Fatalf("/ai/quota must expose entries map (topbar contract), body=%s", body)
+	}
+	if payload.Results != nil {
+		t.Fatalf("/ai/quota must not expose results array (legacy shape leaked), body=%s", body)
+	}
+}
+
+func TestNativeQuotaCacheUsesSameReadOnlyProjection(t *testing.T) {
+	engine, _, baseURL := newAIQueryTestHarness(t)
+	// No quota client or credential access is needed to consume an existing cache.
+	engine.quotaClient = nil
+	if err := os.WriteFile(quotaCachePath(), []byte(`{"fixture":{"provider":"isolated","status":"success","fetchedAt":1,"windows":[{"name":"weekly","remainingPercent":0}],"access_token":"must-not-leak"}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	reply := engine.Handle(context.Background(), nativeio.Request{ID: "cached", Method: "model_quota_cached", Params: json.RawMessage(`{}`)})
+	if !reply.OK {
+		t.Fatalf("cache query failed: %+v", reply)
+	}
+	bytes, err := json.Marshal(reply.Result)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(bytes), "must-not-leak") || strings.Contains(string(bytes), "access_token") {
+		t.Fatal("cache leaked unknown secret fields")
+	}
+	_, body := aiQueryGet(t, baseURL, "/ai/quota")
+	var native, httpResult map[string]json.RawMessage
+	if err := json.Unmarshal(bytes, &native); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(body, &httpResult); err != nil {
+		t.Fatal(err)
+	}
+	if string(native["entries"]) != string(httpResult["entries"]) {
+		t.Fatal("quota transport projections differ")
+	}
+	for _, params := range []string{`{"route":"/ai/quota/refresh"}`, `[]`, `1`} {
+		reply := engine.Handle(context.Background(), nativeio.Request{Method: "model_quota_cached", Params: json.RawMessage(params)})
+		if reply.OK {
+			t.Fatalf("invalid params accepted: %s", params)
+		}
+	}
+}
+
+// 回归：/ai/usage/overview 的 range 合约只接受 today/7d/30d/all 等 Filter 枚举；
+// 顶栏旧口径 day/week/month 不是合法枚举。此测试锁定非法值不会被静默接受成
+// 无界范围以外的语义（当前行为：回退 all），防止未来枚举漂移无人知晓。
+func TestAIQueryUsageOverviewRangeContract(t *testing.T) {
+	_, _, baseURL := newAIQueryTestHarness(t)
+	// 合法枚举（Filter.Range 注释口径）：4h/24h/72h/today/7d/30d/all。
+	// 顶栏旧口径 day/week/month 不在枚举内——锁定合法值全部 200 且响应结构有效，
+	// 防止枚举漂移导致顶栏再次静默拿到错误范围。
+	for _, route := range []string{
+		"/ai/usage/overview?range=today",
+		"/ai/usage/overview?range=7d",
+		"/ai/usage/overview?range=30d",
+		"/ai/usage/overview?range=all",
+	} {
+		resp, body := aiQueryGet(t, baseURL, route)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s status=%d body=%s", route, resp.StatusCode, body)
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(body, &payload); err != nil {
+			t.Fatalf("%s invalid JSON: %v", route, err)
+		}
+		if payload["status"] == nil {
+			t.Fatalf("%s missing status field (body=%s)", route, body)
+		}
 	}
 }

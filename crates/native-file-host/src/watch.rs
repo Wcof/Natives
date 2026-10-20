@@ -27,6 +27,29 @@ impl WatchManager {
         request: &Request,
         writer: &Arc<Mutex<io::Stdout>>,
     ) -> Result<Value, String> {
+        let event_writer = Arc::clone(writer);
+        let watch_id = request.id.clone();
+        self.handle_with_callback(
+            request,
+            Arc::new(move |result| {
+                let _ = respond(
+                    &event_writer,
+                    Response {
+                        id: &watch_id,
+                        ok: true,
+                        result: Some(result),
+                        error: None,
+                    },
+                );
+            }),
+        )
+    }
+
+    pub(crate) fn handle_with_callback(
+        &mut self,
+        request: &Request,
+        emit: Arc<dyn Fn(Value) + Send + Sync>,
+    ) -> Result<Value, String> {
         let path = request
             .params
             .get("path")
@@ -53,8 +76,6 @@ impl WatchManager {
             return Ok(json!({"watching": key}));
         }
 
-        let event_writer = Arc::clone(writer);
-        let watch_id = request.id.clone();
         let cancelled = Arc::new(AtomicBool::new(false));
         let callback_cancelled = Arc::clone(&cancelled);
         let recent_events = Arc::new(Mutex::new(HashMap::<String, Instant>::new()));
@@ -92,17 +113,7 @@ impl WatchManager {
                         })
                         .unwrap_or(false);
                     if should_emit {
-                        let _ = respond(
-                            &event_writer,
-                            Response {
-                                id: &watch_id,
-                                ok: true,
-                                result: Some(
-                                    json!({"event": "fs_changed", "kind": kind, "path": path}),
-                                ),
-                                error: None,
-                            },
-                        );
+                        emit(json!({"event": "fs_changed", "kind": kind, "path": path}));
                     }
                 }
             },

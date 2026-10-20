@@ -12,11 +12,6 @@ pub fn app_runtime_host_name() -> String {
     }
 }
 
-/// 统一返回产品级 App Runtime Native Host 名称（ADR-0031）。
-pub fn runtime_host_name(_app_id: &str) -> String {
-    app_runtime_host_name()
-}
-
 /// 旧版每模块 Host 名称生成（仅用于升级时清理历史残留 manifest）。
 pub fn legacy_runtime_host_name(app_id: &str) -> String {
     let digest = Sha256::digest(app_id.as_bytes());
@@ -105,16 +100,16 @@ pub fn clean_legacy_runtime_hosts(manifest_dir: &Path, app_ids: &[&str]) {
     }
 }
 
-pub fn activation_path(apps_root: &Path, app_id: &str) -> PathBuf {
-    apps_root.join(app_id).join("activation.json")
+pub fn product_activation_path(apps_root: &Path) -> PathBuf {
+    let parent = apps_root.parent().unwrap_or(apps_root);
+    parent.join("product").join("activation.json")
 }
 
-pub fn write_activation_projection(
+pub fn write_product_activation_receipt(
     apps_root: &Path,
-    app_id: &str,
-    projection: &serde_json::Value,
+    receipt: &serde_json::Value,
 ) -> Result<(), AppError> {
-    let path = activation_path(apps_root, app_id);
+    let path = product_activation_path(apps_root);
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
         #[cfg(unix)]
@@ -125,9 +120,10 @@ pub fn write_activation_projection(
             std::fs::set_permissions(parent, p)?;
         }
     }
-    let body = serde_json::to_vec_pretty(projection)
-        .map_err(|_| AppError::InvalidState("activation projection serialization failed".into()))?;
-    let temp = path.with_extension("json.tmp");
+    let body = serde_json::to_vec_pretty(receipt).map_err(|_| {
+        AppError::InvalidState("product activation receipt serialization failed".into())
+    })?;
+    let temp = path.with_extension("json.next");
     {
         use std::io::Write;
         let mut file = std::fs::File::create(&temp)?;
@@ -141,56 +137,93 @@ pub fn write_activation_projection(
         file.write_all(&body)?;
         file.sync_all()?;
     }
-    std::fs::rename(temp, path)?;
+    #[cfg(unix)]
+    if let Some(parent) = path.parent() {
+        std::fs::File::open(parent)?.sync_all()?;
+    }
+    std::fs::rename(&temp, &path)?;
+    #[cfg(unix)]
+    {
+        if let Some(parent) = path.parent() {
+            if let Ok(dir) = std::fs::File::open(parent) {
+                let _ = dir.sync_all();
+            }
+        }
+    }
     Ok(())
 }
 
-pub fn read_activation_projection(
+pub fn read_product_activation_receipt(
     apps_root: &Path,
-    app_id: &str,
 ) -> Result<Option<serde_json::Value>, AppError> {
-    let path = activation_path(apps_root, app_id);
+    let path = product_activation_path(apps_root);
     if !path.exists() {
         return Ok(None);
     }
     Ok(Some(
         serde_json::from_slice(&std::fs::read(path)?)
-            .map_err(|e| AppError::InvalidState(format!("invalid activation.json: {e}")))?,
+            .map_err(|e| AppError::InvalidState(format!("invalid product activation.json: {e}")))?,
     ))
 }
 
-pub fn next_activation_generation(apps_root: &Path, app_id: &str) -> u64 {
-    read_activation_projection(apps_root, app_id)
+pub fn next_product_generation(apps_root: &Path) -> u64 {
+    read_product_activation_receipt(apps_root)
         .ok()
         .flatten()
-        .and_then(|v| v.get("generation").and_then(serde_json::Value::as_u64))
+        .and_then(|v| {
+            v.get("productGeneration")
+                .and_then(serde_json::Value::as_u64)
+        })
         .unwrap_or(0)
         .saturating_add(1)
-}
-
-pub fn update_activation_enabled(
-    apps_root: &Path,
-    app_id: &str,
-    enabled: bool,
-) -> Result<(), AppError> {
-    if let Some(mut value) = read_activation_projection(apps_root, app_id)? {
-        value["generation"] = serde_json::json!(next_activation_generation(apps_root, app_id));
-        value["enabled"] = serde_json::Value::Bool(enabled);
-        value["activationState"] = serde_json::json!(if enabled { "ready" } else { "disabled" });
-        write_activation_projection(apps_root, app_id, &value)?;
-    }
-    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     #[test]
-    fn activation_generation_is_monotonic() {
-        let root = std::env::temp_dir().join(format!("natives-activation-{}", std::process::id()));
+    fn product_activation_v3_atomic_receipt_and_recovery() {
+        let root = std::env::temp_dir().join(format!("natives-prod-act-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&root);
-        write_activation_projection(&root, "fund", &serde_json::json!({"generation": 1})).unwrap();
-        assert_eq!(next_activation_generation(&root, "fund"), 2);
+        let apps_root = root.join("apps");
+        assert_eq!(next_product_generation(&apps_root), 1);
+
+        let receipt = serde_json::json!({
+            "receiptVersion": 3,
+            "productVersion": "1.0.0",
+            "productGeneration": 1,
+            "productManifestSha256": "sha-dummy",
+            "runtime": {
+                "host": "com.natives.app_runtime",
+                "protocolVersion": 2,
+                "sha256": "sha-rt"
+            },
+            "modules": {
+                "fund": {"moduleApiVersion": 1},
+                "tokenusage": {"moduleApiVersion": 1}
+            },
+            "allowedOrigins": ["chrome-extension://test/"]
+        });
+        write_product_activation_receipt(&apps_root, &receipt).unwrap();
+        assert_eq!(next_product_generation(&apps_root), 2);
+
+        let loaded = read_product_activation_receipt(&apps_root)
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded["receiptVersion"], 3);
+        assert_eq!(loaded["productVersion"], "1.0.0");
+        assert!(loaded["modules"].get("fund").is_some());
+        assert!(loaded["modules"].get("tokenusage").is_some());
+
+        // 故障注入 1：写一半（.next 写入不完整或写进程崩溃）
+        let next_file = product_activation_path(&apps_root).with_extension("json.next");
+        std::fs::write(&next_file, b"{\"truncated\": true,").unwrap();
+        // 验证已有 activation.json 毫发无损，读取正常
+        let still_loaded = read_product_activation_receipt(&apps_root)
+            .unwrap()
+            .unwrap();
+        assert_eq!(still_loaded["productGeneration"], 1);
+
         let _ = std::fs::remove_dir_all(root);
     }
 

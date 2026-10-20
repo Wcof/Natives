@@ -197,6 +197,24 @@ pub(crate) fn workspace_dispatch(
                 .ok_or("template is required")?;
             handle_result!(store.reset(id, template, expected(params)))
         }
+        "preferences_get" => store.preferences_get().map_err(|e| e.to_string()),
+        "preferences_set" | "preferences_import" => {
+            let entries = params.get("entries").ok_or("entries is required")?;
+            let revision = expected(params).ok_or("expectedRevision is required")?;
+            let source = if request.method == "preferences_import" {
+                Some(
+                    params
+                        .get("source")
+                        .and_then(Value::as_str)
+                        .ok_or("source is required")?,
+                )
+            } else {
+                None
+            };
+            store
+                .preferences_write(entries, revision, source)
+                .map_err(|e| e.to_string())
+        }
         "settings_get" => {
             let keys = params
                 .get("keys")

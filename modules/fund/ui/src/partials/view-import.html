@@ -1,0 +1,17 @@
+      <!-- 5. 批量导入模块（DES-P10 五步：输入→校验→影响→提交→结果） -->
+      <section id="view-import" hidden>
+        <header class="investment-page-head"><div><h2 data-i18n="fundLedgerNavImport">批量导入</h2><p data-i18n="fundLedgerImportScope">支持粘贴交易流水或期初持仓 CSV：格式包括 账户,代码,类型,数量,价格,日期。</p></div></header>
+        <section class="card import-workflow"><ol class="import-steps" id="import-steps"><li data-step="1" aria-current="step"><span>1</span><b data-i18n="fundLedgerImportStep1"></b></li><li data-step="2"><span>2</span><b data-i18n="fundLedgerImportStep2"></b></li><li data-step="3"><span>3</span><b data-i18n="fundLedgerImportStep3"></b></li><li data-step="4"><span>4</span><b data-i18n="fundLedgerImportStep4"></b></li><li data-step="5"><span>5</span><b data-i18n="fundLedgerImportStep5"></b></li></ol>
+        <textarea id="import-text" data-i18n-placeholder="fundLedgerImportPlaceholder" placeholder="账户,代码,类型,数量,价格,日期…"></textarea>
+        <div class="import-actions">
+          <button class="btn btn-accent" id="import-preview-btn" data-i18n="fundLedgerPreviewCsv">预览 CSV</button>
+          <button class="btn" id="import-commit-btn" disabled data-i18n="fundLedgerCommitImport">确认提交入账</button>
+        </div>
+        <div id="import-msg" role="status" aria-live="polite"></div>
+        <div id="import-impact" class="investment-summary"></div><p class="investment-card-tip" data-i18n="fundLedgerImportImpactHint"></p>
+        <div class="home-table-scroll" tabindex="0"><table class="data-table" id="import-table">
+          <thead><tr><th data-i18n="fundLedgerThLineNo">行号</th><th data-i18n="fundLedgerThAccount">账户</th><th data-i18n="fundLedgerThCode">标的代码</th><th data-i18n="fundLedgerThType">类型</th><th class="num" data-i18n="fundLedgerThQuantity">数量</th><th class="num" data-i18n="fundLedgerThAmount">金额</th><th data-i18n="fundLedgerThStatus">校验状态</th></tr></thead>
+          <tbody></tbody>
+        </table></div>
+        </section>
+      </section>

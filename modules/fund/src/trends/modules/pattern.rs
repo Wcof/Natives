@@ -25,7 +25,10 @@ fn detect_box(klines: &[KlineBar], price: f64) -> Option<PatternResult> {
         return None;
     }
     let window = &klines[klines.len() - 20..];
-    let upper = window.iter().map(|k| k.high).fold(f64::NEG_INFINITY, f64::max);
+    let upper = window
+        .iter()
+        .map(|k| k.high)
+        .fold(f64::NEG_INFINITY, f64::max);
     let lower = window.iter().map(|k| k.low).fold(f64::INFINITY, f64::min);
     if upper <= lower {
         return None;
@@ -90,7 +93,11 @@ fn detect_double_top_bottom(klines: &[KlineBar], price: f64) -> Option<PatternRe
             let bottom = v0;
             if neck > bottom {
                 let target = neck + (neck - bottom);
-                let status = if price > neck { "已突破" } else { "形成中" };
+                let status = if price > neck {
+                    "已突破"
+                } else {
+                    "形成中"
+                };
                 let mut key_levels = BTreeMap::new();
                 key_levels.insert("颈线".into(), py_round(neck, 2));
                 key_levels.insert("底部".into(), py_round(bottom, 2));
@@ -164,7 +171,11 @@ fn detect_head_shoulders(klines: &[KlineBar], price: f64) -> Option<PatternResul
                 let depth = neck - vm;
                 if neck > vm {
                     let target = neck + depth;
-                    let status = if price > neck { "已突破" } else { "形成中" };
+                    let status = if price > neck {
+                        "已突破"
+                    } else {
+                        "形成中"
+                    };
                     let confidence = if status == "已突破" { 80 } else { 60 };
                     let mut key_levels = BTreeMap::new();
                     key_levels.insert("颈线".into(), py_round(neck, 2));
@@ -198,7 +209,11 @@ fn detect_head_shoulders(klines: &[KlineBar], price: f64) -> Option<PatternResul
                 if neck < vm {
                     let height = vm - neck;
                     let target = neck - height;
-                    let status = if price < neck { "已突破" } else { "形成中" };
+                    let status = if price < neck {
+                        "已突破"
+                    } else {
+                        "形成中"
+                    };
                     let confidence = if status == "形成中" { 45 } else { 60 };
                     let mut key_levels = BTreeMap::new();
                     key_levels.insert("颈线".into(), py_round(neck, 2));
@@ -287,10 +302,22 @@ fn detect_triangle(klines: &[KlineBar], price: f64) -> Option<PatternResult> {
     if first_half.is_empty() || second_half.is_empty() {
         return None;
     }
-    let h1 = first_half.iter().map(|k| k.high).fold(f64::NEG_INFINITY, f64::max);
-    let h2 = second_half.iter().map(|k| k.high).fold(f64::NEG_INFINITY, f64::max);
-    let l1 = first_half.iter().map(|k| k.low).fold(f64::INFINITY, f64::min);
-    let l2 = second_half.iter().map(|k| k.low).fold(f64::INFINITY, f64::min);
+    let h1 = first_half
+        .iter()
+        .map(|k| k.high)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let h2 = second_half
+        .iter()
+        .map(|k| k.high)
+        .fold(f64::NEG_INFINITY, f64::max);
+    let l1 = first_half
+        .iter()
+        .map(|k| k.low)
+        .fold(f64::INFINITY, f64::min);
+    let l2 = second_half
+        .iter()
+        .map(|k| k.low)
+        .fold(f64::INFINITY, f64::min);
     let upper_slope = h2 - h1;
     let lower_slope = l2 - l1;
 
@@ -310,7 +337,11 @@ fn detect_triangle(klines: &[KlineBar], price: f64) -> Option<PatternResult> {
         });
     }
     if h1 > 0.0 && upper_slope.abs() / h1 < 0.02 && lower_slope > 0.0 {
-        let status = if price > h2 { "已突破" } else { "接近突破" };
+        let status = if price > h2 {
+            "已突破"
+        } else {
+            "接近突破"
+        };
         let mut key_levels = BTreeMap::new();
         key_levels.insert("阻力位".into(), py_round(h2, 2));
         return Some(PatternResult {
@@ -324,7 +355,11 @@ fn detect_triangle(klines: &[KlineBar], price: f64) -> Option<PatternResult> {
         });
     }
     if l1 > 0.0 && lower_slope.abs() / l1 < 0.02 && upper_slope < 0.0 {
-        let status = if price < l2 { "已跌破" } else { "接近跌破" };
+        let status = if price < l2 {
+            "已跌破"
+        } else {
+            "接近跌破"
+        };
         let mut key_levels = BTreeMap::new();
         key_levels.insert("支撑位".into(), py_round(l2, 2));
         return Some(PatternResult {
@@ -354,7 +389,10 @@ fn detect_flag(klines: &[KlineBar], _price: f64) -> Option<PatternResult> {
     if pole_rise <= 0.0 {
         return None;
     }
-    let flag_high = flag.iter().map(|k| k.high).fold(f64::NEG_INFINITY, f64::max);
+    let flag_high = flag
+        .iter()
+        .map(|k| k.high)
+        .fold(f64::NEG_INFINITY, f64::max);
     let flag_low = flag.iter().map(|k| k.low).fold(f64::INFINITY, f64::min);
     let flag_range = if flag_low > 0.0 {
         (flag_high - flag_low) / flag_low

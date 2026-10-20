@@ -11,6 +11,31 @@ typedef NS_ENUM(NSInteger, NativesStatusBarDisplayMode) {
     NativesStatusBarDisplayModeIconOnly = 4 // 仅图标
 };
 
+static inline BOOL NativesStatusBarUsesWeb(void) {
+    NSString *entry = NSProcessInfo.processInfo.environment[@"NATIVES_ENTRY"];
+    if (!entry) entry = [NSUserDefaults.standardUserDefaults stringForKey:@"NativesPreferredEntry"];
+    return [entry isEqualToString:@"web"];
+}
+
+static inline NSURL *NativesStatusBarTargetURL(NSString *target) {
+    NSDictionary *routes = @{@"space": @"space.html", @"files": @"files.html", @"tokenusage": @"app.html?app=tokenusage"};
+    NSString *route = [target isKindOfClass:NSString.class] ? routes[target] : nil;
+    if (!route) return nil;
+
+    if (NativesStatusBarUsesWeb()) {
+        NSString *port = [[[NSProcessInfo processInfo] environment] objectForKey:@"NATIVES_WEB_PORT"] ?: @"8770";
+        if ([port rangeOfCharacterFromSet:NSCharacterSet.decimalDigitCharacterSet.invertedSet].location != NSNotFound || port.integerValue < 1 || port.integerValue > 65535) return nil;
+        return [NSURL URLWithString:[NSString stringWithFormat:@"http://127.0.0.1:%@/%@", port, route]];
+    }
+
+#ifdef EXTENSION_ID
+    NSString *extensionId = [NSString stringWithUTF8String:EXTENSION_ID];
+#else
+    NSString *extensionId = @"gehmgcnlpdepnpmcbbdaijabcjdnbfmh";
+#endif
+    return [NSURL URLWithString:[NSString stringWithFormat:@"chrome-extension://%@/%@", extensionId, route]];
+}
+
 @interface NativesStatusBar : NSObject
 
 @property (nonatomic, strong) NSStatusItem *statusItem;
@@ -26,7 +51,7 @@ typedef NS_ENUM(NSInteger, NativesStatusBarDisplayMode) {
 - (void)closePanel;
 
 // 清理同二进制的其它实例（SIGTERM → 宽限 → SIGKILL）。
-// 启动时调用 = 干掉旧实例再拉起；退出时调用（atexit）= 兜底防僵尸。
+// 仅启动时清理旧实例；退出不得清扫后来启动的实例。
 void NativesStatusBarSweepProjectProcesses(void);
 
 @end

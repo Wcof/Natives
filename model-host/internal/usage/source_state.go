@@ -40,6 +40,7 @@ type SourceRunStatus struct {
 	SchemaVersion    string             `json:"schemaVersion,omitempty"`
 	SourceVersion    string             `json:"sourceVersion,omitempty"`
 	FileErrors       []SourceFileError  `json:"fileErrors,omitempty"`
+	ErrorsTruncated  int                `json:"errorsTruncated,omitempty"` // 超出错误列表上限被省略的数量（F8）
 }
 
 // 采集边界（ADR-0030 决策 6 的显式上限）：
@@ -49,6 +50,12 @@ const (
 	// maxTotalBytesPerSource 为单来源单次扫描的读取总量上限（按实际读取
 	// 字节计，不按文件大小预判——否则超大单文件永远无法启动导入）。
 	maxTotalBytesPerSource = 512 << 20 // 512 MiB
+	// maxFileErrors 为单次采集错误列表上限；超出以 ErrorsTruncated 计数披露（F8）。
+	maxFileErrors = 200
+	// maxWalkNodesPerSource 为单来源单次扫描访问的目录项总数上限（F8）。
+	maxWalkNodesPerSource = 200_000
+	// maxDirEntriesPerDir 为单目录扇出上限（F8）。
+	maxDirEntriesPerDir = 20_000
 )
 
 // deriveInstanceID 由「工具 ID + 授权根目录规范路径」派生本机稳定的实例 ID

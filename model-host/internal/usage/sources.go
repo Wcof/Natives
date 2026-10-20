@@ -139,7 +139,7 @@ var usageSources = []UsageSource{
 			HistoricalUsage: CapImplemented, // grok-session/1（收口方案 Phase 0）：sessions/<proj>/<uuid>/updates.jsonl turn_completed 终态用量
 			LiveEvent:       CapUnsupported,
 			Billing:         CapUnavailable, Quota: CapUnavailable,
-			Attribution: CapPartial, // sessionId/prompt_id/eventId 稳定归属；modelUsage 按模型拆分
+			Attribution:  CapPartial, // sessionId/prompt_id/eventId 稳定归属；modelUsage 按模型拆分
 			Notification: CapUnsupported,
 			Privacy:      "metadata_only",
 		},

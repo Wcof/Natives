@@ -1,0 +1,25 @@
+{
+  "status": "ready",
+  "generatedAt": "2026-09-28T08:00:00Z",
+  "entries": {
+    "google:antigravity": {
+      "provider": "google",
+      "account": "user@gmail.com",
+      "status": "active",
+      "windows": [
+        {
+          "name": "5 Hour Window",
+          "usedPercent": 32.5,
+          "remainingPercent": 67.5,
+          "resetTime": "2026-09-28T13:00:00Z"
+        },
+        {
+          "name": "Weekly Window",
+          "usedPercent": 15.0,
+          "remainingPercent": 85.0,
+          "resetTime": "2026-10-05T00:00:00Z"
+        }
+      ]
+    }
+  }
+}

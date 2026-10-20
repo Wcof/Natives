@@ -1,3 +1,4 @@
+import { subscribeWidgetClock } from '../widget-clock.js';
 import { escapeHtml } from '../sanitizer.js';
 
 export const binaryTimeWidget = {
@@ -49,8 +50,8 @@ export const binaryTimeWidget = {
     };
 
     update();
-    const intervalId = setInterval(update, 1000);
-    return () => clearInterval(intervalId);
+    const stopClock = subscribeWidgetClock(update, 1000);
+    return () => stopClock();
   },
   renderSettings(container, data = {}, onChange = () => {}, { t = (key, fallback) => fallback || key } = {}) {
     container.innerHTML = `

@@ -20,9 +20,11 @@ function isMarketOpen(now) {
 // 休市：30min（分钟级兜底，覆盖盘后数据修正/节假日差异，页面保持静止）。
 const OPEN_INTERVAL_MS = 3000;
 const CLOSED_INTERVAL_MS = 30 * 60 * 1000;
+function navPublicationTime(now=new Date()){const hm=now.getHours()*100+now.getMinutes();return now.getDay()>0&&now.getDay()<6&&hm>=1505&&hm<=2300;}
 
 function currentInterval() {
-  return isMarketOpen() ? OPEN_INTERVAL_MS : CLOSED_INTERVAL_MS;
+  const seconds=Number(Fund.state.quoteRefreshSeconds);
+  return isMarketOpen() ? ([3,10,30,60].includes(seconds)?seconds*1000:OPEN_INTERVAL_MS) : Fund.state.pendingFundNav&&navPublicationTime()?60000:CLOSED_INTERVAL_MS;
 }
 
 // ---------- 调度器 ----------
@@ -80,7 +82,15 @@ function requestManualRefresh() {
   }
 }
 
+function reschedule() {
+  if(_stopped)return;
+  if(_timer)clearTimeout(_timer);
+  scheduleNext();
+}
+document.addEventListener("fund:financial-display-changed",reschedule);
+document.addEventListener('fund:nav-state-changed',reschedule);
 const marketSession = {
+  reschedule,
   isMarketOpen,
   currentInterval,
   OPEN_INTERVAL_MS,

@@ -40,12 +40,17 @@ impl AppStore {
     pub fn module_projections(
         &self,
     ) -> Result<Vec<crate::app_product::ModuleProjection>, AppError> {
+        let v3_receipt = crate::app_activation::read_product_activation_receipt(self.app_root())
+            .ok()
+            .flatten();
+        let source = self.product_source();
+
         self.with_conn(|conn| {
             let mut out = Vec::new();
             for module in crate::app_product::FIXED_MODULES {
                 let preference = conn
                     .query_row(
-                        "SELECT enabled, show_in_sidebar, sidebar_order FROM apps WHERE app_id = ?1",
+                        "SELECT enabled, show_in_sidebar, sidebar_order FROM builtin_app_preferences WHERE app_id = ?1",
                         [module.app_id],
                         |row| {
                             Ok((
@@ -56,20 +61,26 @@ impl AppStore {
                         },
                     )
                     .optional()
-                    .map_err(AppError::Sql)?;
-                let configured = conn
-                    .query_row(
-                        "SELECT EXISTS(SELECT 1 FROM apps WHERE app_id = ?1 AND host_registered != 0)",
-                        [module.app_id],
-                        |row| row.get::<_, i64>(0),
-                    )
-                    .map(|v| v != 0)
-                    .map_err(AppError::Sql)?;
+                    .unwrap_or(None);
+
+                // present: 依据真实载荷动态推导：
+                // 检查系统产品源或当前工作区中是否存在该模块的资源目录
+                let present = source.join("modules").join(module.app_id).exists()
+                    || std::path::Path::new("modules").join(module.app_id).exists();
+
+                // configured: 依据 v3 Receipt（或旧版激活记录）动态推导：
+                // 必须满足 product/activation.json 存在且 modules 字典包含该模块
+                let configured = v3_receipt
+                    .as_ref()
+                    .and_then(|r| r.get("modules").and_then(|m| m.as_object()))
+                    .map(|m| m.contains_key(module.app_id))
+                    .unwrap_or(false);
+
                 out.push(crate::app_product::module_projection(
                     module,
                     preference,
+                    present,
                     configured,
-                    self.app_root(),
                 ));
             }
             Ok(out)
@@ -102,6 +113,16 @@ impl AppStore {
         request_id: &str,
         scope: ClearDataScope,
     ) -> Result<ClearDataReceipt, AppError> {
+        self.clear_module_data_with_maintenance(app_id, request_id, scope, || Ok(()))
+    }
+
+    pub(crate) fn clear_module_data_with_maintenance<G>(
+        &self,
+        app_id: &str,
+        request_id: &str,
+        scope: ClearDataScope,
+        acquire: impl FnOnce() -> Result<G, AppError>,
+    ) -> Result<ClearDataReceipt, AppError> {
         app_files::validate_identifier(app_id, "app id")?;
         let request_id = request_id.trim();
         if request_id.is_empty() || request_id.len() > 128 {
@@ -112,7 +133,7 @@ impl AppStore {
         let scope_json = serde_json::to_string(&scope)
             .map_err(|_| AppError::InvalidState("invalid clear scope".into()))?;
         // Intent-first: record the reset before any teardown (AC-04 pattern).
-        let stored: Option<(String, String, String)> = self.with_conn(|conn| {
+        let stored: Option<(String, String, String, String)> = self.with_conn(|conn| {
             conn.execute(
                 "INSERT INTO app_data_reset_receipts (request_id, app_id, scope_json, state, cleared_json, created_at)
                  VALUES (?1, ?2, ?3, 'pending', '[]', ?4)
@@ -121,42 +142,31 @@ impl AppStore {
             )
             .map_err(AppError::Sql)?;
             conn.query_row(
-                "SELECT app_id, state, cleared_json FROM app_data_reset_receipts WHERE request_id = ?1",
+                "SELECT app_id, state, cleared_json, scope_json FROM app_data_reset_receipts WHERE request_id = ?1",
                 [request_id],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)),
+                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?)),
             )
             .map(Some)
             .map_err(AppError::Sql)
         })?;
-        if let Some((stored_app, state, cleared_json)) = stored {
+        if let Some((stored_app, state, cleared_json, stored_scope_json)) = stored {
             if stored_app != app_id {
                 return Err(AppError::Conflict(format!(
                     "requestId {request_id} belongs to another app"
                 )));
             }
+            let stored_scope: ClearDataScope = serde_json::from_str(&stored_scope_json)
+                .map_err(|_| AppError::InvalidState("invalid stored receipt scope".into()))?;
+            if stored_scope.imports != scope.imports
+                || stored_scope.cache != scope.cache
+                || stored_scope.logs != scope.logs
+                || stored_scope.credentials != scope.credentials
+            {
+                return Err(AppError::Conflict(
+                    "requestId was confirmed with a different scope".into(),
+                ));
+            }
             if state == "completed" {
-                let stored_scope: Option<ClearDataScope> = self.with_conn(|conn| {
-                    conn.query_row(
-                        "SELECT scope_json FROM app_data_reset_receipts WHERE request_id = ?1",
-                        [request_id],
-                        |row| row.get::<_, String>(0),
-                    )
-                    .optional()
-                    .map_err(AppError::Sql)?
-                    .map(|json| serde_json::from_str(&json))
-                    .transpose()
-                    .map_err(|_| AppError::InvalidState("invalid stored receipt scope".into()))
-                })?;
-                if stored_scope.is_some_and(|stored| {
-                    stored.imports != scope.imports
-                        || stored.cache != scope.cache
-                        || stored.logs != scope.logs
-                        || stored.credentials != scope.credentials
-                }) {
-                    return Err(AppError::Conflict(
-                        "requestId was confirmed with a different scope".into(),
-                    ));
-                }
                 // Completed replay: return the original result without
                 // deleting anything recorded after the reset.
                 let cleared: Vec<String> = serde_json::from_str(&cleared_json)
@@ -173,6 +183,22 @@ impl AppStore {
 
         let _operation = self.operation.lock().map_err(lock_error)?;
         let _operation_lock = app_files::acquire_app_lock(self.app_root(), app_id, false)?;
+        let covered = self.with_conn(|conn| {
+            let mut stmt = conn.prepare("SELECT request_id, scope_json FROM app_data_reset_receipts WHERE app_id = ?1 AND state = 'pending'")?;
+            let rows = stmt.query_map([app_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?;
+            let mut covered = Vec::new();
+            for row in rows {
+                let (id, json) = row?;
+                let previous: ClearDataScope = serde_json::from_str(&json)
+                    .map_err(|_| AppError::InvalidState("invalid pending receipt scope".into()))?;
+                if (!previous.imports || scope.imports) && (!previous.cache || scope.cache)
+                    && (!previous.logs || scope.logs) && (!previous.credentials || scope.credentials) {
+                    covered.push((id, previous));
+                }
+            }
+            Ok(covered)
+        })?;
+        let _maintenance = acquire()?;
         // Business in use is never force-stopped or deleted under way: the
         // runtime lock stays held by the owner, so this fails with the
         // documented APP_BUSY/APP_RUNNING_ELSEWHERE and the receipt stays
@@ -197,7 +223,7 @@ impl AppStore {
             app_files::validate_app_path(natives, &logs)?;
             targets.push(("logs", logs));
         }
-        let mut cleared = Vec::new();
+        let mut cleared: Vec<String> = Vec::new();
         for (label, path) in &targets {
             if path.exists() {
                 app_files::remove_staging_dir(path)?;
@@ -214,16 +240,20 @@ impl AppStore {
             cleared.push("credentials".into());
         }
 
-        let cleared_json = serde_json::to_string(&cleared)
-            .map_err(|_| AppError::InvalidState("invalid cleared scope".into()))?;
         self.with_conn(|conn| {
             let tx = conn.unchecked_transaction()?;
-            tx.execute(
-                "UPDATE app_data_reset_receipts SET state = 'completed', cleared_json = ?2, completed_at = ?3
-                 WHERE request_id = ?1 AND state = 'pending'",
-                params![request_id, cleared_json, now_millis()],
-            )
-            .map_err(AppError::Sql)?;
+            for (id, previous) in &covered {
+                let receipt_labels: Vec<_> = cleared.iter().filter(|label| match label.as_str() {
+                    "imports" => previous.imports, "cache" => previous.cache,
+                    "logs" => previous.logs, "credentials" => previous.credentials, _ => true,
+                }).collect();
+                let receipt_json = serde_json::to_string(&receipt_labels)
+                    .map_err(|_| AppError::InvalidState("invalid cleared scope".into()))?;
+                tx.execute(
+                    "UPDATE app_data_reset_receipts SET state = 'completed', cleared_json = ?2, completed_at = ?3 WHERE request_id = ?1 AND state = 'pending'",
+                    params![id, receipt_json, now_millis()],
+                ).map_err(AppError::Sql)?;
+            }
             bump_revision(&tx)?;
             tx.commit()?;
             Ok(())
