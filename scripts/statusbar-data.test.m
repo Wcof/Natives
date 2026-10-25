@@ -106,6 +106,16 @@ int main(int argc, const char *argv[]) {
         Exec(db, @"WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<100) INSERT INTO usage_events(requested_at,total_tokens,cost_micro,tool_id,source,provider,session_id,model,input_tokens) SELECT strftime('%Y-%m-%dT%H:%M:%SZ','now'),1,0,'fixture','test','fixture','tiny','tiny',1 FROM n");
         NSDictionary *tiny = ReadUsageModels(db, @"all")[1];
         NSCAssert([tiny[@"name"] isEqual:@"tiny"] && fabs([tiny[@"costUsd"] doubleValue] - 0.000015) < 1e-12, @"small costs aggregate before integer scaling");
+        Exec(db, @"ALTER TABLE usage_events ADD COLUMN usage_status TEXT NOT NULL DEFAULT 'reported'");
+        Exec(db, @"INSERT INTO usage_events(requested_at,total_tokens,cost_micro,tool_id,source,provider,session_id,model,usage_status) VALUES(strftime('%Y-%m-%dT%H:%M:%SZ','now'),0,0,'fixture','test','fixture','missing','missing','missing')");
+        NSDictionary *partial = ReadUsagePeriod(db, @"all");
+        NSCAssert([partial[@"missingUsageRequests"] longLongValue] == 1 && ![partial[@"priced"] boolValue], @"offline totals preserve missing usage coverage");
+        NSArray *missingModels = ReadUsageModels(db, @"all");
+        NSCAssert(missingModels.count == 3, @"missing-only model must not be hidden as no activity");
+        NSDictionary *unknownPeriod = @{@"totalTokens":@0, @"costUsd":@0, @"priced":@NO, @"missingUsageRequests":@1};
+        NSCAssert([StatusBarUsageSummary(unknownPeriod, partial)[@"displayText"] isEqual:@"-- · --"], @"missing today usage must not fall back to historical totals or show zero");
+        NSDictionary *mappedMissing = UsagePeriodFromOverview(@{@"metrics":@{@"totalTokens":@0, @"estimatedCostUsd":@0, @"priced":@NO, @"missingUsageRequests":@1}});
+        NSCAssert([mappedMissing[@"missingUsageRequests"] intValue] == 1, @"HTTP period mapping preserves coverage");
         Exec(db, @"DROP TABLE usage_subjects");
         sqlite3_close(db);
         NSCAssert(FetchStateFromUsageDbAtPath(path) == nil, @"failed offline session query cannot look like an empty list");

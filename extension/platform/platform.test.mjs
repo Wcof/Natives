@@ -14,7 +14,8 @@ assert.ok(!chromeSession.includes('web-entry.js')&&!chromeSession.includes('./se
 
 globalThis.document = Object.assign(new EventTarget(), { visibilityState: 'visible' });
 globalThis.window = new EventTarget();
-globalThis.location = { origin: 'http://127.0.0.1:8771', hash: '' };
+globalThis.location = { origin: 'http://127.0.0.1:8771', pathname:'/space.html', search:'', hash: '' };
+globalThis.history={replaceState(){location.hash='';}};
 globalThis.sessionStorage = { setItem() {}, removeItem() {} };
 let authenticated = false, holdRpc = false, holdRenewal = false, holdOpening = false, renewals = 0;
 let nextSurface = 0, sessionReads = 0;
@@ -47,14 +48,14 @@ globalThis.fetch = async (url, options = {}) => {
     options.signal.addEventListener('abort', () => reject(Object.assign(Error('aborted'), { name: 'AbortError' })), { once: true });
   });
 };
-const { initWebSession, exchangePairingCode } = await import('./session.js');
+const { initWebSession, invalidateWebSession } = await import('./session.js');
 const { createPlatformClient } = await import('./transport.js');
 const { createWebSurfaceLease } = await import('./surface.js');
 const flush = () => new Promise(resolve => setImmediate(resolve));
 
 assert.equal((await initWebSession()).authenticated, false);
-await exchangePairingCode('ISOLATED');
-assert.equal((await initWebSession()).authenticated, true, 'successful pairing replaces a cached unauthenticated result');
+location.hash='#token=ISOLATED';invalidateWebSession();await initWebSession();
+assert.equal((await initWebSession()).authenticated, true, 'trusted launch replaces a cached unauthenticated result');
 const received = [];
 const first = createPlatformClient({ onEvent: event => received.push(event) });
 const second = createPlatformClient();
@@ -76,7 +77,7 @@ await assert.rejects(pending, { code: 'host_disconnected' });
 assert.equal(first.inFlight, 0);
 assert.ok(!streams[0].closed, 'another client still owns the SSE');
 second.disconnect();
-assert.equal(streams[0].closed, true);
+assert.ok(!streams[0].closed, 'the open Web document retains only its shared recovery connection');
 
 const lease = createWebSurfaceLease('fund');
 await lease.ensure();
@@ -108,15 +109,15 @@ holdRpc = false;
 holdRenewal = false;
 const restored = createPlatformClient();
 await restored.call('version');
-await exchangePairingCode('NEW_SESSION');
+location.hash='#token=NEW_SESSION';invalidateWebSession();await initWebSession();
 assert.deepEqual(await restored.call('version'), { method: 'version' },
   'a new authenticated session must replace the document Surface without a page reload');
 const readsBefore = sessionReads;
 ownedSurfaces.clear();
 window.dispatchEvent(Object.assign(new Event('storage'),{key:'natives-web-session-revision'}));
 await flush();await flush();
-assert.ok(sessionReads>readsBefore, 'a peer pairing must refresh the shared Cookie session');
+assert.ok(sessionReads>readsBefore, 'a peer trusted launch must refresh the shared Cookie session');
 assert.deepEqual(await restored.call('version'), {method:'version'});
 restored.disconnect();
 window.dispatchEvent(new Event('pagehide'));
-console.log('Web pairing, shared SSE, disconnect cancellation and lease renewal regressions passed');
+console.log('Web trusted launch, shared SSE, disconnect cancellation and lease renewal regressions passed');

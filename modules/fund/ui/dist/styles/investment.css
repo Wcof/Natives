@@ -183,12 +183,7 @@
 .home-card-title { font-size:17px; font-weight:650; }
 .goal-water-percent { font-weight:650; }
 .goal-water-metrics strong { font-weight:650; }
-.home-allocation-grid { gap:16px; align-items:stretch; }
-.home-allocation-grid .card { border-radius:var(--fund-card-radius); padding:var(--fund-card-padding); }
-.home-allocation-grid > .card { height:var(--fund-allocation-height); box-sizing:border-box; display:flex; flex-direction:column; overflow:hidden; }
-.home-allocation-grid > .card > .home-card-title-row { flex-shrink:0; }
-#home-distribution-body, #home-combination-body { flex:1; min-height:0; overflow-y:auto; overflow-x:hidden; scrollbar-gutter:stable; overscroll-behavior-y:contain; }
-.home-allocation-grid > .card > :is(.divider,.between) { flex-shrink:0; }
+#home-distribution-body, #home-combination-body { flex:1; min-height:0; overflow-y:auto; overflow-x:hidden; scrollbar-gutter:stable; padding-inline-end:var(--natives-space-2); overscroll-behavior-y:contain; }
 :is(#home-distribution-body,#home-combination-body):focus-visible { outline:2px solid var(--natives-accent); outline-offset:-2px; }
 
 .home-news-panel,.home-ai-panel { padding:var(--fund-card-padding); border-radius:var(--fund-card-radius); background:var(--natives-surface); }
@@ -289,18 +284,6 @@
 .goal-water-metrics > div:nth-child(3) { order:3; }
 .goal-note { margin-bottom:0; }
 .goal-scale { top:16px; bottom:16px; }
-.home-allocation-bar { display:flex; height:14px; border-radius:5px; background:var(--natives-surface-3); overflow:hidden; margin:20px 0; }
-.home-allocation-bar span { height:100%; flex-shrink:0; }
-.distribution-tree { gap:0; }
-.distribution-tree details { border:0; border-radius:0; border-bottom:1px solid var(--natives-border); background:transparent; }
-:root:not([data-theme="archive"]) .distribution-tree details { background:transparent; }
-.distribution-tree summary { padding:14px 0 4px; min-height:44px; grid-template-columns:12px minmax(0,1fr) auto; font-size:13px; }
-.distribution-tree .allocation-tip { padding:0 0 14px 0; margin:0; }
-.distribution-tree details[open] > summary { background:transparent; border:0; }
-.distribution-tree summary:before { font-size:16px; }
-.distribution-tree summary .num { font-weight:400; }
-.distribution-children { padding-left:22px; background:var(--natives-surface-2); }
-.combination-row { min-height:100px; padding:14px 0; }
 @media(max-width:760px) {
  .home-goal-water > .home-card-title-row { display:block; }
  .goal-water-percent > strong { font-size:27px; }

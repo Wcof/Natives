@@ -29,7 +29,12 @@ const readTokenBudget=async()=>(await api('GET','/api/settings')).aiMaxTokens??4
 const tokenBudgetPreview=count=>`<p class="evidence-hint" data-ai-token-budget="${count}">${esc(t('fundHomeAiTokenPreview',{count}))}</p>`;
 home.cancelAI=()=>{
   aiGeneration++;
-  if(typeof homeAIState!=="undefined"){homeAIState.generation++;homeAIState.preparing=false;if(homeAIState.phase==='running')homeAIState.phase='preview';}
+  if(typeof homeAIState!=="undefined"){
+    homeAIState.generation++;homeAIState.preparing=false;homeAIState.controller?.abort();
+    if(homeAIState.phase==='running'||homeAIState.phase==='preparing'){
+      homeAIState.phase='error';homeAIState.errorMsg=t('fundHomeCancelled');
+    }
+  }
   const wasActive=aiActive;aiActive=false;
   if(wasActive)broker("cancel").catch(error=>home.status(error.message));
 };
@@ -206,12 +211,14 @@ home.manageReports=async(page=1,includeDeleted=false)=>{
 let homeAIState = {
   newsId: null,
   newsItem: null,
-  phase: 'idle', // 'idle' | 'preview' | 'running' | 'result' | 'error'
+  phase: 'idle', // 'idle' | 'preparing' | 'running' | 'result' | 'error'
+  progress: 'reading',
+  controller: null,
+  contentNotice: '',
   disclose: false,
   evidence: null,
   lastResult: null,
   errorMsg: "",
-  progress: "waiting",
   generation: 0,
 };
 const reportSaves=new WeakMap();
@@ -222,6 +229,14 @@ async function ensureSavedReport(result){
  finally{reportSaves.delete(result);}
 }
 
+home.newsCoverageLabel = info => {
+  if (info.basis === 'content') return info.contentTruncated
+    ? t('fundHomeAiBodyTruncated', {sent: info.contentSentChars, total: info.contentTotalChars})
+    : t('fundHomeAiFullTextSent');
+  if (info.basis === 'summary') return t('fundHomeAiBasisSummary');
+  if (info.basis === 'title') return t('fundHomeAiBasisTitle');
+  return info.coverageNotice || '';
+};
 function renderHomeAIContent() {
   const s = homeAIState;
   const n = s.newsItem;
@@ -238,40 +253,18 @@ function renderHomeAIContent() {
     <h3 style="font-size:14px;margin:4px 0 6px">${esc(n.title)}</h3>
     <div class="news-meta" style="font-size:11px;color:var(--natives-text-muted);display:flex;gap:8px">
       <span>${esc(home.informationSourceLabel(n.sourceId))}</span>
-      <span>${esc(home.informationTimeLabel(n.publishedAt))}</span><span>${esc(home.informationContentLabel(n))}</span>
+      <span>${esc(home.informationTimeLabel(n.publishedAt,n.timePrecision))}</span><span>${esc(home.informationContentLabel(n))}</span>
     </div>
   </div>`;
 
-  if (s.phase === 'preview') {
-    const materials = Array.isArray(s.evidence?.evidence) ? s.evidence.evidence.filter(piece => piece.kind === 'information') : [];
-    const isHidden = home.displayMode() === "hidden";
-    const percentMode = home.displayMode() === "percent";
-    const isPrivate = isHidden || percentMode;
-    return chosenHeader + `<div class="decision-block">
-      <h3 style="font-size:14px;margin-bottom:8px">${esc(t("fundHomeAiReviewEvidence"))}</h3>
-      <p class="muted home-ai-material">${materials.map(p=>esc(p.excerpt||p.summary||p.title)).join('<br>')||esc(t('fundDetailLoading'))}</p>
-      <small>${esc(t('fundHomeAiExcerptScope'))}</small>
-      ${s.evidence?tokenBudgetPreview(s.maxTokens):""}
-      <dl class="metric-list" style="margin:12px 0;font-size:12px">
-        <div><dt style="color:var(--natives-text-muted)">${esc(t('fundHomeAiPublicMaterials'))}</dt><dd>${esc(t('fundHomeAiPublicScope'))}</dd></div>
-        <div><dt style="color:var(--natives-text-muted)">${esc(t('fundHomeAiLocalFacts'))}</dt><dd>${esc(t('fundHomeAiFactScope'))}</dd></div>
-        <div><dt style="color:var(--natives-text-muted)">${esc(t('fundHomeAiSensitiveData'))}</dt><dd>${esc(t(s.disclose && !isPrivate ? 'fundHomeAiFinanceIncluded' : 'fundHomeAiFinanceExcluded'))}</dd></div>
-      </dl>
-      <label class="home-check" style="margin:12px 0;display:flex;align-items:center;gap:6px;font-size:12px">
-        <input id="home-ai-disclose" type="checkbox" ${s.disclose && !isPrivate ? "checked" : ""} ${isPrivate ? "disabled" : ""}>
-        <span>${esc(t("fundHomeIncludeFinancialAmountsAndAccountDetailsShow"))}</span>
-      </label>
-      <div class="row" style="margin-top:16px;display:flex;gap:10px">
-        <button class="btn btn-accent" data-act="home-ai-confirm" ${!s.evidence||s.preparing?'disabled':''}>${esc(t("fundHomeAiConfirmAnalyze"))}</button>
-        <button class="btn" data-act="home-ai-cancel">${esc(t("fundHomeAiCancelSelect"))}</button>
-      </div>
-    </div>`;
-  }
-
-  if (s.phase === 'running') {
+  if (s.phase === 'preparing' || s.phase === 'running') {
+    const progress = s.phase === 'preparing'
+      ? t(s.progress === 'holdings' ? 'fundHomeAiHoldings' : 'fundHomeAiReading')
+      : inferenceProgress(s.progress);
     return chosenHeader + `<div class="decision-block">
       <div class="home-ai-empty" style="min-height:180px">
-        <p style="font-size:13px">${esc(inferenceProgress(s.progress))}</p>
+        <p style="font-size:13px">${esc(progress)}</p>
+        ${s.contentNotice ? `<p class="evidence-hint">${esc(s.contentNotice)}</p>` : ''}
         <button class="btn btn-sm" data-act="home-ai-stop" style="margin-top:12px">${esc(t("fundHomeCancelAnalysis"))}</button>
       </div>
     </div>`;
@@ -293,8 +286,12 @@ function renderHomeAIContent() {
     const percentMode = home.displayMode() === "percent";
     const isPrivate = isHidden || percentMode;
     const statusText = t(validation.status === "structure_verified" ? "fundHomeAnalysisVerified" : "fundHomeAnalysisUnverified");
+    const info = Array.isArray(s.evidence?.evidence) ? s.evidence.evidence.find(piece => piece.kind === 'information') : null;
+    const coverageText = info ? home.newsCoverageLabel(info) : '';
+    const coverage = (coverageText || s.contentNotice) ? `${t('fundHomeAiReadingScope')} ${coverageText || s.contentNotice}` : '';
     return chosenHeader + `<div class="decision-block">
       <div style="font-size:12px;color:var(--natives-accent);margin-bottom:8px">${esc(statusText)} · ${esc(r.modelName || "")}${r.dataRevision!==home.snapshot()?.dataRevision?' · '+esc(t('fundHomeReportsStaleSnapshot')):''}</div>
+      ${coverage ? `<p class="evidence-hint">${esc(coverage)}</p>` : ''}
       ${home.renderDecisionResult(r,isPrivate)}
       <div class="home-ai-receipt" role="status">
         ${r.saved ? `<p>✓ ${esc(t("fundHomeReportSaved") || "已保存分析报告。")}</p>` : ""}
@@ -307,7 +304,6 @@ function renderHomeAIContent() {
       </div>
     </div>`;
   }
-
   return "";
 }
 
@@ -323,38 +319,10 @@ function updateHomeAI(focus = true) {
     btn.setAttribute("aria-pressed", String(isChosen));
   });
 
-  const disclose = body.querySelector("#home-ai-disclose");
-  if (disclose) {
-    disclose.onchange=e=>{home.cancelAI();homeAIState.disclose=e.target.checked;void prepareHomeEvidence();};
-  }
-  const confirmBtn = body.querySelector("[data-act=home-ai-confirm]");
-  if (confirmBtn) {
-    confirmBtn.onclick = () => runHomeAI();
-  }
-  const cancelBtn = body.querySelector("[data-act=home-ai-cancel]");
-  if (cancelBtn) {
-    cancelBtn.onclick = () => {
-      home.cancelAI();
-      homeAIState.phase = 'idle';
-      homeAIState.newsId = null;
-      homeAIState.newsItem = null;
-      updateHomeAI(true);
-    };
-  }
   const stopBtn = body.querySelector("[data-act=home-ai-stop]");
-  if (stopBtn) {
-    stopBtn.onclick = () => {
-      home.cancelAI();
-      homeAIState.phase = 'preview';
-      updateHomeAI(false);
-    };
-  }
+  if (stopBtn) stopBtn.onclick = () => cancelNewsAI();
   const retryBtn = body.querySelector("[data-act=home-ai-retry]");
-  if (retryBtn) {
-    retryBtn.onclick = () => {
-      home.cancelAI();homeAIState.phase='preview';void prepareHomeEvidence();
-    };
-  }
+  if (retryBtn) retryBtn.onclick = () => { if(!homeAIState.newsItem)return; void prepareAndAnalyzeHomeAI(); };
   const saveBtn = body.querySelector("[data-act=home-ai-save]");
   if (saveBtn) {
     saveBtn.onclick = async () => {
@@ -380,6 +348,14 @@ function updateHomeAI(focus = true) {
     catch(error){window.removeEventListener('focus',restore);home.status(error.message);}
   };
 }
+function cancelNewsAI(){
+  home.cancelAI();
+  homeAIState.phase = 'error';
+  homeAIState.errorMsg = t('fundHomeCancelled');
+  homeAIState.preparing = false;
+  homeAIState.controller?.abort();
+  updateHomeAI(false);
+}
 async function recordHomeDecision(){
  const result=homeAIState.lastResult,item=homeAIState.newsItem;if(!result||!item)return;
  if(home.displayMode()!=='amount'){home.status(t('fundHomeSelectShowAmountsBeforeViewingPrivateSources'));return;}
@@ -391,116 +367,170 @@ async function recordHomeDecision(){
   result.decision={action:values.action,note:values.note};home.closePanel();if(homeAIState.lastResult===result)updateHomeAI(false);
  }));
 }
-async function prepareHomeEvidence(){
- const own=++homeAIState.generation;homeAIState.evidence=null;homeAIState.preparing=true;updateHomeAI(false);
- try{
-  for(let attempt=0;attempt<2;attempt++){
-   const snapshot=await home.readSnapshot();if(own!==homeAIState.generation)return;if(!snapshot)throw Error(t('fundHomeHomeSnapshotCouldNotLoad'));
-   try{
-    const maxTokens=await readTokenBudget();
-    const packet=await api('POST','/api/home/evidence',{dataRevision:snapshot.dataRevision,sourceIds:[],informationIds:[homeAIState.newsId],discloseFinance:home.displayMode()==='amount'&&homeAIState.disclose,task:'news_impact'});
-    if(own===homeAIState.generation){homeAIState.evidence=packet;homeAIState.maxTokens=maxTokens;}break;
-   }catch(error){if(error.status!==409||attempt===1)throw error;}
+async function readNewsDetail(item, signal) {
+  try {
+    const detail = await api('GET', `/api/information/item?id=${encodeURIComponent(item.id)}`, null, {signal});
+    if (!detail) throw Error(t('fundHomeInformationCouldNotLoad'));
+    return {...item, ...detail};
+  } catch (error) {
+    if (error.status === 404 || error.status === 403 || error.status === 401) throw error;
+    return {...item};
   }
- }catch(error){if(own===homeAIState.generation){homeAIState.errorMsg=error.message;homeAIState.phase='error';}}
- finally{if(own===homeAIState.generation){homeAIState.preparing=false;updateHomeAI(false);}}
+}
+
+async function prepareAndAnalyzeHomeAI() {
+  const s = homeAIState, item = s.newsItem;
+  if (!item) return;
+  if (home.displayMode() === 'hidden') {
+    s.phase = 'error'; s.errorMsg = t('fundHomeAnalysisHiddenText'); s.preparing = false; updateHomeAI(false); return;
+  }
+  home.cancelAI();
+  const own = ++s.generation;
+  const controller = new AbortController();
+  s.controller = controller;
+  s.phase = 'preparing'; s.progress = 'reading'; s.preparing = true;
+  s.evidence = null; s.lastResult = null; s.errorMsg = ''; s.contentNotice = '';
+  updateHomeAI(false);
+  const alive = () => own === s.generation && s.newsItem?.id === item.id && !controller.signal.aborted && !document.hidden;
+  try {
+    if (!Number.isFinite(Number(item.id)) || Number(item.id) <= 0) throw Error(t('fundHomeInformationCouldNotLoad'));
+    const detail = await readNewsDetail(item, controller.signal);
+    if (!alive()) return;
+    s.newsItem = detail;
+    if (detail.contentSupported !== false && (!detail.contentText || detail.contentCacheExpired)) {
+      try {
+        const fetched = await home.requestInformation('/api/information/content', {id: detail.id, expectedVersion: detail.contentVersion});
+        if (!alive()) return;
+        if (!fetched) throw Error(t('fundHomeCancelled'));
+        const refreshed = await readNewsDetail(detail, controller.signal);
+        if (!alive()) return;
+        s.newsItem = refreshed;
+      } catch (error) {
+        if (error.status === 404 || error.status === 403 || error.status === 401) throw error;
+        if (!alive()) return;
+        s.contentNotice = t('fundHomeAiSummaryFallback');
+      }
+    }
+    if (!alive()) return;
+    s.progress = 'holdings'; updateHomeAI(false);
+    let packet = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const snapshot = await home.readSnapshot();
+      if (!alive()) return;
+      if (!snapshot) throw Error(t('fundHomeHomeSnapshotCouldNotLoad'));
+      try {
+        packet = await api('POST', '/api/home/evidence', {
+          dataRevision: snapshot.dataRevision,
+          sourceIds: [],
+          informationIds: [detail.id],
+          discloseFinance: false,
+          task: 'news_impact',
+        }, {signal: controller.signal});
+        if (own !== s.generation) return;
+        break;
+      } catch (error) {
+        if (error.status !== 409 || attempt === 1) throw error;
+      }
+    }
+    if (!packet || !alive()) return;
+    if (packet.dataRevision !== home.snapshot()?.dataRevision) throw Error(t('fundHomeReportsStaleSnapshot'));
+    s.evidence = packet;
+    s.maxTokens = await readTokenBudget();
+    if (!alive()) return;
+    s.preparing = false;
+    s.phase = 'running'; s.progress = 'waiting'; updateHomeAI(false);
+    await runHomeAI();
+  } catch (error) {
+    if (own !== s.generation || controller.signal.aborted) return;
+    s.phase = 'error'; s.errorMsg = error.message; s.preparing = false; updateHomeAI(false);
+  } finally {
+    if (s.controller === controller) s.controller = null;
+    if (own === s.generation) s.preparing = false;
+  }
 }
 
 async function runHomeAI() {
-  const packet=homeAIState.evidence;
-  if(!packet||packet.dataRevision!==home.snapshot().dataRevision){homeAIState.phase='preview';await prepareHomeEvidence();return;}
-  const gen=++homeAIState.generation;let remoteStarted=false,finished=false;
+  const s = homeAIState;
+  const packet = s.evidence;
+  if (!packet || !s.newsItem) throw Error(t('fundHomeAnalysisFailed'));
+  if (packet.dataRevision !== home.snapshot()?.dataRevision) throw Error(t('fundHomeReportsStaleSnapshot'));
+  const gen = ++s.generation;
+  let remoteStarted = false, finished = false;
   aiActive = true;
-  homeAIState.phase = 'running';
-  homeAIState.progress='waiting';
-  updateHomeAI(false);
+  s.phase = 'running'; s.progress = 'waiting'; updateHomeAI(false);
   try {
-    if(await readTokenBudget()!==homeAIState.maxTokens)throw Error(t('fundHomeAiTokenChanged'));
-    const { models, defaultModel } = await broker("options");
-    if (gen !== homeAIState.generation || !aiActive) return;
-    if (!models || !models.length) throw Error(t("fundHomeNoModelIsAvailableEnableAModel"));
-
-    if (!defaultModel || defaultModel.unavailable) throw Error(t('fundHomeAiDefaultUnavailable'));
-    const startPayload = { maxTokens:homeAIState.maxTokens,selection: "default", expectedConfigToken: defaultModel.configToken, text: JSON.stringify(packet) };
-
-    const startedInfo = await broker("start", startPayload);remoteStarted=true;
-    if (gen !== homeAIState.generation || !aiActive) return;
-
+    if (await readTokenBudget() !== s.maxTokens) throw Error(t('fundHomeAiTokenChanged'));
+    const {models, defaultModel} = await broker('options');
+    if (gen !== s.generation || !aiActive) return;
+    if (!defaultModel || defaultModel.unavailable || !models?.length) throw Error(t('fundHomeAiDefaultUnavailable'));
+    const startPayload = {maxTokens: s.maxTokens, selection: 'default', expectedConfigToken: defaultModel.configToken, text: JSON.stringify(packet)};
+    const startedInfo = await broker('start', startPayload); remoteStarted = true;
+    if (gen !== s.generation || !aiActive) return;
     const started = Date.now();
-    while (aiActive && gen === homeAIState.generation) {
-      if (Date.now() - started > 95000) throw Error(t("fundHomeAnalysisTimedOut"));
-      await new Promise(r => setTimeout(r, 800));
-      if (!aiActive || gen !== homeAIState.generation) break;
-      const res = await broker("status");
-      if (!aiActive || gen !== homeAIState.generation) break;
-      if(!res.done&&res.phase&&res.phase!==homeAIState.progress){homeAIState.progress=res.phase;updateHomeAI(false);}
-      if (res.done) {
-        if (res.failure) throw Error(inferenceFailure(res.failure));
-        const modelLabel = startedInfo && (startedInfo.providerId || startedInfo.modelId)
-          ? `${startedInfo.providerId || ""}/${startedInfo.modelId || ""}`
-          : defaultModel.name;
-        const validation = await api("POST", "/api/analysis/validate", {
-          resultText: res.text,
-          evidence: packet,
-        });
-        if (gen !== homeAIState.generation || !aiActive) break;
-        homeAIState.lastResult = {
-          resultText: res.text,
-          task: "news_impact",
-          providerId: startedInfo?.providerId || "",
-          modelId: startedInfo?.modelId || "",
-          modelName: modelLabel,
-          snapshotId: packet.snapshotId,
-          dataRevision: packet.dataRevision,
-          scope: packet.scope,
-          evidence: packet,
-          validation,
-          saved: false,
-        };
-        finished=true;homeAIState.phase='result';
-        aiActive = false;
-        updateHomeAI(false);
-        break;
-      }
+    while (aiActive && gen === s.generation) {
+      if (Date.now() - started > 95000) throw Error(t('fundHomeAnalysisTimedOut'));
+      await new Promise(resolve => setTimeout(resolve, 800));
+      if (!aiActive || gen !== s.generation) break;
+      const result = await broker('status');
+      if (!aiActive || gen !== s.generation) break;
+      if (!result.done && result.phase && result.phase !== s.progress) { s.progress = result.phase; updateHomeAI(false); }
+      if (!result.done) continue;
+      if (result.failure) throw Error(inferenceFailure(result.failure));
+      const modelLabel = startedInfo && (startedInfo.providerId || startedInfo.modelId)
+        ? `${startedInfo.providerId || ''}/${startedInfo.modelId || ''}` : defaultModel.name;
+      const validation = await api('POST', '/api/analysis/validate', {resultText: result.text, evidence: packet});
+      if (gen !== s.generation || !aiActive) break;
+      s.lastResult = {
+        resultText: result.text, task: 'news_impact',
+        providerId: startedInfo?.providerId || '', modelId: startedInfo?.modelId || '',
+        modelName: modelLabel, snapshotId: packet.snapshotId, dataRevision: packet.dataRevision,
+        scope: packet.scope, evidence: packet, validation, saved: false,
+      };
+      finished = true; s.phase = 'result'; aiActive = false; updateHomeAI(false); break;
     }
-  } catch (err) {
-    if (gen === homeAIState.generation && aiActive) {
-      aiActive = false;
-      homeAIState.phase = 'error';
-      homeAIState.errorMsg = err.message;
-      updateHomeAI(false);
+  } catch (error) {
+    if (gen === s.generation && aiActive) {
+      aiActive = false; s.phase = 'error'; s.errorMsg = error.message; updateHomeAI(false);
     }
   } finally {
-    if (gen === homeAIState.generation) {
-      if(remoteStarted&&!finished)broker('cancel').catch(error=>home.status(error.message));
-      aiActive=false;
+    if (gen === s.generation) {
+      if (remoteStarted && !finished) broker('cancel').catch(error => home.status(error.message));
+      aiActive = false;
     }
   }
 }
 
-home.selectNewsForAI = item => {
+home.analyzeNewsForAI = item => {
+  if (!item || !Number.isFinite(Number(item.id))) return;
+  if (homeAIState.newsId === item.id && homeAIState.phase !== 'idle') return;
   home.cancelAI();
   homeAIState.generation++;
   homeAIState.newsId = item.id;
   homeAIState.newsItem = item;
-  homeAIState.phase = 'preview';
-  homeAIState.disclose = false;
+  homeAIState.phase = 'preparing';
+  homeAIState.progress = 'reading';
+  homeAIState.preparing = false;
   homeAIState.evidence = null;
   homeAIState.lastResult = null;
-  homeAIState.errorMsg = "";
-  updateHomeAI(true);void prepareHomeEvidence();
+  homeAIState.errorMsg = '';
+  homeAIState.contentNotice = '';
+  homeAIState.controller?.abort();
+  updateHomeAI(true);
+  void prepareAndAnalyzeHomeAI();
 };
-
+home.selectNewsForAI = home.analyzeNewsForAI;
 home.isNewsAISelected = id => homeAIState.newsId === id && homeAIState.phase !== 'idle';
 home.updateHomeAI = updateHomeAI;
-home.inlineAIActive=()=>aiActive||Boolean(homeAIState.preparing);
+home.inlineAIActive=()=>aiActive||Boolean(homeAIState.preparing)||homeAIState.phase==='running';
 
 function onPrivacyChanged() {
-  if (home.displayMode() === "hidden" || home.displayMode() === "percent") {
-    homeAIState.disclose = false;
+  homeAIState.disclose = false;
+  const inline = homeAIState.preparing || homeAIState.phase === 'running';
+  if (home.displayMode() === 'hidden' || (aiActive && !inline)) {
+    home.cancelAI();
+    if (inline) homeAIState.errorMsg = t('fundHomeAiPrivacyCancelled');
   }
-  home.cancelAI();
-  if(homeAIState.phase==='preview'&&home.displayMode()!=='hidden')void prepareHomeEvidence();else updateHomeAI(false);
+  updateHomeAI(false);
 }
 document.addEventListener("fund:privacy-changed", onPrivacyChanged);
 document.addEventListener("fund:display-mode-changed", onPrivacyChanged);
@@ -508,10 +538,8 @@ document.addEventListener('fund:language-changed',()=>updateHomeAI(false));
 
 document.addEventListener('fund:home-snapshot-updated',()=>{
  const body=document.getElementById('home-ai-body');if(!body)return;
- if(homeAIState.preparing)return;
- const changed=homeAIState.evidence&&homeAIState.evidence.dataRevision!==home.snapshot()?.dataRevision;
- if(changed&&homeAIState.phase==='running'){home.cancelAI();homeAIState.phase='preview';void prepareHomeEvidence();}
- else if(changed&&homeAIState.phase==='preview')void prepareHomeEvidence();
- else updateHomeAI(false);
+ // A normal snapshot refresh never starts a new charged inference. A running
+ // request keeps its original revision and is marked stale when it completes.
+ updateHomeAI(false);
 });
 })();

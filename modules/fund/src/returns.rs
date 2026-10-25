@@ -36,8 +36,33 @@ fn save_snapshot(
     let trades: i64 = conn.query_row("SELECT COALESCE(MAX(id),0) FROM transactions", [], |r| {
         r.get(0)
     })?;
+    // Capture the current custom-group values with the same valuation batch so
+    // future history can draw real category curves. Older snapshots remain
+    // explicitly absent instead of being backfilled from today's weights.
+    let group_values = crate::group_plan::group_allocation(conn, summary)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("groups")
+                .and_then(|groups| groups.as_array())
+                .cloned()
+        })
+        .map(|groups| {
+            groups
+                .iter()
+                .map(|group| {
+                    json!({
+                        "groupId": group.get("groupId").cloned().unwrap_or(Value::Null),
+                        "name": group.get("name").cloned().unwrap_or(Value::Null),
+                        "valueMinor": group.get("currentMinor").cloned().unwrap_or(Value::Null),
+                    })
+                })
+                .collect::<Vec<Value>>()
+        })
+        .unwrap_or_default();
     let detail = json!({"flowsChecked":checked,"transactionThrough":trades,"cashEventThrough":through,"revision":Store::data_revision(conn)?,
         "valuationBatch":summary.valuation_batch,"valuationFetchedAt":summary.valuation_fetched_at,"valuationStale":summary.valuation_stale,
+        "groupValues":group_values,
         "attribution":crate::portfolio_attribution::capture(conn,summary)?});
     conn.execute("INSERT INTO value_snapshots(taken_at,total_minor,cash_minor,noncash_minor,quality,note,created_at,breakdown_json) VALUES(?1,?2,?3,?4,?5,?6,?7,?8)", params![date,total,cash,add_minor(total,-cash,"非现金资产")?,summary.quality,note,now_secs(),detail.to_string()])?;
     Ok(conn.last_insert_rowid())

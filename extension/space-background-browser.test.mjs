@@ -42,16 +42,26 @@ try {
  }
  await page.evaluate(()=>{
    const root=document.getElementById('dashboard-host').shadowRoot;
-   const card=document.createElement('div');card.className='Widget';card.style.cssText='height:1200px;width:min(288px,calc(100vw - 32px));';
+   const card=document.createElement('div');card.id='middle-probe';card.className='Widget';card.style.cssText='height:120px;width:min(288px,calc(100vw - 32px));';
    const button=document.createElement('button');button.id='slot-refresh-probe';button.textContent='Refresh';button.style.cssText='float:right;width:36px;height:32px';
    window.slotRefreshes=0;button.onclick=()=>slotRefreshes++;card.append(button);root.querySelector('.middleCentre').append(card);
+   for(const slot of ['topLeft','topCentre','topRight']){const probe=document.createElement('div');probe.className='Widget';probe.id=`${slot}-probe`;probe.style.cssText='height:24px;width:24px;';root.querySelector('.'+slot).append(probe);}
    const free=document.createElement('div');free.id='free-position-probe';free.className='Slot free free-slot-wrap';free.style.cssText='left:0;top:0;width:20px;height:20px';root.querySelector('.container').append(free);
  });
  for(const width of [320,640,1280]){
    await page.setViewportSize({width,height:800});
    const target=page.locator('#dashboard-host #slot-refresh-probe');
-   const geometry=await target.evaluate(button=>{const b=button.getBoundingClientRect(),host=document.getElementById('dashboard-host'),toolbar=document.getElementById('dashboard-toolbar').getBoundingClientRect();return {top:b.top,toolbarBottom:toolbar.bottom,freeTop:host.shadowRoot.getElementById('free-position-probe').getBoundingClientRect().top,hit:document.elementFromPoint(b.x+b.width/2,b.y+b.height/2)===host&&host.shadowRoot.elementFromPoint(b.x+b.width/2,b.y+b.height/2)===button};});
-   assert.ok(geometry.top>geometry.toolbarBottom,'automatic slot clears the floating toolbar');assert.equal(geometry.hit,true);assert.equal(geometry.freeTop,0,'free placement is preserved');
+   const geometry=await target.evaluate(button=>{
+     const host=document.getElementById('dashboard-host'),root=host.shadowRoot,hostBox=host.getBoundingClientRect();
+     const box=id=>root.getElementById(id).getBoundingClientRect();
+     const middle=box('middle-probe');
+     return {hostTop:hostBox.top,hostHeight:hostBox.height,topLeft:box('topLeft-probe').top,topCentre:box('topCentre-probe').top,topRight:box('topRight-probe').top,middleCenter:middle.top+middle.height/2,freeTop:box('free-position-probe').top,hit:document.elementFromPoint(button.getBoundingClientRect().x+button.getBoundingClientRect().width/2,button.getBoundingClientRect().y+button.getBoundingClientRect().height/2)===host&&host.shadowRoot.elementFromPoint(button.getBoundingClientRect().x+button.getBoundingClientRect().width/2,button.getBoundingClientRect().y+button.getBoundingClientRect().height/2)===button};
+   });
+   assert.equal(geometry.topLeft,geometry.hostTop+16,'topLeft cards start at the real top');
+   assert.equal(geometry.topCentre,geometry.hostTop+16,'topCentre cards start at the real top');
+   assert.equal(geometry.topRight,geometry.hostTop+16,'topRight cards start at the real top');
+   assert.equal(Math.round(geometry.middleCenter),Math.round(geometry.hostTop+geometry.hostHeight/2),'middle slot stays vertically centred');
+   assert.equal(geometry.hit,true);assert.equal(geometry.freeTop,0,'free placement is preserved');
    const before=await page.evaluate(()=>slotRefreshes);await target.click();await target.press('Enter');assert.equal(await page.evaluate(()=>slotRefreshes),before+2);
  }
  await page.setViewportSize({width:1280,height:800});await page.screenshot({path:resolve(out,'background-full.png')});

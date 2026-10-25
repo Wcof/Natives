@@ -17,7 +17,10 @@ function bindLifecycle() {
   document.addEventListener('visibilitychange', () => {
     clearTimeout(hiddenTimer);
     if (document.visibilityState === 'hidden') hiddenTimer = setTimeout(releaseAll, 60_000);
-    else for (const lease of [...leases]) void lease.renew().catch(() => announce('error'));
+    else {
+      void ensureWebSurface().catch(() => announce('error'));
+      for (const lease of [...leases]) void lease.renew().catch(() => announce('error'));
+    }
   });
 }
 function track(lease) {

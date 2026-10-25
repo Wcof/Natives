@@ -23,10 +23,10 @@ use crate::app_store::AppStore;
 use crate::workspace_store::{default_db_path, WorkspaceStore};
 use app_runtime_core::lock::FileLock;
 use app_runtime_core::session::{base64url, random_bytes};
-use serde_json::{json, Value};
+use serde_json::json;
 use std::fs;
-use std::io::{self, Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::io::{self, Write};
+use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::{self, Command};
 use std::sync::atomic::AtomicBool;
@@ -136,37 +136,6 @@ pub fn acquire_lock(port: u16, epoch: &str) -> io::Result<Option<LockGuard>> {
             }
         }
     }
-}
-
-pub fn request_pairing_code(port: u16, secret: &str) -> io::Result<String> {
-    let mut stream = TcpStream::connect(("127.0.0.1", port))?;
-    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
-    stream.set_write_timeout(Some(Duration::from_secs(5)))?;
-
-    write!(
-        stream,
-        "POST /web/session/pair-code HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nX-Natives-Relay-Secret: {secret}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-    )?;
-    stream.flush()?;
-
-    let mut resp_bytes = Vec::new();
-    stream.read_to_end(&mut resp_bytes)?;
-
-    let text = String::from_utf8_lossy(&resp_bytes);
-    let body = text.split("\r\n\r\n").nth(1).unwrap_or("");
-    let parsed: Value = serde_json::from_str(body)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))?;
-
-    parsed
-        .get("pairingCode")
-        .and_then(Value::as_str)
-        .map(String::from)
-        .ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                "missing pairingCode in response",
-            )
-        })
 }
 
 pub fn run_service(port: Option<u16>, bootstrap: Option<String>) -> io::Result<()> {

@@ -34,21 +34,63 @@ fn auth_manager_bootstrap_token_lifecycle() {
 }
 
 #[test]
-fn auth_manager_pairing_code_lockout() {
-    let mut auth = AuthManager::new(None);
-    let code = auth.generate_pairing_code().unwrap();
-    assert_eq!(code.len(), 10);
-
-    // 连续错误尝试，第 5 次锁定
-    for _ in 0..4 {
-        assert_eq!(
-            auth.exchange_pairing_code("WRONGCODE1"),
-            Err("ERR_PAIRING_CODE_MISMATCH")
+fn retired_pairing_endpoints_reject_without_issuing_authority() {
+    let state = make_test_state(0);
+    let generated = request(
+        state.clone(),
+        "POST",
+        "/web/session/pair-code",
+        "",
+        &[("X-Natives-Relay-Secret", "test-relay-secret-123")],
+        false,
+    );
+    assert!(generated.starts_with("HTTP/1.1 404"), "{generated}");
+    for body in [
+        r#"{"pairingCode":"0123456789"}"#,
+        r#"{"bootstrapToken":"test-bootstrap","pairingCode":"0123456789"}"#,
+    ] {
+        let response = request(
+            state.clone(),
+            "POST",
+            "/web/session/exchange",
+            body,
+            &[
+                ("Origin", "http://127.0.0.1:0"),
+                ("Content-Type", "application/json"),
+            ],
+            false,
         );
+        assert!(response.starts_with("HTTP/1.1 401"), "{response}");
+        assert!(!response.contains("Set-Cookie:"));
     }
-    assert_eq!(
-        auth.exchange_pairing_code("WRONGCODE1"),
-        Err("ERR_PAIRING_CODE_LOCKED")
+    for headers in [
+        [
+            ("Origin", "https://untrusted.invalid"),
+            ("Content-Type", "application/json"),
+        ],
+        [
+            ("Origin", "http://127.0.0.1:0"),
+            ("Content-Type", "text/plain"),
+        ],
+    ] {
+        let response = request(
+            state.clone(),
+            "POST",
+            "/web/session/exchange",
+            r#"{"bootstrapToken":"test-bootstrap"}"#,
+            &headers,
+            false,
+        );
+        assert!(response.starts_with("HTTP/1.1 403"), "{response}");
+    }
+    assert!(
+        state
+            .auth
+            .lock()
+            .unwrap()
+            .exchange_bootstrap("test-bootstrap")
+            .is_ok(),
+        "invalid payloads must not consume a trusted launch token"
     );
 }
 
@@ -205,7 +247,7 @@ fn unauthenticated_native_relay_must_reject() {
     );
     assert!(
         response.starts_with("HTTP/1.1 403"),
-        "unpaired cross-origin caller must be rejected with 403"
+        "unauthorized cross-origin caller must be rejected with 403"
     );
 }
 

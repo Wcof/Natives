@@ -348,7 +348,7 @@ shutdown；`start()` 返回 `Arc<dyn ModuleService>`，由 Runtime 的受控 lis
 
 源码内核更新仅允许核验后的隔离开发身份与开发源；正式身份在下载、构建、
 换装前拒绝，正式代码继续沿唯一产品交付链。此规则不创建在线产品更新引擎，
-也不授权 CLIProxy 主版本迁移。
+也不授权恢复模型代理／路由内核或旁路唯一产品交付链（ADR-0044）。
 
 上述目标的施工与逐项证据见[模块整改 Plan](/Users/ldh/Downloads/project/plan/mode/README.md)，
 实施状态以项目 ROADMAP 为准，契约存在不等于全部检查已经实现。

@@ -90,6 +90,18 @@
     return '$' + n.toFixed(2);
   }
 
+  function formatUsage(row, compact = true) {
+    const value = row.totalTokens;
+    const missing = row.missingUsageRequests > 0;
+    if (missing && !value) return '--';
+    return (compact ? formatCompactTokens(value) : formatNumber(value)) + (missing ? '+' : '');
+  }
+
+  function formatCost(row) {
+    if (row.costUsd != null) return formatMoney(row.costUsd);
+    return row.knownCostUsd > 0 ? '≥' + formatMoney(row.knownCostUsd) : '--';
+  }
+
   function escapeHtml(str) {
     return String(str || '')
       .replace(/&/g, '&amp;')
@@ -257,9 +269,11 @@
 
     const totalEl = document.getElementById('totalTokens');
     const costEl = document.getElementById('cost');
+    const coverage = document.getElementById('usage-coverage');
+    if (coverage) coverage.hidden = !(currentPeriod.missingUsageRequests > 0);
 
-    if (totalEl) totalEl.textContent = formatNumber(currentPeriod.totalTokens);
-    if (costEl) costEl.textContent = formatMoney(currentPeriod.costUsd);
+    if (totalEl) { totalEl.textContent = formatUsage(currentPeriod, false); totalEl.title = currentPeriod.missingUsageRequests > 0 ? t("usageIncomplete") : ""; }
+    if (costEl) costEl.textContent = formatCost(currentPeriod);
   }
 
   // 1. Home View Breakdown (Signature Token Monitor Style)
@@ -267,7 +281,7 @@
     const container = document.getElementById('view-home');
     if (!container) return;
 
-    const activeTools=toolsData.filter(tool=>tool.totalTokens>0);
+    const activeTools=toolsData.filter(tool=>tool.totalTokens>0 || tool.missingUsageRequests>0);
     if (!activeTools.length) {
       container.innerHTML = `<div style="text-align:center; padding:30px; color:var(--muted);">${t(failures.has('tools')?'unavailable':'noTools')}</div>`;
       return;
@@ -287,8 +301,8 @@
               <span class="tool-name">${escapeHtml(t.name)}</span>
             </div>
             <div class="tool-metrics">
-              <span class="tool-tokens">${formatCompactTokens(t.totalTokens)}</span>
-              <span class="tool-cost">${formatMoney(t.costUsd)}</span>
+              <span class="tool-tokens">${formatUsage(t)}</span>
+              <span class="tool-cost">${formatCost(t)}</span>
             </div>
           </div>
           <div class="progress-track">
@@ -374,8 +388,8 @@
           </div>
         </td>
         <td><span style="color:var(--muted);">${escapeHtml(tool.category || '--')}</span></td>
-        <td><strong>${formatCompactTokens(tool.totalTokens)}</strong></td>
-        <td style="color:var(--accent);">${formatMoney(tool.costUsd)}</td>
+        <td><strong>${formatUsage(tool)}</strong></td>
+        <td style="color:var(--accent);">${formatCost(tool)}</td>
         <td>${tool.requestCount}</td>
         <td><span class="status-pill status-ok">${t(tool.enabled?'normal':'disabled')}</span></td>
       </tr>
@@ -398,8 +412,8 @@
           ${s.projectPath ? `<div style="font-size:12px; color:var(--muted);">${escapeHtml(s.projectPath)}</div>` : ''}
         </td>
         <td><span style="color:var(--muted);">${escapeHtml(s.sourceId)}</span></td>
-        <td><strong>${formatCompactTokens(s.totalTokens)}</strong></td>
-        <td style="color:var(--accent);">${formatMoney(s.costUsd)}</td>
+        <td><strong>${formatUsage(s)}</strong></td>
+        <td style="color:var(--accent);">${formatCost(s)}</td>
         <td>${s.messageCount}</td>
         <td style="color:var(--muted);">${escapeHtml(s.lastUsedAt)}</td>
       </tr>
@@ -475,8 +489,8 @@
         <td><code>${escapeHtml(m.model)}</code></td>
         <td>${formatCompactTokens(m.inputTokens)}</td>
         <td>${formatCompactTokens(m.outputTokens)}</td>
-        <td><strong>${formatCompactTokens(m.totalTokens)}</strong></td>
-        <td style="color:var(--accent);">${formatMoney(m.costUsd)}</td>
+        <td><strong>${formatUsage(m)}</strong></td>
+        <td style="color:var(--accent);">${formatCost(m)}</td>
       </tr>
     `).join('');
   }
@@ -494,8 +508,8 @@
       <tr>
         <td><strong>${escapeHtml(tr.date)}</strong></td>
         <td><span style="color:var(--muted);">${escapeHtml(tr.sourceId)}</span></td>
-        <td><strong>${formatCompactTokens(tr.totalTokens)}</strong></td>
-        <td style="color:var(--accent);">${formatMoney(tr.costUsd)}</td>
+        <td><strong>${formatUsage(tr)}</strong></td>
+        <td style="color:var(--accent);">${formatCost(tr)}</td>
         <td>${tr.sessionCount}</td>
       </tr>
     `).join('');

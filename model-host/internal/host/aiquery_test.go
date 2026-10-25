@@ -112,7 +112,7 @@ func TestAIQueryGetRoutesServeJSON(t *testing.T) {
 
 func TestAIQueryUnknownPathAndMethodRejected(t *testing.T) {
 	_, _, baseURL := newAIQueryTestHarness(t)
-	// 未知路径 404；CLIProxyAPI management 面（ADR-0020 禁止暴露）同样 404。
+	// 未知路径 404；任何模型代理／管理面（ADR-0044）同样不可达。
 	for _, route := range []string{
 		"/ai/unknown",
 		"/ai/usage/notaroute",

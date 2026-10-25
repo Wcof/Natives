@@ -14,8 +14,8 @@ package host
 //   - 响应严禁包含 access/refresh token、API key、凭据内容（R-S4：仅允许
 //     百分比、时间戳等派生值）——复用现有只读处理器天然满足，额度缓存另经
 //     结构体重建兜底，任何未知字段都不会进入响应；
-//   - 不暴露 CLIProxyAPI Management API、任意文件、进程、SQL 能力
-//     （ADR-0020 边界不变）。
+//   - 不暴露模型代理／管理 API、任意文件、进程、SQL 能力
+//     （ADR-0044 已退役代理业务，ADR-0020 只读边界不变）。
 //
 // 全服务唯一允许发起上游请求的路由是 POST /ai/quota/refresh（用户显式动作触发）。
 

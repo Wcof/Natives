@@ -245,9 +245,12 @@ pub fn list_items_filtered(
     let mut sql = String::from(
         "SELECT i.id, i.source_id, i.title, i.url, i.summary_text, i.content_text IS NOT NULL, \
          i.published_at, i.time_precision, i.completeness, i.event_type, i.importance, \
-         i.read_status, i.favorite, i.archived, i.content_version \
-         FROM information_items i",
+         i.read_status, i.favorite, i.archived, i.content_version",
     );
+    if !refs.is_empty() {
+        sql.push_str(", r.rel_rank");
+    }
+    sql.push_str(" FROM information_items i");
     // 归档条目不出现在默认列表（个人归档语义；归档视图后续按需扩展）。
     let mut where_started = false;
     if !refs.is_empty() {
@@ -322,6 +325,30 @@ pub fn list_items_filtered(
             sql.push_str("))");
         }
     }
+    // Collapse same-day repeats after scope/filter matching so paging counts
+    // visible stories. The same story arrives under several source rows with
+    // different summaries, so the key is source family + normalized title +
+    // market day, never personal state: marking one copy read must not
+    // resurrect the others. Rows keep their own flags; the canonical row
+    // prefers the strongest relation, then personal state, importance, a
+    // richer summary and recency. Official announcements stay a separate
+    // family from public news even when the headline matches.
+    let relation_order = if refs.is_empty() {
+        ""
+    } else {
+        "i.rel_rank IS NULL, i.rel_rank, "
+    };
+    sql = format!(
+        "WITH filtered AS ({sql}), ranked AS (SELECT *, ROW_NUMBER() OVER (\
+         PARTITION BY CASE WHEN i.published_at IS NOT NULL THEN \
+         (CASE WHEN i.source_id IN ('em_finance','em_stock_news') THEN 'news' \
+         WHEN i.source_id IN ('em_stock_ann','em_fund_ann') THEN 'announcement' \
+         ELSE i.source_id END)||char(31)||lower(trim(i.title))||char(31)||date(i.published_at,'+8 hours') \
+         ELSE 'row:'||i.id END \
+         ORDER BY {relation_order}i.favorite DESC, i.read_status DESC, i.importance DESC, \
+         length(trim(i.summary_text)) DESC, i.published_at DESC, i.id DESC) AS duplicate_rank \
+         FROM filtered i) SELECT * FROM ranked i WHERE duplicate_rank=1"
+    );
     if refs.is_empty() && filter.sort != "latest" {
         sql.push_str(" ORDER BY i.published_at IS NULL, date(i.published_at,'+8 hours') DESC, CASE WHEN i.importance>=2 THEN 0 WHEN i.source_id='em_finance' AND i.importance=1 THEN 1 WHEN i.source_id='em_finance' THEN 2 ELSE 3 END, i.published_at DESC, i.id DESC LIMIT ? OFFSET ?");
     } else if filter.sort == "latest" {
@@ -330,8 +357,8 @@ pub fn list_items_filtered(
         );
     } else {
         sql.push_str(
-            " ORDER BY CASE WHEN r.rel_rank = 0 AND i.importance >= 2 THEN 0 \
-             WHEN r.rel_rank = 0 THEN 1 WHEN r.rel_rank = 1 THEN 2 ELSE 3 END, \
+            " ORDER BY CASE WHEN i.rel_rank = 0 AND i.importance >= 2 THEN 0 \
+             WHEN i.rel_rank = 0 THEN 1 WHEN i.rel_rank = 1 THEN 2 ELSE 3 END, \
              i.published_at IS NULL, i.published_at DESC, i.id DESC LIMIT ? OFFSET ?",
         );
     }

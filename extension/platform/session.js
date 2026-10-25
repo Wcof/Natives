@@ -62,6 +62,7 @@ export async function initWebSession() {
               sessionStorage.setItem('natives_csrf', currentCsrfToken);
             }
             notifyPeerSessions();
+            if (typeof window !== 'undefined') window.dispatchEvent(new Event('natives-web-session-restored'));
             return { authenticated: true, csrfToken: currentCsrfToken };
           }
         } catch (e) {
@@ -95,31 +96,6 @@ export async function initWebSession() {
   const result = await sessionPromise;
   if (!result.authenticated && generation === sessionGeneration) sessionPromise = null;
   return result;
-}
-
-export async function exchangePairingCode(pairingCode) {
-  const base = getBaseEndpoint();
-  const res = await fetch(`${base}/web/session/exchange`, {
-    signal: AbortSignal.timeout(10_000),
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ pairingCode: pairingCode.trim() }),
-  });
-  if (!res.ok) {
-    const err = await res.json().catch(() => ({ error: 'ERR_PAIRING_FAILED' }));
-    throw new Error(err.error || '配对码验证失败');
-  }
-  const data = await res.json();
-  sessionGeneration++;
-  currentCsrfToken = data.csrfToken;
-  currentEpoch = data.epoch;
-  sessionPromise = Promise.resolve({ authenticated: true, csrfToken: currentCsrfToken });
-  if (typeof sessionStorage !== 'undefined' && currentCsrfToken) {
-    sessionStorage.setItem('natives_csrf', currentCsrfToken);
-  }
-  if (typeof window !== 'undefined') window.dispatchEvent(new Event('natives-web-session-restored'));
-  notifyPeerSessions();
-  return data;
 }
 
 export async function revokeWebSession() {

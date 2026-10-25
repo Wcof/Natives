@@ -100,7 +100,7 @@ func (e *Engine) getUsageEvents(raw json.RawMessage) (*usage.EventsResult, error
 	// 不让"未计价"与"合法零价"在 UI 中混淆（T0 契约修复）。
 	if e.usageCalculator != nil {
 		for i := range result.Events {
-			if e.usageCalculator.FindPrice(result.Events[i].Provider, result.Events[i].Model) != nil {
+			if result.Events[i].UsageStatus != "missing" && (result.Events[i].TotalTokens == 0 || result.Events[i].CostMicro > 0 || e.usageCalculator.FindPrice(result.Events[i].Provider, result.Events[i].Model) != nil) {
 				result.Events[i].CostStatus = "priced"
 			} else {
 				result.Events[i].CostStatus = "unpriced"

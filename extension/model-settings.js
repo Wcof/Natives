@@ -1,11 +1,8 @@
 import { createModelSettingsAPI } from './model-settings-api.js';
 import { createModelSettingsView, renderNewProvider } from './model-settings-view.js';
-import { handleAdvancedAction, handleAdvancedSubmit } from './model-advanced-controller.js';
 import { localizedModelError } from './model-settings-errors.js';
 import { handleUsageAction, handleUsageSubmit } from './model-usage-controller.js';
 import { userTimezone, acquireModelApi, releaseModelApi, sharedCall } from './ai-usage-client/index.js';
-import { handleAgentAction, loadAgentClients } from './model-agent-controller.js';
-import { openAccountModelsDialog } from './model-account-models-dialog.js';
 
 let instance;
 
@@ -13,7 +10,6 @@ export async function openModelSettings(options) {
   if (!instance) instance = new ModelSettings(options);
   instance.setLocale(options);
   if (options?.initialPage) instance.setInitialPage(options.initialPage);
-  // R7 钻取：携带来源卡片的筛选打开用量详情（同 range/来源/模型口径）。
   if (options?.initialUsageFilter) instance.setInitialUsageFilter(options.initialUsageFilter);
   await instance.open();
 }
@@ -24,23 +20,9 @@ class ModelSettings {
     this.language = language;
     this.returnFocus = returnFocus;
     this.snapshot = null;
-    this.selectedID = 'codex';
-    this.pendingOAuth = null;
-    this.oauthResults = {};
+    this.selectedID = '';
     this.appCenter = null;
     this.initialPage = null;
-
-    
-    this.agentStatuses = null;
-    this.agentSelectedId = '';
-    this.agentModels = null;
-    this.agentModelsError = '';
-    this.agentSelections = {};
-    this.agentBusy = false;
-    this.agentLoadError = '';
-    this.agentDetecting = false;
-    this.agentActiveTab = 'core';
-    this.agentSessions = [];
 
     this.usageFilter = { range: '4h', page: 1, limit: 20 };
     this.usageFilterOptions = null;
@@ -48,12 +30,12 @@ class ModelSettings {
     this.analyticsData = null;
     this.eventsData = null;
     this.pricingData = null;
+    this.billingData = null;
     this.importerWizard = null;
 
-    
     this.authFiles = [];
     this.quotaMap = {};
-    this.authFileFilter = { query: '', provider: 'all', status: 'all' };
+
     this.api = createModelSettingsAPI({
       onEvent: (event) => this.handleEvent(event),
       onDisconnect: (_error, intentional) => { if (!intentional && this.view?.dialog.open) this.showError(this.t('modelHostDisconnected', '模型 Host 已断开')); },
@@ -67,7 +49,6 @@ class ModelSettings {
     });
     this.view.dialog.addEventListener('submit', (event) => this.handleSubmit(event));
     this.view.dialog.addEventListener('model-provider-submit', (event) => this.saveProvider(event));
-    // 全局"默认大模型"选择器：空 detail = 取消默认。
     this.view.dialog.addEventListener('model-default-model-change', (event) => {
       const { providerId = '', modelId = '' } = event.detail || {};
       const revision = this.snapshot?.revision;
@@ -77,7 +58,6 @@ class ModelSettings {
   setLocale({ t, language, returnFocus }) { this.t = t; this.language = language; this.returnFocus = returnFocus; }
   setInitialPage(page) { this.initialPage = page; }
   setInitialUsageFilter(filter) {
-    // R7 钻取：只接受用量页已支持的字段；page 重置为第一页。
     if (!filter || typeof filter !== 'object') return;
     const allowed = ['range', 'startTime', 'endTime', 'model', 'provider', 'source', 'accessKeyId', 'result'];
     this.usageFilter = { range: '4h', page: 1, limit: 20, ...Object.fromEntries(allowed.filter((k) => filter[k] != null && filter[k] !== '').map((k) => [k, filter[k]])) };
@@ -99,8 +79,6 @@ class ModelSettings {
     try {
       const { createAppCenter } = await import('./apps.js');
       const appsList = this.view.dialog.querySelector('[data-role="appsList"]');
-      // mode/T06：设置页内嵌应用中心的设置打开器由本页自持（复用已打开的
-      // 设置实例聚焦），不回经 Shell/Broker 的动态导入链。
       this.appCenter = createAppCenter({
         list: appsList,
         language: this.language,
@@ -122,26 +100,16 @@ class ModelSettings {
         await this.ensureAppCenter();
         return;
       }
-      try {
-        this.snapshot = await this.api.snapshot();
-        if (['stopped', 'failed'].includes(this.snapshot.gateway.state)) {
-          this.snapshot = await this.api.startGateway({ expectedRevision: this.snapshot.revision });
-        }
-        if (!this.snapshot.providers.some((provider) => provider.id === this.selectedID)) this.selectedID = this.snapshot.providers[0]?.id;
-        if (this.view.activePage === 'usage') {
-          await this.loadUsageData();
-        } else if (this.view.activePage === 'oauth') {
-          await this.loadAuthFiles();
-        } else if (this.view.activePage === 'agent') {
-          await loadAgentClients(this, { force: true });
-        }
-        this.render();
-        if (this.snapshot.gateway.state === 'running') await this.api.syncAgentClientConfigs();
-      } catch (error) {
-        if (this.view.activePage !== 'apps') throw error;
+      this.snapshot = await this.api.snapshot();
+      if (!this.snapshot.providers.some((provider) => provider.id === this.selectedID)) this.selectedID = this.snapshot.providers[0]?.id || '';
+      if (this.view.activePage === 'usage') {
+        await this.loadUsageData();
+      } else if (this.view.activePage === 'quota') {
+        await this.loadAuthFiles();
       }
+      this.render();
     } catch (error) {
-      this.showError(error);
+      if (this.view.activePage !== 'apps') this.showError(error);
     } finally {
       this.view.setLoading(false);
     }
@@ -156,10 +124,6 @@ class ModelSettings {
   }
 
   async loadUsageData() {
-    // 用量读查询统一走 tokenusage 共享数据层（ADR-0028）：与 AI 效能卡片
-    // 共用同一 Native Port（引用计数）与 sharedCall 缓存（同参合并 +
-    // revision 失效），避免双端口双拉取。写操作（价格/导入）仍走本实例
-    // 的 this.api，写成功后由 controller 调 invalidateQueries 失效共享缓存。
     const usageApi = acquireModelApi();
     try {
       if (!this.usageFilterOptions) this.usageFilterOptions = await sharedCall(usageApi, 'getUsageAnalysis', { range: 'all' });
@@ -173,7 +137,6 @@ class ModelSettings {
         sources: this.usageFilter.source ? [this.usageFilter.source] : [],
         accessKeyIds: this.usageFilter.accessKeyId ? [this.usageFilter.accessKeyId] : [],
         result: this.usageFilter.result || undefined,
-        // 整改 E2 §4.2：数据与用量页与 Space 卡片使用同一用户时区口径。
         timezone: userTimezone(),
       };
       if (tab === 'overview') {
@@ -199,82 +162,29 @@ class ModelSettings {
   }
 
   render() {
-    if (this.snapshot) {
-      const agentState = {
-        agentStatuses: this.agentStatuses,
-        agentSelectedId: this.agentSelectedId,
-        agentModels: this.agentModels,
-        agentModelsError: this.agentModelsError,
-        agentSelections: this.agentSelections,
-        agentBusy: this.agentBusy,
-        agentActiveTab: this.agentActiveTab,
-        agentSessions: this.agentSessions,
-        agentLoadError: this.agentLoadError,
-        agentDetecting: this.agentDetecting,
-      };
-      this.view.render(
-        this.snapshot,
-        this.selectedID,
-        this.pendingOAuth,
-        {
-          overviewData: this.overviewData,
-          analyticsData: this.analyticsData,
-          eventsData: this.eventsData,
-          pricingData: this.pricingData,
-          billingData: this.billingData,
-          currentFilter: this.usageFilter,
-          filterOptions: this.usageFilterOptions,
-          ...agentState,
-        },
-        {
-          results: this.oauthResults,
-          authFiles: this.authFiles,
-          quotaMap: this.quotaMap,
-          authFileFilter: this.authFileFilter,
-          ...agentState,
-        },
-      );
-    }
+    if (!this.snapshot) return;
+    this.view.render(
+      this.snapshot,
+      this.selectedID,
+      {
+        overviewData: this.overviewData,
+        analyticsData: this.analyticsData,
+        eventsData: this.eventsData,
+        pricingData: this.pricingData,
+        billingData: this.billingData,
+        currentFilter: this.usageFilter,
+        filterOptions: this.usageFilterOptions,
+      },
+      {
+        authFiles: this.authFiles,
+        quotaMap: this.quotaMap,
+      },
+    );
   }
 
   showError(error) {
     if (!error) { this.view.showError(''); return; }
     this.view.showError(localizedModelError(error, this.t));
-  }
-
-  async pollKernelUpdate(target) {
-    const phaseText = (phase) => ({
-      queued: this.t('modelKernelPhaseQueued', '等待开始…'),
-      source: this.t('modelKernelPhaseSource', '正在同步上游源码…'),
-      patches: this.t('modelKernelPhasePatches', '正在应用本地补丁…'),
-      build: this.t('modelKernelPhaseBuild', '正在构建新内核（约 1 分钟）…'),
-      swap: this.t('modelKernelPhaseSwap', '正在换装内核…'),
-      restarting: this.t('modelKernelPhaseRestart', '正在重启内核…'),
-    })[phase] || this.t('modelKernelUpdating', '正在更新内核…');
-    // worker 换装后以退出码 75 请求桥接重建自己，轮询会短暂断连——按重试处理
-    for (let attempt = 0; attempt < 240; attempt += 1) {
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-      try {
-        const status = await this.api.updateKernelStatus();
-        const phase = status?.job?.phase || 'idle';
-        if (phase === 'done') return status.job;
-        if (phase === 'failed') return { ...status.job, message: localizedModelError({ code: status.job.errorCode || 'internal_error' }, this.t) };
-        if (phase === 'idle') {
-          // 新 worker 尚无任务记录：内核版本已等于目标版本即视为完成
-          if (target) {
-            const snap = await this.api.snapshot();
-            if (snap?.gateway?.kernelVersion === target) {
-              return { phase: 'done', message: this.t('modelKernelUpdated', '内核已成功更新') };
-            }
-          }
-          continue;
-        }
-        this.view.showToast(phaseText(phase));
-      } catch (err) {
-        // worker 重启间隙：忽略并继续轮询
-      }
-    }
-    return { phase: 'failed', message: this.t('modelKernelUpdateTimeout', '内核更新超时，请稍后重试') };
   }
 
   async mutate(work, { select } = {}) {
@@ -298,13 +208,7 @@ class ModelSettings {
   }
 
   async setResident(resident, expectedRevision) {
-    return this.mutate(async () => {
-      let snapshot = await this.api.setResident({ resident, expectedRevision });
-      if (resident && snapshot.gateway.state !== 'running') {
-        snapshot = await this.api.startGateway({ expectedRevision: snapshot.revision });
-      }
-      return snapshot;
-    });
+    return this.mutate(() => this.api.setResident({ resident, expectedRevision }));
   }
 
   async handleAction(action, target, event) {
@@ -330,10 +234,6 @@ class ModelSettings {
     if (action === 'select-model-page') {
       this.view.showError('');
       const page = target.dataset.page;
-      const kind = page === 'custom' ? 'custom' : page === 'oauth' ? 'oauth' : '';
-      if (kind && !this.snapshot?.providers?.some((provider) => provider.id === this.selectedID && provider.kind === kind)) {
-        this.selectedID = this.snapshot?.providers?.find((provider) => provider.kind === kind)?.id;
-      }
       this.view.setPage(page);
       if (page === 'apps') {
         await this.ensureAppCenter();
@@ -347,10 +247,10 @@ class ModelSettings {
           this.view.setLoading(false);
         }
       }
-      if (page === 'agent' && (!this.agentStatuses || !this.agentStatuses.length)) {
+      if (page === 'quota') {
         this.view.setLoading(true);
         try {
-          await loadAgentClients(this, { force: true });
+          await this.loadAuthFiles();
         } finally {
           this.view.setLoading(false);
         }
@@ -359,81 +259,10 @@ class ModelSettings {
       return;
     }
     if (action === 'select-provider') { this.selectedID = target.dataset.providerId; this.render(); return; }
-    if (action === 'new-provider') { renderNewProvider(this.view.dialog.querySelector('[data-role="detail"]'), this.t); return; }
+    if (action === 'new-provider') { renderNewProvider(this.view.dialog.querySelector('[data-role="detail"]'), this.t, this.snapshot); return; }
     if (action === 'cancel-new-provider') return this.render();
-    if (action === 'start-gateway') return this.mutate(() => this.api.startGateway({ expectedRevision: revision }));
-    if (action === 'stop-gateway') return this.mutate(() => this.api.stopGateway({ expectedRevision: revision }));
-    if (action === 'restart-gateway') return this.mutate(() => this.api.restartGateway({ expectedRevision: revision }));
-    if (action === 'refresh-gateway') {
-      this.view.setLoading(true);
-      try {
-        this.snapshot = await this.api.snapshot();
-        this.view.showNotice(this.t('modelStatusRefreshed', '状态已刷新'));
-      } catch (error) {
-        this.showError(error);
-      } finally {
-        this.view.setLoading(false);
-        this.render();
-      }
-      return;
-    }
-    if (action === 'check-kernel-update') {
-      this.view.showError('');
-      try {
-        const res = await this.api.checkKernelUpdate();
-        if (this.snapshot?.gateway) {
-          this.snapshot.gateway.latestKernelVersion = res?.latestVersion;
-        }
-        this.render();
-        this.view?.showToast?.(this.t('modelKernelCheckDone', '已检查内核最新版本'));
-      } catch (err) {
-        this.showError(err);
-      }
-      return;
-    }
-    if (action === 'update-kernel') {
-      this.view.showError('');
-      try {
-        const target = this.snapshot?.gateway?.latestKernelVersion || '';
-        const started = await this.api.updateKernel();
-        if (started?.status === 'up_to_date') {
-          this.view.showToast(this.t('modelKernelUpToDate', '已是最新'));
-          return;
-        }
-        const final = await this.pollKernelUpdate(target);
-        this.snapshot = await this.api.snapshot();
-        this.render();
-        if (final?.phase === 'done') {
-          this.view.showNotice(final.message || this.t('modelKernelUpdated', '内核已成功更新'));
-        } else {
-          this.showError(new Error(final?.message || this.t('modelKernelUpdateFailed', '内核更新失败')));
-        }
-      } catch (err) {
-        this.showError(err);
-      }
-      return;
-    }
     if (action === 'resident') return this.setResident(target.checked, revision);
-    if (action === 'copy-endpoint') {
-      if (await this.copyText(target.dataset.endpoint, this.t('modelEndpointUnavailable', '代理地址当前不可用'))) this.view.showToast(this.t('copied', '已复制'));
-      return;
-    }
-    if (action === 'reveal-key' || action === 'copy-first-key') return this.copyAccessKey();
-    if (action === 'rotate-key') return this.rotateAccessKey();
-    if (action === 'oauth-start') return this.pendingOAuth?.provider === target.dataset.provider ? this.cancelOAuth() : this.startOAuth(target.dataset.provider);
-    if (action === 'toggle-account') {
-      await this.mutate(() => this.api.setAccountEnabled({ accountId: target.dataset.accountId, enabled: target.dataset.enabled === 'true', expectedRevision: revision }));
-      await this.loadAuthFiles();
-      this.render();
-      return;
-    }
-    if (action === 'reauth-account') return this.startOAuth(target.dataset.provider, target.dataset.accountId);
-    if (action === 'delete-account') return this.confirmDelete(this.t('modelDeleteAccountConfirm', '确定删除这个 OAuth 账户吗？'), async () => {
-      const result = await this.api.deleteAccount({ accountId: target.dataset.accountId, expectedRevision: revision });
-      await this.loadAuthFiles();
-      return result;
-    });
-    if (action === 'delete-provider') return this.confirmDelete(this.t('modelDeleteProviderConfirm', '确定删除这个供应商及其模型吗？'), () => this.api.deleteProvider({ providerId: this.selectedID, expectedRevision: revision }), { select: (snapshot) => snapshot.providers[0]?.id });
+    if (action === 'delete-provider') return this.confirmDelete(this.t('modelDeleteProviderConfirm', '确定删除这个连接及其模型吗？'), () => this.api.deleteProvider({ providerId: this.selectedID, expectedRevision: revision }), { select: (snapshot) => snapshot.providers[0]?.id || '' });
     if (action === 'test-provider' || action === 'test-new-provider') return this.testProvider(target.closest('form'));
     if (action === 'refresh-models') return this.mutate(() => this.api.refreshModels({ providerId: this.selectedID, expectedRevision: revision }));
     if (action === 'toggle-model') return this.mutate(() => this.api.setModelEnabled({ providerId: this.selectedID, modelId: target.dataset.modelId, enabled: target.dataset.enabled === 'true', expectedRevision: revision }));
@@ -441,16 +270,7 @@ class ModelSettings {
     if (action === 'cancel-model-edit') return this.resetModelForm();
     if (action === 'delete-model') return this.mutate(() => this.api.deleteModel({ providerId: this.selectedID, modelId: target.dataset.modelId, expectedRevision: revision }));
 
-    
-    if (action === 'select-oauth-tab') {
-      this.view.setOAuthTab(target.dataset.tab);
-      if (target.dataset.tab === 'authFiles' || target.dataset.tab === 'quota') {
-        await this.loadAuthFiles();
-        this.render();
-      }
-      return;
-    }
-    if (action === 'auth-files-refresh' || action === 'quota-read-list') {
+    if (action === 'auth-files-refresh') {
       this.view.setLoading(true);
       await this.loadAuthFiles();
       this.view.setLoading(false);
@@ -483,29 +303,6 @@ class ModelSettings {
         await this.api.deleteAuthFile({ name });
         await this.loadAuthFiles();
         this.render();
-      });
-    }
-    if (action === 'auth-files-priority') {
-      const name = target.dataset.name;
-      const current = Number(target.dataset.priority) || 0;
-      this.promptInput(this.t('authFilePriorityPrompt', '请输入优先级（数字，越大越优先）：'), String(current), (value) => {
-        const priority = Number(value);
-        if (!Number.isInteger(priority)) {
-          this.showError(this.t('authFilePriorityInvalid', '优先级必须是整数'));
-          return;
-        }
-        this.api.updateAuthFile({ name, priority })
-          .then(() => this.loadAuthFiles())
-          .then(() => { this.render(); this.view.showToast(this.t('authFilePrioritySaved', '优先级已更新')); })
-          .catch((error) => this.showError(error));
-      });
-      return;
-    }
-    if (action === 'auth-files-models') {
-      return openAccountModelsDialog(this, {
-        accountId: target.dataset.accountId || '',
-        provider: target.dataset.provider || '',
-        name: target.dataset.name || '',
       });
     }
     if (action === 'auth-files-copy') {
@@ -550,11 +347,6 @@ class ModelSettings {
       this.render();
       return;
     }
-    if (action === 'auth-files-filter') {
-      this.authFileFilter = { ...this.authFileFilter, ...target };
-      this.render();
-      return;
-    }
     if (action === 'auth-files-import-file') {
       try {
         await this.api.importAuthFile(target);
@@ -567,9 +359,7 @@ class ModelSettings {
       return;
     }
 
-	if (await handleUsageAction(this, action, target)) return;
-	if (await handleAgentAction(this, action, target)) return;
-	await handleAdvancedAction(this, action, target, revision);
+    if (await handleUsageAction(this, action, target)) return;
   }
 
   async handleSubmit(event) {
@@ -579,15 +369,10 @@ class ModelSettings {
       await handleUsageSubmit(this, form);
       return;
     }
-    if (['basic-settings-form', 'network-settings-form', 'kernel-settings-form'].includes(form.dataset.role)) {
-      event.preventDefault();
-      await handleAdvancedSubmit(this, form);
-      return;
-    }
     if (form.matches('[data-new-provider]')) {
       event.preventDefault();
       const data = Object.fromEntries(new FormData(form));
-      await this.mutate(() => this.api.createProvider({ ...data, enabled: form.elements.enabled.checked, allowLan: form.elements.allowLan.checked, expectedRevision: this.snapshot.revision }), { select: (snapshot) => snapshot.providers.at(-1)?.id });
+      await this.mutate(() => this.api.createProvider({ ...data, setAsDefault: form.elements.setAsDefault.checked, enabled: form.elements.enabled.checked, allowLan: form.elements.allowLan.checked, expectedRevision: this.snapshot.revision }), { select: (snapshot) => snapshot.providers.at(-1)?.id });
       return;
     }
     if (form.matches('[data-model-form]')) {
@@ -605,26 +390,6 @@ class ModelSettings {
     await this.mutate(() => this.api.updateProvider({ ...data, providerId: form.dataset.providerId, enabled: form.elements.enabled.checked, allowLan: form.elements.allowLan.checked, expectedRevision: this.snapshot.revision }));
   }
 
-  async startOAuth(provider, accountId = '') {
-    this.view.showError('');
-    try {
-      const result = accountId
-        ? await this.api.reauthAccount({ provider, accountId, expectedRevision: this.snapshot.revision })
-        : await this.api.startOAuth({ provider, expectedRevision: this.snapshot.revision });
-      if (!result?.sessionId) return;
-      this.oauthResults[provider] = 'pending';
-      this.pendingOAuth = result;
-      this.render();
-    } catch (error) {
-      this.showError(error);
-    }
-  }
-
-  async cancelOAuth() {
-    if (!this.pendingOAuth) return;
-    await this.api.cancelOAuth({ sessionId: this.pendingOAuth.sessionId, expectedRevision: this.snapshot.revision }).catch((error) => this.showError(error));
-  }
-
   handleEvent(message) {
     if (message?.type === 'model_changed' || (message?.type === 'resync' && message.reason !== 'unavailable')) {
       if (this.recoveringEvents) return;
@@ -632,27 +397,16 @@ class ModelSettings {
         this.view.showNotice(this.t('sharedPreferencesReviewLatest'));
         return;
       }
-      this.recoveringEvents=(async()=>{
-        const [snapshot,events]=await Promise.all([this.api.snapshot(),this.api.surfaceEvents()]);
-        this.snapshot=snapshot;
-        for (const event of events.events || []) this.handleEvent(event);
-        if (this.view.activePage==='usage') await this.loadUsageData();
-        if (this.view.activePage==='oauth') await this.loadAuthFiles();
+      this.recoveringEvents = (async () => {
+        const snapshot = await this.api.snapshot();
+        this.snapshot = snapshot;
+        if (this.view.activePage === 'usage') await this.loadUsageData();
+        if (this.view.activePage === 'quota') await this.loadAuthFiles();
         this.render();
-      })().catch(error=>this.showError(error)).finally(()=>{this.recoveringEvents=null;});
+      })().catch((error) => this.showError(error)).finally(() => { this.recoveringEvents = null; });
       return;
     }
-    if (message?.event === 'model_gateway_state_changed' && message.result?.snapshot) {
-      this.snapshot = message.result.snapshot;
-      this.render();
-      return;
-    }
-    if (message?.event === 'model_account_state_changed' && message.result?.snapshot) {
-      this.snapshot = message.result.snapshot;
-      this.render();
-      return;
-    }
-    if (message?.event === 'model_catalog_changed' && message.result?.snapshot) {
+    if (message?.event === 'model_host_state_changed' && message.result?.snapshot) {
       this.snapshot = message.result.snapshot;
       this.render();
       return;
@@ -663,31 +417,6 @@ class ModelSettings {
       }
       return;
     }
-    if (message?.event !== 'model_oauth_state_changed') return;
-    const result = message.result;
-    if (!result || result.sessionId !== this.pendingOAuth?.sessionId) return;
-    if (result.snapshot) this.snapshot = result.snapshot;
-    this.oauthResults[result.provider || this.pendingOAuth.provider] = result.state;
-    if (result.state === 'succeeded') {
-      this.view.showNotice(this.t('modelLoginSucceeded', '已登录'));
-      this.loadAuthFiles().then(() => this.render());
-    }
-    if (result.state !== 'pending') this.pendingOAuth = null;
-    if (result.state === 'failed') this.showError(this.t('modelAuthorizationFailed', 'OAuth 授权失败，请重试。'));
-    if (result.state === 'timeout') this.showError(this.t('modelAuthorizationTimeout', 'OAuth 授权已超时，请重新开始。'));
-    this.render();
-  }
-
-  async copyAccessKey() {
-    try {
-      const result = await this.api.revealAccessKey();
-      if (await this.copyText(result.accessKey, this.t('modelAccessKeyUnavailable', '尚未生成访问密钥'))) this.view.showToast(this.t('copied', '已复制'));
-    } catch (error) { this.showError(error); }
-  }
-
-  async rotateAccessKey() {
-    const result = await this.mutate(() => this.api.rotateAccessKey({ expectedRevision: this.snapshot.revision }));
-    if (result?.accessKey && await this.copyText(result.accessKey)) this.view.showToast(this.t('modelKeyRotatedAndCopied', '密钥已重置并复制到剪贴板'));
   }
 
   async testProvider(form) {
@@ -707,7 +436,6 @@ class ModelSettings {
     form.elements.id.value = model.id;
     form.elements.id.readOnly = true;
     form.elements.displayName.value = model.displayName || '';
-    form.elements.alias.value = model.alias || '';
     form.elements.contextLength.value = model.contextLength || '';
     form.querySelector('[data-role="model-submit"]').textContent = this.t('save', '保存');
     form.querySelector('[data-action="cancel-model-edit"]').hidden = false;
@@ -725,12 +453,6 @@ class ModelSettings {
     form.elements.id.focus();
   }
 
-  async copyText(value, unavailable = '') {
-    if (!value) { this.showError(unavailable); return false; }
-    try { await navigator.clipboard.writeText(value); return true; }
-    catch { this.showError(this.t('copyFailed', '复制失败')); return false; }
-  }
-
   confirmDelete(message, work, options) {
     const dialog = document.createElement('dialog');
     dialog.className = 'model-confirm-dialog';
@@ -742,28 +464,5 @@ class ModelSettings {
     actions.append(cancel, submit); form.append(text, actions); dialog.append(form); document.body.append(dialog);
     dialog.addEventListener('close', () => { if (dialog.returnValue === 'default') this.mutate(work, options); dialog.remove(); }, { once: true });
     dialog.showModal();
-  }
-
-  promptInput(message, initialValue, onConfirm, datalistHtml = '') {
-    const dialog = document.createElement('dialog');
-    dialog.className = 'model-confirm-dialog';
-    const form = document.createElement('form'); form.method = 'dialog';
-    const text = document.createElement('p'); text.textContent = message;
-    const input = document.createElement('input'); input.type = 'text'; input.value = initialValue || '';
-    input.style.cssText = 'width:100%;min-height:36px;padding:6px 12px;margin:10px 0 16px;border:1px solid var(--border);border-radius:6px;background:var(--surface-2);box-sizing:border-box;color:var(--text);font-size:13px;';
-    if (datalistHtml) {
-      input.setAttribute('list', 'prompt-input-datalist');
-      input.insertAdjacentHTML('afterend', `<datalist id="prompt-input-datalist">${datalistHtml}</datalist>`);
-    }
-    const actions = document.createElement('div'); actions.className = 'modal-actions';
-    const cancel = document.createElement('button'); cancel.value = 'cancel'; cancel.textContent = this.t('cancel', '取消');
-    const submit = document.createElement('button'); submit.value = 'default'; submit.className = 'primary'; submit.textContent = this.t('save', '保存');
-    actions.append(cancel, submit); form.append(text, input, actions); dialog.append(form); document.body.append(dialog);
-    dialog.addEventListener('close', () => {
-      if (dialog.returnValue === 'default' && input.value.trim()) onConfirm(input.value.trim());
-      dialog.remove();
-    }, { once: true });
-    dialog.showModal();
-    input.focus(); input.select();
   }
 }

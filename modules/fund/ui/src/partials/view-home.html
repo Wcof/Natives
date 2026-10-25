@@ -52,35 +52,112 @@
 
 
 
-          <!-- 区2：左侧资产分布、右侧组合设置（方案 P03 双栏） -->
-          <div class="grid2 section-space home-allocation-grid">
-            <section class="card home-distribution-card" aria-labelledby="home-distribution-title">
-              <div class="between cardhead home-card-title-row">
+            <section class="home-card home-history home-insights home-performance-card" aria-labelledby="home-insights-title">
+              <header class="home-card-title-row cardhead home-insights-head">
                 <div>
-                  <h2 id="home-distribution-title" class="home-card-title"><span data-i18n="fundHomeDistributionTitle">资产分布</span></h2>
-                  <small class="muted" data-i18n="fundHomeDistributionSubtitle">组合分类 · 实际金额与占比</small>
+                  <h2 id="home-insights-title" class="home-card-title home-performance-title" data-i18n="fundHomePerformanceHeading"></h2>
+                  <p class="muted" data-i18n="fundHomeInsightsSubtitle"></p>
                 </div>
-                <button class="btn btn-sm" id="home-group-manage"><span data-i18n="fundHomeGroupAdjust">管理分类</span></button>
+              </header>
+
+              <div class="home-income-grid">
+                <article class="home-income-card" id="home-stock-income" aria-labelledby="home-stock-income-title"><h3 id="home-stock-income-title" data-i18n="fundHomeStockIncome"></h3><div data-income-body></div></article>
+                <article class="home-income-card" id="home-fund-income" aria-labelledby="home-fund-income-title"><h3 id="home-fund-income-title" data-i18n="fundHomeFundIncome"></h3><div data-income-body></div></article>
+                <article class="home-income-card" id="home-offline-income" aria-labelledby="home-offline-income-title"><h3 id="home-offline-income-title" data-i18n="fundHomeOfflineIncome"></h3><div data-income-body></div></article>
+                <article class="home-income-card" id="home-all-income" aria-labelledby="home-all-income-title"><h3 id="home-all-income-title" data-i18n="fundHomeAllIncome"></h3><span class="hc-label" data-i18n="fundHomeOverviewDaily"></span><div class="hc-value num" id="home-all-daily-value">–</div><div class="hc-sub" id="home-all-daily-note"></div><dl class="home-income-metrics"><div><dt data-i18n="fundHomeRangeReturn"></dt><dd class="num" id="home-all-period-value">–</dd></div><div><dt data-i18n="fundHomeOverviewTwr"></dt><dd class="num" id="home-twr-value">–</dd></div><div><dt data-i18n="fundHomeOverviewPosition"></dt><dd class="num" id="home-position-value">–</dd></div></dl></article>
+                <p class="hc-sub" id="home-returns-scope"></p>
               </div>
-              <div id="home-distribution-body" tabindex="0" role="region" aria-labelledby="home-distribution-title"></div>
-              <div id="home-group-body" style="display:none"></div>
-              <div class="divider"></div>
-              <div class="between">
-                <small class="muted" data-i18n="fundHomeDistributionNote">按明确选择的资产归类，每项只计入一次</small>
+
+              <div class="home-market">
+                <div class="home-market-head">
+                  <strong data-i18n="fundHomeMarket"></strong>
+                  <span class="home-market-time" id="home-market-time"></span>
+                </div>
+                <div class="home-market-tabs" id="home-market-tabs" role="group" data-i18n-aria-label="fundHomeMarketGroups"></div>
+                <div id="home-market-body"></div>
               </div>
+
+              <div class="home-ledger-extra"><div class="home-ledger-cell" id="hc-cumulative">
+                <div class="hc-label" data-i18n="fundHomeCumulativeReturn"></div>
+                <div class="hc-value num" id="home-cumulative-value">–</div>
+                <div class="hc-sub" id="home-cumulative-note"></div>
+                <div class="hc-sub" data-i18n="fundHomeCumulativeScope"></div>
+              </div><div class="home-ledger-cell" id="hc-invested">
+                <div class="hc-label"><span data-i18n="fundHomeInvestedMarketValue">已投资市值</span></div>
+                <div class="hc-value num" id="hc-invested-value">–</div>
+                <div class="hc-sub" id="hc-invested-sub"><span data-i18n="fundHomeCurrentNoncashAssetValue">非现金资产当前价值</span></div>
+                <button class="hc-detail" data-detail="invested"><span data-i18n="fundHomeDetails">详情</span></button>
+              </div></div>
+
+              <div class="home-trend-head">
+                <div class="home-trend-title-stack">
+                  <h3 class="home-card-title home-trend-title" data-i18n="fundHomeHistoryTitle"></h3>
+                  <p class="home-trend-sub" data-i18n="fundHomeHistorySubtitle"></p>
+                </div>
+                <div class="home-period-summary" id="hc-return">
+                  <span class="hc-range-tabs" role="group" aria-label="收益区间" data-i18n-aria-label="fundHomeReturnRange">
+                    <button class="hc-range" data-range="today"><span data-i18n="fundHomeToday">Today</span></button>
+                    <button class="hc-range active" data-range="month"><span data-i18n="fundHomeThisMonth">本月</span></button>
+                    <button class="hc-range" data-range="year"><span data-i18n="fundHomeThisYear">今年</span></button>
+                    <button class="hc-range" data-range="all"><span data-i18n="fundHomeSinceTrackingBegan">跟踪以来</span></button>
+                    <button class="hc-range" data-range="custom" aria-controls="home-custom-range"><span data-i18n="fundHomeCustom">自定义</span></button>
+                  </span>
+                  <div id="home-selected-range" class="home-selected-range"></div>
+                  <div id="home-custom-range" class="home-range-popover" popover="auto" role="dialog" data-i18n-aria-label="fundHomeCustom"></div>
+                  <div id="home-range-status" class="home-range-status" role="status" aria-live="polite"></div>
+                </div>
+              </div>
+
+              <div id="home-history-series" class="home-history-series" role="group" data-i18n-aria-label="fundHomeHistorySeries"></div>
+              <div class="home-chart-total">
+                <span class="home-chart-total-label" data-i18n="fundHomePeriodNetReturn"></span>
+                <div class="home-chart-total-row">
+                  <strong class="hc-value num" id="hc-return-value">–</strong>
+                  <span class="home-chart-total-pct" id="home-chart-twr"></span>
+                  <small class="home-history-selection" id="home-history-selection"></small>
+                </div>
+                <div class="hc-sub" id="hc-return-sub"><span data-i18n="fundHomeTodaySReturnIsNotShownWithout">未经完整核验不显示今日收益</span></div>
+                <button class="hc-detail" data-detail="return"><span data-i18n="fundHomeDetails">详情</span></button>
+              </div>
+              <p class="evidence-hint" id="home-history-status"></p>
+              <div id="home-history-chart" class="home-history-chart"></div>
+              <div id="home-history-categories" class="home-history-categories"></div>
+              <p class="evidence-hint" id="home-benchmark-status"></p>
+              <div id="home-benchmark-chart" class="home-history-chart"></div>
+              <div id="home-attribution-body"></div>
             </section>
 
-            <section class="card home-combination-card" aria-labelledby="home-combination-title">
-              <div class="between cardhead home-card-title-row">
-                <div>
-                  <h2 id="home-combination-title" class="home-card-title" data-i18n="fundHomeCombinationTitle">组合设置</h2>
-                  <small class="muted" data-i18n="fundHomeCombinationSubtitle">右侧看目标，与左侧实际分布逐项对照</small>
-                </div>
-                <button class="btn btn-sm" id="home-combination-manage" data-i18n="fundHomeCombinationEdit">编辑比例</button>
+          <section class="card section-space home-allocation-card" aria-labelledby="home-allocation-title">
+            <div class="home-card-title-row home-allocation-head">
+              <div>
+                <span class="home-allocation-eyebrow" data-i18n="fundHomeAllocationEyebrow"></span>
+                <h2 id="home-allocation-title" class="home-card-title" data-i18n="fundHomeAllocationTitle"></h2>
+                <p class="muted" data-i18n="fundHomeAllocationSubtitle"></p>
               </div>
-              <div id="home-combination-body" tabindex="0" role="region" aria-labelledby="home-combination-title"></div>
-            </section>
-          </div>
+              <div class="home-evidence-actions">
+                <button class="btn btn-sm" id="home-group-manage" data-i18n="fundHomeGroupAdjust"></button>
+                <button class="btn btn-sm btn-accent" id="home-combination-manage" data-i18n="fundHomeCombinationEdit"></button>
+              </div>
+            </div>
+            <dl class="home-allocation-summary">
+              <div><dt data-i18n="fundHomeAllocationTotal"></dt><dd id="home-allocation-total" class="num">–</dd><small id="home-allocation-total-note"></small></div>
+              <div><dt data-i18n="fundHomeAllocationTargetTotal"></dt><dd id="home-allocation-target" class="num">–</dd><small id="home-allocation-target-note"></small></div>
+              <div><dt data-i18n="fundHomeAllocationUnassigned"></dt><dd id="home-allocation-unassigned" class="num">–</dd><small id="home-allocation-unassigned-note"></small></div>
+            </dl>
+            <div class="home-allocation-grid">
+              <section class="home-allocation-column" aria-labelledby="home-distribution-title">
+                <div class="home-allocation-section-head"><h3 id="home-distribution-title" data-i18n="fundHomeAllocationActual"></h3><small data-i18n="fundHomeAllocationValuation"></small></div>
+                <div id="home-distribution-body" tabindex="0" role="region" aria-labelledby="home-distribution-title"></div>
+                <div id="home-group-body" hidden></div>
+              </section>
+              <section class="home-allocation-column" aria-labelledby="home-combination-title">
+                <div class="home-allocation-section-head"><h3 id="home-combination-title" data-i18n="fundHomeAllocationTarget"></h3><small data-i18n="fundHomeAllocationDeviation"></small></div>
+                <div id="home-combination-body" tabindex="0" role="region" aria-labelledby="home-combination-title"></div>
+                <p class="home-allocation-note" data-i18n="fundHomeAllocationNote"></p>
+              </section>
+            </div>
+            <footer class="home-allocation-footer"><small class="muted" data-i18n="fundHomeDistributionNote"></small><button class="btn btn-sm" id="home-allocation-detail" data-i18n="fundHomeAllocationDetail"></button></footer>
+          </section>
 <div class="home-decision-grid section-space">
             <!-- 左侧：资讯 -->
             <section class="card home-news-panel" aria-labelledby="home-news-title">
@@ -115,71 +192,7 @@
           </div>
 
 
-            <h2 class="home-performance-title" data-i18n="fundHomePerformanceHeading"></h2>
-<div class="home-income-grid">
-              <article class="home-card home-income-card" id="home-stock-income" aria-labelledby="home-stock-income-title"><h3 id="home-stock-income-title" data-i18n="fundHomeStockIncome"></h3><div data-income-body></div></article>
-              <article class="home-card home-income-card" id="home-fund-income" aria-labelledby="home-fund-income-title"><h3 id="home-fund-income-title" data-i18n="fundHomeFundIncome"></h3><div data-income-body></div></article>
-              <article class="home-card home-income-card" id="home-offline-income" aria-labelledby="home-offline-income-title"><h3 id="home-offline-income-title" data-i18n="fundHomeOfflineIncome"></h3><div data-income-body></div></article>
-              <article class="home-card home-income-card" id="home-all-income" aria-labelledby="home-all-income-title"><h3 id="home-all-income-title" data-i18n="fundHomeAllIncome"></h3><span class="hc-label" data-i18n="fundHomeOverviewDaily"></span><div class="hc-value num" id="home-all-daily-value">–</div><div class="hc-sub" id="home-all-daily-note"></div><dl class="home-income-metrics"><div><dt data-i18n="fundHomeRangeReturn"></dt><dd class="num" id="home-all-period-value">–</dd></div><div><dt data-i18n="fundHomeOverviewTwr"></dt><dd class="num" id="home-twr-value">–</dd></div><div><dt data-i18n="fundHomeOverviewPosition"></dt><dd class="num" id="home-position-value">–</dd></div></dl></article>
-              <p class="hc-sub" id="home-returns-scope"></p>
-            </div>
-
-            <details class="home-card home-history"><summary data-i18n="fundHomeHistoryDisclosure"></summary>
-              <div class="home-ledger-extra"><div class="home-ledger-cell" id="hc-cumulative">
-                <div class="hc-label" data-i18n="fundHomeCumulativeReturn"></div>
-                <div class="hc-value num" id="home-cumulative-value">–</div>
-                <div class="hc-sub" id="home-cumulative-note"></div>
-                <div class="hc-sub" data-i18n="fundHomeCumulativeScope"></div>
-              </div><div class="home-ledger-cell" id="hc-invested">
-                <div class="hc-label"><span data-i18n="fundHomeInvestedMarketValue">已投资市值</span></div>
-                <div class="hc-value num" id="hc-invested-value">–</div>
-                <div class="hc-sub" id="hc-invested-sub"><span data-i18n="fundHomeCurrentNoncashAssetValue">非现金资产当前价值</span></div>
-                <button class="hc-detail" data-detail="invested"><span data-i18n="fundHomeDetails">详情</span></button>
-              </div></div><h3 class="home-card-title" data-i18n="fundHomeOverviewHistory"></h3>
-              <div class="home-period-summary" id="hc-return">
-                <div class="hc-label-row">
-                  <span class="hc-label"><span data-i18n="fundHomePeriodNetReturn">期间净收益</span></span>
-                  <span class="hc-range-tabs" role="group" aria-label="收益区间" data-i18n-aria-label="fundHomeReturnRange">
-                    <button class="hc-range" data-range="today"><span data-i18n="fundHomeToday">Today</span></button>
-                    <button class="hc-range active" data-range="month"><span data-i18n="fundHomeThisMonth">本月</span></button>
-                    <button class="hc-range" data-range="year"><span data-i18n="fundHomeThisYear">今年</span></button>
-                    <button class="hc-range" data-range="all"><span data-i18n="fundHomeSinceTrackingBegan">跟踪以来</span></button>
-                    <button class="hc-range" data-range="custom" aria-controls="home-custom-range"><span data-i18n="fundHomeCustom">自定义</span></button>
-                  </span>
-                </div>
-                <div id="home-selected-range" class="home-selected-range"></div>
-                <div id="home-custom-range" class="home-range-popover" popover="auto" role="dialog" data-i18n-aria-label="fundHomeCustom"></div>
-                <div id="home-range-status" class="home-range-status" role="status" aria-live="polite"></div>
-                <div class="hc-value num" id="hc-return-value">–</div>
-                <div class="hc-sub" id="hc-return-sub"><span data-i18n="fundHomeTodaySReturnIsNotShownWithout">未经完整核验不显示今日收益</span></div>
-                <button class="hc-detail" data-detail="return"><span data-i18n="fundHomeDetails">详情</span></button>
-              </div>
-
-              <p class="evidence-hint" id="home-history-status"></p>
-              <div id="home-history-chart" class="home-history-chart"></div>
-              <p class="evidence-hint" id="home-benchmark-status"></p>
-              <div id="home-benchmark-chart" class="home-history-chart"></div>
-              <div id="home-attribution-body"></div>
-              <div id="home-history-points"></div>
-            </details>
-              <!-- F05 市场概览 -->
-
-
-          </section>
-          <section class="home-opportunities-region" aria-labelledby="home-opportunities-title">
-            <details class="home-card home-extra-research"><summary><h2 id="home-opportunities-title" data-i18n="fundHomeOverviewOpportunities"></h2></summary><div class="home-card home-market">
-                <div class="home-card-title-row">
-                  <span class="home-card-title"><span data-i18n="fundHomeRelatedMarkets">与我相关的市场</span></span>
-                  <span class="home-market-time" id="home-market-time"></span>
-                </div>
-                <div id="home-market-body"></div>
-              </div>
-            <div class="home-card"><div id="home-opportunity-body"></div></div>
-          <!-- 首页资讯与 AI 原地决策两栏等高（方案 P11/P12） -->
-
-
-
-          <div class="home-mid-grid" style="display:grid;grid-template-columns:1fr;gap:12px">
+            <div class="home-mid-grid" style="display:grid;grid-template-columns:1fr;gap:12px">
               <div class="home-card" style="padding:14px 18px">
                 <div class="home-card-title-row" style="margin-bottom:6px">
                   <h3 class="home-card-title" data-i18n="fundHomeOverviewToday"></h3>
@@ -193,26 +206,14 @@
                 <div id="home-concentration-list"></div>
                 <button class="btn home-health-open" id="home-health-open" style="display:none"></button>
               </div>
-            </div></details></section>
-          <!-- 详情展开区（摘要四卡共用） -->
+            </div>
           <div class="home-detail-panel" id="home-detail-panel" style="display:none">
             <div id="home-detail-body"></div>
           </div>
 
 
 
-<details class="home-more-details" id="home-finance-details">
-            <summary><span data-i18n="fundHomeOverviewFinanceTools"></span></summary>
-              <!-- F03 旧五类配置（方案 11 §4：历史口径保留，明确标识） -->
-              <div class="home-card home-allocation">
-                <div class="home-card-title-row">
-                  <span class="home-card-title"><span data-i18n="fundHomeAllocationAndInvestmentPlan">配置与建仓计划</span></span>
-                  <button class="btn" id="home-simulate"><span data-i18n="fundHomeSimulateAmounts">金额模拟</span></button>
-                  <button class="btn" id="home-allocation-manage"><span data-i18n="fundHomeEditAllocation">编辑配置</span></button>
-                </div>
-                <div id="home-allocation-body"></div>
-              </div>
-          </details>
+
         </div>
       </section>
 

@@ -27,6 +27,8 @@ type providerInput struct {
 	APIKey           string          `json:"apiKey"`
 	Enabled          *bool           `json:"enabled"`
 	AllowLAN         bool            `json:"allowLan"`
+	ModelID          string          `json:"modelId,omitempty"`
+	SetAsDefault     bool            `json:"setAsDefault,omitempty"`
 }
 
 func parseProvider(raw json.RawMessage) (providerInput, error) {
@@ -62,6 +64,10 @@ func (e *Engine) createProvider(raw json.RawMessage) (domain.Snapshot, error) {
 	if err = validateBaseURL(input.BaseURL, input.AllowLAN); err != nil {
 		return domain.Snapshot{}, err
 	}
+	modelID := strings.TrimSpace(input.ModelID)
+	if len(modelID) > 200 || (input.ModelID != "" && modelID == "") || (input.SetAsDefault && (modelID == "" || (input.Enabled != nil && !*input.Enabled))) {
+		return domain.Snapshot{}, invalid("默认模型须填写有效模型 ID 并启用连接")
+	}
 	id, err := randomID("provider_")
 	if err != nil {
 		return domain.Snapshot{}, err
@@ -86,12 +92,19 @@ func (e *Engine) createProvider(raw json.RawMessage) (domain.Snapshot, error) {
 		if customCount >= maxCustomProviders {
 			return invalid("自定义供应商数量已达到上限")
 		}
+		models := []domain.Model{}
+		if modelID != "" {
+			models = append(models, domain.Model{ID: modelID, DisplayName: modelID, Enabled: true, Manual: true})
+		}
 		snapshot.Providers = append(snapshot.Providers, domain.Provider{
 			ID: id, Kind: "custom", Name: input.Name, BaseURL: input.BaseURL,
 			Protocol: input.Protocol, Enabled: enabled, AllowLAN: input.AllowLAN,
-			SecretRef: secretRef, CredentialMask: maskSecret(input.APIKey), Models: []domain.Model{},
+			SecretRef: secretRef, CredentialMask: maskSecret(input.APIKey), Models: models,
 			UpdatedAt: time.Now().UTC().Format(time.RFC3339Nano),
 		})
+		if input.SetAsDefault {
+			snapshot.DefaultModel = domain.DefaultModelRef{ProviderID: id, ModelID: modelID}
+		}
 		return nil
 	})
 	if err != nil && strings.TrimSpace(input.APIKey) != "" {
@@ -149,7 +162,7 @@ func (e *Engine) updateProvider(raw json.RawMessage) (domain.Snapshot, error) {
 			return findErr
 		}
 		if provider.Kind != "custom" {
-			return invalid("OAuth 供应商不能按自定义供应商编辑")
+			return invalid("仅 API Key 连接可编辑")
 		}
 		if newKey != "" {
 			provider.CredentialMask = maskSecret(input.APIKey)
@@ -197,7 +210,7 @@ func (e *Engine) deleteProvider(raw json.RawMessage) (domain.Snapshot, error) {
 		return domain.Snapshot{}, err
 	}
 	if provider.Kind != "custom" {
-		return domain.Snapshot{}, invalid("内置 OAuth 供应商不能删除")
+		return domain.Snapshot{}, invalid("仅 API Key 连接可删除")
 	}
 	secretRef := provider.SecretRef
 	oldKey, oldKeyErr := e.secrets.Get(secretRef)
@@ -213,7 +226,7 @@ func (e *Engine) deleteProvider(raw json.RawMessage) (domain.Snapshot, error) {
 			return findErr
 		}
 		if provider.Kind != "custom" {
-			return invalid("内置 OAuth 供应商不能删除")
+			return invalid("仅 API Key 连接可删除")
 		}
 		snapshot.Providers = slices.DeleteFunc(snapshot.Providers, func(value domain.Provider) bool { return value.ID == input.ProviderID })
 		// 供应商被删时清掉指向它的默认模型引用。
@@ -263,8 +276,7 @@ func (e *Engine) upsertModel(raw json.RawMessage) (domain.Snapshot, error) {
 	}
 	input.Model.ID = strings.TrimSpace(input.Model.ID)
 	input.Model.DisplayName = strings.TrimSpace(input.Model.DisplayName)
-	input.Model.Alias = strings.TrimSpace(input.Model.Alias)
-	if len(input.Model.ID) > 200 || len(input.Model.DisplayName) > 200 || len(input.Model.Alias) > 200 || input.Model.ContextLength < 0 || input.Model.ContextLength > 100_000_000 {
+	if len(input.Model.ID) > 200 || len(input.Model.DisplayName) > 200 || input.Model.ContextLength < 0 || input.Model.ContextLength > 100_000_000 {
 		return domain.Snapshot{}, invalid("模型字段超过允许范围")
 	}
 	if input.Model.DisplayName == "" {
@@ -365,9 +377,6 @@ func (e *Engine) setDefaultModel(raw json.RawMessage) (domain.Snapshot, error) {
 		provider, err := findProvider(snapshot, input.ProviderID)
 		if err != nil {
 			return err
-		}
-		if provider.Kind != "custom" {
-			return invalid("只能选择自定义供应商下的模型")
 		}
 		model := slices.IndexFunc(provider.Models, func(m domain.Model) bool { return m.ID == input.ModelID })
 		if model < 0 {

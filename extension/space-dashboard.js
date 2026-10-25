@@ -157,7 +157,7 @@ export function createSpaceDashboard({
         const blurPx = Number(bgDisplay.blur) || 0;
         const bright = bgDisplay.brightness ?? (isNight ? 0.6 : 1);
         bgLayerEl.style.filter = (blurPx > 0 || bright !== 1) ? `blur(${blurPx}px) brightness(${bright})` : 'none';
-        const maybeBgDisposer = bgPlugin.render(bgLayerEl, bgDisplay, { t, lang: selectedLanguage });
+        const maybeBgDisposer = bgPlugin.render(bgLayerEl, bgDisplay, { t, lang: selectedLanguage, nativeCall });
         if (typeof maybeBgDisposer === 'function') {
           currentBgDisposer = maybeBgDisposer;
         } else if (typeof bgPlugin.dispose === 'function') {

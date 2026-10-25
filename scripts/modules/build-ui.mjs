@@ -41,6 +41,15 @@ function computeTreeHash(dir) {
 
 console.log('Building module UI assets...');
 writeFileSync(join(ROOT, 'modules/fund/ui/src/home-i18n.js'), fundLocalesSource(ROOT));
+const connectionKeys = ['webConnectionRequiredTitle', 'webConnectionRequiredDescription', 'webConnectionRetry'];
+const connectionMessages = Object.fromEntries(['zh_CN', 'en'].map(locale => {
+  const messages = JSON.parse(readFileSync(join(ROOT, 'extension/_locales', locale, 'messages.json'), 'utf8'));
+  return [locale, Object.fromEntries(connectionKeys.map(key => {
+    if (!messages[key]?.message) throw Error(`Missing connection copy: ${locale}/${key}`);
+    return [key, messages[key].message];
+  }))];
+}));
+writeFileSync(join(ROOT, 'extension/platform/connection-messages.js'), '// Generated from extension/_locales by modules:ui:build.\nexport const connectionMessages = '+JSON.stringify(connectionMessages)+';\n');
 
 const baseThemeCss = readBaseThemeCss(ROOT);
 

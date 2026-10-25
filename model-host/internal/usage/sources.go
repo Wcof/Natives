@@ -2,7 +2,7 @@ package usage
 
 // 静态 adapter registry（T2，ADR-0030 决策 3）。
 //
-// 能力矩阵覆盖“用户明确名单 ∪ agentclients 注册表”的 13 个基线工具。
+// 能力矩阵覆盖“用户明确名单 ∪ 冻结的本机工具清单”的 13 个基线工具。
 // 状态是诚实的适配器结论，不是愿望：只有代码中存在已验证实现的能力才标
 // implemented；审计后无结构化来源的标 unsupported（仍保留在矩阵中，
 // 不从统计范围删除）；依赖外部凭据/权限当前无法核验的标 unavailable。
@@ -31,14 +31,14 @@ type SourceCapabilities struct {
 
 // UsageSource 为静态注册的用量来源。
 type UsageSource struct {
-	ID             string             `json:"id"` // 等于 agentclients 工具 ID；AtomCode/Cursor 为用户指定补充
+	ID             string             `json:"id"` // 本机工具稳定 ID；AtomCode/Cursor 为用户指定补充
 	Name           string             `json:"name"`
-	InAgentClients bool               `json:"inAgentClients"` // 是否在配置注册表中
+	InAgentClients bool               `json:"inAgentClients"` // 曾纳入本机工具清单（配置注入已退役，仅用于来源分组）
 	Caps           SourceCapabilities `json:"caps"`
 	Audit          string             `json:"audit"` // 审计结论/下一步动作；unsupported 必填
 }
 
-// usageSources 为冻结的静态矩阵；新增 agentclients 工具必须补录并阻断
+// usageSources 为冻结的静态矩阵；新增本机工具来源必须补录并阻断
 // “完整支持”声明（测试强制 13 工具齐全）。
 var usageSources = []UsageSource{
 	{
@@ -169,7 +169,7 @@ var usageSources = []UsageSource{
 		Audit: "官方 session-storage 文档核验（schema_version 23）；只读白名单投影，不读正文/FTS；WAL 由只读连接处理。2026-09-12 本机状态：~/.hermes/ 仅有 config.yaml 与 skills/，无 state.db——adapter 已实现（fixture 验证），本机来源不可用（unavailable），待真实 state.db 联调",
 	},
 	{
-		// 用户明确指定；不在 agentclients 注册表——账单/脱敏导入路径。
+		// 用户明确指定；不在本机工具清单——账单/脱敏导入路径。
 		ID: "cursor", Name: "Cursor", InAgentClients: false,
 		Caps: SourceCapabilities{
 			HistoricalUsage: CapUnavailable, // 个人端 dashboard/账单导入，无实时逐请求承诺
@@ -183,7 +183,7 @@ var usageSources = []UsageSource{
 		Audit: "个人端不承诺实时计量；账单导入回退待手动入口实现；组织 API 仅在权限具备时接入并核验",
 	},
 	{
-		// 用户明确指定；不在 agentclients 注册表。
+		// 用户明确指定；不在本机工具清单。
 		ID: "atomcode", Name: "AtomCode", InAgentClients: false,
 		Caps: SourceCapabilities{
 			HistoricalUsage: CapImplemented, LiveEvent: CapUnavailable,

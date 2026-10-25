@@ -1,4 +1,4 @@
-// Shared Web session adapter. The extension never loads pairing/session code;
+// Shared Web session adapter. The extension never loads Web authorization code;
 // Web loads session.js dynamically. session.js and web-entry.js are web-only
 // assets embedded in Core and excluded from the Chrome extension package.
 import { isExtension } from './env.js';

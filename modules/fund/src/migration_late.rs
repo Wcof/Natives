@@ -457,6 +457,11 @@ pub const LATE_MIGRATIONS: &[Migration] = &[
         name: "information_decisions_v28",
         sql: SCHEMA_V28_SQL,
     },
+    Migration {
+        version: 29,
+        name: "valuation_observations_v29",
+        sql: SCHEMA_V29_SQL,
+    },
 ];
 
 /// v26：场外基金操作（N09）：订单（加仓/减仓/转换两腿）、定投计划与期次、
@@ -569,4 +574,20 @@ CREATE TABLE information_decisions (
     created_at TEXT NOT NULL
 );
 CREATE INDEX idx_information_decisions_item ON information_decisions(information_id,created_at);
+"#;
+
+/// v29：派生估值观察；不参与手动核对的收益基线。
+pub const SCHEMA_V29_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS valuation_observations (
+    minute INTEGER PRIMARY KEY,
+    date TEXT NOT NULL,
+    observed_at INTEGER NOT NULL,
+    value_minor INTEGER,
+    quality TEXT NOT NULL,
+    groups_json TEXT NOT NULL,
+    revision TEXT NOT NULL,
+    valuation_json TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_valuation_observations_date
+    ON valuation_observations(date, minute);
 "#;

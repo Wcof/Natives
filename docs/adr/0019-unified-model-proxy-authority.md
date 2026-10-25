@@ -1,6 +1,6 @@
 # ADR-0019: 统一模型代理（Unified Model Proxy）Authority 边界与实施选型
 
-- **状态**: 部分被 [ADR-0020](./0020-ai-native-personal-workspace-rearchitecture.md) 取代（保留 P0 源码审计；Daemon 完成态 authority 与 SQLite Secret 设计已失效）
+- **状态**: 已被 [ADR-0044](./0044-retire-model-proxy-and-direct-inference.md) 取代（模型代理业务整体退役；P0 源码审计仅作历史记录）
 - **日期**: 2026-08-18
 - **决策者**: 技术方（工程归属拍板；产品需求由用户提出）
 - **关联**: [ADR-0011](./0011-native-engine-production-gaps.md)、[ADR-0015](./0015-job-module-ownership-and-dispatch.md)、[ADR-0016](./0016-capability-hub.md)、`docs/architecture/provider-proxy-architecture.md`、`docs/architecture/provider-routing-sub2api.md`、`docs/standards/technical/01-layering.md`、`docs/standards/technical/02-security.md`

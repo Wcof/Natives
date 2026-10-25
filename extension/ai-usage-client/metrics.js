@@ -4,6 +4,7 @@
 // 转换为归一化的 AI 计量数据集。所有数据来自 Model Host 预聚合（R-P 纪律）。
 
 export function formatTokens(value) {
+  if (value == null) return "--";
   const v = Number(value) || 0;
   if (Math.abs(v) >= 1e9) return `${(v / 1e9).toFixed(1)}B`;
   if (Math.abs(v) >= 1e6) return `${(v / 1e6).toFixed(1)}M`;
@@ -12,12 +13,14 @@ export function formatTokens(value) {
 }
 
 export function formatUsd(value) {
+  if (value == null) return "--";
   const v = Number(value) || 0;
   if (Math.abs(v) > 0 && Math.abs(v) < 0.01) return `$${v.toFixed(4)}`;
   return `$${v.toFixed(2)}`;
 }
 
 export function formatInt(value) {
+  if (value == null) return "--";
   return String(Math.round(Number(value) || 0));
 }
 
@@ -41,7 +44,7 @@ export function formatTime(isoString) {
 export function toPoints(trend, key) {
   return (trend || [])
     .filter((p) => p && p.timestamp)
-    .map((p) => ({ t: p.timestamp, v: Number(p[key]) || 0 }));
+    .map((p) => ({ t: p.timestamp, v: (key === "tokens" && p.missingUsageRequests > 0 || key === "costUsd" && p.priced === false) && !p[key] ? null : Number(p[key]) || 0 }));
 }
 
 // Hourly trend points bucketed by calendar day for heatmap consumption.
@@ -50,7 +53,8 @@ export function toDays(points) {
   for (const p of points || []) {
     const date = String(p.t).slice(0, 10);
     if (!date) continue;
-    byDate.set(date, (byDate.get(date) || 0) + p.v);
+    if (p.v == null) { if (!byDate.has(date)) byDate.set(date, null); }
+    else byDate.set(date, (byDate.get(date) || 0) + p.v);
   }
   return [...byDate.entries()]
     .map(([date, v]) => ({ date, v }))
@@ -70,6 +74,7 @@ export function toRank(items, valueKey) {
     // R7 钻取：保留 Host 维度 key（model/source/provider），点击行时用作详情筛选。
     key: item?.key || item?.name || '',
     value: Number(item?.[valueKey] ?? item?.tokens ?? item?.requests) || 0,
+    incomplete: valueKey === "tokens" ? item?.missingUsageRequests > 0 : valueKey === "costUsd" && item?.priced === false,
   }));
 }
 
@@ -78,8 +83,10 @@ export function toTableRows(items) {
     name: item?.name || item?.key || '',
     key: item?.key || item?.name || '',
     requests: Number(item?.requests) || 0,
-    tokens: Number(item?.tokens) || 0,
-    cost: Number(item?.costUsd) || 0,
+    tokens: item?.missingUsageRequests > 0 && !item?.tokens ? null : Number(item?.tokens) || 0,
+    missingUsageRequests: item?.missingUsageRequests || 0,
+    cost: item?.priced === false && !item?.costUsd ? null : Number(item?.costUsd) || 0,
+    priced: item?.priced,
   }));
 }
 
@@ -90,10 +97,10 @@ export function toTimelineEvents(events) {
     time: formatTime(ev.requestedAt ?? ev.timestamp),
     source: ev.source || 'AI Client',
     model: ev.model || '—',
-    tokens: Number(ev.totalTokens) || 0,
+    tokens: ev.usageStatus === "missing" ? null : Number(ev.totalTokens) || 0,
     cost: (Number(ev.costMicro) || 0) / 1e6,
     // priced=价格命中（金额可为 0）；unpriced=目录缺价，不与合法零价混淆。
-    costStatus: ev.costStatus === 'unpriced' ? 'unpriced' : 'priced',
+    costStatus: ev.usageStatus === 'missing' || ev.costStatus === 'unpriced' ? 'unpriced' : 'priced',
     status: ev.result === 'success' || !ev.result ? 'success' : 'error',
   }));
 }
@@ -247,7 +254,8 @@ export async function fetchDataset(api, metric, range, need, options = {}) {
     const tableRows = (sessions.bySource || []).map((it) => ({
       name: it.name || it.key || '',
       requests: Number(it.requests) || 0,
-      tokens: Number(it.tokens) || 0,
+      tokens: it.missingUsageRequests > 0 && !it.tokens ? null : Number(it.tokens) || 0,
+      missingUsageRequests: it.missingUsageRequests || 0,
       cost: Number(it.costUsd) || 0,
     }));
     return {
@@ -316,12 +324,18 @@ export async function fetchDataset(api, metric, range, need, options = {}) {
     }
   }
 
+  const incomplete = overview?.metrics?.missingUsageRequests > 0 || Object.values(analytics || {}).some(items => Array.isArray(items) && items.some(item => item.missingUsageRequests > 0));
+  if ((metric.id === 'token_usage' && incomplete) || (metric.id === 'ai_cost' && overview?.metrics?.priced === false)) {
+    if (numValue === 0) numValue = null;
+  }
   const trend = toPoints(overview?.trend, metric.trendKey);
   const rankItems = RANKS[dimension]?.(analytics) || RANKS[metric.rankDimension]?.(analytics) || [];
 
   return {
     empty: false,
+    incomplete,
     number: {
+      incomplete: metric.id === "token_usage" && incomplete || metric.id === "ai_cost" && overview?.metrics?.priced === false,
       value: numValue,
       isPercent: subMetric === 'rate',
       subLabel,

@@ -67,9 +67,6 @@ impl FetchError {
 }
 
 /// GET 有界读取（不跟随重定向；非 2xx 显式分类）。
-fn get_text(url: &str, referer: Option<&str>) -> Result<String, FetchError> {
-    get_text_until(url, referer, Instant::now() + REQUEST_TIMEOUT)
-}
 pub(super) fn get_text_until(
     url: &str,
     referer: Option<&str>,
@@ -328,7 +325,8 @@ pub fn fetch_fund_announcements_until(
         };
         let (published_at, precision) =
             normalize::parse_publish_time(&str_field(item, "PUBLISHDATE"));
-        let fund_url = format!("https://fundf10.eastmoney.com/jjgg_{code}.html");
+        let fund_url = super::content::source_url(SRC_FUND_ANN, &external_id)
+            .unwrap_or_else(|| format!("https://fundf10.eastmoney.com/jjgg_{code}.html"));
         let importance = normalize::announcement_importance(&title, &[]);
         let event_types = normalize::classify_event(&title, &[]);
         out.push(RawItem {
@@ -346,35 +344,6 @@ pub fn fetch_fund_announcements_until(
         });
     }
     Ok(out)
-}
-
-/// 公告正文（M03：np-cnotice-stock content API）。
-///
-/// 供体 fail-soft 返回空串不复刻：失败显式错误类别；调用方不得用标题冒充全文。
-/// 返回正文与完整度：完整正文直接 `full`；超过存储上限截断（`truncated`）。
-pub fn fetch_announcement_content(art_code: &str) -> Result<(String, &'static str), FetchError> {
-    if art_code.trim().is_empty() {
-        return Err(FetchError::Parse("empty art_code".into()));
-    }
-    let url = format!(
-        "https://np-cnotice-stock.eastmoney.com/api/content/ann?art_code={}&client_source=web&page_index=1",
-        urlencode(art_code.trim())
-    );
-    let text = get_text(&url, None)?;
-    let data = parse_json(&text)?;
-    if data["success"].as_i64() != Some(1) || !data["data"].is_object() {
-        return Err(FetchError::Parse("invalid content response".into()));
-    }
-    let content = data["data"]["notice_content"]
-        .as_str()
-        .unwrap_or("")
-        .trim()
-        .to_string();
-    if content.is_empty() {
-        // 上游确认无正文（如图表型公告）：显式 unavailable，不是错误也不伪装标题为全文。
-        return Ok((String::new(), "unavailable"));
-    }
-    Ok((content, "full"))
 }
 
 fn str_field(v: &Value, key: &str) -> String {

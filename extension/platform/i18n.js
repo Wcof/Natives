@@ -1,6 +1,7 @@
 // 国际化文案与资源路径适配器（ADR-0042）
 
 import { isExtension, getBaseEndpoint } from './env.js';
+import { connectionMessages } from './connection-messages.js';
 
 let webMessages = {};
 let currentLocale = 'zh_CN';
@@ -16,14 +17,15 @@ export function getUILanguage() {
 }
 
 export async function initI18n(locale) {
-  if (locale) currentLocale = locale;
-  else currentLocale = getUILanguage().startsWith('zh') ? 'zh_CN' : 'en';
+  const nextLocale = (locale || getUILanguage()).startsWith('zh') ? 'zh_CN' : 'en';
+  if (nextLocale !== currentLocale) webMessages = {};
+  currentLocale = nextLocale;
 
   {
     try {
       const base = getBaseEndpoint();
-      const res = await fetch(`${base}/_locales/${currentLocale}/messages.json`);
-      if (res.ok) {
+      const res = await fetch(`${base}/_locales/${nextLocale}/messages.json`, {signal:AbortSignal.timeout(2000)});
+      if (res.ok && currentLocale === nextLocale) {
         webMessages = await res.json();
       }
     } catch (_) {}
@@ -31,8 +33,9 @@ export async function initI18n(locale) {
 }
 
 export function getMessage(messageName, substitutions) {
-  if(webMessages[messageName]?.message) {
-    let text=webMessages[messageName].message;
+  const message = webMessages[messageName]?.message || connectionMessages[currentLocale]?.[messageName];
+  if(message) {
+    let text=message;
     const values=Array.isArray(substitutions)?substitutions:substitutions==null?[]:[substitutions];
     values.forEach((value,index)=>{text=text.replaceAll(`$${index+1}`,String(value));});
     return text;
@@ -42,19 +45,7 @@ export function getMessage(messageName, substitutions) {
     if (msg) return msg;
   }
 
-  const entry = webMessages[messageName];
-  if (!entry || !entry.message) {
-    return messageName;
-  }
-
-  let text = entry.message;
-  if (substitutions) {
-    const subs = Array.isArray(substitutions) ? substitutions : [substitutions];
-    subs.forEach((sub, idx) => {
-      text = text.replace(new RegExp(`\\$${idx + 1}`, 'g'), String(sub));
-    });
-  }
-  return text;
+  return messageName;
 }
 
 export function getURL(path) {

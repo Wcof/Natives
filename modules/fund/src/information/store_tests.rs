@@ -296,3 +296,127 @@ fn body_cache_age_does_not_follow_flags_or_list_refresh() {
         })
         .unwrap();
 }
+
+#[test]
+fn exact_news_duplicates_are_collapsed_after_filters_before_pagination() {
+    let store = crate::storage::Store::open_in_memory().unwrap();
+    store
+        .with_write::<_, rusqlite::Error>(|c| {
+            let mut first = raw("first", "Same story");
+            first.source_id = super::super::adapters::SRC_STOCK_NEWS;
+            first.summary = "Same full summary".into();
+            let mut second = first.clone();
+            second.external_id = "second".into();
+            second.published_at = Some("2026-09-28T08:13:39Z".into());
+            let mut third = first.clone();
+            third.external_id = "third".into();
+            third.title = "Different story".into();
+            upsert_items(c, &[first, second, third], &rel, "2026-09-28T09:00:00Z")?;
+            let rows = list_items(c, &[], false, 2, 0)?;
+            assert_eq!(rows.len(), 2);
+            assert_eq!(rows.iter().filter(|r| r.title == "Same story").count(), 1);
+            assert!(list_items(c, &[], false, 2, 2)?.is_empty());
+            assert_eq!(
+                c.query_row("SELECT COUNT(*) FROM information_items", [], |r| r
+                    .get::<_, i64>(0))?,
+                3
+            );
+            c.execute(
+                "UPDATE information_items SET favorite=1 WHERE external_id='first'",
+                [],
+            )?;
+            assert_eq!(list_items(c, &[], true, 2, 0)?.len(), 1);
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
+fn same_headline_across_news_sources_collapses_but_announcements_stay_separate() {
+    let store = crate::storage::Store::open_in_memory().unwrap();
+    store
+        .with_write::<_, rusqlite::Error>(|c| {
+            let mut news = raw("news", "Shared headline");
+            news.source_id = super::super::adapters::SRC_STOCK_NEWS;
+            news.summary = "Short public summary".into();
+            let mut finance = raw("finance", "Shared headline");
+            finance.source_id = super::super::adapters::SRC_FINANCE;
+            finance.summary = "A longer public story summary with the same headline".into();
+            let mut announcement = raw("announcement", "Shared headline");
+            announcement.source_id = super::super::adapters::SRC_STOCK_ANN;
+            announcement.summary = "Official announcement text".into();
+            upsert_items(
+                c,
+                &[news, finance, announcement],
+                &rel,
+                "2026-09-28T10:00:00Z",
+            )?;
+            let rows = list_items(c, &[], false, 10, 0)?;
+            assert_eq!(
+                rows.len(),
+                2,
+                "news merge; announcement remains its own story"
+            );
+            assert_eq!(
+                rows.iter()
+                    .filter(|r| r.source_id == super::super::adapters::SRC_FINANCE)
+                    .count(),
+                1,
+                "the richer public-news copy is canonical"
+            );
+            assert_eq!(
+                rows.iter()
+                    .filter(|r| r.source_id == super::super::adapters::SRC_STOCK_ANN)
+                    .count(),
+                1
+            );
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
+fn duplicate_stories_stay_collapsed_after_read_or_favorite_changes() {
+    let store = crate::storage::Store::open_in_memory().unwrap();
+    store
+        .with_write::<_, rusqlite::Error>(|c| {
+            let mut first = raw("first", "Same syndicated story");
+            first.source_id = super::super::adapters::SRC_STOCK_NEWS;
+            first.summary = "Same full summary".into();
+            let mut second = first.clone();
+            second.external_id = "second".into();
+            second.published_at = Some("2026-09-28T08:30:00Z".into());
+            let mut cross_source = first.clone();
+            cross_source.source_id = super::super::adapters::SRC_FINANCE;
+            cross_source.external_id = "cross".into();
+            cross_source.summary = "A richer syndicated summary".into();
+            cross_source.published_at = Some("2026-09-28T09:00:00Z".into());
+            upsert_items(
+                c,
+                &[first, second, cross_source],
+                &rel,
+                "2026-09-28T10:00:00Z",
+            )?;
+            // Reading one copy must not reveal the hidden duplicates.
+            set_flags(c, 1, Some(true), None, "2026-09-28T11:00:00Z")?;
+            let rows = list_items(c, &[], false, 10, 0)?;
+            assert_eq!(rows.len(), 1);
+            assert!(rows[0].read_status);
+            // Favoriting another copy keeps the story at one visible row.
+            set_flags(c, 2, None, Some(true), "2026-09-28T12:00:00Z")?;
+            let rows = list_items(c, &[], false, 10, 0)?;
+            assert_eq!(rows.len(), 1);
+            assert!(rows[0].favorite);
+            // Relation-ranked scope applies the same dedup and keeps rel_rank sortable.
+            let refs = vec!["security:CN:stock:600519".to_string()];
+            let scope = list_items_filtered(c, &refs, false, 10, 0, &ListFilter::default())?;
+            assert_eq!(scope.len(), 1);
+            assert_eq!(
+                c.query_row("SELECT COUNT(*) FROM information_items", [], |r| r
+                    .get::<_, i64>(0))?,
+                3
+            );
+            Ok(())
+        })
+        .unwrap();
+}

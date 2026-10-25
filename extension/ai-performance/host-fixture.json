@@ -17,6 +17,7 @@
         "cacheWriteTokens": 0,
         "reasoningTokens": 0,
         "totalTokens": 5200,
+        "usageStatus": "reported",
         "costMicro": 0,
         "costStatus": "unpriced",
         "createdAt": "2026-09-12T21:00:00Z"
@@ -37,6 +38,7 @@
         "cacheWriteTokens": 0,
         "reasoningTokens": 0,
         "totalTokens": 1000000,
+        "usageStatus": "reported",
         "costMicro": 0,
         "costStatus": "priced",
         "createdAt": "2026-09-10T09:00:00Z"
@@ -51,6 +53,7 @@
     "status": "ready",
     "totalEventsCount": 2,
     "metrics": {
+      "missingUsageRequests": 0,
       "totalRequests": 2,
       "totalTokens": 1005200,
       "successRate": 50,
@@ -61,12 +64,16 @@
     },
     "trend": [
       {
+        "missingUsageRequests": 0,
+        "priced": true,
         "timestamp": "2026-09-10T00:00:00Z",
         "requests": 1,
         "tokens": 1000000,
-        "costUsd": 0
+        "costUsd": 0.84
       },
       {
+        "missingUsageRequests": 0,
+        "priced": false,
         "timestamp": "2026-09-12T00:00:00Z",
         "requests": 1,
         "tokens": 5200,

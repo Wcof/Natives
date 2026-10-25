@@ -426,11 +426,15 @@ pub(crate) fn history_range(
         if !date.is_ascii() || !crate::assets::is_valid_calendar_date(date) {
             return Err(FinanceError::Invalid("历史估值日期无效".into()));
         }
-        let (value, quality): (i64, String) = conn.query_row(
-            "SELECT total_minor,quality FROM value_snapshots WHERE id=?1",
+        let (value, quality, breakdown): (i64, String, String) = conn.query_row(
+            "SELECT total_minor,quality,breakdown_json FROM value_snapshots WHERE id=?1",
             [last],
-            |r| Ok((r.get(0)?, r.get(1)?)),
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
         )?;
+        let group_values = serde_json::from_str::<Value>(&breakdown)
+            .ok()
+            .and_then(|value| value.get("groupValues").cloned())
+            .unwrap_or_else(|| json!([]));
         let mut period = None;
         if i > 0 && reason.is_none() {
             let previous = &days[i - 1].0;
@@ -464,6 +468,7 @@ pub(crate) fn history_range(
             reason = Some("unverified_history");
         }
         points.push(json!({"date":date,"valueMinor":value,"quality":quality,
+            "groups":group_values,
             "periodReturnMinor":period.flatten(),"twrPpm":if reason.is_none() {Some((factor-1_000_000).to_string())} else {None}}));
     }
     if days.last().map(|d| d.0.as_str()) != Some(to) && reason.is_none() {

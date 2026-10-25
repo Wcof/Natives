@@ -278,6 +278,12 @@ export const aiPerformanceWidget = {
         root.classList.remove('is-loading');
         root.querySelector('.ai-perf-status')?.remove();
         chart.render(root, dataset, ui);
+        if (dataset.incomplete) {
+          const note = document.createElement('div');
+          note.className = 'ai-perf-status';
+          note.textContent = t('aiPerfUsageIncomplete', '部分请求未报告用量，显示已知部分。');
+          root.append(note);
+        }
       } catch (err) {
         if (cancelled || generation !== loadGeneration) return;
         root.classList.remove('is-loading');

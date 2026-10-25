@@ -394,6 +394,25 @@ fn rejects_unknown_envelope_fields() {
 }
 
 #[test]
+fn validates_space_wallpaper_relay_envelope() {
+    let ok = Request {
+        id: "wallpaper".into(),
+        method: "space_background_bing".into(),
+        params: json!({"mkt": "zh-CN", "idx": 0}),
+    };
+    assert_eq!(validate_request(&ok), Ok(()));
+    let arbitrary_url = Request {
+        id: "wallpaper".into(),
+        method: "space_background_bing".into(),
+        params: json!({"mkt": "zh-CN", "idx": 0, "url": "https://evil.example/"}),
+    };
+    assert_eq!(
+        validate_request(&arbitrary_url).unwrap_err(),
+        "unknown parameter: url"
+    );
+}
+
+#[test]
 fn rejects_unknown_method_parameters_and_bad_limits() {
     let unknown = Request {
         id: "x".into(),

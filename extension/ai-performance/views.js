@@ -167,12 +167,12 @@ function renderLedgerView(root, data, i18n) {
   }
   const rows = events.map((e) => {
     const timeStr = e.requestedAt ? new Date(e.requestedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '—';
-    const cost = e.costMicro != null ? `$${(e.costMicro / 1e6).toFixed(4)}` : (e.costStatus === 'unpriced' ? '未计价' : '$0.00');
+    const cost = e.usageStatus === 'missing' || e.costStatus === 'unpriced' || e.costMicro == null ? '--' : `$${(e.costMicro / 1e6).toFixed(4)}`;
     const atom = e.billingAtom || e.sessionId || '—';
     return `<div class="ai-perf-ledger-row">
       <span class="ai-perf-ledger-time">${escapeHtml(timeStr)}</span>
       <span class="ai-perf-ledger-model" title="${escapeHtml(e.model)}">${escapeHtml(e.provider)}/${escapeHtml(e.model)}</span>
-      <span class="ai-perf-ledger-tokens">${escapeHtml(Number(e.totalTokens || 0).toLocaleString())} toks</span>
+      <span class="ai-perf-ledger-tokens">${escapeHtml(e.usageStatus === 'missing' ? '--' : Number(e.totalTokens || 0).toLocaleString())} toks</span>
       <span class="ai-perf-ledger-cost">${escapeHtml(cost)}</span>
       <span class="ai-perf-ledger-atom" title="${escapeHtml(atom)}">${escapeHtml(atom)}</span>
     </div>`;

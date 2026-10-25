@@ -43,11 +43,11 @@ assert.equal(calls.at(-1)[1].id, 'cancelled-start', 'cancel during startup must 
 await broker2.dispose();
 
 // 方案11 §6 回归：selection=default 走 expectedConfigToken 校验并转发；
-// start 返回实际采用的 providerId/modelId/route。
+// start 返回实际采用的 providerId/modelId（代理退役后无 route）。
 const started3 = [];
 const api3 = {
   inferenceOptions: async () => ({ models: [], defaultModel: { providerId: 'p', modelId: 'm', name: 'n', configToken: 'tok' } }),
-  inferenceStart: async value => { started3.push(value); return { id: 'job-def', providerId: value.providerId ?? 'p', modelId: value.modelId ?? 'm', route: `route-${value.providerId ?? 'p'}` }; },
+  inferenceStart: async value => { started3.push(value); return { id: 'job-def', providerId: value.providerId ?? 'p', modelId: value.modelId ?? 'm' }; },
   inferenceCancel: async value => { calls.push(['cancel', value]); },
   inferenceStatus: async () => ({ done: true, text: 'ok' }),
 };
@@ -61,7 +61,7 @@ assert.equal(replies.at(-1).error, undefined);
 assert.equal(replies.at(-1).result.started, true);
 assert.equal(replies.at(-1).result.providerId, 'p');
 assert.equal(replies.at(-1).result.modelId, 'm');
-assert.equal(replies.at(-1).result.route, 'route-p');
+assert.equal(replies.at(-1).result.route, undefined, 'retired route must not be exposed');
 assert.deepEqual(started3.at(-1), { owner: started3.at(-1).owner, text: 'synthetic evidence', selection: 'default', expectedConfigToken: 'tok' });
 // 显式 pair 仍兼容且不被注入 selection 字段。
 await broker3.dispose();
@@ -81,3 +81,17 @@ for(const maxTokens of [0,511,8193,4096.5,'4096',null]) {
 await broker5.handle(request('natives:ai','start',{selection:'default',expectedConfigToken:'tok',text:'synthetic evidence',maxTokens:4096}));
 assert.equal(started3.at(-1).maxTokens,4096);
 await broker5.dispose();
+
+// Local Web has no chrome.tabs; a blocked popup must report failure.
+const openedTab={opener:{},location:{replace:url=>calls.push(['web-link',url])}};
+globalThis.window={open:()=>openedTab};
+const webBroker=createModuleInferenceBroker({context:()=>context,openSettings:async()=>{}});
+await webBroker.handle(request('natives:open-link','open',{url:'https://example.com/story'}));
+assert.equal(replies.at(-1).result.opened,true);
+assert.equal(openedTab.opener,null);
+assert.deepEqual(calls.at(-1),['web-link','https://example.com/story']);
+window.open=()=>null;
+await webBroker.handle(request('natives:open-link','open',{url:'https://example.com/story'}));
+assert.equal(replies.at(-1).error,'EXTERNAL_LINK_BLOCKED');
+assert.equal(replies.at(-1).result,null);
+delete globalThis.window;

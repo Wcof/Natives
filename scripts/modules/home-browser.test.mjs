@@ -20,17 +20,20 @@ try {
     await page.setContent(`<style>${css}</style>${readFileSync(resolve(root, 'partials/view-home.html'), 'utf8')}`);
     await page.evaluate(theme => { document.documentElement.dataset.theme = theme; }, theme);
     await page.evaluate(installHomeFixture);
-    for (const file of ['core.js', 'home-i18n.js', 'home-overview.js', 'home-opportunities.js', 'home.js', 'home-range.js', 'home-manage.js', 'home-evidence.js', 'home-report-feedback.js']) await page.addScriptTag({ path: resolve(root, file) });
+    for (const file of ['core.js', 'home-i18n.js', 'home-overview.js', 'home-opportunities.js', 'home.js', 'home-range.js', 'home-manage.js','home-information-detail.js', 'home-evidence.js', 'home-report-feedback.js']) await page.addScriptTag({ path: resolve(root, file) });
     await page.evaluate(() => { Fund.state.token = 'synthetic'; Fund.actions.loadHome(); });
-    await page.locator('.home-extra-research > summary').click();
+    await page.locator('.home-performance-card').waitFor({state:'visible'});
     await page.locator('#home-today-body').waitFor();
     await page.waitForFunction(()=>requests.some(request=>request.path==='/api/check/run')&&document.getElementById('home-today-body').getAttribute('aria-busy')==='false');
     if(width===1280&&theme==='archive') {
       const before=await page.evaluate(()=>requests.length);
       await page.evaluate(async()=>{await Fund.actions.refreshHomeValuation();});
       const calls=await page.evaluate(start=>requests.slice(start),before);
-      assert.ok(calls.some(r=>r.method==='GET'&&r.path.startsWith('/api/home/snapshot?')),'automatic valuation refresh is read-only');
+      assert.ok(calls.some(r=>r.method==='POST'&&r.path.startsWith('/api/home/valuation/observe?')),'automatic valuation refresh explicitly records derived observations');
       assert.ok(!calls.some(r=>r.path.includes('/snapshot/generate')),'automatic ticks do not record opportunity snapshots');
+      const readBefore=await page.evaluate(()=>requests.length);
+      await page.evaluate(()=>Fund.home.readSnapshot());
+      assert.ok((await page.evaluate(n=>requests.slice(n),readBefore)).some(r=>r.method==='GET'&&r.path.startsWith('/api/home/snapshot?')),'explicit readSnapshot remains read-only');
       await page.evaluate(()=>{document.getElementById('home-fund-daily').textContent='sentinel';Fund.home.applyDisplayMode('amount',false);});
       await page.evaluate(async()=>{await Fund.actions.refreshHomeValuation();});
       assert.match(await page.locator('#home-fund-income-note').textContent(),/1/,'daily partial coverage is visible');
@@ -66,7 +69,7 @@ try {
     assert.equal(await page.locator('#home-benchmark-chart svg').count(),0,'hidden benchmark must not expose private returns');
     assert.equal(await page.locator('[data-opportunity-candidate]').count(),0,'hidden mode removes candidate identity and evidence');
     assert.equal(await page.locator('#home-attribution-body table').count(),0,'hidden attribution must not expose private contributions');
-    await page.locator('.home-history > summary').click();
+    await page.locator('.home-performance-card').waitFor({state:'visible'});
     await verifyHomeUsability(page, { width, theme, shots });
     await verifyHomeEncapsulation(page);
     await verifyHomeDataGaps(page);
@@ -548,7 +551,7 @@ try {
     await page.evaluate(async()=>{
       document.documentElement.style.zoom='';Fund.home.applyDisplayMode('amount',false);
       window.contentFetchBackup=window.fetch;
-      window.fetch=(url,options)=>String(url).includes('/api/information/item?')?Promise.resolve(new Response(JSON.stringify({id:1,title:'Content failure fixture',sourceId:'em_stock_ann',completeness:'link_only',contentVersion:0,relations:[]}))):String(url).endsWith('/api/information/content')?Promise.resolve(new Response(JSON.stringify({error:'INFO_SOURCE_FETCH_FAILED'}),{status:503})):contentFetchBackup(url,options);
+      window.fetch=(url,options)=>String(url).includes('/api/information/item?')?Promise.resolve(new Response(JSON.stringify({id:1,title:'Content failure fixture',sourceId:'em_stock_ann',completeness:'link_only',contentVersion:1,contentSupported:true,relations:[]}))):String(url).endsWith('/api/information/content')?Promise.resolve(new Response(JSON.stringify({error:'INFO_SOURCE_FETCH_FAILED'}),{status:503})):contentFetchBackup(url,options);
       await Fund.home.openInformationDetail(1);
     });
     await page.locator('dialog[open] [data-info-fetch]').click();
@@ -584,7 +587,7 @@ try {
     for (const file of ['core.js', 'home-i18n.js', 'home-overview.js', 'home.js']) await page2.addScriptTag({ path: resolve(root, file) });
     await page2.evaluate(() => { Fund.state.token = 'synthetic'; Fund.actions.loadHome(); });
     await page2.locator('#home-finance-details summary').click();
-    await page2.locator('.home-history > summary').click();
+    await page2.locator('.home-performance-card').waitFor({state:'visible'});
     await page2.waitForTimeout(200);
     const text = await page2.locator('#view-home').innerText();
     assert.match(text, /待核实/, 'incomplete wealth must show 待核实, not 0');

@@ -6,14 +6,20 @@ import { ensureWebSurface } from './surface.js';
 const subscribers = new Set();
 let source, opening, retry, attempt = 0, generation = 0, bound = false;
 let epoch, sequence, connected = false;
+let pageActive = true;
+const web = !(typeof __NATIVES_EXTENSION_BUILD__ !== 'undefined' ? __NATIVES_EXTENSION_BUILD__ : isExtension);
+let documentOwned = false;
+const hasOwners = () => subscribers.size || (web && documentOwned);
 const backoff = [1000, 2000, 4000, 8000, 15000];
 function deliver(payload) {
+  if (web && document.visibilityState === 'hidden') return;
   for (const {handler, domains} of subscribers) {
     if (domains && !['resync','connected','shutdown'].includes(payload.type) && !domains.includes(payload.domain)) continue;
     try { handler(payload); } catch { /* A consumer cannot break other subscriptions. */ }
   }
 }
 function receive(payload) {
+  if (web && document.visibilityState === 'hidden') return;
   if (!payload || typeof payload !== 'object') return;
   const next = payload.sequence;
   // A document can own several relays for the same Core event stream.
@@ -37,19 +43,21 @@ function failed(owned) {
   if (source !== owned) return;
   close(); invalidateWebSession();
   deliver({type:'resync',reason:'unavailable'});
-  if (subscribers.size && document.visibilityState !== 'hidden') {
+  if (hasOwners() && pageActive && document.visibilityState !== 'hidden') {
     retry = setTimeout(() => { retry = undefined; void open(); }, backoff[Math.min(attempt++, backoff.length-1)]);
   }
 }
 async function open() {
-  if (source || opening || retry || !subscribers.size || document.visibilityState === 'hidden') return;
+  if (source || opening || retry || !pageActive || !hasOwners() || (!web && document.visibilityState === 'hidden')) return;
   const ownedGeneration = generation;
+  const dormant = web && document.visibilityState === 'hidden';
   opening = (async () => {
     if (!(typeof __NATIVES_EXTENSION_BUILD__ !== 'undefined' ? __NATIVES_EXTENSION_BUILD__ : isExtension) && !(await initWebSession())?.authenticated) {
       if(typeof CustomEvent!=='undefined')window.dispatchEvent(new CustomEvent('natives-web-session-required'));
       throw Error('WEB_SESSION_REQUIRED');
     }
-    if (ownedGeneration !== generation || !subscribers.size || document.visibilityState === 'hidden') return;
+    if (ownedGeneration !== generation || !pageActive || !hasOwners() || dormant !== (web && document.visibilityState === 'hidden')) return;
+    if (web) documentOwned = true;
     if ((typeof __NATIVES_EXTENSION_BUILD__ !== 'undefined' ? __NATIVES_EXTENSION_BUILD__ : isExtension)) {
       // The page's Core Port already carries its own Surface-scoped relay.
       // Reuse that stream instead of opening a second Native Surface, so
@@ -65,7 +73,8 @@ async function open() {
       source = owned;
     } else {
       let surface = '';
-      try { surface = (await ensureWebSurface()) || ''; } catch {}
+      if (!dormant) surface = await ensureWebSurface();
+      if (ownedGeneration !== generation || !pageActive || !hasOwners()) return;
       const owned = new EventSource(`${getBaseEndpoint()}/web/events${surface ? `?surface=${encodeURIComponent(surface)}` : ''}`);
       source = owned;
       owned.onmessage = event => {
@@ -77,11 +86,14 @@ async function open() {
   })();
   try { await opening; }
   catch {
-    if (ownedGeneration === generation && subscribers.size && document.visibilityState !== 'hidden') {
+    if (ownedGeneration === generation && pageActive && hasOwners() && document.visibilityState !== 'hidden') {
       deliver({type:'resync',reason:'unavailable'});
       retry = setTimeout(() => { retry = undefined; void open(); }, backoff[Math.min(attempt++,backoff.length-1)]);
     }
-  } finally { opening = undefined; }
+  } finally {
+    opening = undefined;
+    if (ownedGeneration !== generation && pageActive && hasOwners()) void open();
+  }
 }
 export function subscribeCoreEvents(handler, domains) {
   if (!(typeof __NATIVES_EXTENSION_BUILD__ !== 'undefined' ? __NATIVES_EXTENSION_BUILD__ : isExtension) && typeof EventSource === 'undefined') return () => {};
@@ -89,11 +101,14 @@ export function subscribeCoreEvents(handler, domains) {
   subscribers.add(subscription);
   if (!bound) {
     bound = true;
-    document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') close(); else void open(); });
-    window.addEventListener('pagehide', close);
-    window.addEventListener('pageshow', () => { void open(); });
+    document.addEventListener('visibilitychange', () => {
+      close();
+      if (pageActive && (web || document.visibilityState !== 'hidden')) void open();
+    });
+    window.addEventListener('pagehide', () => { pageActive=false; close(); });
+    window.addEventListener('pageshow', () => { pageActive=true; void open(); });
     window.addEventListener('natives-web-session-restored', () => { close(); void open(); });
   }
   void open();
-  return () => { subscribers.delete(subscription); if (!subscribers.size) close(); };
+  return () => { subscribers.delete(subscription); if (!hasOwners()) close(); };
 }

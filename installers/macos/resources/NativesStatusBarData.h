@@ -55,7 +55,16 @@ static inline const char *UsagePeriodWhere(NSString *range) {
 // false 时面板必须显示 "--"（未知），严禁把无价渲染成 $0.00。
 // 该片段总是紧随 STATUSBAR_COST_EXPR 之后，故以前导逗号开头。
 #define STATUSBAR_PRICED_EXPR \
-    ", COALESCE(MIN(CASE WHEN e.total_tokens = 0 OR e.cost_micro != 0 OR p.rowid IS NOT NULL THEN 1 ELSE 0 END),1) "
+    ", COALESCE(MIN(CASE WHEN e.usage_status = 'missing' THEN 0 WHEN e.total_tokens = 0 OR e.cost_micro != 0 OR p.rowid IS NOT NULL THEN 1 ELSE 0 END),1), COALESCE(SUM(CASE WHEN e.usage_status = 'missing' THEN 1 ELSE 0 END),0) "
+
+// Older read-only ledgers predate usage_status; never migrate them from the menu bar.
+static inline int PrepareUsageQuery(sqlite3 *db, NSString *sql, sqlite3_stmt **stmt) {
+    sqlite3_stmt *probe = NULL;
+    int status = sqlite3_prepare_v2(db, "SELECT usage_status FROM usage_events LIMIT 0", -1, &probe, NULL);
+    sqlite3_finalize(probe);
+    if (status != SQLITE_OK) sql = [sql stringByReplacingOccurrencesOfString:@"e.usage_status" withString:@"'reported'"];
+    return sqlite3_prepare_v2(db, sql.UTF8String, -1, stmt, NULL);
+}
 
 static inline NSDictionary *ReadUsagePeriod(sqlite3 *db, NSString *range) {
     NSString *sql = [NSString stringWithFormat:
@@ -63,17 +72,19 @@ static inline NSDictionary *ReadUsagePeriod(sqlite3 *db, NSString *range) {
          STATUSBAR_PRICED_EXPR "FROM usage_events e " STATUSBAR_PRICE_JOIN "%s",
         UsagePeriodWhere(range)];
     sqlite3_stmt *stmt = NULL;
-    if (sqlite3_prepare_v2(db, sql.UTF8String, -1, &stmt, NULL) != SQLITE_OK) return nil;
+    if (PrepareUsageQuery(db, sql, &stmt) != SQLITE_OK) return nil;
     int64_t tokens = 0, costMicro = 0;
     BOOL priced = NO;
+    int64_t missing = 0;
     if (sqlite3_step(stmt) == SQLITE_ROW) {
         tokens = sqlite3_column_int64(stmt, 0);
         costMicro = sqlite3_column_int64(stmt, 1);
         priced = sqlite3_column_int(stmt, 2) != 0;
+        missing = sqlite3_column_int64(stmt, 3);
     } else { sqlite3_finalize(stmt); return nil; }
     sqlite3_finalize(stmt);
     return @{@"totalTokens": @(tokens), @"costUsd": @((double)costMicro / 1000000.0),
-             @"priced": @(priced)};
+             @"priced": @(priced), @"missingUsageRequests": @(missing)};
 }
 
 static inline NSArray *ReadUsageModels(sqlite3 *db, NSString *range) {
@@ -81,10 +92,10 @@ static inline NSArray *ReadUsageModels(sqlite3 *db, NSString *range) {
         @"SELECT COALESCE(NULLIF(e.model_alias, ''), e.model) AS name, "
          "SUM(e.total_tokens), " STATUSBAR_COST_EXPR STATUSBAR_PRICED_EXPR
          "FROM usage_events e " STATUSBAR_PRICE_JOIN "%s "
-         "GROUP BY name HAVING SUM(e.total_tokens)>0 ORDER BY SUM(e.total_tokens) DESC LIMIT 8",
+         "GROUP BY name HAVING SUM(e.total_tokens)>0 OR SUM(CASE WHEN e.usage_status = 'missing' THEN 1 ELSE 0 END)>0 ORDER BY SUM(e.total_tokens) DESC LIMIT 8",
         UsagePeriodWhere(range)];
     sqlite3_stmt *stmt = NULL;
-    if (sqlite3_prepare_v2(db, sql.UTF8String, -1, &stmt, NULL) != SQLITE_OK) return nil;
+    if (PrepareUsageQuery(db, sql, &stmt) != SQLITE_OK) return nil;
     NSMutableArray *items = [NSMutableArray array];
     int step;
     while ((step = sqlite3_step(stmt)) == SQLITE_ROW) {
@@ -93,6 +104,7 @@ static inline NSArray *ReadUsageModels(sqlite3 *db, NSString *range) {
             @"name": name ? [NSString stringWithUTF8String:(const char *)name] : @"unknown",
             @"tokens": @(sqlite3_column_int64(stmt, 1)),
             @"costUsd": @((double)sqlite3_column_int64(stmt, 2) / 1000000.0),
+            @"missingUsageRequests": @(sqlite3_column_int64(stmt, 4)),
             @"priced": @(sqlite3_column_int(stmt, 3) != 0)
         }];
     }
@@ -112,14 +124,14 @@ static inline NSArray *ReadUsageSessions(sqlite3 *db, NSString *range) {
         "ORDER BY MAX(e.requested_at) DESC LIMIT 12",
         UsagePeriodWhere(range), [range isEqualToString:@"all"] ? "WHERE" : "AND"];
     sqlite3_stmt *stmt = NULL;
-    if (sqlite3_prepare_v2(db, sql.UTF8String, -1, &stmt, NULL) != SQLITE_OK) return nil;
+    if (PrepareUsageQuery(db, sql, &stmt) != SQLITE_OK) return nil;
     NSMutableArray *items = [NSMutableArray array];
     int step;
     while ((step = sqlite3_step(stmt)) == SQLITE_ROW) {
         const unsigned char *sid = sqlite3_column_text(stmt, 0);
         const unsigned char *tool = sqlite3_column_text(stmt, 1);
         const unsigned char *title = sqlite3_column_text(stmt, 2);
-        const unsigned char *lastAt = sqlite3_column_text(stmt, 6);
+        const unsigned char *lastAt = sqlite3_column_text(stmt, 7);
         NSString *toolName = tool ? [NSString stringWithUTF8String:(const char *)tool] : @"";
         NSString *titleName = title ? [NSString stringWithUTF8String:(const char *)title] : @"";
         NSString *display = titleName.length > 0 ? titleName
@@ -130,6 +142,7 @@ static inline NSArray *ReadUsageSessions(sqlite3 *db, NSString *range) {
             @"totalTokens": @(sqlite3_column_int64(stmt, 3)),
             @"costUsd": @((double)sqlite3_column_int64(stmt, 4) / 1000000.0),
             @"priced": @(sqlite3_column_int(stmt, 5) != 0),
+            @"missingUsageRequests": @(sqlite3_column_int64(stmt, 6)),
             @"lastActive": lastAt ? [NSString stringWithUTF8String:(const char *)lastAt] : @""
         }];
     }
@@ -138,12 +151,12 @@ static inline NSArray *ReadUsageSessions(sqlite3 *db, NSString *range) {
 }
 
 static inline NSArray *ReadUsageTrend(sqlite3 *db) {
-    const char *sql =
-        "SELECT date(datetime(requested_at),'localtime'), SUM(total_tokens), SUM(cost_micro) "
-        "FROM usage_events WHERE datetime(requested_at) >= datetime('now','localtime','start of day','-6 days','utc') "
+    NSString *sql =
+        @"SELECT date(datetime(requested_at),'localtime'), SUM(total_tokens), SUM(cost_micro), SUM(CASE WHEN e.usage_status = 'missing' THEN 1 ELSE 0 END) "
+        "FROM usage_events e WHERE datetime(requested_at) >= datetime('now','localtime','start of day','-6 days','utc') "
         "GROUP BY 1 ORDER BY 1 ASC LIMIT 7";
     sqlite3_stmt *stmt = NULL;
-    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) return nil;
+    if (PrepareUsageQuery(db, sql, &stmt) != SQLITE_OK) return nil;
     NSMutableArray *items = [NSMutableArray array];
     int step;
     while ((step = sqlite3_step(stmt)) == SQLITE_ROW) {
@@ -151,6 +164,7 @@ static inline NSArray *ReadUsageTrend(sqlite3 *db) {
         [items addObject:@{
             @"date": date ? [NSString stringWithUTF8String:(const char *)date] : @"",
             @"totalTokens": @(sqlite3_column_int64(stmt, 1)),
+            @"missingUsageRequests": @(sqlite3_column_int64(stmt, 3)),
             @"costUsd": @((double)sqlite3_column_int64(stmt, 2) / 1000000.0)
         }];
     }
@@ -159,11 +173,14 @@ static inline NSArray *ReadUsageTrend(sqlite3 *db) {
 }
 
 static inline NSDictionary *StatusBarUsageSummary(NSDictionary *today, NSDictionary *all) {
-    BOOL hasToday = [today[@"totalTokens"] longLongValue] > 0;
+    BOOL hasToday = [today[@"totalTokens"] longLongValue] > 0 || [today[@"missingUsageRequests"] longLongValue] > 0;
     NSDictionary *period = hasToday ? today : all;
     NSString *cost = [period[@"priced"] boolValue]
         ? [NSString stringWithFormat:@"$%.2f", [period[@"costUsd"] doubleValue]] : @"--";
-    NSString *display = [NSString stringWithFormat:@"%@ · %@", FormatCompactTokens([period[@"totalTokens"] longLongValue]), cost];
+    BOOL missing = [period[@"missingUsageRequests"] longLongValue] > 0;
+    long long tokens = [period[@"totalTokens"] longLongValue];
+    NSString *tokenText = missing && tokens == 0 ? @"--" : [FormatCompactTokens(tokens) stringByAppendingString:missing ? @"+" : @""];
+    NSString *display = [NSString stringWithFormat:@"%@ · %@", tokenText, cost];
     return @{@"mode": @"both", @"displayText": display, @"worstLimit": [NSNull null],
         @"tooltip": [NSString stringWithFormat:@"Natives: %@ (%@；费用估算)", display, hasToday ? @"今日" : @"累计"]};
 }
@@ -509,10 +526,11 @@ static inline NSArray *ToolRowsFromResponse(NSDictionary *analysis) {
         if (![m isKindOfClass:[NSDictionary class]]) continue;
         long long tokens = [m[@"tokens"] isKindOfClass:[NSNumber class]] ? [m[@"tokens"] longLongValue] : 0;
         NSString *name = [m[@"name"] isKindOfClass:[NSString class]] ? m[@"name"] : @"";
-        if (tokens <= 0 || name.length == 0) continue;
+        if ((tokens <= 0 && [m[@"missingUsageRequests"] longLongValue] == 0) || name.length == 0) continue;
         [tools addObject:@{
             @"name": name,
             @"tokens": @(tokens),
+            @"missingUsageRequests": m[@"missingUsageRequests"] ?: @0,
             @"costUsd": [m[@"costUsd"] isKindOfClass:[NSNumber class]] ? m[@"costUsd"] : @0.0,
             @"priced": [m[@"priced"] isKindOfClass:[NSNumber class]] ? m[@"priced"] : @NO
         }];
@@ -549,6 +567,7 @@ static inline NSArray *SessionRowsFromResponse(NSDictionary *sessionsResp) {
             @"id": display,
             @"tool": toolId,
             @"totalTokens": [s[@"tokens"] isKindOfClass:[NSNumber class]] ? s[@"tokens"] : @0,
+            @"missingUsageRequests": s[@"missingUsageRequests"] ?: @0,
             @"costUsd": [s[@"costUsd"] isKindOfClass:[NSNumber class]] ? s[@"costUsd"] : @0.0,
             @"priced": [s[@"priced"] isKindOfClass:[NSNumber class]] ? s[@"priced"] : @NO
         }];
@@ -569,13 +588,13 @@ static inline NSDictionary *UsagePeriodFromOverview(NSDictionary *overview) {
         if (![metrics[key] isKindOfClass:NSNumber.class] || !isfinite([metrics[key] doubleValue])) return nil;
     }
     if ([metrics[@"totalTokens"] longLongValue] < 0) return nil;
-    return @{@"totalTokens": metrics[@"totalTokens"], @"costUsd": metrics[@"estimatedCostUsd"], @"priced": metrics[@"priced"]};
+    return @{@"totalTokens": metrics[@"totalTokens"], @"costUsd": metrics[@"estimatedCostUsd"], @"priced": metrics[@"priced"], @"missingUsageRequests": metrics[@"missingUsageRequests"] ?: @0};
 }
 
 static inline NSDictionary *FetchCompactStatusBarState(void) {
     NSDictionary *today = UsagePeriodFromOverview(FetchAIQueryJSON(AIUsageQueryPath(@"/ai/usage/overview?range=today", NSTimeZone.localTimeZone.name)));
     if (!today) return FetchStateFromUsageDb();
-    NSDictionary *all = [today[@"totalTokens"] longLongValue] > 0 ? today
+    NSDictionary *all = ([today[@"totalTokens"] longLongValue] > 0 || [today[@"missingUsageRequests"] longLongValue] > 0) ? today
         : UsagePeriodFromOverview(FetchAIQueryJSON(AIUsageQueryPath(@"/ai/usage/overview?range=all", NSTimeZone.localTimeZone.name)));
     return all ? StatusBarUsageSummary(today, all) : FetchStateFromUsageDb();
 }
@@ -604,7 +623,7 @@ static inline NSDictionary *FetchStateViaAIQueryWithFetcher(NSDictionary *(^fetc
         if (![point isKindOfClass:NSDictionary.class]) return nil;
         NSString *timestamp = [point[@"timestamp"] isKindOfClass:NSString.class] ? point[@"timestamp"] : nil;
         if (timestamp.length < 10 || ![point[@"tokens"] isKindOfClass:NSNumber.class]) return nil;
-        [trend addObject:@{@"date": [timestamp substringToIndex:10], @"totalTokens": point[@"tokens"]}];
+        [trend addObject:@{@"date": [timestamp substringToIndex:10], @"totalTokens": point[@"tokens"], @"missingUsageRequests": point[@"missingUsageRequests"] ?: @0}];
     }
 
     // 周期切换（面板页签）：使用情况与最近会话按所选周期分别查询——

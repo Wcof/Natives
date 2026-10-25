@@ -66,7 +66,7 @@ Natives 品牌 + 全局搜索                 Tabliss Dashboard              总
 - 所有 mutation 携带 `expectedRevision` 乐观并发；不匹配返回类型化冲突错误。创建/复制/模板实例化/重置/删除在**单事务**完成。
 - 跨新标签页经 `BroadcastChannel('natives-workspace')` 广播 revision 失效通知；浏览器存储只保存首帧缓存与可丢弃网络缓存，**不是**第二权威。
 - Native Messaging 新增类型化方法族（全部进入协议白名单与 params 校验）：
-  `workspace_session`（session snapshot：openedTabs + activeWorkspaceId + workspaces metadata + revision）、`workspace_snapshot`（单 Workspace 全量）、`workspace_create`、`workspace_rename`、`workspace_reorder`、`workspace_pin`、`workspace_duplicate`、`workspace_delete`（软删）、`workspace_open/close/reorder_tabs`、`workspace_widget_upsert/remove/reorder`、`workspace_background_save`、`workspace_instantiate_template`、`workspace_save_from_tabliss`（Tabliss v2/v3 JSON 导入，校验+预览+事务回滚）、`settings_get/set`。
+  `workspace_session`（session snapshot：openedTabs + activeWorkspaceId + workspaces metadata + revision）、`workspace_snapshot`（单 Workspace 全量）、`workspace_create`、`workspace_rename`、`workspace_reorder`、`workspace_pin`、`workspace_duplicate`、`workspace_delete`（软删）、`workspace_open/close/reorder_tabs`、`workspace_widget_upsert/remove/reorder`、`workspace_background_save`、`workspace_instantiate_template`、`workspace_save_from_tabliss`（Tabliss v2/v3 JSON 导入，校验+预览+事务回滚）、`settings_get/set`、`space_background_bing`（固定 Bing 归档只读中继，见 §6 补充）。
 - Chrome 不允许读取另一扩展私有存储：不提供「自动读取旧 Tabliss 扩展数据」，仅提供 v2/v3 JSON 文件导入。
 
 ### 5. ADR-0023 修订：个人空间允许短连接 Native Host
@@ -79,6 +79,7 @@ Natives 品牌 + 全局搜索                 Tabliss Dashboard              总
 
 - Manifest 增加 `search`、`identity`；`bookmarks`、`topSites` 为可选权限（对应 Widget 首次使用时请求）。
 - 网络 CSP 仅允许已登记 API 域名（api.github.com、api.trello.com、api.giphy.com、api.unsplash.com、api.nasa.gov、api.open-meteo.com 等）；禁止远程脚本、eval 与任意 URL 代理。
+- **补充（2026-10-21，ADR-0042 双入口）**：本机 Web 页面没有 Chrome `host_permissions`，而 `www.bing.com` 的归档 JSON 不返回 CORS 头。`native-file-host` 提供只读 `space_background_bing` 中继：固定 `https://www.bing.com/HPImageArchive.aspx`，仅接受登记市场与 `idx` 0–7，8 秒超时、64 KiB 上限、0 重定向，只返回 `/th?` 图片地址；不接受页面传入 URL、headers 或凭据。扩展入口优先直连，失败时回退同一中继；它不是通用代理。
 - Trello OAuth：Service Worker 仅执行一次性 `launchWebAuthFlow` 并把 token 直接交给 Host；Host 存 OS Keychain，以固定 Trello 域名 + 动作枚举代理 boards/lists/cards/labels 及卡片增删改移动；拒绝通用 URL 代理；超时、响应大小上限、参数白名单、可取消。
 - GIPHY/Unsplash/NASA/Trello key 缺失时保留入口并显示双语「未配置」状态；不提交占位 key、不伪装成功。首个无 key 构建允许通过。
 

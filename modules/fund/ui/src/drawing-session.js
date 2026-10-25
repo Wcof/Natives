@@ -135,7 +135,7 @@ Fund.createDrawingSession = ({ scope, replace, statusRoot }) => {
       field('color',t('fundChartDrawingColor'),'color',d.options.color || '#3366cc');
       const width=field('width',t('fundChartDrawingWidth'),'number',d.options.width || 1.8);width.min='0.5';width.max='10';width.step='0.1';width.required=true;
       const line=document.createElement('label');line.textContent=t('fundChartDrawingDash');const select=document.createElement('select');select.name='dash';
-      for(const val of ['solid','dashed','dashed-dense','dashed-sparse']){const option=document.createElement('option');option.value=val;option.textContent=t('fundChartDrawingDash'+val);select.append(option);}select.value=d.options.dash || 'solid';line.append(select);form.append(line);
+      for(const val of ['solid','dashed','dashed-dense','dashed-sparse']){const option=document.createElement('option');option.value=val;option.textContent=t('fundChartDrawingDash'+val.replace(/-([a-z])/g,(_,c)=>c.toUpperCase()));select.append(option);}select.value=d.options.dash || 'solid';line.append(select);form.append(line);
       field('visible',t('fundChartDrawingVisible'),'checkbox',d.options.visible!==false);
       field('locked',t('fundChartDrawingLocked'),'checkbox',!!d.options.locked);
       if(d.toolType==='text')field('text',t('fundTrendsDrawingText'),'text',d.options.text || '').maxLength=256;

@@ -22,6 +22,43 @@ fn surface_query(req: &HttpRequest) -> Option<String> {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn dormant_document_owns_only_its_stream_and_close_restarts_core_grace() {
+        use std::io::{Read, Write};
+        use std::net::{Shutdown, TcpListener, TcpStream};
+        use std::time::{Duration, Instant};
+
+        let state = super::super::tests::make_test_state(0);
+        let session = state
+            .auth
+            .lock()
+            .unwrap()
+            .exchange_bootstrap("test-bootstrap")
+            .unwrap()
+            .0;
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let owned = state.clone();
+        let handler = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            super::super::server::handle_client(stream, owned);
+        });
+        let mut client = TcpStream::connect(("127.0.0.1", port)).unwrap();
+        client
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        write!(client, "GET /web/events HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nCookie: natives_dev_session={session}\r\n\r\n").unwrap();
+        let mut buffer = [0; 512];
+        assert!(client.read(&mut buffer).unwrap() > 0);
+        assert_eq!(state.auth.lock().unwrap().active_surface_count(), 0);
+        assert_eq!(state.sse_senders.lock().unwrap().len(), 1);
+        *state.last_activity.lock().unwrap() = Instant::now() - Duration::from_secs(120);
+        client.shutdown(Shutdown::Both).unwrap();
+        handler.join().unwrap();
+        assert!(state.sse_senders.lock().unwrap().is_empty());
+        assert!(state.last_activity.lock().unwrap().elapsed() < Duration::from_secs(5));
+    }
+
+    #[test]
     fn another_web_session_cannot_subscribe_to_owned_task_progress() {
         use std::io::{Read, Write};
         use std::net::{TcpListener, TcpStream};
@@ -204,4 +241,6 @@ pub(super) fn handle_events_sse(stream: &mut TcpStream, state: &ServiceState, re
         .lock()
         .unwrap()
         .retain(|(id, _, _)| *id != sse_id);
+    // The last document leaving starts the Core grace period at disconnection.
+    state.touch_activity();
 }

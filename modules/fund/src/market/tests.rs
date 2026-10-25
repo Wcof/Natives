@@ -217,3 +217,28 @@ fn refresh_analysis_cache_keeps_only_window_and_prefers_a_new_chart() {
     assert!(super::save_opportunity_history("sh600994", "not JSON".into()).is_err());
     assert!(super::cache::read_success("opportunity:sh600994").is_none());
 }
+
+#[test]
+fn upstream_market_clocks_accept_cn_hk_us_formats_and_reject_invalid_dates() {
+    use super::quotes::parse_quote_time;
+    for raw in [
+        "20261023162407",
+        "2026/10/23 16:24:07",
+        "2026-10-23 16:24:07",
+    ] {
+        assert_eq!(
+            parse_quote_time(raw).as_deref(),
+            Some("2026-10-23 16:24:07")
+        );
+    }
+    for raw in [
+        "",
+        "20260230162407",
+        "2026-10-23 24:00:00",
+        "2026-10-23 16:60:00",
+        "日期未知",
+        "2026-10-23",
+    ] {
+        assert_eq!(parse_quote_time(raw), None);
+    }
+}

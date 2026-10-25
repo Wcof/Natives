@@ -25,7 +25,7 @@
 - **Extension Page**：当前唯一业务 UI Surface，包括 Home、Files、Apps、Model/Usage 和通用 `app.html`。
 - **Thin Launcher**：唯一 `/Applications/Natives.app`；只打开 Chrome、定位扩展、展示安装引导和简短诊断，交接后退出。
 - **Files Host**：`native-file-host`；Files、Workspace、Core App Store 和产品配置的 Native Messaging owner。
-- **Model Host**：单用途 `model-host`；Provider、Credential、Local Proxy、AI Tool Integration 和 Usage 的 owner，不拥有 Files。
+- **Model Host**：单用途 `model-host`；Provider、Credential、直连供应商推理、AI 工具用量采集和 Usage 的 owner，不拥有 Files；不提供模型代理／路由。
 - **App Runtime**：`natives-app-runtime`；Natives 产品级官方内置应用通用运行时（Single Runtime Binary），对应 Native Messaging Host `com.natives.app_runtime`（本地开发为 `com.natives.local.app_runtime`）。
 - **Built-in App Runtime Process**：官方内置应用在用户打开时按需拉起的独立进程实例。每个活动 App Surface 对应一个 Runtime Process，进程一次只绑定一个 `appId`，关闭时彻底回收全部资源。
 - **Native Port**：Extension Page 通过 `chrome.runtime.connectNative` 建立的连接；默认拥有对应 Host 生命周期。
@@ -46,8 +46,8 @@
 - **Provider**：模型厂商身份。
 - **Connection**：真实 upstream endpoint、协议和网络配置。
 - **Credential**：可独立轮换和启停的认证材料引用；持久 Secret 在 OS Keychain。
-- **AI Tool Integration**：Claude Code、Codex、Z Code、Atom Code、Cursor、Pi、Hermes Agent、Harness 等工具的检测、配置和用量采集。
-- **Usage Event**：来自真实代理请求、账单或工具会话的规范化用量记录。
+- **AI Tool Integration**：Claude Code、Codex、Z Code、Atom Code、Cursor、Pi、Hermes Agent、Harness 等工具的本地日志用量采集与统计；不包含代理配置注入。
+- **Usage Event**：来自内部直连推理、外部工具会话或账单的规范化用量记录；缺失 usage 时必须显式标记，不能当作零消耗。
 - **Cost**：按可追溯价格版本计算或由账单提供的金额；估算必须明确标注。
 
 ## 数据与生命周期

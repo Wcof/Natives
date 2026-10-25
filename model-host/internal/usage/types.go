@@ -45,7 +45,10 @@ type Event struct {
 	CacheWriteTokens int64       `json:"cacheWriteTokens"`
 	ReasoningTokens  int64       `json:"reasoningTokens"`
 	TotalTokens      int64       `json:"totalTokens"`
-	CostMicro        int64       `json:"costMicro"` // in millionths of USD ($0.000001)
+	// UsageStatus 区分供应商报告了用量与未报告：reported=有计量证据；
+	// missing=上游未返回 usage。missing 时 token 数字不得用于推断零消耗。
+	UsageStatus string `json:"usageStatus,omitempty"`
+	CostMicro   int64  `json:"costMicro"` // in millionths of USD ($0.000001)
 	// CostStatus 区分"未计价"与合法零价：priced=价格命中（金额可为 0）；
 	// unpriced=当前目录无该 (provider, model) 价格。读时判定，由 handler 注解。
 	// BillingAtom 是唯一计费原子（ADR-0030 决策 2）：同一请求跨来源
@@ -94,22 +97,25 @@ type Filter struct {
 }
 
 type MetricCards struct {
-	TotalRequests    int64   `json:"totalRequests"`
-	TotalTokens      int64   `json:"totalTokens"`
-	SuccessRate      float64 `json:"successRate"`
-	TPS              float64 `json:"tps"`
-	CacheHitRate     float64 `json:"cacheHitRate"`
-	EstimatedCostUSD float64 `json:"estimatedCostUsd"`
+	MissingUsageRequests int64   `json:"missingUsageRequests"`
+	TotalRequests        int64   `json:"totalRequests"`
+	TotalTokens          int64   `json:"totalTokens"`
+	SuccessRate          float64 `json:"successRate"`
+	TPS                  float64 `json:"tps"`
+	CacheHitRate         float64 `json:"cacheHitRate"`
+	EstimatedCostUSD     float64 `json:"estimatedCostUsd"`
 	// Priced 仅在全部有用量的记录都有存储计费或价格覆盖时为 true。
 	// false 时消费方显示未知（--），严禁渲染成 $0.00。
 	Priced bool `json:"priced"`
 }
 
 type TrendPoint struct {
-	Timestamp string  `json:"timestamp"`
-	Requests  int64   `json:"requests"`
-	Tokens    int64   `json:"tokens"`
-	CostUSD   float64 `json:"costUsd"`
+	MissingUsageRequests int64   `json:"missingUsageRequests"`
+	Priced               bool    `json:"priced"`
+	Timestamp            string  `json:"timestamp"`
+	Requests             int64   `json:"requests"`
+	Tokens               int64   `json:"tokens"`
+	CostUSD              float64 `json:"costUsd"`
 }
 
 type TokenComposition struct {
@@ -129,11 +135,12 @@ type OverviewResult struct {
 }
 
 type RankItem struct {
-	Key      string  `json:"key"`
-	Name     string  `json:"name"`
-	Requests int64   `json:"requests"`
-	Tokens   int64   `json:"tokens"`
-	CostUSD  float64 `json:"costUsd"`
+	MissingUsageRequests int64   `json:"missingUsageRequests"`
+	Key                  string  `json:"key"`
+	Name                 string  `json:"name"`
+	Requests             int64   `json:"requests"`
+	Tokens               int64   `json:"tokens"`
+	CostUSD              float64 `json:"costUsd"`
 	// Priced 标记金额是否可信（存储计费>0 或价格目录覆盖该模型）；
 	// false 时消费方显示未知（--）而非 $0.00。
 	Priced  bool    `json:"priced"`
@@ -161,14 +168,15 @@ type EventsResult struct {
 // Key 是 (toolId, sourceInstanceId, sessionId) 的稳定三元组合键；
 // 同 session ID 跨工具、跨 profile/安装实例不合并。
 type SessionStat struct {
-	Key              string  `json:"key"`
-	ToolID           string  `json:"toolId,omitempty"`
-	SourceInstanceID string  `json:"sourceInstanceId,omitempty"`
-	Source           string  `json:"source,omitempty"`
-	Title            string  `json:"title,omitempty"`
-	Requests         int64   `json:"requests"`
-	Tokens           int64   `json:"tokens"`
-	CostUSD          float64 `json:"costUsd"`
+	MissingUsageRequests int64   `json:"missingUsageRequests"`
+	Key                  string  `json:"key"`
+	ToolID               string  `json:"toolId,omitempty"`
+	SourceInstanceID     string  `json:"sourceInstanceId,omitempty"`
+	Source               string  `json:"source,omitempty"`
+	Title                string  `json:"title,omitempty"`
+	Requests             int64   `json:"requests"`
+	Tokens               int64   `json:"tokens"`
+	CostUSD              float64 `json:"costUsd"`
 	// Priced 标记金额是否可信；false 时消费方显示未知（--）而非 $0.00。
 	Priced  bool   `json:"priced"`
 	FirstAt string `json:"firstAt,omitempty"`

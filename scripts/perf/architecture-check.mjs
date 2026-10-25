@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 const ROOT = resolve(fileURLToPath(new URL('../..', import.meta.url)));
 
 const IGNORED_DIRS = new Set([
-  'node_modules', 'target', 'dist', '.tmp', '.git', '.cargo', 'docs', '.runtime-evidence', 'third_party',
+  'node_modules', 'target', 'dist', '.tmp', '.git', '.cargo', 'docs', '.runtime-evidence',
 ]);
 
 const ALLOWED_EXCEED_REASONS = new Map([
@@ -18,12 +18,12 @@ const ALLOWED_EXCEED_REASONS = new Map([
   ['modules/fund/src/api/home_api.rs', 'Fund home/finance/group-plan REST endpoints: single routing owner for the home surface; group-plan endpoints added by home remediation plan 11 with focused validation helpers and API tests; domain logic lives in group_plan.rs/goals.rs/finance.rs; analysis-report endpoints split to reports_api.rs.'],
   ['modules/fund/src/group_plan.rs', 'Custom money-group plan domain (plan 11 §4): plan CRUD/validation/transaction, same-snapshot group allocation projection, legacy import preview, and conservation fixture tests cohere as one domain module; projection and persistence share the same types.'],
   ['extension/files.js', 'Workspace shell controller: files.html surface, section routing and app-menu wiring'],
-  ['extension/model-settings.js', 'Model settings dialog central controller: snapshot loop, action dispatch, OAuth/auth-file/quota flows over extracted per-domain controllers (usage/agent/advanced/oauth modules)'],
   ['scripts/apps/fixtures/sample-host/sample_host.rs', 'Built-in module Host fixture: activation verification, lock hierarchy, and runtime HTTP server'],
   ['modules/fund/src/otc_ops.rs', 'OTC fund order state machine (N09): create/confirm/cancel/arrival for buy, sell and two-leg conversions with cash reservation and trade_cash settlement couplings kept atomic in one domain module; plan scheduling lives in otc_plans.rs'],
   ['modules/fund/src/otc_ops_tests.rs', 'OTC fund operation integration tests (N09): holding derivation/calibration, order state machine with cash couplings, conversion legs and plan period dedup co-located as one scenario suite'],
   ['extension/tests/space-seven-widgets-verify.test.mjs', 'AI seven-widget space visual acceptance harness: appearance/font/chart-switch scenarios with Shadow DOM assertions'],
   ['modules/fund/ui/src/home.js', 'Fund home controller (plan 11/panwatch upgrade): tri-state display, group allocation projection, auto-information list/detail with personal state, goal/privacy/lifecycle wiring; evidence AI panel and manage dialogs live in home-evidence.js/home-manage.js'],
+  ['modules/fund/ui/src/home-overview.js', 'Home overview projection owner: securities/income cards, asset-trend chart with group series (demo replica: dots/headline/category cards share one snapshot closure), benchmark, DES-D04 health drawer and group-allocation projection render from the same frozen snapshot helpers; splitting would re-expose the closure state as module globals'],
   ['modules/fund/ui/src/stock-detail.js', 'Stock detail workspace controller: data pipeline, session-aware polling lifecycle, detail panel and UI event binding; chart rendering already split into stock-detail-chart.js'],
   ['modules/fund/ui/src/positions-view.js', 'Fund positions controller: tab/account projection, holding rows with metrics band, add/transfer/edit dialogs and per-row action dispatch; N09 OTC operations delegated to otc-ops.js'],
   ['modules/fund/ui/src/stock-drawings.js', 'Stock drawings engine interaction layer: CRUD, magnet snap, tool/toolbar/popover event binding; pure geometry and graphic building already split into stock-drawings-shapes.js'],

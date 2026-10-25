@@ -5,12 +5,9 @@
 
 ## 已纳入构建的代码
 
-### CLIProxyAPI v7（MIT）
-
-- 上游：`github.com/router-for-me/CLIProxyAPI/v7`
-- 锁定提交与版本：见 `third_party/cliproxyapi/version.txt` 和 `NATIVES_FORK.md`。
-- 本仓库只编译 SDK、认证和网关所需子集；许可证保留在 `third_party/cliproxyapi/LICENSE`。
-- 唯一生产调用方是 `model-host`。它不提供管理 UI、通用 Agent Runtime 或第二凭证/配置权威。
+当前 `model-host` 不链接任何模型代理／路由内核。ADR-0044 已删除
+`third_party/cliproxyapi` 及其 SDK、补丁和构建依赖；内部 AI 调用由 Model Host
+按供应商协议直接发起。
 
 ## 本地行为参考（未复制）
 
@@ -18,7 +15,7 @@
 
 | 项目 | 用途 | 当前落点 |
 |---|---|---|
-| EasyCLIProxyAPI | Provider、账号、用量与认证交互参考 | `extension/model-*`、`model-host/internal/` |
+| EasyCLIProxyAPI | 历史用量导入格式（V3 `usage.db`）与价格源的兼容参考；不参与推理 | `model-host/internal/usage/importer.go`、`pricing.go` |
 | TablissNG | 空间 Widget、背景和主题行为参考 | `extension/space*`、`extension/plugins/` |
 | FundVal-Live | 基金业务规则、来源和 provenance 参考 | 内置 Fund 模块的产品实现与测试 |
 

@@ -1,7 +1,7 @@
-//! A Surface-owned thin Model client. The existing Go Hub remains the sole AI writer.
+//! A Surface-owned thin Model client. The Go Model Host remains the sole AI writer.
 use crate::protocol::{read_frame, Request, MAX_MESSAGE_BYTES};
 use serde_json::{json, Value};
-use std::collections::{HashMap, VecDeque};
+use std::collections::HashMap;
 use std::io::{self, Write};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -9,7 +9,7 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 
-type Reply = (String, mpsc::Sender<Result<Value, String>>);
+type Reply = mpsc::Sender<Result<Value, String>>;
 type Pending = Arc<Mutex<HashMap<String, Reply>>>;
 
 pub(super) struct ModelWorker {
@@ -17,8 +17,6 @@ pub(super) struct ModelWorker {
     input: Option<mpsc::SyncSender<Request>>,
     threads: Vec<JoinHandle<()>>,
     pending: Pending,
-    oauth: Arc<Mutex<VecDeque<String>>>,
-    events: Arc<Mutex<VecDeque<Value>>>,
 }
 
 impl ModelWorker {
@@ -34,8 +32,6 @@ impl ModelWorker {
             return Err(io::Error::other("Model pipes unavailable"));
         };
         let pending: Pending = Default::default();
-        let oauth: Arc<Mutex<VecDeque<String>>> = Default::default();
-        let events: Arc<Mutex<VecDeque<Value>>> = Default::default();
         let (input, receiver) = mpsc::sync_channel::<Request>(16);
         let write_pending = pending.clone();
         let writer = thread::spawn(move || {
@@ -56,31 +52,17 @@ impl ModelWorker {
                 }
             }
         });
-        let (read_pending, read_oauth, read_events) =
-            (pending.clone(), oauth.clone(), events.clone());
+        let read_pending = pending.clone();
         let reader = thread::spawn(move || {
             while let Some(body) = read_frame(&mut stdout) {
                 if body.len() >= MAX_MESSAGE_BYTES {
                     break;
                 }
-                let Ok(mut frame) = serde_json::from_slice::<Value>(&body) else {
+                let Ok(frame) = serde_json::from_slice::<Value>(&body) else {
                     break;
                 };
                 if frame["event"].is_string() {
                     changed.store(true, Ordering::Release);
-                    if frame["event"] == "model_oauth_state_changed" {
-                        if let Some(result) = frame["result"].as_object_mut() {
-                            result.remove("snapshot");
-                        }
-                        if frame.to_string().len() <= 4096 {
-                            if let Ok(mut events) = read_events.lock() {
-                                if events.len() >= 32 {
-                                    events.pop_front();
-                                }
-                                events.push_back(frame);
-                            }
-                        }
-                    }
                     continue;
                 }
                 let Some(id) = frame["id"].as_str() else {
@@ -90,23 +72,10 @@ impl ModelWorker {
                     .lock()
                     .ok()
                     .and_then(|mut pending| pending.remove(id));
-                let Some((method, reply)) = reply else {
+                let Some(reply) = reply else {
                     break;
                 };
                 if frame["ok"] == true {
-                    if matches!(
-                        method.as_str(),
-                        "model_oauth_start" | "model_account_reauth"
-                    ) {
-                        if let Some(id) = frame["result"]["sessionId"].as_str() {
-                            if let Ok(mut sessions) = read_oauth.lock() {
-                                if sessions.len() >= 32 {
-                                    sessions.pop_front();
-                                }
-                                sessions.push_back(id.into());
-                            }
-                        }
-                    }
                     let _ = reply.send(Ok(frame["result"].clone()));
                 } else {
                     let _ = reply.send(Err(frame["errorCode"]
@@ -123,8 +92,6 @@ impl ModelWorker {
             input: Some(input),
             threads: vec![writer, reader],
             pending,
-            oauth,
-            events,
         })
     }
 
@@ -135,7 +102,7 @@ impl ModelWorker {
             if pending.len() >= 16 || pending.contains_key(&request.id) {
                 return Err("MODEL_REQUEST_LIMIT".into());
             }
-            pending.insert(request.id.clone(), (request.method.clone(), reply));
+            pending.insert(request.id.clone(), reply);
         }
         if self
             .input
@@ -158,31 +125,13 @@ impl ModelWorker {
         }
     }
 
-    pub fn owns_oauth(&self, id: &str) -> bool {
-        self.oauth
-            .lock()
-            .is_ok_and(|sessions| sessions.iter().any(|s| s == id))
-    }
     pub fn is_alive(&self) -> bool {
         self.child
             .lock()
             .is_ok_and(|mut child| matches!(child.try_wait(), Ok(None)))
     }
     pub fn events(&self) -> Value {
-        let events = self
-            .events
-            .lock()
-            .map(|events| {
-                events
-                    .iter()
-                    .filter(|event| {
-                        self.owns_oauth(event["result"]["sessionId"].as_str().unwrap_or(""))
-                    })
-                    .cloned()
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default();
-        json!({"events":events})
+        json!({"events": Vec::<Value>::new()})
     }
     pub fn stop(&self) {
         if let Ok(mut child) = self.child.lock() {
@@ -194,7 +143,7 @@ impl ModelWorker {
 
 fn fail_pending(pending: &Pending) {
     if let Ok(mut pending) = pending.lock() {
-        for (_, (_, reply)) in pending.drain() {
+        for (_, reply) in pending.drain() {
             let _ = reply.send(Err("MODEL_HOST_DISCONNECTED".into()));
         }
     }

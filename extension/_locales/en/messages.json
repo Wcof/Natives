@@ -160,210 +160,6 @@
   "addWidget": {
     "message": "Add widget"
   },
-  "agentAppVersion": {
-    "message": "App Version"
-  },
-  "agentApply": {
-    "message": "Apply Changes"
-  },
-  "agentApplyDone": {
-    "message": "Configuration updated"
-  },
-  "agentClaudeMappingHint": {
-    "message": "Route Claude role requests to concrete gateway models; 1M enables million-token context."
-  },
-  "agentClaudeMappingTitle": {
-    "message": "Claude Model Mappings"
-  },
-  "agentCliVersion": {
-    "message": "CLI Version"
-  },
-  "agentClientDetected": {
-    "message": "Client detected"
-  },
-  "agentClientMissing": {
-    "message": "Client not found"
-  },
-  "agentClientVersion": {
-    "message": "Client version"
-  },
-  "agentClientsDetected": {
-    "message": "local clients"
-  },
-  "agentCloseConfig": {
-    "message": "Close Modification"
-  },
-  "agentCloseConfirm": {
-    "message": "Close modification and restore the original config?"
-  },
-  "agentCodexClear": {
-    "message": "Clear Config"
-  },
-  "agentCodexClearConfirm": {
-    "message": "Clear the Codex config and credential files?"
-  },
-  "agentCodexCleared": {
-    "message": "Deleted $1 files"
-  },
-  "agentCodexDangerHint": {
-    "message": "Removes the Codex config and credential files written by this tool, restoring the unmanaged state."
-  },
-  "agentCodexDangerTitle": {
-    "message": "Codex Config Cleanup"
-  },
-  "agentCompactPct": {
-    "message": "Auto-compact Trigger %"
-  },
-  "agentCoreConfig": {
-    "message": "Core Configuration"
-  },
-  "agentDefault": {
-    "message": "Default Config"
-  },
-  "agentDetectFailed": {
-    "message": "Detection failed"
-  },
-  "agentDetecting": {
-    "message": "Detecting local clients…"
-  },
-  "agentDisableCompact": {
-    "message": "Disable auto-compact"
-  },
-  "agentInstallStatus": {
-    "message": "Install status"
-  },
-  "agentInstalled": {
-    "message": "Installed"
-  },
-  "agentInstalledKeepConfig": {
-    "message": "Installed · original config kept"
-  },
-  "agentLaunch": {
-    "message": "Launch"
-  },
-  "agentLaunchDirPrompt": {
-    "message": "Working directory (blank for home):"
-  },
-  "agentLaunched": {
-    "message": "Launched"
-  },
-  "agentLocalClients": {
-    "message": "Local Clients"
-  },
-  "agentLocalClientsHint": {
-    "message": "Choose an agent to manage"
-  },
-  "agentManualClient": {
-    "message": "Gateway parameters are managed automatically"
-  },
-  "agentManualClientHint": {
-    "message": "Launching routes the client through the local gateway."
-  },
-  "agentMaxContext": {
-    "message": "Max Context Tokens"
-  },
-  "agentModelLabel": {
-    "message": "Default model"
-  },
-  "agentModelNoMatch": {
-    "message": "No matching models"
-  },
-  "agentModelSearchPlaceholder": {
-    "message": "Search or pick a model"
-  },
-  "agentModelsEmpty": {
-    "message": "No models found on the local gateway yet. Add providers or accounts first."
-  },
-  "agentModelsHint": {
-    "message": "available models, first one selected by default"
-  },
-  "agentModelsLoading": {
-    "message": "Reading available models…"
-  },
-  "agentModified": {
-    "message": "Modified"
-  },
-  "agentModifyHint": {
-    "message": "After applying or closing the config, fully restart the client; model and context length apply to new sessions."
-  },
-  "agentModifyTitle": {
-    "message": "Config Changes"
-  },
-  "agentNoClientsFound": {
-    "message": "No supported agent clients detected"
-  },
-  "agentNotInstalled": {
-    "message": "Not detected"
-  },
-  "agentNotInstalledHint": {
-    "message": "Install the client, then Re-detect."
-  },
-  "agentNotInstalledTitle": {
-    "message": "Not detected"
-  },
-  "agentPiDone": {
-    "message": "Pi plugin action finished"
-  },
-  "agentPiInstall": {
-    "message": "Install Plugin"
-  },
-  "agentPiInstalled": {
-    "message": "Pi provider plugin installed"
-  },
-  "agentPiMissing": {
-    "message": "Pi provider plugin not installed"
-  },
-  "agentPiPluginVersion": {
-    "message": "Plugin Version"
-  },
-  "agentPiRepair": {
-    "message": "Repair Plugin"
-  },
-  "agentPiTitle": {
-    "message": "Pi Provider Plugin"
-  },
-  "agentPiUninstall": {
-    "message": "Uninstall Plugin"
-  },
-  "agentPiUpdate": {
-    "message": "Update Plugin"
-  },
-  "agentRedetect": {
-    "message": "Re-detect"
-  },
-  "agentSelectHint": {
-    "message": "Select an agent client on the left"
-  },
-  "agentSelectHintDetail": {
-    "message": "After detection, review install status and apply gateway config."
-  },
-  "agentSessionDeleteConfirm": {
-    "message": "Delete this session recording?"
-  },
-  "agentSessionDeleted": {
-    "message": "Session deleted"
-  },
-  "agentSessionName": {
-    "message": "Session"
-  },
-  "agentSessionsEmpty": {
-    "message": "No Codex session recordings found"
-  },
-  "agentTabCore": {
-    "message": "Core Configuration"
-  },
-  "agentTabSessions": {
-    "message": "Sessions"
-  },
-  "agentUpdate": {
-    "message": "Update Config"
-  },
-  "agentUseModel": {
-    "message": "Use Model"
-  },
-  "agentVersionUnknown": {
-    "message": "Unknown"
-  },
   "aiPerfAck": {
     "message": "Mark as seen"
   },
@@ -456,6 +252,9 @@
   },
   "aiPerfLoadFailed": {
     "message": "Failed to load usage data"
+  },
+  "aiPerfUsageIncomplete": {
+    "message": "Some requests did not report usage; showing the known portion."
   },
   "aiPerfLoading": {
     "message": "Loading usage data…"
@@ -1310,7 +1109,7 @@
     "message": "Files"
   },
   "filesCount": {
-    "message": "files"
+    "message": "credentials"
   },
   "filterCurrentDirectory": {
     "message": "Filter current folder"
@@ -1420,6 +1219,105 @@
   "fundHomeAddToSimulation": {
     "message": "Add to simulation"
   },
+  "fundHomeAllocationEyebrow": {
+    "message": "Portfolio allocation"
+  },
+  "fundHomeAllocationTitle": {
+    "message": "Asset allocation"
+  },
+  "fundHomeAllocationSubtitle": {
+    "message": "Actual distribution vs target weights · each asset counted once"
+  },
+  "fundHomeAllocationTotal": {
+    "message": "Classified assets"
+  },
+  "fundHomeAllocationTargetTotal": {
+    "message": "Target total"
+  },
+  "fundHomeAllocationUnassigned": {
+    "message": "Unassigned"
+  },
+  "fundHomeAllocationActual": {
+    "message": "Actual distribution"
+  },
+  "fundHomeAllocationValuation": {
+    "message": "At current valuation"
+  },
+  "fundHomeAllocationTarget": {
+    "message": "Target vs actual"
+  },
+  "fundHomeAllocationDeviation": {
+    "message": "Deviation"
+  },
+  "fundHomeAllocationNote": {
+    "message": "Filled bars show actual weights; empty space is the remaining share. Targets are reference only; no automatic trading. Missing valuations remain unknown."
+  },
+  "fundHomeAllocationDetail": {
+    "message": "View category details"
+  },
+  "fundHomeAllocationSummaryCount": {
+    "message": "{groups} categories · {assets} assets"
+  },
+  "fundHomeAllocationPartial": {
+    "message": "Some categories have no valuation"
+  },
+  "fundHomeAllocationTargetNote": {
+    "message": "{groups} categories"
+  },
+  "fundHomeAllocationAllAssigned": {
+    "message": "All assets classified"
+  },
+  "fundHomeAllocationUnassignedNote": {
+    "message": "Not included in target categories"
+  },
+  "fundHomeInsightsSubtitle": {
+    "message": "Returns by asset type, asset trends and related markets in one place"
+  },
+  "fundHomeHistoryTitle": {
+    "message": "Asset trend"
+  },
+  "fundHomeHistoryAllSeries": {
+    "message": "All"
+  },
+  "fundHomeHistoryViewLabel": {
+    "message": "Trend view"
+  },
+  "fundHomeHistoryViewAmount": {
+    "message": "Amount"
+  },
+  "fundHomeHistoryViewPercent": {
+    "message": "Percent"
+  },
+  "fundHomeHistoryViewAmountLocked": {
+    "message": "Available after showing amounts"
+  },
+  "fundHomeHistoryGroupsCount": {
+    "message": "{n} groups"
+  },
+  "fundHomeHistorySubtitle": {
+    "message": "Total assets stay visible; select a group to overlay."
+  },
+  "fundHomeHistoryCategories": {
+    "message": "Group trends"
+  },
+  "fundHomeHistoryCategoriesHint": {
+    "message": "Click to switch the chart · scroll sideways for more"
+  },
+  "fundHomeMarket": {
+    "message": "Market"
+  },
+  "fundHomeMarketGroups": {
+    "message": "Market groups"
+  },
+  "fundHomeMarketA": {
+    "message": "A-shares"
+  },
+  "fundHomeMarketHK": {
+    "message": "Hong Kong"
+  },
+  "fundHomeMarketUS": {
+    "message": "United States"
+  },
   "fundHomeNewsPanelTitle": {
     "message": "News & Insights"
   },
@@ -1428,6 +1326,30 @@
   },
   "fundHomeAiPanelBadge": {
     "message": "In-Place Analysis"
+  },
+  "fundHomeAiReading": {
+    "message": "Reading the selected news…"
+  },
+  "fundHomeAiHoldings": {
+    "message": "Combining current holdings…"
+  },
+  "fundHomeAiReadingScope": {
+    "message": "Reading scope:"
+  },
+  "fundHomeAiFullTextSent": {
+    "message": "the full cached body was sent."
+  },
+  "fundHomeAiBodyTruncated": {
+    "message": "the body was truncated; sent {sent} of {total} characters, so the model did not read the full text."
+  },
+  "fundHomeAiSummaryFallback": {
+    "message": "The full text is unavailable or expired; this analysis uses the summary only."
+  },
+  "fundHomeAiBasisSummary": {
+    "message": "summary only; full text was not read."
+  },
+  "fundHomeAiBasisTitle": {
+    "message": "title only; material is insufficient."
   },
   "fundHomeNewsAiBtn": {
     "message": "AI Decision"
@@ -2059,7 +1981,7 @@
     "message": "Group"
   },
   "fundHomeGroupAdjust": {
-    "message": "Adjust groups"
+    "message": "Manage categories"
   },
   "fundHomeGroupAllocationPlan": {
     "message": "Financial allocation"
@@ -2224,6 +2146,9 @@
   "fundHomeIndexShenzhen": {
     "message": "Shenzhen Component"
   },
+  "fundHomeIndexBeijing50": {
+    "message": "BSE 50"
+  },
   "fundHomeIndexStar50": {
     "message": "STAR 50"
   },
@@ -2245,6 +2170,15 @@
   },
   "fundHomeInformationContentExpired": {
     "message": "Cached text is over 24 hours old or has an unknown retrieval time. Refresh explicitly to verify the source."
+  },
+  "fundHomeInformationContentLoading": {
+    "message": "Fetching full text. The saved summary remains available…"
+  },
+  "fundHomeInformationRetry": {
+    "message": "Retry reading"
+  },
+  "fundHomeInformationContentUnavailable": {
+    "message": "The source has no readable text available. Open the original to view it."
   },
   "fundHomeInformationCouldNotLoad": {
     "message": "Information failed to load: ",
@@ -2269,7 +2203,7 @@
     "description": "P06 information: fundHomeInformationEmpty"
   },
   "fundHomeInformationFetchContent": {
-    "message": "Fetch announcement text",
+    "message": "Fetch full text",
     "description": "P06 information: fundHomeInformationFetchContent"
   },
   "fundHomeInformationFilter": {
@@ -2319,7 +2253,7 @@
     "description": "P06 information: fundHomeInformationRefreshDone"
   },
   "fundHomeInformationRefreshPartial": {
-    "message": "Information refreshed, but some sources failed: ",
+    "message": "Information refreshed, but some sources returned partial results: ",
     "description": "P06 information: fundHomeInformationRefreshPartial"
   },
   "fundHomeInformationRelations": {
@@ -2481,9 +2415,6 @@
   },
   "fundHomeMarkUnread": {
     "message": "Mark unread"
-  },
-  "fundHomeMarket": {
-    "message": "Market"
   },
   "fundHomeMarketDataCouldNotLoad": {
     "message": "Market data could not load ("
@@ -3169,9 +3100,6 @@
   "fundHomeOverviewFlowExcluded": {
     "message": "Based on reconciled valuations, excluding net external contributions."
   },
-  "fundHomeOverviewFlowTiming": {
-    "message": "Return uses the end-of-day cash-flow convention. The valuation curve includes contributions and is not a return curve."
-  },
   "fundHomeOverviewHealth": {
     "message": "Portfolio health"
   },
@@ -3181,29 +3109,14 @@
   "fundHomeOverviewHistoryHidden": {
     "message": "Investment charts are hidden in private mode."
   },
-  "fundHomeOverviewHistoryLabel": {
-    "message": "Normalized recorded valuations; missing dates are not connected."
-  },
   "fundHomeOverviewHoldings": {
     "message": "View holdings"
-  },
-  "fundHomeOverviewMissingBaseline": {
-    "message": "The selected range has no opening valuation; return is unavailable."
-  },
-  "fundHomeOverviewMissingDays": {
-    "message": "Some valuation dates are missing. Only recorded points are shown; missing returns are not estimated."
-  },
-  "fundHomeOverviewMissingEnd": {
-    "message": "Today’s reconciled valuation is missing; return is unavailable."
   },
   "fundHomeOverviewMissingPrice": {
     "message": "Records without prices"
   },
   "fundHomeOverviewNoBenchmark": {
     "message": "An aligned benchmark series is unavailable; excess return cannot be calculated."
-  },
-  "fundHomeOverviewNoHistory": {
-    "message": "Save actual valuations on at least two dates to show a curve."
   },
   "fundHomeOverviewNoLookThrough": {
     "message": "The same security is merged across accounts. Fund constituents are not available. Cash and offline investments are excluded from the concentration denominator."
@@ -3252,12 +3165,6 @@
   },
   "fundHomeOverviewUnrealized": {
     "message": "Unrealized securities return"
-  },
-  "fundHomeOverviewUnverified": {
-    "message": "Historical valuations or cash flows are not fully reconciled."
-  },
-  "fundHomeOverviewZeroBaseline": {
-    "message": "A valuation denominator is nonpositive; time-weighted return is unavailable."
   },
   "fundHomeOverweight": {
     "message": "Overweight"
@@ -3645,9 +3552,6 @@
   },
   "fundHomeSettlementStatus": {
     "message": "Settlement status / account"
-  },
-  "fundHomeShowAmounts": {
-    "message": "Show amounts"
   },
   "fundHomeShowArchived": {
     "message": "Include archived records"
@@ -4549,7 +4453,7 @@
     "message": "Import"
   },
   "importAuthFilesHint": {
-    "message": "Click Import to upload .json credentials, or login to save automatically."
+    "message": "Import a .json credential file, or keep an existing OAuth account, to query quota."
   },
   "importCancelled": {
     "message": "Import cancelled"
@@ -4941,42 +4845,6 @@
   "modelAccessKeyUnavailable": {
     "message": "No access key has been generated"
   },
-  "modelAccountActive": {
-    "message": "Available"
-  },
-  "modelAccountModelsEmpty": {
-    "message": "No models available"
-  },
-  "modelAccountModelsLoadFailed": {
-    "message": "Failed to load models"
-  },
-  "modelAccountModelsSaved": {
-    "message": "Account model settings saved"
-  },
-  "modelAccountModelsSearch": {
-    "message": "Search models"
-  },
-  "modelAccountModelsSelectAll": {
-    "message": "Enable all"
-  },
-  "modelAccountModelsSelectNone": {
-    "message": "Disable all"
-  },
-  "modelAccountModelsSelectVisible": {
-    "message": "Toggle visible"
-  },
-  "modelAccountModelsSummary": {
-    "message": "$1 models, $2 enabled"
-  },
-  "modelAccountModelsTitle": {
-    "message": "Account models"
-  },
-  "modelAccountNeedsReauth": {
-    "message": "Sign-in required"
-  },
-  "modelAccounts": {
-    "message": "accounts"
-  },
   "modelActions": {
     "message": "Actions"
   },
@@ -4984,7 +4852,7 @@
     "message": "Add confirmed expense"
   },
   "modelAddProvider": {
-    "message": "Add custom provider"
+    "message": "Add AI connection"
   },
   "modelAdvBasic": {
     "message": "Basic Control"
@@ -4994,15 +4862,6 @@
   },
   "modelAdvBasicTitle": {
     "message": "Gateway Control"
-  },
-  "modelAdvKernel": {
-    "message": "Core Settings"
-  },
-  "modelAdvKernelDesc": {
-    "message": "Configure failure retries. A running gateway restarts safely after saving."
-  },
-  "modelAdvKernelTitle": {
-    "message": "Core Retry Settings"
   },
   "modelAdvKeys": {
     "message": "Access Keys"
@@ -5024,9 +4883,6 @@
   },
   "modelAdvancedSettingsDescription": {
     "message": "Manage gateway control, access keys, network routing, and core parameters."
-  },
-  "modelAgentSettings": {
-    "message": "Agent Clients"
   },
   "modelAlias": {
     "message": "Alias"
@@ -5184,9 +5040,6 @@
   "modelCustomRange": {
     "message": "Custom range"
   },
-  "modelDeleteAccountConfirm": {
-    "message": "Delete this OAuth account?"
-  },
   "modelDeleteKeyConfirm": {
     "message": "Are you sure you want to delete this access key? Clients will lose access immediately."
   },
@@ -5202,15 +5055,6 @@
   "modelEndpointUnavailable": {
     "message": "Gateway endpoint is unavailable"
   },
-  "modelErrorGatewayRestart": {
-    "message": "The configuration was saved, but the gateway could not restart. Try again."
-  },
-  "modelErrorGatewayStart": {
-    "message": "The local model gateway could not start."
-  },
-  "modelErrorGatewayStop": {
-    "message": "The local model gateway could not stop."
-  },
   "modelErrorInternal": {
     "message": "The model settings operation failed."
   },
@@ -5222,9 +5066,6 @@
   },
   "modelErrorNotFound": {
     "message": "This configuration no longer exists. Refresh and try again."
-  },
-  "modelErrorOAuthInProgress": {
-    "message": "Another OAuth authorization is already in progress."
   },
   "modelErrorRevisionConflict": {
     "message": "The configuration changed in another page. Refresh and try again."
@@ -5301,15 +5142,6 @@
   "modelFetchModels": {
     "message": "Fetch models"
   },
-  "modelGatewayBaseURL": {
-    "message": "Current API URL"
-  },
-  "modelGatewayNotRunning": {
-    "message": "Gateway is not running"
-  },
-  "modelGatewaySummary": {
-    "message": "$1 providers · $2 accounts · $3 models"
-  },
   "modelGeminiCompat": {
     "message": "Gemini Compatible"
   },
@@ -5337,48 +5169,6 @@
   "modelInvalidTimeRange": {
     "message": "End time must be after start time"
   },
-  "modelKernelCheckDone": {
-    "message": "Checked latest kernel version"
-  },
-  "modelKernelPhaseBuild": {
-    "message": "Building new kernel (~1 min)…"
-  },
-  "modelKernelPhasePatches": {
-    "message": "Applying local patches…"
-  },
-  "modelKernelPhaseQueued": {
-    "message": "Queued…"
-  },
-  "modelKernelPhaseRestart": {
-    "message": "Restarting kernel…"
-  },
-  "modelKernelPhaseSource": {
-    "message": "Syncing upstream source…"
-  },
-  "modelKernelPhaseSwap": {
-    "message": "Swapping kernel binary…"
-  },
-  "modelKernelUpToDate": {
-    "message": "Up to date"
-  },
-  "modelKernelMigrationRequired": {
-    "message": "The upstream kernel requires SDK and local patch migration. Please update the complete Natives product."
-  },
-  "modelKernelUpdateFailed": {
-    "message": "Kernel update failed"
-  },
-  "modelKernelUpdateTimeout": {
-    "message": "Kernel update timed out, please retry"
-  },
-  "modelKernelUpdated": {
-    "message": "Kernel updated successfully"
-  },
-  "modelKernelUpdating": {
-    "message": "Updating kernel…"
-  },
-  "modelKernelVersion": {
-    "message": "Kernel Version"
-  },
   "modelKeyCopied": {
     "message": "Access key copied to clipboard"
   },
@@ -5394,23 +5184,11 @@
   "modelKeyRotatedAndCopied": {
     "message": "Access key rotated and copied to clipboard"
   },
-  "modelLatestKernelVersion": {
-    "message": "Latest Version"
-  },
   "modelList": {
     "message": "Models"
   },
   "modelLoading": {
     "message": "Loading model settings…"
-  },
-  "modelLocalProxy": {
-    "message": "Local proxy"
-  },
-  "modelLocalProxyDescription": {
-    "message": "Manage local compatible endpoints, access keys, and resident mode."
-  },
-  "modelLoginAddAccount": {
-    "message": "Add another account"
   },
   "modelLoginCancelAction": {
     "message": "Cancel sign-in"
@@ -5505,15 +5283,6 @@
   "modelNoUsageRecords": {
     "message": "No Usage Records"
   },
-  "modelOAuthLogin": {
-    "message": "OAuth Login"
-  },
-  "modelOAuthModels": {
-    "message": "OAuth"
-  },
-  "modelOAuthModelsHint": {
-    "message": "Models sync automatically after account authorization and gateway startup."
-  },
   "modelOpenAICompat": {
     "message": "OpenAI Compatible"
   },
@@ -5552,9 +5321,6 @@
   },
   "modelProviderOptional": {
     "message": "Provider (optional)"
-  },
-  "modelProxyURL": {
-    "message": "Upstream Proxy URL"
   },
   "modelQuotaInquiry": {
     "message": "Quota"
@@ -5604,9 +5370,6 @@
   "modelResident": {
     "message": "Keep running after the browser closes"
   },
-  "modelRestartGateway": {
-    "message": "Restart"
-  },
   "modelRestarting": {
     "message": "Restarting"
   },
@@ -5638,16 +5401,13 @@
     "message": "Models and services"
   },
   "modelSettingsDescription": {
-    "message": "Manage model providers, including custom models, OAuth models, and local proxy settings."
+    "message": "Manage built-in AI connections, usage, and quota."
   },
   "modelSettingsSaved": {
     "message": "Gateway settings saved"
   },
   "modelSoftwareVersion": {
     "message": "Software Version"
-  },
-  "modelStartGateway": {
-    "message": "Start"
   },
   "modelStartTime": {
     "message": "Start time"
@@ -5660,9 +5420,6 @@
   },
   "modelStatusRefreshed": {
     "message": "Status Refreshed"
-  },
-  "modelStopGateway": {
-    "message": "Stop"
   },
   "modelStopped": {
     "message": "Stopped"
@@ -5845,7 +5602,7 @@
     "message": "No active credentials available"
   },
   "noAuthFiles": {
-    "message": "No auth files"
+    "message": "No queryable credentials"
   },
   "noFilterResults": {
     "message": "No matching items in this folder"
@@ -7669,10 +7426,10 @@
   "fundChartDrawingDashdashed": {
     "message": "Dashed"
   },
-  "fundChartDrawingDashdashed-dense": {
+  "fundChartDrawingDashdashedDense": {
     "message": "Dense dash"
   },
-  "fundChartDrawingDashdashed-sparse": {
+  "fundChartDrawingDashdashedSparse": {
     "message": "Sparse dash"
   },
   "fundChartDrawingVisible": {
@@ -8724,26 +8481,83 @@
   "fundHomeRangePartial": {
     "message": "Partial date coverage"
   },
-  "fundHomeRangeTruncated": {
-    "message": "Showing the latest 400 actual recorded points"
-  },
-  "fundHomeHistoryOneValue": {
-    "message": "Recorded asset value"
+  "fundHomeHistoryRecord": {
+    "message": "Record today’s valuation"
   },
   "fundHomeHistoryCurrentValue": {
     "message": "Current assets (not a historical record)"
   },
+  "fundHomeHistoryGroupTotal": {
+    "message": "Total assets"
+  },
+  "fundHomeHistoryChange": {
+    "message": "Change over range"
+  },
+  "fundHomeHistoryGroupUnavailable": {
+    "message": "A category trend needs valid valuations on at least two dates; missing history is not backfilled."
+  },
+  "fundHomeHistoryIntraday": {
+    "message": "Intraday valuation observations using the latest available prices, not confirmed returns; gaps over 5 minutes are disconnected"
+  },
+  "fundHomeHistoryReconstructed": {
+    "message": "Historical valuation reference using registered quantities and NAV published by each date, grouped by current assignments. Uses the latest NAV within 7 days; missing prices break the line. Not verified returns."
+  },
+  "fundHomeHistoryReplayLimit": {
+    "message": "Holding history exceeds the replay limit. Only saved valuations are shown."
+  },
+  "fundHomeHistoryIntradayOnePoint": {
+    "message": "Intraday valuations are accumulating automatically. A trend appears after the next valid minute observation; collection pauses while hidden or closed."
+  },
+  "fundHomeHistoryGroupValue": {
+    "message": "Category asset valuation"
+  },
+  "fundHomeHistoryGroupMissing": {
+    "message": "No usable valuation for this category. Check the prices or valuations of its assets."
+  },
   "fundHomeHistoryOnePoint": {
     "message": "Only one valuation is available, so there is no trend yet. Record today’s valuation to build actual history."
   },
-  "fundHomeHistoryValuationGap": {
-    "message": "Prices are missing or valuations are outdated for some assets. Only the known value is shown; review valuations first."
+  "fundHomeHistoryOneValue": {
+    "message": "Recorded asset value"
   },
   "fundHomeHistoryRangeEmpty": {
     "message": "No valuations were recorded in this range. Current assets cannot reconstruct past values."
   },
-  "fundHomeHistoryRecord": {
-    "message": "Record today’s valuation"
+  "fundHomeHistorySeries": {
+    "message": "Choose the asset trend to display"
+  },
+  "fundHomeHistoryValuationGap": {
+    "message": "Prices are missing or valuations are outdated for some assets. Only the known value is shown; review valuations first."
+  },
+  "fundHomeOverviewFlowTiming": {
+    "message": "Return uses the end-of-day cash-flow convention. The valuation curve includes contributions and is not a return curve."
+  },
+  "fundHomeOverviewHistoryLabel": {
+    "message": "Total assets and the selected category normalized to the first date in range; missing dates are not connected."
+  },
+  "fundHomeOverviewMissingBaseline": {
+    "message": "The selected range has no opening valuation; return is unavailable."
+  },
+  "fundHomeOverviewMissingDays": {
+    "message": "Some valuation dates are missing. Only recorded points are shown; missing returns are not estimated."
+  },
+  "fundHomeOverviewMissingEnd": {
+    "message": "Today’s reconciled valuation is missing; return is unavailable."
+  },
+  "fundHomeOverviewNoHistory": {
+    "message": "Save actual valuations on at least two dates to show a curve."
+  },
+  "fundHomeOverviewUnverified": {
+    "message": "Historical valuations or cash flows are not fully reconciled."
+  },
+  "fundHomeOverviewZeroBaseline": {
+    "message": "A valuation denominator is nonpositive; time-weighted return is unavailable."
+  },
+  "fundHomeRangeTruncated": {
+    "message": "Showing the most recent part of the available history (up to 400 points)"
+  },
+  "fundHomeShowAmounts": {
+    "message": "Show amounts"
   },
   "fundHomeStockIncome": {
     "message": "Stock returns"
@@ -9034,7 +8848,7 @@
     "message": "Compare planned and actual weights"
   },
   "fundHomeCombinationEdit": {
-    "message": "Edit weights"
+    "message": "Edit targets"
   },
   "fundHomeGroupActual": {
     "message": "Actual"
@@ -9475,9 +9289,6 @@
   "fundHomeAiEmpty": {
     "message": "The model returned no usable answer. Check the selected model and retry."
   },
-  "modelKernelMigrationAvailable": {
-    "message": "The upstream release requires a complete product migration. The current kernel remains usable; major versions cannot be upgraded here."
-  },
   "sharedPreferencesImport": {
     "message": "Import this extension profile"
   },
@@ -9499,17 +9310,14 @@
   "sharedPreferencesReviewLatest": {
     "message": "Settings changed in another page. Review the latest version before saving."
   },
-  "webPairingMismatch": {
-    "message": "The pairing code is incorrect. Try again."
+  "webConnectionRequiredTitle": {
+    "message": "Open this page from Natives"
   },
-  "webPairingExpired": {
-    "message": "The pairing code expired. Request a new one on this device."
+  "webConnectionRequiredDescription": {
+    "message": "This browser has no local connection yet. Reopen the page from Natives; no pairing code is needed. If the service has recovered, retry the connection."
   },
-  "webPairingLocked": {
-    "message": "Too many attempts. Request a new pairing code."
-  },
-  "webPairingNotFound": {
-    "message": "The pairing code is invalid or already used. Request a new one."
+  "webConnectionRetry": {
+    "message": "Retry connection"
   },
   "fundHomeInformationBusy": {
     "message": "Another information task is finishing. Please retry shortly; your ledger has not changed.",
@@ -9889,5 +9697,83 @@
   },
   "fundChartCandleEmpty": {
     "message": "No candle data is available."
+  },
+  "modelAISettings": {
+    "message": "AI settings"
+  },
+  "modelConnections": {
+    "message": "AI connections"
+  },
+  "modelConnectionsDescription": {
+    "message": "Configure Base URL, API Key, protocol, and models once for AI calls across modules."
+  },
+  "modelDefaultModel": {
+    "message": "Global default model"
+  },
+  "modelDefaultModelNone": {
+    "message": "Not set (select a model when calling AI)"
+  },
+  "modelDefaultModelHint": {
+    "message": "Modules use this default model without configuring the address and API Key again. Tokenusage records usage and costs."
+  },
+  "modelDefaultModelUnavailable": {
+    "message": "The previous default model is unavailable. Select another model."
+  },
+  "modelSetAsDefault": {
+    "message": "Set as global default model"
+  },
+  "modelProxyRetiredNotice": {
+    "message": "The local model proxy and routing have been retired. Natives no longer injects proxy configuration into third-party tools or provides proxy access keys."
+  },
+  "modelResidentHost": {
+    "message": "Keep the AI service running after pages close (resident)"
+  },
+  "modelQuotaDescription": {
+    "message": "Quota inquiry only reads imported credentials or existing OAuth accounts; it never participates in inference."
+  },
+  "modelQuotaCredentialNote": {
+    "message": "Credentials are used only for quota inquiry. They never participate in inference or get written into third-party tool configuration."
+  },
+  "modelLegacyReadOnly": {
+    "message": "Existing account (read-only)"
+  },
+  "modelErrorUnavailable": {
+    "message": "The selected model is no longer available. Refresh and try again."
+  },
+  "modelErrorDefaultUnavailable": {
+    "message": "The default model is unavailable. Choose another one."
+  },
+  "modelErrorDefaultChanged": {
+    "message": "The default model configuration changed. Preview again."
+  },
+  "modelUsageMissing": {
+    "message": "Usage not reported"
+  },
+  "modelCostUnpriced": {
+    "message": "Unit price missing; cost unknown"
+  },
+  "modelCostUnknown": {
+    "message": "Unknown"
+  },
+  "fundHomeAiPrivacyCancelled": {
+    "message": "Analysis stopped because privacy was hidden. Restore visibility and start again when ready."
+  },
+  "fundHomeExternalLinkFailed": {
+    "message": "Could not open the source. Allow this site to open a new tab and try again."
+  },
+  "fundHomeGoalLegacyInformation": {
+    "message": "Historical information; excluded from the current amount goal"
+  },
+  "fundHomeQualityReady": {
+    "message": "Registered assets fully valued"
+  },
+  "fundHomeQualityPartial": {
+    "message": "Some assets need verification"
+  },
+  "fundHomeQualityEmpty": {
+    "message": "No assets yet"
+  },
+  "fundHomeQualityStale": {
+    "message": "Valuation is stale"
   }
 }

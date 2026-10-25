@@ -151,9 +151,6 @@ impl Tasks {
             if row.row.content_version != expected {
                 return Err((409, "FIN_CONFLICT: contentVersion".into()));
             }
-            if row.row.source_id != super::adapters::SRC_STOCK_ANN {
-                return Err((400, "INFORMATION_UNSUPPORTED".into()));
-            }
             let enabled = store
                 .with_read(|c| super::enabled_sources(c, &[row.row.source_id.as_str()]))
                 .map_err(|_| (500, "INFORMATION_DB".into()))?;
@@ -169,7 +166,10 @@ impl Tasks {
                     )
                 })
                 .map_err(|_| (500, "INFORMATION_DB".into()))?;
-            Some((id, expected, external))
+            if super::content::source_url(&row.row.source_id, &external).is_none() {
+                return Err((400, "INFORMATION_UNSUPPORTED".into()));
+            }
+            Some((id, expected, row.row.source_id, external))
         } else {
             None
         };
@@ -203,13 +203,13 @@ impl Tasks {
                 let now = crate::finance::now_secs();
                 let stamp =
                     super::super::api::information_api::format_unix(now.parse().unwrap_or(0));
-                let result=if let Some((item,version,external))=content_item{
+                let result=if let Some((item,version,source,external))=content_item{
                     let cached=store.with_read(|c|super::store::content_cache_fresh(c,item,&stamp)).map_err(|_|(500,"INFORMATION_DB".into()));
                     let fresh=cached.as_ref()==Ok(&true);
-                    let fetched=cached.and_then(|_|if fresh {store.with_read(|c|super::store::item_detail(c,item)).map_err(|_|(500,"INFORMATION_DB".into())).and_then(|d|d.map(|d|(d.content_text.unwrap_or_default(),match d.row.completeness.as_str(){"full"=>"full","truncated"=>"truncated",_=>"unavailable"})).ok_or((404,"INFORMATION_NOT_FOUND".into())))}else{super::adapters::fetch_announcement_content(&external).map_err(|e|(502,format!("INFORMATION_UPSTREAM: {}",e.code())))});
+                    let fetched=cached.and_then(|_|if fresh {store.with_read(|c|super::store::item_detail(c,item)).map_err(|_|(500,"INFORMATION_DB".into())).and_then(|d|d.map(|d|(d.content_text.unwrap_or_default(),match d.row.completeness.as_str(){"full"=>"full","truncated"=>"truncated",_=>"unavailable"})).ok_or((404,"INFORMATION_NOT_FOUND".into())))}else{super::content::fetch(&source,&external,||owner.registry.is_cancelled(id)).map_err(|e|(502,format!("INFORMATION_UPSTREAM: {}",e.code())))});
                     match fetched.and_then(|(text,completeness)|owner.registry.commit(id,||store.with_write(|c|{
                         if super::cache::revision(c)?!=cache_revision{return Err(crate::finance::FinanceError::Conflict("缓存已清理，请重试".into()));}
-                        if super::enabled_sources(c,&[super::adapters::SRC_STOCK_ANN])?.is_empty(){return Err(crate::finance::FinanceError::Conflict("来源已停用".into()));}
+                        if super::enabled_sources(c,&[source.as_str()])?.is_empty(){return Err(crate::finance::FinanceError::Conflict("来源已停用".into()));}
                         let current:i64=c.query_row("SELECT content_version FROM information_items WHERE id=?1 AND archived=0",[item],|r|r.get(0))?;
                         if current!=version{return Err(crate::finance::FinanceError::Conflict("contentVersion".into()));}
                         if !fresh { super::store::save_content(c,item,&text,completeness,&stamp)?; }

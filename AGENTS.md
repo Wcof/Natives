@@ -56,7 +56,17 @@
   within its explicit dual-entry scope.
   ADR-0043 permits only Host-validated PDF Blob previews to use Chrome's native
   reader without an iframe sandbox; HTML and business-module sandboxes remain unchanged.
-  Superseded ADRs explain history; never restore their deleted production paths.
+  ADR-0044 retires the model proxy/router business, the CLIProxyAPI kernel, proxy
+  access keys, alias routing, account rotation and agent-config injection; Model
+  Host calls configured providers directly and keeps Tokenusage as the single
+  local usage/billing authority. Superseded ADRs explain history; never restore
+  their deleted production paths.
+- ADR-0045 retires browser pairing codes and idle/absolute Web authorization expiry;
+  trusted-launch Bootstrap, Cookie/CSRF authentication, Surface leases and Core
+  shutdown remain required. Never restore pairing prompts or unauthenticated APIs.
+- ADR-0047 separates the Web document connection from business leases: one authenticated
+  dormant SSE may retain Core while the page remains open; modules still reclaim on idle.
+  Page close releases that owner and starts the existing Core grace period.
 - A change that relaxes a MUST requires an ADR first. Do not silently work
   around it.
 - Use the task map in `docs/README.md`; do not duplicate architecture or
@@ -162,12 +172,14 @@
   business JS in extension context); do not reintroduce WebView, React
   workspace, plugin, or runtime surfaces. Files PDF previews follow the narrowly
   scoped native-reader exception in ADR-0043; it does not apply to HTML previews.
-- `model-host` is an AI-domain Native Messaging Host, not a general daemon. It
-  may remain resident only after the user explicitly enables that setting; it
-  must bind loopback, remain single-instance, keep Secrets in OS Keychain, and
-  must not own Files capabilities or expose CLIProxyAPI management endpoints.
+- `model-host` is an AI-domain Native Messaging Host, not a general daemon and not
+  a model proxy/router. It may remain resident only after the user explicitly
+  enables that setting; it keeps Secrets in OS Keychain, calls configured
+  provider APIs directly with `providerId`+`modelId`, and must not own Files
+  capabilities or expose proxy/gateway/management endpoints.
+  `model-host/internal/usage` remains the single usage/billing writer.
 - Built-in module inference uses the generic Extension session broker and Model
-  Host under ADR-0037. Module iframes never receive provider credentials.
+  Host under ADR-0037/ADR-0044. Module iframes never receive provider credentials.
 
 ## Change discipline
 

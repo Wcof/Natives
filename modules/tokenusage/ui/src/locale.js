@@ -3,6 +3,7 @@
   const locales={
   "zh_CN": {
     "title": "Token 用量",
+    "usageIncomplete": "部分请求未报告用量，显示已知部分。",
     "retrying":"部分查询暂时不可用，正在重试…",
     "home": "主页",
     "limits": "额度",
@@ -57,6 +58,7 @@
   },
   "en": {
     "title": "Token usage",
+    "usageIncomplete": "Some requests did not report usage; showing the known portion.",
     "retrying":"Some queries are temporarily unavailable. Retrying…",
     "home": "Home",
     "limits": "Limits",

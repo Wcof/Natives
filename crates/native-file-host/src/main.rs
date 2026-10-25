@@ -30,6 +30,7 @@ mod protocol;
 mod search;
 pub mod service;
 mod session;
+mod wallpaper;
 mod watch;
 mod workspace_dispatch;
 mod workspace_store;
@@ -90,30 +91,6 @@ fn main() -> io::Result<()> {
         // 据此转入 --launcher-setup 引导）。
         std::process::exit(launcher_setup::run_launcher_default(&cli_args));
     }
-    if cli_args.first().map(String::as_str) == Some("--pair") {
-        let port = cli_args
-            .iter()
-            .position(|a| a == "--port")
-            .and_then(|idx| cli_args.get(idx + 1))
-            .and_then(|p| p.parse::<u16>().ok())
-            .unwrap_or_else(service::default_port);
-        if !service::relay::check_service_health(port) {
-            eprintln!("natives: service is not running on port {port}.");
-            std::process::exit(1);
-        }
-        let secret = service::read_relay_secret().unwrap_or_default();
-        match service::request_pairing_code(port, &secret) {
-            Ok(code) => {
-                println!("Natives Web 配对码: {code} (5 分钟有效)");
-                println!("浏览器访问: http://127.0.0.1:{port}/");
-                std::process::exit(0);
-            }
-            Err(e) => {
-                eprintln!("natives: failed to generate pairing code: {e}");
-                std::process::exit(1);
-            }
-        }
-    }
     if cli_args.contains(&"--service".to_string()) {
         let port = cli_args
             .iter()
@@ -138,6 +115,10 @@ fn main() -> io::Result<()> {
     #[cfg(debug_assertions)]
     if std::env::args().nth(1).as_deref() == Some("--app-fixture") {
         return app_fixture::run();
+    }
+    if cli_args.first().is_some_and(|arg| arg.starts_with("--")) {
+        eprintln!("Natives: unsupported command; use --launcher-web to open the local page.");
+        std::process::exit(2);
     }
     // 当 Chrome 通过 Native Messaging 启动本进程时，确保单一 Writer：
     // 优先启动/连接受 OS 锁保护的服务并走轻量级 Relay（ADR-0042）。
@@ -224,6 +205,24 @@ fn main() -> io::Result<()> {
                     error: None,
                 },
             )?;
+            continue;
+        }
+        if request.method == "space_background_bing" {
+            let response = match wallpaper::bing_wallpaper(&request.params) {
+                Ok(result) => Response {
+                    id: &request.id,
+                    ok: true,
+                    result: Some(result),
+                    error: None,
+                },
+                Err(error) => Response {
+                    id: &request.id,
+                    ok: false,
+                    result: None,
+                    error: Some(safe_error(error)),
+                },
+            };
+            respond(&writer, response)?;
             continue;
         }
         if request.method.starts_with("import_") {

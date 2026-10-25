@@ -1,7 +1,7 @@
 # ADR-0041 · CLIProxyAPI v8 内核迁移
 
 - 日期：2026-10-14
-- 状态：接受（用户明确要求更新路由模块内核）
+- 状态：已被 [ADR-0044](0044-retire-model-proxy-and-direct-inference.md) 取代（CLIProxyAPI 内核、SDK 与补丁已删除）
 - 取代范围：ADR-0020 §6.1 中固定 CLIProxyAPI v7 提交与模块路径的描述；其余 Model Host、Secret、loopback、生命周期和产品边界不变。
 - 依赖：ADR-0020、ADR-0034、ADR-0037、ADR-0040。
 

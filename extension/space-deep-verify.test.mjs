@@ -75,6 +75,23 @@ console.log('\n--- Batch A: Verifying 9 Backgrounds ---');
   console.log('✓ background/bing live wallpaper passed');
 }
 
+// Web 入口：Bing 不返回 CORS，必须经固定 Host 中继而不是直连。
+{
+  clearMemCache();
+  const c = new MockElement();
+  const calls = [];
+  backgroundPlugins['background/bing'].render(c, { interval: 'daily', index: 3, mkt: 'en-GB' }, {
+    nativeCall: async (method, params) => {
+      calls.push({ method, params });
+      return { url: 'https://www.bing.com/th?id=OHR.Relay_1920x1080.jpg', urlbase: 'https://www.bing.com/th?id=OHR.Relay' };
+    },
+  });
+  await new Promise((r) => setTimeout(r, 10));
+  assert.deepEqual(calls[0], { method: 'space_background_bing', params: { mkt: 'en-GB', idx: 3 } }, 'Web Bing must use the fixed Host relay');
+  assert.ok(c.style.backgroundImage.includes('OHR.Relay'), 'Host relay wallpaper must render');
+  console.log('✓ background/bing Web relay passed');
+}
+
 // 2. NASA APOD
 {
   clearMemCache();

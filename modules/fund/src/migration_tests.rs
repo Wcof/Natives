@@ -25,8 +25,14 @@ fn v28_information_decisions_upgrade_preserves_v27_data_and_is_idempotent() {
     )
     .unwrap();
     conn.execute("INSERT INTO information_items(source_id,external_id,title,retrieved_at,content_hash,created_at,updated_at) VALUES('fixture','preserved','preserved','0','hash','0','0')", []).unwrap();
-    assert_eq!(run_migrations(dir.path(), &conn, "test").unwrap(), 28);
-    assert_eq!(run_migrations(dir.path(), &conn, "test").unwrap(), 28);
+    assert_eq!(
+        run_migrations(dir.path(), &conn, "test").unwrap(),
+        crate::storage::SCHEMA_VERSION
+    );
+    assert_eq!(
+        run_migrations(dir.path(), &conn, "test").unwrap(),
+        crate::storage::SCHEMA_VERSION
+    );
     assert_eq!(
         conn.query_row("SELECT name FROM accounts", [], |r| r.get::<_, String>(0))
             .unwrap(),

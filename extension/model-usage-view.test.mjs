@@ -18,3 +18,14 @@ renderUsageView(container, { activeSubTab: 'analytics',
 assert.equal(container.querySelectorAll('.model-rank-card').length, 4);
 assert.ok(container.textContent.includes('model'));
 console.log('Usage view: nullable empty filter dimensions, all five empty tabs and partial rankings passed');
+
+renderUsageView(container, { activeSubTab: 'overview',
+  overviewData: { status: 'ready', metrics: { totalRequests: 1, totalTokens: 0, estimatedCostUsd: 0, priced: false, missingUsageRequests: 1 }, tokens: {}, trend: [] },
+  t: (_key, fallback) => fallback });
+assert.ok(container.textContent.includes('部分请求未报告用量'));
+assert.ok(!container.textContent.includes('$0.0000'), 'missing usage cannot be rendered as free');
+renderUsageView(container, { activeSubTab: 'overview',
+  overviewData: { status: 'ready', metrics: { totalRequests: 2, totalTokens: 10, estimatedCostUsd: 0.25, priced: false, missingUsageRequests: 1 }, tokens: { input: 10 }, trend: [] },
+  t: (_key, fallback) => fallback });
+assert.ok(container.textContent.includes('10+'));
+assert.ok(container.textContent.includes('≥$0.2500'), 'known cost subtotal is preserved');

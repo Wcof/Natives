@@ -266,7 +266,13 @@ export async function verifyNativeModelSettingsEntry(page, frame, report, entry 
   await modelButton.waitFor({ timeout: 15000 });
   await modelButton.click();
   const dialog = page.locator('.model-settings-dialog[open]');
-  await dialog.waitFor({ timeout: 15000 });
+  await dialog.waitFor({ timeout: 15000 }).catch(async (error) => {
+    report.settingsDialog = await page.evaluate(() => ({
+      dialogs: [...document.querySelectorAll('dialog.model-settings-dialog')].map(d => ({ open: d.open, modal: d.matches(':modal'), display: getComputedStyle(d).display, text: (d.innerText || '').slice(0, 200) })),
+      statuses: [...document.querySelectorAll('[role=status]')].map(n => n.textContent).filter(Boolean).slice(0, 5),
+    })).catch(probeError => ({ probeError: probeError.message }));
+    throw error;
+  });
   await dialog.locator('#model-settings-title').waitFor();
   assert.ok((await dialog.innerText()).trim().length > 0, 'real Model Settings content required');
   await page.keyboard.press('Escape');

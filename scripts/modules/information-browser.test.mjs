@@ -32,7 +32,7 @@ try{
    return original(url,options);
   };
  });
- for(const file of ['core.js','home-i18n.js','home.js','home-manage.js'])await page.addScriptTag({path:resolve(root,file)});
+ for(const file of ['core.js','home-i18n.js','home.js','home-manage.js','home-information-detail.js'])await page.addScriptTag({path:resolve(root,file)});
  await page.evaluate(async()=>{Fund.state.token='fixture';Fund.home.applyDisplayMode('amount',false);document.getElementById('view-home').hidden=true;document.getElementById('view-news').hidden=false;await Fund.actions.loadNewsPage();});
  const collects=()=>page.evaluate(()=>informationCalls.filter(call=>call.path.includes('/api/information/refresh')).length);
  assert.equal(await collects(),1,'opening an uncollected news page must collect, rather than only reading an empty cache');
@@ -111,7 +111,7 @@ try{
   Fund.home.snapshot=()=>({...currentSnapshot(),dataRevision:'stale-before-news-refresh'});
   Fund.home.selectNewsForAI({id:1,title:'Collected source article',sourceId:'em_finance'});
  });
- await page.locator('[data-act=home-ai-confirm]:enabled').waitFor({state:'attached'});
+ await page.waitForFunction(()=>lastEvidenceBody?.evidence?.some(piece=>piece.kind==='information'));
  assert.notEqual(await page.evaluate(()=>lastEvidenceBody.dataRevision),'stale-before-news-refresh','a freshly collected article must use a current ledger snapshot for evidence');
  await page.evaluate(()=>{Fund.home.snapshot=currentSnapshot;Fund.home.cancelAI();});
  const out=resolve(root,'../../../../.tmp/information-layout');mkdirSync(out,{recursive:true});

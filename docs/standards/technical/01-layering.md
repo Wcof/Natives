@@ -24,7 +24,7 @@ Natives.app
 - **等级**：MUST
 - Surface（包含 Chrome Extension Page 与 ADR-0042 放行的本机独立 Web 页面）只拥有 UI、交互草稿和派生缓存。
 - Files Host（`native-file-host`）拥有文件、Workspace、Core App Store 和产品配置；在 ADR-0042 下提供受限服务监听模式与 Native Relay 模式。
-- Model Host（`model-host`）拥有 Provider、Credential、Proxy、AI Tool Integration 和 Usage。
+- Model Host（`model-host`）拥有 Provider、Credential、直连供应商推理和 Usage；按 `providerId`+`modelId` 直接调用已配置供应商，不提供代理／路由或第三方工具配置注入。
 - App Runtime（`natives-app-runtime`，对应 `com.natives.app_runtime` / `com.natives.local.app_runtime`）是官方内置应用的通用运行时宿主；每个活动 Built-in App 模块按需拉起一个 App Runtime Process，独占承载该模块业务、业务库和运行实例，并通过 ADR-0042 多 Surface 会话机制安全支持多个前端窗口同时访问。
 - Launcher 不拥有业务状态或业务 UI。
 - 一个 Host 不得借“复用”接管另一个 Host 的领域能力；严禁把内置应用业务编译进 Files Host（Core != App Runtime）。
@@ -58,7 +58,7 @@ Page entry
 
 - **等级**：MUST
 - Extension 与 Host 之间，扩展入口走 Chrome Native Messaging 的长度前缀 JSON 帧或经本地 Native Relay 转发。
-- Web 入口与 Host 之间，按 ADR-0042 走严格回环 127.0.0.1 绑定的受限 HTTP/1.1 与同源 SSE，受 Bootstrap Token/配对码、SameSite=Strict Cookie 与 CSRF 强鉴权保护。
+- Web 入口与 Host 之间，按 ADR-0042／0045 走严格回环 127.0.0.1 绑定的受限 HTTP/1.1 与同源 SSE，受一次性 Bootstrap Token、SameSite=Strict Cookie 与 CSRF 强鉴权保护；不提供配对码，浏览器授权不因闲置失效。
 - `app.html` 先经 Core 核验，再由同一 Core 服务调度模块 Worker；扩展 Relay 和 Web 会话分别注入受信 Surface 身份，通过 Protocol v2 选择受信 appId。
 - App iframe 只走两阶段 `postMessage` 握手和带 bearer 的 loopback HTTP。
 - 页面不能传可执行路径、Host 名称、安装路径或任意命令。
@@ -72,6 +72,7 @@ Page entry
 - Model Host 默认相同；只有用户显式开启 resident 后允许单实例 worker 留存，且必须可关闭。
 - Service Worker 不持有 Native Port、轮询或 keepalive。
 - Host 不注册登录启动项，不演化成通用 daemon。
+- ADR-0047 的 Web document 可通过每页唯一已鉴权 SSE 持有轻量 Core 连接；隐藏时业务 Surface／模块照常回收，返回时重新获取并按需启动。页面关闭释放连接；无页面、任务或其他 owner 时仍退出。
 
 #### R-T6 · Launcher 是严格例外
 

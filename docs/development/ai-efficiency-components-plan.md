@@ -1,5 +1,7 @@
 # 空间 AI 效能组件实施方案：独立组件、多 Agent 统计、空间可视化规范
 
+> **ADR-0044 状态注记（2026-10-20）**：本文历史章节中的 Local Proxy／Proxy 采集、代理请求记账、代理健康与代理配置注入已随模型代理业务退役；当前采集来源为内部直连、外部工具日志与账单，`model-host/internal/usage` 仍是唯一用量／计费权威。保留的统计、归因、预算、提醒与额度只读能力继续有效。
+
 ## 2026-10-03 查询链修复契约
 
 - 扩展继续经 Native Messaging 共享客户端消费 Model Host；不绕经 tokenusage
@@ -25,7 +27,7 @@
 **本轮必须同时满足的三个交付条件：**
 
 1. “AI 效能”是目录分类，下面直接提供 **AI 成本、Token 用量、会话活跃、调用统计** 等独立组件。每种有独立注册 key、名称、默认指标和实例配置；不能再用一个“AI 效能”组件加“视图模式”下拉框交差。
-2. 默认统计全部已授权、已接入 Agent 来源。Model Host 是归一、存储与查询的权威，Local Proxy 只是其中一种采集渠道；不经过 Proxy 的 Claude Code、Codex、ZCode、AtomCode、Hermes Agent、Pi 等也必须接入。目录列出工具或标注待实现不算完成统计。
+2. 默认统计全部已授权、已接入 Agent 来源。Model Host 是归一、存储与查询的权威；内部直连调用、外部工具日志与账单是采集来源（ADR-0044 已退役 Local Proxy）。不经过代理的 Claude Code、Codex、ZCode、AtomCode、Hermes Agent、Pi 等也必须接入。目录列出工具或标注待实现不算完成统计。
 3. 组件及其 **数字、趋势、排行、热力图、时间线、表格** 全部消费空间解析后的外观。文字颜色、字体、字号、字重、背景、图形色阶随空间和卡片设置即时变化；不能直接拿 Files/模型设置页面的变量盖过空间外观。具体执行契约见 §5。
 
 ## 1. 产品判断与建议
@@ -111,7 +113,7 @@ Skill、MCP、插件和子代理不是天然独立的收费项：模型请求因
 |---|---|---|
 | Widget 配置、注册、销毁和主题 | `extension/ai-performance/`、`extension/plugins/widgets/index.js` | 原地扩展；继续 build-time 内置普通 JS renderer，不新增运行时或前端框架。 |
 | 用量库、聚合、价格和保留期 | `model-host/internal/usage/` | 唯一用量 authority；复用 `usage_events`、`model_prices`、`usage_metadata`。 |
-| Proxy 请求记账与变更事件 | `usage/plugin.go` | 复用 `NativesUsagePlugin`、`model_usage_updated`。 |
+| 内部直连请求记账与变更事件 | `usage/recorder.go` | 复用中性 `usage.Recorder` 与 `model_usage_updated`；不依赖代理 SDK。 |
 | Native Messaging API | `extension/model-settings-api.js`、`host/usage_handlers.go` | 扩展现有协议，不开另一套查询服务。 |
 | 用量详情与导入页面 | `extension/model-usage-view.js`、`model-usage-controller.js` | 承接钻取、数据接入、价格和预算设置。 |
 | 工具配置与检测 | `model-host/internal/agentclients/` | 复用识别和配置变更资产；逐条核验是否满足 inspect/plan/backup/apply/verify/rollback。 |
@@ -326,7 +328,7 @@ Claude 官方提供 Notification/Stop/StopFailure 等 hook；Codex 官方配置�
 
 ```mermaid
 flowchart LR
-  P[Local Proxy 已完成请求] --> U[Model Host Usage]
+  P[Model Host 内部直连请求] --> U[Model Host Usage]
   L[授权的工具日志元数据] --> S[有界增量读取]
   S --> U
   H[受支持的 Hook / notify] --> O[同一 model-host 二进制的一次性入口]
@@ -389,9 +391,9 @@ Claude OTel 如需精细归因，只能在用户明确开启并允许 Model Host
 
 | 场景 | 用量 | 提醒 |
 |---|---|---|
-| 页面打开且可见 | 读取本地增量、接收 Proxy 事件、按需额度刷新 | 卡片即时更新，按用户设置请求系统通知 |
+| 页面打开且可见 | 读取本地增量、接收内部直连/工具事件、按需额度刷新 | 卡片即时更新，按用户设置请求系统通知 |
 | 页面隐藏/关闭，未开启常驻 | 不持续扫描/刷新额度；已有原工具日志下次补读 | 已安装的工具 hook 可触发一次性 Host 上报与系统通知；无 hook 的形态不承诺即时提醒 |
-| 用户显式开启 Model Host 常驻 | 既有 Proxy 请求持续记账 | 随实际用量/工具事件判断阈值；不因此新增定时全盘扫描或任意调度 |
+| 用户显式开启 Model Host 常驻 | 内部直连与工具事件持续记账 | 随实际用量/工具事件判断阈值；不因此新增定时全盘扫描或任意调度 |
 | 浏览器关闭，但支持的 CLI 仍运行 | hook 可调用一次性入口 | macOS 系统允许时发通知，下一次打开空间看持久收件箱；须通过真实验收 |
 | 系统休眠、工具退出、无任何运行进程 | 无事件处理 | 不承诺按时提醒重置/续费；恢复后补查并标记过期 |
 
@@ -447,7 +449,7 @@ Claude OTel 如需精细归因，只能在用户明确开启并允许 Model Host
 
 ### 7.2 统一 Token 桶与金额
 
-优先复用 `third_party/cliproxyapi/sdk/cliproxy/usage/accounting.go` 已存在的非重叠模型：
+沿用既有非重叠 Token 桶模型（ADR-0044 后由 `model-host/internal/usage` 的中性计量与 `usage.Recorder` 承载，不再依赖代理 SDK）：
 
 ```text
 input_total  = input_uncached + cache_read + cache_write
@@ -492,7 +494,7 @@ OpenAI 等把 cache 作为输入子集的记录和 Claude 等独立记录输入�
 
 验收示例（**测试价格，非真实模型报价**）：普通输入 $1/百万，缓存读 $0.1/百万；输入总量 100 万，其中缓存读 80 万、无输出。正确费用是 $0.28，不能算成 $1.08。
 
-历史迁移不能假定所有旧 `input_tokens` 都是同一口径。仅能确认来自当前规范化 Proxy 路径的记录按确定规则重算；导入来源不明的旧记录标 `legacy_unknown`。默认保留旧值和迁移/计算版本，用户可预览重算差异；无法恢复价格快照的不展示精确历史节省，不能删除原记录掩盖问题。
+历史迁移不能假定所有旧 `input_tokens` 都是同一口径。仅能确认来自当前规范化内部直连路径的记录按确定规则重算；导入来源不明的旧记录标 `legacy_unknown`。默认保留旧值和迁移/计算版本，用户可预览重算差异；无法恢复价格快照的不展示精确历史节省，不能删除原记录掩盖问题。
 
 ### 7.3 去重与多来源重叠
 
@@ -500,7 +502,7 @@ OpenAI 等把 cache 作为输入子集的记录和 Claude 等独立记录输入�
 2. Claude assistant/stream 更新：依据实际源格式确定一次调用的终态记录，避免中间更新、最终记录和子会话重复计入；不能简单把同 message ID 的所有记录相加。
 3. Codex 累计用量：区分累计快照和本轮增量。累计值只能对同一计量序列求差，重复快照记 0；重启/回退是新序列或明确异常，不把负差静默截零后继续假装完整。
 4. 同一来源本机历史文件和 archived 文件重叠：稳定源 ID 去重；如果缺乏稳定 ID，保留来源范围并提示疑似重叠，禁止凭“看起来相似”删记录。
-5. Proxy + 原生日志：有可信关联 ID 时合并元数据，计费用量保留一份；没有关联时不做概率匹配。按“账户/工具/时间段”的明确主计量来源计入合计，另一来源仅供明细参考。新增主来源必须预览重叠、确认生效时间；未知账户记录不得自动并入总计。
+5. 内部直连 + 外部工具日志：有可信关联 ID 时合并元数据，计费用量保留一份；没有关联时不做概率匹配。按“账户/工具/时间段”的明确主计量来源计入合计，另一来源仅供明细参考。新增主来源必须预览重叠、确认生效时间；未知账户记录不得自动并入总计。
 6. Checkpoint 与事件提交保持原子；导入失败重试可重复但不重复计量。坏行计数并显示来源受损，继续安全部分时必须为 partial。
 7. 只有会话终身累计值的来源，首次接入不能将全部历史用量记到今天；保留聚合覆盖区间且标明无法按日分配。后续累计快照有持久基线才能求差；时间粒度不够的来源排除精确日图并说明，不能按跨度均摊。
 8. Pi 分支、Hermes 压缩续接或消息归档不是新的收费证据；已实际发生但后来不在当前上下文分支的请求仍保留成本，复用的旧消息不再计费。优先用稳定计费/源记录 ID，不通过消息文本或时间相同删历史。

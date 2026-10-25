@@ -49,6 +49,14 @@ try {
     dispatchEvent(new MessageEvent('message', { data: { type: 'panel', panel: { today: { totalTokens: 100, costUsd: 2, priced: true }, allTime: { totalTokens: 100, costUsd: 2, priced: true }, tools: [], sessions: [] } } }));
   });
   assert.equal(await page.locator('.cost-val').textContent(), '≈$2.00', 'usage arriving after quotas updates the estimate');
+  await page.evaluate(() => dispatchEvent(new MessageEvent('message', { data: { type: 'panel', panel: {
+    today: { totalTokens: 0, costUsd: 0, priced: false, missingUsageRequests: 1 },
+    allTime: { totalTokens: 10, costUsd: 0.25, priced: false, missingUsageRequests: 1 }, tools: [], sessions: [],
+  } } })));
+  assert.equal(await page.locator('#tNum').textContent(), '--');
+  assert.equal(await page.locator('#tSub').textContent(), '--');
+  assert.equal(await page.locator('#aNum').textContent(), '10+');
+  assert.equal(await page.locator('#aSub').textContent(), '≥$0.25');
   await page.evaluate(() => {
     PANEL.trends = [{ date: '2026-10-11', totalTokens: 1 }, { date: '2026-10-12', totalTokens: 2 }];
     renderTrend();

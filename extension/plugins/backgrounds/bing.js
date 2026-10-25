@@ -1,6 +1,7 @@
 
 
 import { fetchDedup, loadCachedBackground } from '../plugins-cache.js';
+import { isExtension } from '../../platform/env.js';
 
 const MARKETS = [
   { code: 'random', name: '全球地区随机 (All Markets - 推荐)' },
@@ -23,7 +24,7 @@ export const bingBackground = {
     interval: 'everyTab', // 'everyTab' | '5m' | '15m' | '1h' | 'daily'
     index: 0,
   },
-  render(container, data = {}, { t, onDataChange } = {}) {
+  render(container, data = {}, { t, onDataChange, nativeCall } = {}) {
     container.style.backgroundColor = 'transparent';
     if (activeTimer) {
       clearInterval(activeTimer);
@@ -60,6 +61,36 @@ export const bingBackground = {
       }).catch(() => {});
     }
 
+    async function directArchive(targetMkt, indexParam) {
+      const res = await fetch(`https://www.bing.com/HPImageArchive.aspx?format=js&idx=${indexParam}&n=1&mkt=${encodeURIComponent(targetMkt)}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const json = await res.json();
+      const image = json?.images?.[0];
+      if (!image?.url) return null;
+      return { url: image.url, urlbase: image.urlbase };
+    }
+
+    async function hostArchive(targetMkt, indexParam) {
+      if (typeof nativeCall !== 'function') throw new Error('wallpaper relay unavailable');
+      const archive = await nativeCall('space_background_bing', { mkt: targetMkt, idx: indexParam });
+      return archive?.url ? archive : null;
+    }
+
+    async function loadArchive(targetMkt, indexParam) {
+      // Web 入口没有 host_permissions 且 Bing 不返回 CORS 头；固定域名的
+      // 元数据中继由 Host 提供。扩展入口保持直连，失败时回退中继。
+      if (!isExtension && typeof nativeCall === 'function') return hostArchive(targetMkt, indexParam);
+      try {
+        return await directArchive(targetMkt, indexParam);
+      } catch (error) {
+        try {
+          const relayed = await hostArchive(targetMkt, indexParam);
+          if (relayed) return relayed;
+        } catch {}
+        throw error;
+      }
+    }
+
     async function loadWallpaper(idx, forceFresh = false) {
       const targetMkt = resolveMarket();
       const isRandom = mode === 'random';
@@ -73,10 +104,7 @@ export const bingBackground = {
       return fetchDedup(
         cacheKey,
         async () => {
-          const res = await fetch(`https://www.bing.com/HPImageArchive.aspx?format=js&idx=${indexParam}&n=1&mkt=${encodeURIComponent(targetMkt)}`);
-          if (!res.ok) throw new Error(`HTTP ${res.status}`);
-          const json = await res.json();
-          const image = json?.images?.[0];
+          const image = await loadArchive(targetMkt, indexParam);
           if (!image?.url) return null;
           const path = resolution === '3840' && image.urlbase
             ? `${image.urlbase}_UHD.jpg`

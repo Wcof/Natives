@@ -99,9 +99,9 @@
 - [ ] Core、Extension 无模块业务逻辑。
 - [ ] 运行和数据隔离、退出 ≤2 秒彻底回收。
 
-## 模块推理与外链代理（ADR-0037）
+## 模块推理与外链（ADR-0037／ADR-0044）
 
 - `ai.inference.request` 和 `system.link.open` 必须进入已核验产品清单的 capabilities/permissions。
 - 推理只经 Native Messaging Model Host；Shell 校验 source、generation、challenge 与有界请求，页面取消／回收释放任务和客户端。
-- Model Host 不把密钥或管理地址给模块，不以只读 8766 接口承载推理。
+- Model Host 用 `providerId`+`modelId` 直连已配置供应商；不把密钥或管理地址给模块，不以只读 8766 接口承载推理，也不恢复本地代理端点或别名路由。
 - 外链仅用户点击时打开新的 Chrome 标签；不改变 iframe sandbox。

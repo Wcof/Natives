@@ -303,6 +303,14 @@ fn news_impact_requires_information_and_carries_evidence() {
     assert_eq!(info["contentVersion"], 1);
     assert_eq!(info["untrusted"], json!(true));
     assert_eq!(info["excerpt"], "正文第一段");
+    let e1 = pack["evidence"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["id"] == "E1")
+        .unwrap();
+    assert_eq!(e1["holdings"].as_array().unwrap().len(), 0);
+    assert_eq!(e1["holdingsCoverage"]["noHoldings"], true);
     // 其他任务也可以带资讯（行动条件参考公告）。
     assert!(evidence_task(
         &store,
@@ -554,4 +562,109 @@ fn public_research_is_scoped_and_rejects_private_fields() {
     invalid = sample.clone();
     invalid["identity"]["fq"] = "made-up".into();
     assert!(research_context(&invalid).is_err());
+}
+
+// ADR-0046：一键资讯分析必须携带程序内置原则、当前持仓背景和真实正文覆盖，
+// 且不能把手工投资理由（E4）或账户/绝对金额发给模型。
+#[test]
+fn news_one_click_carries_holdings_policy_and_bounded_body() {
+    let store = Store::open_in_memory().unwrap();
+    let body = "长文证据".repeat(1800);
+    store.with_write(|c| -> rusqlite::Result<()> {
+        c.execute("INSERT INTO accounts(name,created_at,updated_at) VALUES('SECRET_ACCOUNT',0,0)", [])?;
+        c.execute("INSERT INTO manual_assets(account_id,product_type,instrument_key,name,risk_class,market_value_minor,valued_at,legacy_overlap_distinct,created_at,updated_at) VALUES(1,'stock','synthetic-holding','Synthetic Holding','equity',5000,?1,0,0,0)", [&today_cn()])?;
+        c.execute(
+            "INSERT INTO information_items(source_id,external_id,title,published_at,content_text,completeness,time_precision,retrieved_at,content_hash,content_version,created_at,updated_at) \
+             VALUES('em_stock_ann','LONG1','Synthetic long notice','2026-10-01T00:00:00Z',?1,'full','second','2026-10-01T00:00:00Z','h',1,'2026-10-01T00:00:00Z','2026-10-01T00:00:00Z')",
+            [&body],
+        )?;
+        Ok(())
+    }).unwrap();
+    let revision = store.with_read(Store::data_revision).unwrap();
+    let pack = evidence_task(
+        &store,
+        &revision,
+        &[],
+        false,
+        "news_impact",
+        "",
+        &[1],
+        "",
+        "",
+    )
+    .unwrap();
+    let pieces = pack["evidence"].as_array().unwrap();
+    let e1 = pieces.iter().find(|piece| piece["id"] == "E1").unwrap();
+    assert_eq!(e1["holdings"][0]["name"], "Synthetic Holding");
+    assert_eq!(e1["holdings"][0]["weightPpm"], 1_000_000);
+    assert!(!pack.to_string().contains("SECRET_ACCOUNT"));
+    assert!(!pack.to_string().contains("5000"));
+    assert!(
+        !pieces.iter().any(|piece| piece["id"] == "E4"),
+        "manual theses must not be sent"
+    );
+    assert_eq!(pack["analysisPolicy"]["source"], "built-in");
+    assert_eq!(
+        pack["analysisPolicy"]["principles"]
+            .as_array()
+            .unwrap()
+            .len(),
+        5
+    );
+    let info = pieces.iter().find(|piece| piece["id"] == "I1").unwrap();
+    assert_eq!(info["basis"], "content");
+    assert_eq!(info["fullTextRead"], false);
+    assert_eq!(info["contentSentChars"], 6000);
+    assert_eq!(info["contentTruncated"], true);
+    assert_eq!(
+        info["contentTotalChars"].as_u64().unwrap(),
+        body.chars().count() as u64
+    );
+    assert!(pack["budget"]["sentChars"].as_u64().unwrap() <= 16000);
+}
+
+#[test]
+fn news_body_missing_or_expired_degrades_to_summary_or_title() {
+    let store = Store::open_in_memory().unwrap();
+    store.with_write(|c| -> rusqlite::Result<()> {
+        c.execute("INSERT INTO information_items(source_id,external_id,title,published_at,summary_text,completeness,time_precision,retrieved_at,content_hash,content_version,created_at,updated_at) VALUES('em_stock_ann','SUM1','Summary notice','2026-10-01T00:00:00Z','Only a summary','excerpt','second','2026-10-01T00:00:00Z','h',1,'2026-10-01T00:00:00Z','2026-10-01T00:00:00Z')", [])?;
+        c.execute("INSERT INTO information_items(source_id,external_id,title,published_at,completeness,time_precision,retrieved_at,content_hash,content_version,created_at,updated_at) VALUES('em_stock_ann','TITLE1','Title only','2026-10-01T00:00:00Z','link_only','second','2026-10-01T00:00:00Z','h',1,'2026-10-01T00:00:00Z','2026-10-01T00:00:00Z')", [])?;
+        c.execute("INSERT INTO information_items(source_id,external_id,title,published_at,summary_text,content_text,content_fetched_at,completeness,time_precision,retrieved_at,content_hash,content_version,created_at,updated_at) VALUES('em_stock_ann','EXP1','Expired body','2026-10-01T00:00:00Z','Expired summary','stale body','2026-10-01T00:00:00Z','full','second','2026-10-01T00:00:00Z','h',1,'2026-10-01T00:00:00Z','2026-10-01T00:00:00Z')", [])?;
+        Ok(())
+    }).unwrap();
+    let revision = store.with_read(Store::data_revision).unwrap();
+    for (id, basis) in [(1, "summary"), (2, "title"), (3, "summary")] {
+        let pack = evidence_task(
+            &store,
+            &revision,
+            &[],
+            false,
+            "news_impact",
+            "",
+            &[id],
+            "",
+            "",
+        )
+        .unwrap();
+        let info = pack["evidence"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|piece| piece["id"] == format!("I{id}"))
+            .unwrap();
+        assert_eq!(info["basis"], basis);
+        assert_eq!(info["fullTextRead"], false);
+        assert_eq!(info["contentSentChars"], 0);
+        if id == 3 {
+            assert_eq!(info["contentCacheExpired"], true);
+            assert_eq!(info["basis"], "summary");
+        }
+        assert!(
+            info["coverageNotice"]
+                .as_str()
+                .unwrap()
+                .contains("全文未获取")
+                || basis == "title"
+        );
+    }
 }

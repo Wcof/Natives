@@ -123,3 +123,4 @@ Natives-source-clean.zip
 *.dylib
 *.nap
 invest-host
+.workbuddy/

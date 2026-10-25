@@ -53,7 +53,6 @@ func run(secretStore secrets.Store) {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	_ = engine.Restore(ctx)
 	accepted := make(chan net.Conn)
 	go func() {
 		defer close(accepted)

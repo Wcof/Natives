@@ -18,7 +18,7 @@ export async function verifyHomeDataGaps(page) {
       }
       // 快照只读（R-M5）：缺口样例由本隔离测试 stub 的传输层服务（生产页面
       // 无任何发布/替换入口），经公开 refresh 入口重载。
-      if (window.gapSnapshot && path.startsWith('/api/home/snapshot')) {
+      if (window.gapSnapshot && (path.startsWith('/api/home/snapshot') || path.startsWith('/api/home/valuation/observe'))) {
         return new Response(JSON.stringify(window.gapSnapshot), { status: 200, headers: { 'Content-Type': 'application/json' } });
       }
       return window.currencyFetch(url, options);

@@ -46,8 +46,8 @@ home.requestInformation=async(route,payload)=>{
  }finally{if(gen===informationGeneration){if(response.status==='cancelled'&&informationActive)retireInformation(informationActive);informationActive=null;}}
 };
 home.informationSourceLabel=id=>t({em_stock_news:'fundHomeStockNews',em_stock_ann:'fundHomeStockAnnouncements',em_fund_ann:'fundHomeFundAnnouncements',em_finance:'fundHomeFinanceNews'}[id]||'fundHomeSources');
-home.informationContentLabel=item=>t(item.completeness==='truncated'?'fundHomeInformationTruncated':item.completeness==='full'?'fundHomeVerbatimExcerpt':item.summary?'fundHomeNewsSummary':'fundHomeLinkOnlyFullTextNotRead');
-home.informationTimeLabel=value=>{const date=value?new Date(value):null;return date&&Number.isFinite(date.getTime())?date.toLocaleString(Fund.state.language,{timeZone:'Asia/Shanghai'}):t('fundHomeSourceTimestampUnknown');};
+home.informationContentLabel=item=>t(item.completeness==='truncated'?'fundHomeInformationTruncated':(item.completeness==='full'||item.completeness==='excerpt'&&(item.hasContent||item.contentText))?'fundHomeVerbatimExcerpt':item.summary?'fundHomeNewsSummary':'fundHomeLinkOnlyFullTextNotRead');
+home.informationTimeLabel=(value,precision)=>{const date=value?new Date(value):null;if(!date||!Number.isFinite(date.getTime())||precision==='unknown')return t('fundHomeSourceTimestampUnknown');if(precision==='day')return date.toLocaleDateString(Fund.state.language,{timeZone:'Asia/Shanghai'});return date.toLocaleString(Fund.state.language,{timeZone:'Asia/Shanghai'});};
 let newsGeneration=0,newsController=null,newsCollectionAt=0,newsCollecting=false;
 actions.leaveNewsPage=()=>{newsGeneration++;newsController?.abort();newsController=null;home.cancelInformationRead();home.cancelInformation();newsCollecting=false;document.getElementById('view-news')?.setAttribute('aria-busy','false');};
 actions.loadNewsPage=async(collect=true)=>{
@@ -234,8 +234,12 @@ home.manageGoals=async()=>{
 function editGoal(g={}){
  // 方案 01 P02（08 最新）：唯一目标只填金额——无名称、期限、范围、月供输入。
  // 旧目标的名称/期限/范围仅作为历史保留显示，不提供编辑入口；提交固定 A 范围与默认名称。
- const legacy = g.id
-   ? `${g.name&&g.name!==t("fundHomeMyInvestmentGoal")?`<p class="alloc-plan-row">${esc(t("fundHomeGoalName"))}：${esc(g.name)}（${t("fundHomeReportsStaleSnapshot")}）</p>`:""}${g.targetDate?`<p class="alloc-plan-row">${esc(t("fundHomeTargetDate"))}：${esc(g.targetDate)}（${t("fundHomeNoDeadlineSet")}）</p>`:""}`
+ const legacyFields = [
+   g.name && g.name !== t("fundHomeMyInvestmentGoal") ? `${esc(t("fundHomeGoalName"))}：${esc(g.name)}` : "",
+   g.targetDate ? `${esc(t("fundHomeTargetDate"))}：${esc(g.targetDate)}` : "",
+ ].filter(Boolean);
+ const legacy = legacyFields.length
+   ? `<p class="alloc-plan-row">${esc(t("fundHomeGoalLegacyInformation"))}：${legacyFields.join(" · ")}</p>`
    : "";
  panel(()=>(g.id?t("fundHomeEditFinancialGoal"):t("fundHomeGoalSettings")),()=>(`<form>${legacy}<p>${t("fundHomeGoalCalculatedOnRegisteredAssets")}</p>${input("target",t("fundHomeTargetAmountCny"),g.targetMinor==null?"":(BigInt(g.targetMinor)/100n).toString()+"."+(BigInt(g.targetMinor)%100n).toString().padStart(2,"0"),"number",`${moneyExtra} required`)}${save()}</form>`),root=>submit(root,async(v)=>{
   if(g.id&&g.scopeKind!=="A"&&!await home.confirm(t("fundHomeGoalScopeConvertConfirm")))return;

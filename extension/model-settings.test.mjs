@@ -1,7 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { createModelSettingsAPI } from './model-settings-api.js';
-import { localizedModelError } from './model-settings-errors.js';
 
 class FakePort {
   constructor() {
@@ -13,7 +12,7 @@ class FakePort {
   }
   postMessage(message) {
     this.messages.push(message);
-    queueMicrotask(() => this.emit({ id: message.id, ok: true, result: message.method === 'model_snapshot' ? { revision: 1, providers: [], accounts: [], gateway: { state: 'stopped' } } : { accepted: message.params } }));
+    queueMicrotask(() => this.emit({ id: message.id, ok: true, result: message.method === 'model_snapshot' ? { revision: 1, providers: [], resident: false } : { accepted: message.params } }));
   }
   emit(message) { for (const listener of this.messageListeners) listener(message); }
   disconnect() { for (const listener of this.disconnectListeners) listener(); }
@@ -25,49 +24,39 @@ globalThis.__NATIVES_DEV_NATIVE_CONNECT__ = (host) => { connectedHost = host; re
 let event;
 const api = createModelSettingsAPI({ onEvent: (message) => { event = message; } });
 assert.equal((await api.snapshot()).revision, 1);
-assert.equal(connectedHost, 'com.natives.file_manager', 'ADR-0042 routes both entries through Core to the single Model Hub');
-const started = await api.startGateway({ expectedRevision: 1 });
-assert.deepEqual(started.accepted, { expectedRevision: 1 });
-const probed = await api.testProvider({ providerId: 'custom', baseUrl: 'https://example.test/v1', protocol: 'openai_chat', apiKey: 'temporary', allowLan: false });
-assert.deepEqual(probed.accepted, { providerId: 'custom', baseUrl: 'https://example.test/v1', protocol: 'openai_chat', apiKey: 'temporary', allowLan: false });
-const usageOverview = await api.getUsageOverview({ range: 'today' });
-assert.deepEqual(usageOverview.accepted, { range: 'today' });
-const createdKey = await api.createGatewayKey({ expectedRevision: 1, name: 'Test Key' });
-assert.deepEqual(createdKey.accepted, { expectedRevision: 1, name: 'Test Key' });
-const accountModels = await api.getAccountModels({ accountId: 'account-1' });
-assert.deepEqual(accountModels.accepted, { accountId: 'account-1' });
-const updatedAccountModels = await api.updateAccountModels({ accountId: 'account-1', enabledModelIds: ['model-a'], expectedRevision: 1 });
-assert.deepEqual(updatedAccountModels.accepted, { accountId: 'account-1', enabledModelIds: ['model-a'], expectedRevision: 1 });
-const kernelCheck = await api.checkKernelUpdate();
-assert.ok(kernelCheck.accepted !== undefined);
-const kernelUpdate = await api.updateKernel();
-assert.ok(kernelUpdate.accepted !== undefined);
-assert.equal(localizedModelError({ code: 'kernel_migration_required', message: 'internal detail' }, (key) => key), 'modelKernelMigrationRequired');
+assert.equal(connectedHost, 'com.natives.file_manager');
+const setup = { name: 'Global AI', baseUrl: 'https://example.test/v1', protocol: 'openai_chat', apiKey: 'synthetic', modelId: 'model::version', setAsDefault: true, expectedRevision: 1 };
+assert.deepEqual((await api.createProvider(setup)).accepted, setup);
+const tested = await api.testProvider({ providerId: 'custom', baseUrl: 'https://example.test/v1', protocol: 'openai_chat', apiKey: 'temporary', allowLan: false });
+assert.deepEqual(tested.accepted, { providerId: 'custom', baseUrl: 'https://example.test/v1', protocol: 'openai_chat', apiKey: 'temporary', allowLan: false });
+assert.deepEqual((await api.getUsageOverview({ range: 'today' })).accepted, { range: 'today' });
+assert.deepEqual((await api.setResident({ expectedRevision: 1, resident: true })).accepted, { expectedRevision: 1, resident: true });
+assert.equal(typeof api.startGateway, 'undefined', 'gateway API must be gone');
+assert.equal(typeof api.createGatewayKey, 'undefined', 'gateway key API must be gone');
+assert.equal(typeof api.startOAuth, 'undefined', 'OAuth login API must be gone');
+assert.equal(typeof api.getAccountModels, 'undefined', 'account model routing API must be gone');
+assert.equal(typeof api.syncAgentClientConfigs, 'undefined', 'agent config injection API must be gone');
+assert.equal(typeof api.checkKernelUpdate, 'undefined', 'kernel update API must be gone');
 
-port.emit({ ok: true, event: 'model_oauth_state_changed', result: { state: 'succeeded' } });
-assert.equal(event.event, 'model_oauth_state_changed');
 port.emit({ ok: true, event: 'model_usage_updated', result: { updatedAt: '2026-08-31T00:00:00Z' } });
 assert.equal(event.event, 'model_usage_updated');
 
 api.disconnect();
 delete globalThis.__NATIVES_DEV_NATIVE_CONNECT__;
 
-const [files, space, controller, view, zh, en, advancedController, css, accountModelsDialog] = await Promise.all([
+const [files, space, controller, view, zhRaw, enRaw, css, usageView] = await Promise.all([
   readFile(new URL('./files.js', import.meta.url), 'utf8'),
   readFile(new URL('./space.js', import.meta.url), 'utf8'),
   readFile(new URL('./model-settings.js', import.meta.url), 'utf8'),
   readFile(new URL('./model-settings-view.js', import.meta.url), 'utf8'),
   readFile(new URL('./_locales/zh_CN/messages.json', import.meta.url), 'utf8'),
   readFile(new URL('./_locales/en/messages.json', import.meta.url), 'utf8'),
-  readFile(new URL('./model-advanced-controller.js', import.meta.url), 'utf8'),
   readFile(new URL('./model-settings.css', import.meta.url), 'utf8'),
-  readFile(new URL('./model-account-models-dialog.js', import.meta.url), 'utf8'),
+  readFile(new URL('./model-usage-view.js', import.meta.url), 'utf8'),
 ]);
 for (const source of [files, space]) assert.match(source, /import\('\.\/model-settings\.js'\)/, 'model settings must stay lazy-loaded');
 for (const source of [controller, view]) assert.doesNotMatch(source, /\b(?:alert|prompt|confirm)\s*\(/, 'model settings must use graphical controls');
-assert.doesNotMatch(accountModelsDialog, /\b(?:alert|prompt|confirm)\s*\(/, 'account model settings must use a graphical dialog');
-assert.match(controller, /action === 'auth-files-models'/, 'account model button must open its settings dialog');
-assert.match(accountModelsDialog, /updateAccountModels/, 'account model selection must persist through Model Host');
+
 const declaredRoles = new Set([...view.matchAll(/data-role="([^"]+)"/g)].map(([, role]) => role));
 for (const [, role] of view.matchAll(/\broles\.([A-Za-z]\w*)/g)) {
   assert.ok(declaredRoles.has(role), `view references missing data-role="${role}"`);
@@ -75,61 +64,43 @@ for (const [, role] of view.matchAll(/\broles\.([A-Za-z]\w*)/g)) {
 assert.match(view, /showModal\(\)/);
 assert.match(view, /aria-live="polite"/);
 assert.match(view, /data-action="test-new-provider"/);
-for (const page of ['custom', 'oauth', 'gateway', 'usage', 'advanced', 'apps']) {
+for (const page of ['custom', 'usage', 'quota', 'apps']) {
   assert.match(view, new RegExp(`data-action="select-model-page" data-page="${page}"`), `model settings must expose the ${page} second-level page`);
   assert.match(view, new RegExp(`data-page-panel="${page}"`), `model settings must render the ${page} page`);
+}
+for (const removed of ['oauth', 'gateway', 'agent', 'advanced']) {
+  assert.doesNotMatch(view, new RegExp(`data-page="${removed}"`), `retired ${removed} page must not be exposed`);
+  assert.doesNotMatch(view, new RegExp(`data-page-panel="${removed}"`), `retired ${removed} page must not be rendered`);
 }
 assert.match(view, /data-role="appsNavGroup"/, 'primary nav group for apps center must exist');
 assert.match(view, /data-role="appsListNav"/, 'secondary nav item for app list must exist');
 assert.match(view, /data-role="appsList"/, 'apps list container must exist');
+assert.match(view, /data-action="resident"/, 'resident lifecycle control must remain available');
+assert.match(view, /modelProxyRetiredNotice/, 'proxy retirement notice must be visible');
 assert.match(controller, /import\('\.\/apps\.js'\)/, 'apps center module must stay lazy-loaded');
 assert.match(controller, /action === 'select-model-page'/, 'controller must switch model settings subpages');
-assert.match(controller, /model_catalog_changed/);
 assert.match(controller, /model_usage_updated/);
+assert.doesNotMatch(controller, /startGateway|syncAgentClientConfigs|updateKernel|startOAuth|accountModels/, 'retired proxy side effects must not remain');
 assert.match(controller, /form\.dataset\.role\?\.startsWith\('usage-'\)/, 'usage forms must prevent native submission before awaiting work');
-assert.doesNotMatch(controller, /await handleAdvancedSubmit\([^\n]+\)\) \{ event\.preventDefault/, 'advanced forms must prevent native submission synchronously');
-const usageView = await readFile(new URL('./model-usage-view.js', import.meta.url), 'utf8');
-const pricingView = await readFile(new URL('./model-pricing-view.js', import.meta.url), 'utf8');
-const advancedView = await readFile(new URL('./model-advanced-view.js', import.meta.url), 'utf8');
-const gatewayView = await readFile(new URL('./model-gateway-view.js', import.meta.url), 'utf8');
-
 assert.match(usageView, /selectFilter\('provider'/);
-assert.match(usageView, /dataset\.role = 'usage-custom-range-form'/);
-assert.match(usageView, /model-filter-bar-dimensions/, 'dimensions filter bar modifier class must exist');
-assert.match(usageView, /model-col-time[\s\S]*model-col-model[\s\S]*model-col-cost/, 'events table must declare semantic column classes');
-assert.match(pricingView, /model-filter-bar-price/, 'pricing form modifier class must exist');
-assert.match(pricingView, /model-col-model[\s\S]*model-col-num[\s\S]*model-col-actions/, 'pricing table must declare semantic column classes');
-assert.match(advancedView, /model-col-name[\s\S]*model-col-mask[\s\S]*model-col-actions/, 'keys table must declare semantic column classes');
-assert.match(gatewayView, /data-action=\"resident\"/, 'gateway overview must preserve the resident control');
-assert.match(view, /select\[data-action\], input\[type="checkbox"\]\[data-action\]/, 'settings checkboxes must commit through change events');
-assert.match(controller, /resident && snapshot\.gateway\.state !== 'running'[\s\S]*startGateway/, 'enabling resident mode must also ensure the gateway is running');
-assert.match(controller, /\['stopped', 'failed'\]\.includes\(this\.snapshot\.gateway\.state\)[\s\S]*startGateway/, 'opening model settings must start a stopped gateway');
-assert.match(controller, /gateway\.state === 'running'[\s\S]*syncAgentClientConfigs/, 'a running gateway must refresh managed client endpoints');
-assert.match(gatewayView, /data-action=\"(?:update-kernel|check-kernel-update)\"/, 'gateway overview must expose kernel update actions');
-assert.match(gatewayView, /#i-box[\s\S]*'i-link'/, 'gateway overview must reuse the shared SVG sprite');
-assert.doesNotMatch(gatewayView, /127\.0\.0\.1:8317|v7\.2\.139|v0\.2\.25/, 'gateway overview must not invent runtime values');
-assert.doesNotMatch(gatewayView, /<svg[^>]+viewBox=/, 'gateway overview must not embed standalone icon artwork');
-assert.match(css, /\.model-filter-bar-dimensions\s*\{[^}]*repeat\(6,/, 'dimensions filter must arrange in 6 equal columns on wide screens');
-assert.match(css, /\.model-adv-form\s*\{[^}]*repeat\(2,/, 'advanced form must use 2-column grid layout');
 assert.match(css, /\.model-settings-shell\s*\{[^}]*grid-template-columns:240px/, 'model navigation must use the compact shared width');
-assert.match(css, /\.model-settings-header,\.model-settings-pages,\.model-settings-notice\s*\{[^}]*1120px/, 'model content must use the shared maximum width');
-assert.match(css, /\.model-settings-subnav button\s*\{[^}]*display:\s*flex;[^}]*align-items:\s*center;/, 'subnav buttons must center their label vertically with flex');
-assert.match(css, /\.model-settings-subnav button \.icon\s*\{[^}]*width:\s*15px;[^}]*height:\s*15px;/, 'subnav icons must use the shared 15px sizing');
-assert.match(css, /\.model-gateway-layout\s*\{[^}]*grid-template-areas:"runtime endpoints" "keys keys" "summary summary";/, 'gateway layout must place runtime and endpoints side by side with keys and summary full width');
-assert.match(css, /\.model-toast\.visible\s*\{[^}]*opacity:1;/, 'model settings must provide a visible toast state for action feedback');
-assert.match(view, /showToast\(message\)/, 'model settings view must expose showToast for action feedback');
-assert.doesNotMatch(view, /showToast\._timer/, 'showToast must not reference undefined showToast identifier internally');
-assert.match(view, /toastTimer = setTimeout/, 'showToast must manage toastTimer safely');
-assert.match(advancedController, /view\.showToast\(controller\.t\(key, fallback\)\)/, 'key copy and rotate actions must surface a toast on success');
-for (const [page, icon] of [['custom', 'i-pen'], ['oauth', 'i-globe'], ['gateway', 'i-bolt'], ['usage', 'i-list'], ['advanced', 'i-gear'], ['apps', 'i-grid']]) {
+assert.match(css, /\.model-toast\.visible\s*\{[^}]*opacity:1;/, 'model settings must provide a visible toast state');
+assert.match(view, /showToast\(message\)/, 'model settings view must expose showToast');
+for (const [page, icon] of [['custom', 'i-pen'], ['usage', 'i-list'], ['quota', 'i-globe'], ['apps', 'i-grid']]) {
   assert.match(view, new RegExp(`data-page="${page}"[^>]*><svg class="icon"[^>]*><use href="#${icon}"`), `subnav ${page} must declare its ${icon} icon inline`);
 }
-assert.doesNotMatch(usageView, /data-action="search-events"/, 'usage UI must not expose a fake search action');
-for (const key of ['modelSettings', 'modelCustomModels', 'modelOAuthModels', 'modelLocalProxy', 'modelUsageRecords', 'modelAdvancedSettings', 'modelGatewaySummary', 'modelTestConnection', 'modelAccountNeedsReauth', 'modelOAuthModelsHint', 'modelAccounts', 'appsCenter', 'appsList']) {
-  assert.ok(JSON.parse(zh)[key] && JSON.parse(en)[key], `locale key ${key} must exist in zh_CN and en`);
+
+const zh = JSON.parse(zhRaw);
+const en = JSON.parse(enRaw);
+for (const key of ['modelDefaultModel', 'modelDefaultModelNone', 'modelDefaultModelHint', 'modelDefaultModelUnavailable', 'modelSetAsDefault']) {
+  assert.ok(zh[key] && en[key], `global connection locale ${key} must exist in both languages`);
 }
-for (const key of new Set(controller.match(/modelError[A-Za-z]+/g))) {
-  assert.ok(JSON.parse(zh)[key] && JSON.parse(en)[key], `safe error locale ${key} must exist in zh_CN and en`);
+for (const key of ['modelSettings', 'modelConnections', 'modelConnectionsDescription', 'modelUsageRecords', 'modelQuotaInquiry', 'modelQuotaDescription', 'modelProxyRetiredNotice', 'modelResidentHost', 'modelAISettings', 'modelTestConnection', 'appsCenter', 'appsList']) {
+  assert.ok(zh[key] && en[key], `locale key ${key} must exist in zh_CN and en`);
+}
+const errorsSource = await readFile(new URL('./model-settings-errors.js', import.meta.url), 'utf8');
+for (const key of new Set([...errorsSource.matchAll(/model(?:Error|Host)[A-Za-z]+/g)].map(([value]) => value))) {
+  assert.ok(zh[key] && en[key], `safe error locale ${key} must exist in zh_CN and en`);
 }
 
 console.log('model settings API, lazy-load, accessibility, and locale tests passed');

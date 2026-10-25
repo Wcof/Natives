@@ -172,15 +172,24 @@ func TestBroadcastMergesSameEventPerClient(t *testing.T) {
 	defer client.Close()
 	hub.serve(ctx, engine, hostEnd, hostEnd, hostEnd.Close)
 
-	hub.broadcast(nativeio.Response{OK: true, Event: "model_gateway_state_changed", Result: "first"})
-	hub.broadcast(nativeio.Response{OK: true, Event: "model_gateway_state_changed", Result: "second"})
-	hub.broadcast(nativeio.Response{OK: true, Event: "model_gateway_state_changed", Result: "third"})
+	hub.broadcast(nativeio.Response{OK: true, Event: "model_host_state_changed", Result: "first"})
+	hub.broadcast(nativeio.Response{OK: true, Event: "model_host_state_changed", Result: "second"})
+	hub.broadcast(nativeio.Response{OK: true, Event: "model_host_state_changed", Result: "third"})
 
 	_ = client.SetReadDeadline(time.Now().Add(2 * time.Second))
-	first := readResponseT(t, client)
-	payload, _ := json.Marshal(first.Result)
-	if string(payload) != `"third"` {
-		t.Fatalf("expected merged latest event, got %s", payload)
+	// 合并只作用于“尚未写出”的同型事件；已被写泵取走的旧事件无法回收。
+	// 因此允许先收到 first/second，但最后一条必须是 third，且其后不再有事件。
+	var last string
+	for attempts := 0; attempts < 3; attempts++ {
+		response := readResponseT(t, client)
+		payload, _ := json.Marshal(response.Result)
+		last = string(payload)
+		if last == `"third"` {
+			break
+		}
+	}
+	if last != `"third"` {
+		t.Fatalf("expected final merged event to be third, got %s", last)
 	}
 	// 合并后没有残留旧事件：deadline 内不应再有同型事件到达。
 	_ = client.SetReadDeadline(time.Now().Add(200 * time.Millisecond))

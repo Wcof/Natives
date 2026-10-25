@@ -44,6 +44,7 @@
 - `document.hidden` 时暂停时钟、背景轮播、自动刷新和无任务 Native Port。
 - 可见后先重算真实状态，再恢复调度；不能补跑隐藏期间每一次 tick。
 - 用户运行中的数据迁移/写入可继续，但 UI timer 与业务任务必须分开。
+- ADR-0047 的已授权 Web document 只保留每页唯一被动 SSE；隐藏业务停止分发／查询并释放 Surface，不用此连接延长模块运行。pagehide 关闭，返回或 BFCache 恢复后按需取得新 Surface。
 
 #### R-E14 · 错误统一分类
 

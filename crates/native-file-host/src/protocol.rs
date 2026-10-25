@@ -156,6 +156,7 @@ pub(crate) fn validate_request(request: &Request) -> Result<(), String> {
             | "preferences_get"
             | "preferences_set"
             | "preferences_import"
+            | "space_background_bing"
             | "diagnostics_get"
             | "diagnostics_reset"
             | "apps:handshake"
@@ -245,6 +246,7 @@ pub(crate) fn validate_request(request: &Request) -> Result<(), String> {
         "preferences_get" => &[],
         "preferences_set" => &["entries", "expectedRevision"],
         "preferences_import" => &["entries", "expectedRevision", "source"],
+        "space_background_bing" => &["mkt", "idx"],
         "apps:list" | "apps:health" | "apps:product_status" | "apps:open_onboarding" => &[],
         "apps:handshake" => &["origin"],
         "apps:get" => &["appId"],

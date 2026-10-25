@@ -7,7 +7,6 @@ export function buildDashboardStyles({ backgroundStyles = '', widgetStyles = '' 
       display: none !important;
     }
     .Widgets {
-      --space-toolbar-clearance: 72px;
       color: #ffffff;
       width: 100%;
       height: 100%;
@@ -86,47 +85,43 @@ export function buildDashboardStyles({ backgroundStyles = '', widgetStyles = '' 
     }
     .Slot:not(.free-slot-wrap):not(.free) {
       max-width: 100%;
-      max-height: calc(100% - var(--space-toolbar-clearance));
-      overflow: auto;
       pointer-events: auto;
-    }
-    .Slot.bottomLeft, .Slot.bottomCentre, .Slot.bottomRight {
-      max-height: calc(100% - 3rem - var(--space-toolbar-clearance));
     }
     .Slot > * {
       margin: 1rem;
       pointer-events: all;
     }
     .Slot.topLeft {
-      top: var(--space-toolbar-clearance);
+      top: 0;
       left: 0;
       text-align: left;
     }
     .Slot.topCentre {
-      top: var(--space-toolbar-clearance);
+      top: 0;
       left: 50%;
       transform: translateX(-50%);
       text-align: center;
     }
+    /* 悬浮工具栏不占布局；所有槽位按真实位置对齐，重叠时工具栏在上层。 */
     .Slot.topRight {
-      top: var(--space-toolbar-clearance);
+      top: 0;
       right: 0;
       text-align: right;
     }
     .Slot.middleLeft {
-      top: calc(50% + var(--space-toolbar-clearance) / 2);
+      top: 50%;
       left: 0;
       transform: translateY(-50%);
       text-align: left;
     }
     .Slot.middleCentre {
-      top: calc(50% + var(--space-toolbar-clearance) / 2);
+      top: 50%;
       left: 50%;
       transform: translate(-50%, -50%);
       text-align: center;
     }
     .Slot.middleRight {
-      top: calc(50% + var(--space-toolbar-clearance) / 2);
+      top: 50%;
       right: 0;
       transform: translateY(-50%);
       text-align: right;

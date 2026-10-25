@@ -123,7 +123,7 @@ async function checkResidentLifecycle(directory) {
   let relay;
   let workerPID;
   try {
-    const enabled = await withTimeout(primaryClient.call({ id: 'resident-on', method: 'model_gateway_set_resident', params: { expectedRevision: 1, resident: true } }), 3000, 'resident enable timed out');
+    const enabled = await withTimeout(primaryClient.call({ id: 'resident-on', method: 'model_host_set_resident', params: { expectedRevision: 1, resident: true } }), 3000, 'resident enable timed out');
     workerPID = process.platform === 'win32' ? null : childProcessIDs(primary.pid)[0];
     if (process.platform !== 'win32' && !workerPID) throw new Error('detached model worker missing');
     primary.stdin.end();
@@ -134,11 +134,11 @@ async function checkResidentLifecycle(directory) {
     const snapshot = await withTimeout(relayClient.call({ id: 'resident-snapshot', method: 'model_snapshot', params: {} }), 3000, 'resident relay timed out');
     const reusedWorker = workerPID ? processRunning(workerPID) && childProcessIDs(relay.pid).length === 0 : null;
     const revision = snapshot?.result?.revision;
-    const disabled = await withTimeout(relayClient.call({ id: 'resident-off', method: 'model_gateway_set_resident', params: { expectedRevision: revision, resident: false } }), 3000, 'resident disable timed out');
+    const disabled = await withTimeout(relayClient.call({ id: 'resident-off', method: 'model_host_set_resident', params: { expectedRevision: revision, resident: false } }), 3000, 'resident disable timed out');
     relay.stdin.end();
     const relayExit = await withTimeout(waitForExit(relay), 2000, 'resident relay did not exit');
     if (workerPID) await waitForProcessExit(workerPID);
-    return { ok: enabled?.ok === true && stayedRunning !== false && reusedWorker !== false && snapshot?.result?.gateway?.resident === true && disabled?.result?.gateway?.resident === false && relayExit.code === 0 && primaryExit.code === 0, stayedRunning, reusedWorker, workerExited: workerPID ? !processRunning(workerPID) : null, relayExit, primaryExit };
+    return { ok: enabled?.ok === true && stayedRunning !== false && reusedWorker !== false && snapshot?.result?.resident === true && disabled?.result?.resident === false && relayExit.code === 0 && primaryExit.code === 0, stayedRunning, reusedWorker, workerExited: workerPID ? !processRunning(workerPID) : null, relayExit, primaryExit };
   } finally {
     primary.kill('SIGKILL');
     relay?.kill('SIGKILL');

@@ -41,8 +41,8 @@
 - **等级**：MUST
 - Files 拥有文件 CRUD、Trash、Watch、Search 和预览。
 - Apps 拥有内置模块登记、偏好、运行与 Surface；模块业务库由模块自己拥有。
-- Model 拥有 Provider、Connection、Credential、Local Proxy、AI Tool Integration 和 Usage。
-- Provider 是厂商；Connection 是 endpoint/protocol；Credential 是 Keychain 引用。
+- Model 拥有 Provider、Connection、Credential、直连供应商推理和 Usage；不提供模型代理／路由、访问密钥或账号池。
+- Provider 是厂商；Connection 是 endpoint/protocol；Credential 是 Keychain 引用；内部调用以 `providerId`+`modelId` 标识模型。
 - Usage/Cost 必须使用真实事件、账单或可追溯价格版本，估算值明确标注。
 
 #### R-P6 · 只允许冻结的进程边界

@@ -63,32 +63,40 @@ fn quality_of(summary: &crate::assets::AssetsSummary) -> (&'static str, Vec<Valu
     if !summary.has_entries {
         return ("empty", issues);
     }
-    if summary.quality != "ready" {
-        if summary.missing_price_count > 0 {
-            issues.push(json!({"code":"missing_price","count":summary.missing_price_count}));
-        }
-        if summary.currency_unconfirmed_count > 0 {
-            issues.push(
-                json!({"code":"currency_unconfirmed","count":summary.currency_unconfirmed_count}),
-            );
-        }
-        if summary.currency_unsupported_count > 0 {
-            issues.push(
-                json!({"code":"currency_unsupported","count":summary.currency_unsupported_count}),
-            );
-        }
-        if summary.overlap_review_count > 0 {
-            issues.push(json!({"code":"overlap_review","count":summary.overlap_review_count}));
-        }
-        if summary.unknown_class_count > 0 {
-            issues.push(json!({"code":"unknown_class","count":summary.unknown_class_count}));
-        }
-        if summary.old_valuation_count > 0 {
-            issues.push(json!({"code":"stale_valuation","count":summary.old_valuation_count}));
-        }
-        return ("incomplete", issues);
+    if summary.missing_price_count > 0 {
+        issues.push(json!({"code":"missing_price","count":summary.missing_price_count}));
     }
-    ("ready", issues)
+    if summary.missing_quote_count > 0 {
+        issues.push(json!({"code":"missing_quote","count":summary.missing_quote_count}));
+    }
+    if summary.currency_unconfirmed_count > 0 {
+        issues.push(
+            json!({"code":"currency_unconfirmed","count":summary.currency_unconfirmed_count}),
+        );
+    }
+    if summary.currency_unsupported_count > 0 {
+        issues.push(
+            json!({"code":"currency_unsupported","count":summary.currency_unsupported_count}),
+        );
+    }
+    if summary.overlap_review_count > 0 {
+        issues.push(json!({"code":"overlap_review","count":summary.overlap_review_count}));
+    }
+    if summary.old_valuation_count > 0 {
+        issues.push(json!({"code":"stale_valuation","count":summary.old_valuation_count}));
+    }
+    match summary.quality {
+        "ready" => ("ready", issues),
+        // A stale valuation already has a complete value; keep the state distinct
+        // from an incomplete one so the summary card and detail never disagree.
+        "stale" => ("stale", issues),
+        _ => {
+            if issues.is_empty() {
+                issues.push(json!({"code":"incomplete","count":1}));
+            }
+            ("incomplete", issues)
+        }
+    }
 }
 
 /// 首页快照。只读聚合（单次 with_read），不隐式写入。
@@ -244,13 +252,11 @@ pub(crate) fn snapshot_inner(
     let total_a = summary.complete_value_minor;
     // 现金 C：来自现金资产合计；无现金资产记录时为 None（未建账，不显示 0）。
     let cash_c = cash.cash_minor;
-    // 非现金 I = A − C（均已知时）。
-    let invested_i = match (total_a, cash_c) {
-        (Some(a), Some(c)) => {
-            Some(crate::assets::add_minor(a, -c, "非现金市值").map_err(FinanceError::from)?)
-        }
-        _ => None,
-    };
+    // A 只含已登记资产；未登记现金不阻断已登记非现金估值，C 仍保持未知。
+    let invested_i = total_a
+        .map(|a| crate::assets::add_minor(a, -cash_c.unwrap_or(0), "非现金市值"))
+        .transpose()
+        .map_err(FinanceError::from)?;
     let available_f = cash.available_minor;
     let mut opportunities_json =
         crate::opportunities::projection(conn, summary, today, available_f)?;
@@ -263,6 +269,9 @@ pub(crate) fn snapshot_inner(
     let mut returns_json = crate::home_period::project(conn, summary, from, to, today)?;
     returns_json["range"] = range_label.clone().into();
     let mut portfolio = crate::overview::overview_range(conn, summary, today, Some((from, to)))?;
+    if range_label != "today" {
+        crate::holding_history::project(conn, &mut portfolio["history"], from, to)?;
+    }
     if let (Some(base), Some(end)) = (returns_json["from"].as_str(), returns_json["to"].as_str()) {
         portfolio["attribution"] = if returns_json["endSource"] == "current-valuation" {
             crate::portfolio_attribution::range_live(conn, base, end, summary)?
@@ -330,7 +339,7 @@ pub(crate) fn snapshot_inner(
         .map(|d| d.as_secs().to_string())
         .unwrap_or_default();
 
-    Ok(json!({
+    let mut snapshot = json!({
         "snapshotId": snapshot_id,
         "generatedAt": generated_at,
         "dataRevision": data_revision,
@@ -395,7 +404,9 @@ pub(crate) fn snapshot_inner(
             "coverage": "投资应用打开期间检查；关闭后不监控",
         },
         "urgent": urgent_json,
-    }))
+    });
+    crate::valuation_history::project(conn, &mut snapshot, from, to)?;
+    Ok(snapshot)
 }
 
 pub use crate::evidence::{evidence, evidence_task};

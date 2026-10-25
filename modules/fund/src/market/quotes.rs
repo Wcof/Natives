@@ -17,11 +17,16 @@ pub(crate) const CN_INDEX_CODES: &[(&str, &str)] = &[
     ("sh000680", "科创综指"),
 ];
 
-/// 美股指数（腾讯代码）。
+/// 港股指数（腾讯代码）。
+pub(crate) const HK_INDEX_CODES: &[(&str, &str)] =
+    &[("hkHSI", "恒生指数"), ("hkHSTECH", "恒生科技指数")];
+
+/// 美股指数（腾讯代码）。标普 500 的腾讯代码是 `usINX`；`usSPX` 返回
+/// `v_pv_none_match`，会让第三张美股卡片永久缺失（价格与时间都没有）。
 pub(crate) const US_INDEX_CODES: &[(&str, &str)] = &[
     ("usNDX", "纳斯达克100"),
     ("usDJI", "道琼斯"),
-    ("usSPX", "标普500"),
+    ("usINX", "标普500"),
 ];
 
 /// 主题板块 → 代表 ETF 标的映射（客观代码常量，行情实时拉取）。
@@ -171,20 +176,7 @@ pub(crate) fn fetch_tencent_quotes(
                     codes.get(index).unwrap_or(&"").to_string()
                 }
             });
-        let as_of = fields
-            .get(30)
-            .filter(|s| s.len() == 14 && s.bytes().all(|b| b.is_ascii_digit()))
-            .map(|s| {
-                format!(
-                    "{}-{}-{} {}:{}:{}",
-                    &s[..4],
-                    &s[4..6],
-                    &s[6..8],
-                    &s[8..10],
-                    &s[10..12],
-                    &s[12..14]
-                )
-            });
+        let as_of = fields.get(30).and_then(|s| parse_quote_time(s));
         quotes.push(Quote {
             as_of,
             code: codes.get(index).map(|c| c.to_string()).unwrap_or_default(),
@@ -199,4 +191,40 @@ pub(crate) fn fetch_tencent_quotes(
         });
     }
     Ok(quotes)
+}
+
+// Preserve the upstream market-local clock; never substitute the fetch time.
+pub(super) fn parse_quote_time(raw: &str) -> Option<String> {
+    let normalized = if raw.len() == 14 && raw.bytes().all(|b| b.is_ascii_digit()) {
+        format!(
+            "{}-{}-{} {}:{}:{}",
+            &raw[..4],
+            &raw[4..6],
+            &raw[6..8],
+            &raw[8..10],
+            &raw[10..12],
+            &raw[12..14]
+        )
+    } else {
+        raw.replace('/', "-")
+    };
+    let b = normalized.as_bytes();
+    if b.len() != 19
+        || !b.iter().enumerate().all(|(i, c)| match i {
+            4 | 7 => *c == b'-',
+            10 => *c == b' ',
+            13 | 16 => *c == b':',
+            _ => c.is_ascii_digit(),
+        })
+        || !crate::assets::is_valid_calendar_date(&normalized[..10])
+    {
+        return None;
+    }
+    if normalized[11..13].parse::<u8>().ok()? > 23
+        || normalized[14..16].parse::<u8>().ok()? > 59
+        || normalized[17..19].parse::<u8>().ok()? > 59
+    {
+        return None;
+    }
+    Some(normalized)
 }

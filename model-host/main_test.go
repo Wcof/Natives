@@ -28,10 +28,10 @@ func TestNativeClientReconnectsToSameResidentEngine(t *testing.T) {
 
 	firstClient, firstHost := net.Pipe()
 	hub.serve(ctx, engine, firstHost, firstHost, firstHost.Close)
-	writeRequest(t, firstClient, nativeio.Request{ID: "resident", Method: "model_gateway_set_resident", Params: json.RawMessage(`{"expectedRevision":1,"resident":true}`)})
+	writeRequest(t, firstClient, nativeio.Request{ID: "resident", Method: "model_host_set_resident", Params: json.RawMessage(`{"expectedRevision":1,"resident":true}`)})
 	firstResponse := readResponse(t, firstClient)
 	firstSnapshot := decodeSnapshot(t, firstResponse.Result)
-	if !firstSnapshot.Gateway.Resident {
+	if !firstSnapshot.Resident {
 		t.Fatal("resident setting was not stored")
 	}
 	_ = firstClient.Close()
@@ -46,7 +46,7 @@ func TestNativeClientReconnectsToSameResidentEngine(t *testing.T) {
 	writeRequest(t, secondClient, nativeio.Request{ID: "snapshot", Method: "model_snapshot", Params: json.RawMessage(`{}`)})
 	secondSnapshot := decodeSnapshot(t, readResponse(t, secondClient).Result)
 	_ = secondClient.Close()
-	if secondSnapshot.Revision != firstSnapshot.Revision || !secondSnapshot.Gateway.Resident {
+	if secondSnapshot.Revision != firstSnapshot.Revision || !secondSnapshot.Resident {
 		t.Fatalf("reconnected client saw different authority: %#v", secondSnapshot)
 	}
 }

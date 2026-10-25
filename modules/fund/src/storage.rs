@@ -13,7 +13,7 @@ use std::sync::Mutex;
 
 /// 当前业务 schema 版本（v3 人工资产/币种，v4 目标/配置，v5 投资首页账本，
 /// v6 交易现金待核对/理由归档，v7 首页自定义资金分组，v27 自定义分类说明）。
-pub const SCHEMA_VERSION: i64 = 28;
+pub const SCHEMA_VERSION: i64 = 29;
 
 pub struct Store {
     conn: Mutex<Connection>,
@@ -441,6 +441,7 @@ impl Store {
                 conn.execute_batch(crate::migration_late::SCHEMA_V26_SQL)?;
                 conn.execute_batch(crate::migration_late::SCHEMA_V27_SQL)?;
                 conn.execute_batch(crate::migration_late::SCHEMA_V28_SQL)?;
+                conn.execute_batch(crate::migration_late::SCHEMA_V29_SQL)?;
                 conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 Ok(())
             })?;
@@ -508,6 +509,7 @@ impl Store {
             conn.execute_batch(crate::migration_late::SCHEMA_V26_SQL)?;
             conn.execute_batch(crate::migration_late::SCHEMA_V27_SQL)?;
             conn.execute_batch(crate::migration_late::SCHEMA_V28_SQL)?;
+            conn.execute_batch(crate::migration_late::SCHEMA_V29_SQL)?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             Ok(())
         })?;
@@ -555,12 +557,34 @@ impl Store {
     where
         E: From<rusqlite::Error>,
     {
+        self.write_transaction(f, true)
+    }
+
+    // Derived observations have no effect on ledger identity or quote-cache validity.
+    pub(crate) fn with_observation_write<T, E>(
+        &self,
+        f: impl FnOnce(&Connection) -> Result<T, E>,
+    ) -> Result<T, E>
+    where
+        E: From<rusqlite::Error>,
+    {
+        self.write_transaction(f, false)
+    }
+
+    fn write_transaction<T, E>(
+        &self,
+        f: impl FnOnce(&Connection) -> Result<T, E>,
+        advance_revision: bool,
+    ) -> Result<T, E>
+    where
+        E: From<rusqlite::Error>,
+    {
         let mut guard = self.conn.lock().expect("storage mutex poisoned");
         let tx = guard.transaction()?;
         let before = tx.total_changes();
         match f(&tx) {
             Ok(value) => {
-                if tx.total_changes() != before {
+                if advance_revision && tx.total_changes() != before {
                     let revision: i64 = Self::data_revision(&tx)?
                         .parse()
                         .map_err(|_| rusqlite::Error::InvalidQuery)?;

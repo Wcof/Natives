@@ -16,6 +16,14 @@ export async function verifyInformationData(page,frame,report){
  const privateData=await runtime.evaluate(()=>Fund.api('GET','/api/information/items?scope=holdings'));
  assert.equal(privateData.items.length,0,'public stories do not imply a holding relation');
  report.finance={count:publicData.items.length,first:publicData.items[0].title,publishedAt:publicData.items[0].publishedAt};
+ await runtime.evaluate(id=>Fund.home.openInformationDetail(id),publicData.items[0].id);
+ await frame.locator('dialog[open] .information-content-text').waitFor({timeout:30000});
+ const publicDetail=await runtime.evaluate(id=>Fund.api('GET',`/api/information/item?id=${id}`),publicData.items[0].id);
+ assert.ok(publicDetail.contentText.length>100,'real public article body must be readable in the detail dialog');
+ assert.ok(['full','truncated'].includes(publicDetail.completeness));
+ assert.equal(await frame.locator('dialog[open] script').count(),0);
+ report.finance.bodyBytes=Buffer.byteLength(publicDetail.contentText);report.finance.completeness=publicDetail.completeness;
+ await frame.locator('dialog[open] [data-close]').click();
  await frame.locator('#tab-home').click();
  await runtime.evaluate(async()=>{
   const asOf=new Date(Date.now()+8*3600000).toISOString().slice(0,10);

@@ -93,3 +93,92 @@ fn selected_history_range_and_today_are_not_a_fixed_sixty_day_window() {
         today
     );
 }
+
+#[test]
+fn history_points_expose_recorded_group_values_without_backfilling_old_snapshots() {
+    let store = Store::open_in_memory().unwrap();
+    let today = crate::finance::today_cn();
+    let first = crate::assets::minus_days(&today, 1);
+    store.with_write(|c|{
+        let with_groups = json!({"flowsChecked":true,"cashEventThrough":0,"transactionThrough":0,"revision":"0",
+            "groupValues":[{"groupId":"g1","name":"Equity","valueMinor":"60000"}]});
+        let without_groups = json!({"flowsChecked":true,"cashEventThrough":0,"transactionThrough":0,"revision":"0"});
+        c.execute("INSERT INTO value_snapshots(taken_at,total_minor,cash_minor,noncash_minor,quality,note,created_at,breakdown_json) VALUES(?1,100000,0,100000,'ready','','0',?2)",params![first,with_groups.to_string()])?;
+        c.execute("INSERT INTO value_snapshots(taken_at,total_minor,cash_minor,noncash_minor,quality,note,created_at,breakdown_json) VALUES(?1,101000,0,101000,'ready','','0',?2)",params![today,without_groups.to_string()])?;
+        Ok::<_,rusqlite::Error>(())
+    }).unwrap();
+    let history = store
+        .with_read(|c| crate::overview::history_range(c, &first, &today))
+        .unwrap();
+    assert_eq!(history["points"][0]["groups"][0]["groupId"], "g1");
+    assert_eq!(history["points"][0]["groups"][0]["valueMinor"], "60000");
+    assert!(history["points"][1]["groups"]
+        .as_array()
+        .unwrap()
+        .is_empty());
+}
+
+#[test]
+fn wealth_quality_lists_every_gap_and_keeps_stale_distinct_from_incomplete() {
+    let store = Store::open_in_memory().unwrap();
+    let today = crate::finance::today_cn();
+    let incomplete = AssetsSummary {
+        has_entries: true,
+        quality: "incomplete",
+        missing_quote_count: 1,
+        ..Default::default()
+    };
+    let value = store
+        .with_read(|c| {
+            crate::home::snapshot_inner(c, &today, "", &today, "all".into(), &incomplete, false)
+        })
+        .unwrap();
+    assert_eq!(value["wealth"]["quality"], "incomplete");
+    assert_eq!(value["wealth"]["issues"][0]["code"], "missing_quote");
+    assert_eq!(value["wealth"]["issues"][0]["count"], 1);
+    assert!(value["wealth"]["totalA"].is_null());
+    assert!(value["wealth"]["investedI"].is_null());
+
+    let stale = AssetsSummary {
+        has_entries: true,
+        quality: "stale",
+        complete_value_minor: Some(1000),
+        known_value_minor: Some(1000),
+        old_valuation_count: 1,
+        ..Default::default()
+    };
+    let value = store
+        .with_read(|c| {
+            crate::home::snapshot_inner(c, &today, "", &today, "all".into(), &stale, false)
+        })
+        .unwrap();
+    assert_eq!(value["wealth"]["quality"], "stale");
+    assert_eq!(value["wealth"]["totalA"], 1000);
+    assert_eq!(value["wealth"]["investedI"], 1000);
+    assert_eq!(value["wealth"]["issues"][0]["code"], "stale_valuation");
+}
+
+#[test]
+fn unregistered_cash_does_not_hide_complete_registered_investments() {
+    let store = Store::open_in_memory().unwrap();
+    let today = crate::finance::today_cn();
+    for total in [Some(930679), Some(0), None] {
+        let summary = AssetsSummary {
+            complete_value_minor: total,
+            known_value_minor: total,
+            has_entries: true,
+            quality: "ready",
+            ..Default::default()
+        };
+        let value = store
+            .with_read(|c| {
+                crate::home::snapshot_inner(c, &today, "", &today, "all".into(), &summary, false)
+            })
+            .unwrap();
+        assert_eq!(
+            value["wealth"]["investedI"],
+            serde_json::to_value(total).unwrap()
+        );
+        assert!(value["wealth"]["cash"]["cashMinor"].is_null());
+    }
+}

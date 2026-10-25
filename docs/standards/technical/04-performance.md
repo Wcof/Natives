@@ -88,6 +88,7 @@ ADR-0042 的 Core 服务、轻量 Native Relay 与共享模块 Worker 必须分�
 - **等级**：MUST
 - 页面不再持有连接时，释放其 Watch、导入和后台任务；hidden 且无任务 60 秒断开。
 - ADR-0042 下 Relay EOF 仅释放自身 Surface；Core 聚合其他有效 owner，最后 owner 离开且无在途工作后空闲 60 秒退出。不得因一个窗口关闭误杀其他入口。
+- ADR-0047：已授权 Web document 在隐藏时可保留每页唯一、无业务 Surface 的被动 SSE 连接 owner；不续租业务、不执行查询或隐藏重连轮询。pagehide 关闭，BFCache 恢复一次；最后连接释放后起算 Core 的 60 秒宽限。模块回收规则不变。
 - Release RSS、CPU、目录查询和退出满足统一预算。
 
 #### R-P9 · 内置模块生命周期与进程级资源回收
@@ -104,7 +105,7 @@ ADR-0042 的 Core 服务、轻量 Native Relay 与共享模块 Worker 必须分�
 
 - **等级**：MUST
 - 配置快照不等待无关 Usage、价格、导入或全部 Secret 预热。
-- Usage/Proxy 初始化可以延迟，但首次相关请求必须完整、单次且错误诚实。
+- Usage 初始化可以延迟，但首次相关请求必须完整、单次且错误诚实；直连推理不等待价格／导入预热。
 - resident=false 时最后连接关闭后退出；resident=true 时状态可见、单实例、可关闭。
 
 #### R-P11 · 动画与视觉成本

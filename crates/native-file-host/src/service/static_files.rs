@@ -52,7 +52,7 @@ pub fn mime_type_for(path: &str) -> &'static str {
 
 // Web-only assets are compiled into the signed Core binary. The product source
 // does not copy them into the Chrome extension tree (ADR-0042/WEB_ONLY), so the
-// Web entry remains usable without shipping pairing/session code in Chrome.
+// Web entry remains usable without shipping Web authorization code in Chrome.
 const WEB_ENTRY_JS: &str = include_str!("../../../../extension/web-entry.js");
 const WEB_SESSION_JS: &str = include_str!("../../../../extension/platform/session.js");
 const WEB_APP_JS: &str = include_str!("../../../../extension/app.js");
@@ -61,6 +61,9 @@ const WEB_SURFACE_JS: &str = include_str!("../../../../extension/platform/surfac
 const WEB_EVENTS_JS: &str = include_str!("../../../../extension/platform/events.js");
 const WEB_STORAGE_JS: &str = include_str!("../../../../extension/platform/storage.js");
 const WEB_SESSION_ADAPTER_JS: &str = include_str!("../../../../extension/platform/web-session.js");
+const WEB_I18N_JS: &str = include_str!("../../../../extension/platform/i18n.js");
+const WEB_CONNECTION_MESSAGES_JS: &str =
+    include_str!("../../../../extension/platform/connection-messages.js");
 
 fn embedded_web_asset(path: &str) -> Option<(Vec<u8>, &'static str)> {
     let bytes = match path {
@@ -72,6 +75,8 @@ fn embedded_web_asset(path: &str) -> Option<(Vec<u8>, &'static str)> {
         "platform/events.js" => WEB_EVENTS_JS,
         "platform/storage.js" => WEB_STORAGE_JS,
         "platform/web-session.js" => WEB_SESSION_ADAPTER_JS,
+        "platform/i18n.js" => WEB_I18N_JS,
+        "platform/connection-messages.js" => WEB_CONNECTION_MESSAGES_JS,
         _ => return None,
     };
     Some((
@@ -130,7 +135,13 @@ mod tests {
     fn web_only_auth_assets_are_served_from_the_signed_core() {
         let (entry, mime) = serve_static_file("/web-entry.js").expect("web-entry embedded");
         assert_eq!(mime, "application/javascript; charset=utf-8");
-        assert!(String::from_utf8_lossy(&entry).contains("natives-pairing-modal"));
+        let source = String::from_utf8_lossy(&entry);
+        assert!(source.contains("natives-connection-notice"));
+        assert!(!source.contains("pairing-form"));
+        let (messages, _) = serve_static_file("/platform/connection-messages.js").unwrap();
+        assert!(String::from_utf8_lossy(&messages).contains("请从 Natives 打开此页面"));
+        let (i18n, _) = serve_static_file("/platform/i18n.js").unwrap();
+        assert!(String::from_utf8_lossy(&i18n).contains("connectionMessages"));
 
         let (session, mime) = serve_static_file("/platform/session.js").expect("session embedded");
         assert_eq!(mime, "application/javascript; charset=utf-8");

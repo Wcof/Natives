@@ -14,7 +14,6 @@ try {
   await page.evaluate(installHomeFixture);
   for(const file of ['core.js','home-i18n.js','home-overview.js','home.js','home-range.js','home-manage.js'])await page.addScriptTag({path:resolve(root,file)});
   await page.evaluate(async theme=>{document.documentElement.dataset.theme=theme;Fund.state.token='test';await Fund.actions.loadHome();Fund.home.applyDisplayMode('amount',false);},theme);
-  await page.locator('.home-history > summary').click();
   for(const language of ['zh-CN','en']){
    await page.evaluate(language=>Fund.applyLanguage(language),language);
    await page.evaluate(()=>{
@@ -48,9 +47,106 @@ try {
    await page.locator('dialog[open]').press('Escape');
    assert.equal(await page.locator('[data-history-save]').evaluate(el=>el===document.activeElement),true);
    assert.equal(await page.evaluate(()=>requests.filter(r=>r.path.includes('/snapshot/save')).length),before,'opening/cancelling never records an estimate');
+   await page.locator('[data-history-group=g1]').click();
+   const category=async data=>page.evaluate(data=>{
+    const snapshot=structuredClone(Fund.home.snapshot());
+    snapshot.groupAllocation.groups[0].currentMinor=data.currentMinor;
+    snapshot.portfolio.history.points=data.points||[];
+    snapshot.portfolio.history.timeResolution=data.intraday?'minute':'day';
+    snapshot.portfolio.history.todayPoints=data.todayPoints||[];
+    if(data.past)snapshot.requestedRange.to=data.past;
+    Fund.home.renderOverview(snapshot);
+   },data);
+   await category({currentMinor:'41723'});
+   // Demo 口径：总资产常显，分类只是叠加线；分类没有历史不能顶替总额。
+   assert.equal(await page.locator('.history-single strong').innerText(),'123,456.78','without category history the total remains the headline');
+   assert.match(await page.locator('#home-history-status').innerText(),/至少两个日期|at least two dates/);
+   await page.locator('#home-history-chart').screenshot({path:resolve(out,`category-${theme}-${width}-${language}.png`)});
+   assert.equal(await page.locator('#home-history-chart polyline').count(),0,'one current observation is not a fabricated trend');
+   await category({currentMinor:'0'});
+   assert.equal(await page.locator('.history-single strong').innerText(),'123,456.78','a zero category never replaces the total headline');
+   await category({currentMinor:null});
+   assert.equal(await page.locator('.history-single strong').innerText(),'123,456.78','unknown category keeps the total current value');
+   const today=await page.evaluate(()=>Fund.home.snapshot().requestedRange.today);
+   const ago=days=>new Date(Date.parse(today+'T00:00:00Z')-days*86400000).toISOString().slice(0,10);
+   const at=Date.parse(today+'T09:30:00+08:00')/1000;
+   const observation=(offset,value)=>({date:today,observedAt:at+offset,valueMinor:'12345678',quality:'reference',groups:[{groupId:'g1',valueMinor:value}]});
+   await category({currentMinor:'41723',intraday:true,points:[observation(0,'10000'),observation(60,'20000')]});
+   assert.equal(await page.locator('#home-history-chart [data-series="total"] circle').count(),2);
+   assert.equal(await page.locator('#home-history-chart [data-series="g1"] circle').count(),2);
+   assert.equal(await page.locator('#home-history-chart [data-series="total"] polyline').count(),1,'total assets stay visible while a category is selected');
+   assert.equal(await page.locator('#home-history-chart [data-series="g1"] polyline').count(),1,'two real intraday observations must draw a trend');
+   const positions=await page.locator('#home-history-chart [data-series="g1"] circle').evaluateAll(nodes=>nodes.map(node=>({x:node.getAttribute('cx'),y:node.getAttribute('cy')})));
+   assert.notEqual(positions[0].x,positions[1].x,'same-day timestamps are distinct x coordinates');
+   assert.notEqual(positions[0].y,positions[1].y,'each observation keeps its own category amount');
+   await category({currentMinor:'41723',intraday:true,points:[observation(0,'20000'),observation(60,'20000')]});
+   assert.equal(await page.locator('#home-history-chart [data-series="g1"] polyline').count(),1,'unchanged real observations draw a flat line');
+   await category({currentMinor:'41723',intraday:true,points:[observation(0,'10000'),observation(3600,'20000')]});
+   assert.equal(await page.locator('#home-history-chart polyline').count(),0,'hidden or disconnected periods are not filled');
+   await category({currentMinor:'41723',points:[{date:ago(1),valueMinor:'12345678',quality:'ready',groups:[]}],todayPoints:[observation(0,'10000'),observation(60,'20000')]});
+   assert.equal(await page.locator('#home-history-chart [data-series="g1"] polyline').count(),1,'new categories automatically use their real intraday observations while older total history remains daily');
+   await category({currentMinor:'41723',points:[{date:today,valueMinor:'12345678',quality:'reference',groups:[]}]});
+   assert.equal(await page.locator('.history-single strong').innerText(),'123,456.78','a live total reference is not replaced by the category amount');
+   await category({currentMinor:'41723',past:ago(1),points:[
+    {date:ago(2),valueMinor:'12345678',quality:'ready',groups:[{groupId:'g1',valueMinor:'10000'}]},
+    {date:ago(1),valueMinor:'12345678',quality:'ready',groups:[{groupId:'g1',valueMinor:'20000'}]},
+   ]});
+   assert.equal(await page.locator('#home-history-chart [data-series="total"] circle').count(),2);
+   assert.equal(await page.locator('#home-history-chart [data-series="g1"] circle').count(),2);
+   assert.equal(await page.locator('#home-history-chart polyline').count(),2,'total and the selected category share one normalized scale');
+   assert.match(await page.locator('[data-history-group="g1"]').innerText(),/\+100\.00%/,'category tab reports its own range change');
+   const replay=[3,2,1,0].map((n,i)=>({date:ago(n),valueMinor:String(30000+i*1000),quality:'reference',source:'holding-nav-replay',groups:[{groupId:'g1',valueMinor:String(10000+i*1000),basis:'current-bindings'}]}));
+   await category({currentMinor:'41723',points:replay});
+   assert.equal(await page.locator('#home-history-chart [data-series="total"] circle').count(),4);
+   assert.equal(await page.locator('#home-history-chart [data-series="g1"] circle').count(),4);
+   assert.equal(await page.locator('#home-history-chart [data-series="total"] polyline').count(),1);
+   assert.equal(await page.locator('#home-history-chart [data-series="g1"] polyline').count(),1,'historical NAV reference points must connect into a real curve');
+   assert.match(await page.locator('[data-history-group="g1"]').innerText(),/\+30\.00%/,'replay category change uses its own NAV values');
+   assert.match(await page.locator('#home-history-selection').innerText(),/总资产 \+ Equity Group|Total assets \+ Equity Group/);
+   assert.match(await page.locator('#home-history-status').textContent(),/当前归属|current assignments/);
+   await page.locator('#home-history-chart').screenshot({path:resolve(out,`reconstructed-${theme}-${width}-${language}.png`)});
+   replay[1].groups[0].valueMinor=null;
+   await category({currentMinor:'41723',points:replay});
+   assert.equal(await page.locator('#home-history-chart [data-series="total"] circle').count(),4,'missing NAV does not remove total points');
+   assert.equal(await page.locator('#home-history-chart [data-series="g1"] circle').count(),3,'missing NAV is not a zero');
+   const replayLines=await page.locator('#home-history-chart [data-series="g1"] polyline').evaluateAll(ns=>ns.map(n=>n.getAttribute('points').split(' ').length));
+   assert.deepEqual(replayLines,[2],'a missing price splits historical reference lines');
+   await category({currentMinor:'41723',past:ago(1),points:[
+    {date:ago(3),valueMinor:'12345678',quality:'ready',groups:[{groupId:'g1',valueMinor:'10000'}]},
+    {date:ago(2),valueMinor:'12345678',quality:'ready',groups:[]},
+    {date:ago(1),valueMinor:'12345678',quality:'ready',groups:[{groupId:'g1',valueMinor:'20000'}]},
+   ]});
+   assert.equal(await page.locator('#home-history-chart [data-series="total"] circle').count(),3);
+   assert.equal(await page.locator('#home-history-chart [data-series="g1"] circle').count(),2);
+   assert.equal(await page.locator('#home-history-chart [data-series="g1"] polyline').count(),0,'missing category observations break the category curve');
+   await category({currentMinor:'41723',past:ago(1),points:[{date:ago(1),valueMinor:'12345678',quality:'ready',groups:[]}]});
+   assert.equal(await page.locator('#home-history-chart [data-series="g1"]').count(),0,'current category amounts never backfill old records');
+   assert.equal(await page.locator('.history-single strong').innerText(),'123,456.78','a lone historical total remains visible');
+   await page.evaluate(()=>Fund.home.applyDisplayMode('hidden',false));
+   assert.doesNotMatch(await page.locator('#home-history-status').innerText(),/Equity Group/,'hidden status masks selected category identity');
+   await page.evaluate(()=>Fund.home.applyDisplayMode('amount',false));
+   await page.locator('#home-history-series [data-history-reset]').click();
    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1),true);
   }
+  const callsBefore=await page.evaluate(()=>requests.length);
+  await page.evaluate(()=>Fund.actions.refreshHomeValuation());
+  assert.ok((await page.evaluate(n=>requests.slice(n),callsBefore)).some(r=>r.method==='POST'&&r.path.startsWith('/api/home/valuation/observe?')),'visible refresh uses the explicit observation writer');
+  const readBefore=await page.evaluate(()=>requests.length);
+  await page.evaluate(()=>Fund.home.readSnapshot());
+  assert.ok((await page.evaluate(n=>requests.slice(n),readBefore)).some(r=>r.method==='GET'&&r.path.startsWith('/api/home/snapshot?')),'readSnapshot never observes');
+  const confirmed=await page.evaluate(()=>JSON.stringify(Fund.home.snapshot()));
+  await page.evaluate(async()=>{window.failRange=true;await Fund.actions.refreshHomeValuation();window.failRange=false;});
+  assert.equal(await page.evaluate(()=>JSON.stringify(Fund.home.snapshot())),confirmed,'failed observation keeps the confirmed snapshot');
+  assert.match(await page.locator('#home-range-status').innerText(),/失败|failed/i);
+  await page.evaluate(()=>{window.holdHomeReads=true;void Fund.actions.refreshHomeValuation();});
+  await page.waitForFunction(()=>heldHomeRequests.some(r=>r.path.startsWith('/api/home/valuation/observe')));
+  await page.evaluate(()=>{Object.defineProperty(document,'hidden',{configurable:true,value:true});document.dispatchEvent(new Event('visibilitychange'));});
+  assert.equal(await page.evaluate(()=>heldHomeRequests.find(r=>r.path.startsWith('/api/home/valuation/observe')).signal.aborted),true,'hiding cancels an in-flight observation');
+  const hiddenCount=await page.evaluate(()=>requests.length);
+  await page.evaluate(()=>Fund.actions.refreshHomeValuation());
+  assert.equal(await page.evaluate(()=>requests.length),hiddenCount,'hidden pages cannot start observations');
+  await page.evaluate(()=>{heldHomeRequests.forEach(r=>r.resolve());window.holdHomeReads=false;Fund.actions.leaveHome();});
   assert.deepEqual(errors,[]);await page.close();
  }
- console.log('Home history: single point, partial current assets, historical empty, privacy, valuation entry/cancel, themes/languages/narrow passed');
+ console.log('Home history: intraday trend/flat line/gap/category values, read-only queries, hidden cancellation, privacy, valuation entry/cancel and 8 theme/language/width layouts passed');
 }finally{await browser.close();}

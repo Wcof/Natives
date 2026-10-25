@@ -21,6 +21,57 @@ fn book() -> IncomeBook {
     }
 }
 #[test]
+fn valuation_replay_uses_historical_quantity_and_accepts_unknown_cost() {
+    let mut b = book();
+    b.opening.as_mut().unwrap().1 = None;
+    b.operations.push((
+        "BUY".into(),
+        50000,
+        5500,
+        0,
+        "2026-01-05".into(),
+        "manual".into(),
+    ));
+    b.operations.push((
+        "SELL".into(),
+        30000,
+        3600,
+        0,
+        "2026-01-06".into(),
+        "manual".into(),
+    ));
+    b.calibrations.push(("2026-01-06".into(), 200000));
+    let p = prices();
+    assert_eq!(
+        b.valuation("2025-12-30", &p),
+        None,
+        "never backfill before registration"
+    );
+    assert_eq!(b.valuation("2025-12-31", &p), Some(10000));
+    assert_eq!(b.valuation("2026-01-05", &p), Some(16500));
+    assert_eq!(
+        b.valuation("2026-01-06", &p),
+        Some(24000),
+        "same-day calibration is the end-of-day quantity"
+    );
+    assert_eq!(b.valuation("2026-01-07", &p), Some(26000));
+    assert_eq!(b.valuation("2026-01-14", &p), Some(26000));
+    assert_eq!(
+        b.valuation("2026-01-15", &p),
+        None,
+        "stale NAV cannot extend a line indefinitely"
+    );
+    assert_eq!(b.valuation("2026-01-05", &BTreeMap::new()), None);
+    b.calibrations.push(("2026-01-08".into(), 0));
+    assert_eq!(
+        b.valuation("2026-01-08", &BTreeMap::new()),
+        Some(0),
+        "closed quantity is a real zero"
+    );
+    b.truncated = true;
+    assert_eq!(b.valuation("2026-01-08", &p), None);
+}
+#[test]
 fn daily_dates_and_money_percentage_use_real_quantities_and_fees() {
     let mut b = book();
     b.operations.push((
@@ -156,6 +207,10 @@ fn only_unadjusted_valid_history_and_visible_nav_are_accepted() {
 
 #[test]
 fn source_records_are_scoped_paginated_and_opening_edits_are_versioned() {
+    let records = |store: &Store, path: &str| {
+        let request = app_runtime_core::http::HttpRequest::for_internal("GET", path, vec![]);
+        crate::api::handle_api_request(store, None, &request, "/api/holding/records")
+    };
     let store = Store::open_in_memory().unwrap();
     let today = crate::finance::today_cn();
     let fund = crate::ledger::record_opening(
@@ -171,7 +226,7 @@ fn source_records_are_scoped_paginated_and_opening_edits_are_versioned() {
         &today,
     )
     .unwrap();
-    let before = super::super::positions::api_holding_records(
+    let before = records(
         &store,
         &format!("/api/holding/records?accountId=1&fundId={fund}&page=1"),
     )
@@ -213,7 +268,7 @@ fn source_records_are_scoped_paginated_and_opening_edits_are_versioned() {
     }
     for (page, count, more) in [(1, 20, true), (2, 2, false)] {
         let value: Value = serde_json::from_str(
-            &super::super::positions::api_holding_records(
+            &records(
                 &store,
                 &format!("/api/holding/records?accountId=1&fundId={fund}&page={page}"),
             )
@@ -223,11 +278,7 @@ fn source_records_are_scoped_paginated_and_opening_edits_are_versioned() {
         assert_eq!(value["transactions"].as_array().unwrap().len(), count);
         assert_eq!(value["hasMore"], more);
     }
-    assert!(super::super::positions::api_holding_records(
-        &store,
-        "/api/holding/records?accountId=-1&fundId=1"
-    )
-    .is_err());
+    assert!(records(&store, "/api/holding/records?accountId=-1&fundId=1").is_err());
 }
 
 #[test]

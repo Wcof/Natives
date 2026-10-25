@@ -5,6 +5,7 @@
 
 pub mod adapters;
 pub(crate) mod cache;
+pub mod content;
 mod finance;
 pub mod normalize;
 mod scope;

@@ -419,14 +419,25 @@ pub fn api_information_item(store: &Store, path: &str) -> Result<String, (u16, S
     let fresh = store
         .with_read(|c| store::content_cache_fresh(c, id, &now_iso()))
         .map_err(|_| (500, "INFORMATION_DB".into()))?;
+    let external: String = store
+        .with_read(|c| {
+            c.query_row(
+                "SELECT external_id FROM information_items WHERE id=?1",
+                [id],
+                |r| r.get(0),
+            )
+        })
+        .map_err(|_| (500, "INFORMATION_DB".into()))?;
+    let source_url = information::content::source_url(&d.row.source_id, &external);
     Ok(json!({
         "contentFetchedAt":d.content_fetched_at,
-        "contentCacheExpired":d.row.has_content && !fresh,
+        "contentCacheExpired":d.content_fetched_at.is_some() && !fresh,
+        "contentSupported":source_url.is_some(),
         "relatedItems": related,
         "id": d.row.id,
         "sourceId": d.row.source_id,
         "title": d.row.title,
-        "url": d.row.url,
+        "url": source_url.unwrap_or(d.row.url),
         "summary": d.row.summary,
         "contentText": d.content_text,
         "hasContent": d.row.has_content,

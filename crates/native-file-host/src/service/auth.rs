@@ -4,29 +4,17 @@ use app_runtime_core::session::{base64url, constant_time_eq, random_bytes};
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
-const SESSION_TTL: Duration = Duration::from_secs(12 * 3600); // 最长 12 小时
-const SESSION_IDLE_TTL: Duration = Duration::from_secs(30 * 60); // 30 分钟无操作过期
-const PAIRING_CODE_TTL: Duration = Duration::from_secs(5 * 60); // 配对码 5 分钟有效
 const BOOTSTRAP_TOKEN_TTL: Duration = Duration::from_secs(60); // Bootstrap Token 60 秒有效
-const MAX_PAIRING_ATTEMPTS: u32 = 5;
 const SURFACE_LEASE_TTL: Duration = Duration::from_secs(75); // 75 秒租约到期
 
 pub struct WebSession {
     pub csrf_token: String,
-    pub created_at: Instant,
-    pub last_active: Instant,
     pub surfaces: HashSet<String>,
 }
 
 pub struct BootstrapToken {
     pub token: String,
     pub expires_at: Instant,
-}
-
-pub struct PairingCode {
-    pub code: String,
-    pub expires_at: Instant,
-    pub failed_attempts: u32,
 }
 
 pub struct SurfaceRecord {
@@ -37,7 +25,6 @@ pub struct SurfaceRecord {
 
 pub struct AuthManager {
     bootstrap_token: Option<BootstrapToken>,
-    pairing_code: Option<PairingCode>,
     sessions: HashMap<String, WebSession>,
     surfaces: HashMap<String, SurfaceRecord>,
     minute_attempts: u32,
@@ -65,7 +52,6 @@ impl AuthManager {
             });
         Self {
             bootstrap_token,
-            pairing_code: None,
             sessions: HashMap::new(),
             surfaces: HashMap::new(),
             minute_attempts: 0,
@@ -92,25 +78,6 @@ impl AuthManager {
         }
         self.minute_attempts += 1;
         Ok(())
-    }
-
-    pub fn generate_pairing_code(&mut self) -> Result<String, &'static str> {
-        let mut buf = [0u8; 10];
-        if !random_bytes(&mut buf) {
-            return Err("ERR_CSPRNG_FAILED");
-        }
-        // Base32 编码生成 10 位可读验证码
-        const B32_ALPHABET: &[u8; 32] = b"23456789ABCDEFGHJKLMNPQRSTUVWXYZ";
-        let mut code = String::with_capacity(10);
-        for &b in buf.iter().take(10) {
-            code.push(B32_ALPHABET[(b as usize) % 32] as char);
-        }
-        self.pairing_code = Some(PairingCode {
-            code: code.clone(),
-            expires_at: Instant::now() + PAIRING_CODE_TTL,
-            failed_attempts: 0,
-        });
-        Ok(code)
     }
 
     pub fn generate_bootstrap_token(&mut self) -> Result<String, &'static str> {
@@ -143,27 +110,6 @@ impl AuthManager {
         self.create_session()
     }
 
-    pub fn exchange_pairing_code(&mut self, code: &str) -> Result<(String, String), &'static str> {
-        self.check_rate_limit()?;
-        let Some(pairing) = &mut self.pairing_code else {
-            return Err("ERR_PAIRING_CODE_NOT_FOUND");
-        };
-        if Instant::now() > pairing.expires_at {
-            self.pairing_code = None;
-            return Err("ERR_PAIRING_CODE_EXPIRED");
-        }
-        if !constant_time_eq(&code.to_ascii_uppercase(), &pairing.code) {
-            pairing.failed_attempts += 1;
-            if pairing.failed_attempts >= MAX_PAIRING_ATTEMPTS {
-                self.pairing_code = None;
-                return Err("ERR_PAIRING_CODE_LOCKED");
-            }
-            return Err("ERR_PAIRING_CODE_MISMATCH");
-        }
-        self.pairing_code = None;
-        self.create_session()
-    }
-
     fn create_session(&mut self) -> Result<(String, String), &'static str> {
         self.reap_expired();
         if self.sessions.len() >= 64 {
@@ -176,13 +122,10 @@ impl AuthManager {
         }
         let session_id = base64url(&session_buf);
         let csrf_token = base64url(&csrf_buf);
-        let now = Instant::now();
         self.sessions.insert(
             session_id.clone(),
             WebSession {
                 csrf_token: csrf_token.clone(),
-                created_at: now,
-                last_active: now,
                 surfaces: HashSet::new(),
             },
         );
@@ -191,18 +134,7 @@ impl AuthManager {
 
     pub fn validate_session(&mut self, session_id: &str) -> bool {
         self.reap_expired();
-        if let Some(session) = self.sessions.get_mut(session_id) {
-            let now = Instant::now();
-            if now.duration_since(session.created_at) > SESSION_TTL
-                || now.duration_since(session.last_active) > SESSION_IDLE_TTL
-            {
-                return false;
-            }
-            session.last_active = now;
-            true
-        } else {
-            false
-        }
+        self.sessions.contains_key(session_id)
     }
 
     pub fn validate_csrf(&self, session_id: &str, csrf: &str) -> bool {
@@ -284,7 +216,7 @@ impl AuthManager {
         self.validate_session(session_id) && self.owns_active_surface(session_id, surface_id)
     }
 
-    // SSE liveness must not count as user activity and renew the session forever.
+    // SSE liveness does not renew module resource leases.
     pub fn owns_active_surface(&self, session_id: &str, surface_id: &str) -> bool {
         self.surfaces.get(surface_id).is_some_and(|surface| {
             surface.session_id == session_id && surface.last_renewed.elapsed() <= SURFACE_LEASE_TTL
@@ -352,12 +284,10 @@ impl AuthManager {
     }
 
     pub fn reap_expired(&mut self) {
-        let now = Instant::now();
-        // 清理超期会话
-        self.sessions.retain(|_, s| {
-            now.duration_since(s.created_at) <= SESSION_TTL
-                && now.duration_since(s.last_active) <= SESSION_IDLE_TTL
-        });
+        self.reap_expired_at(Instant::now());
+    }
+
+    fn reap_expired_at(&mut self, now: Instant) {
         // 清理超期 Surface
         let valid_sessions = &self.sessions;
         self.surfaces.retain(|_, s| {
@@ -373,6 +303,36 @@ impl AuthManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bootstrap_expiry_still_rejects_without_revoking_browser_authorization() {
+        let mut auth = AuthManager::new(Some("first-launch".into()));
+        let (session, _) = auth.exchange_bootstrap("first-launch").unwrap();
+        let next = auth.generate_bootstrap_token().unwrap();
+        auth.bootstrap_token.as_mut().unwrap().expires_at = Instant::now() - Duration::from_secs(1);
+        assert_eq!(auth.exchange_bootstrap(&next), Err("ERR_BOOTSTRAP_EXPIRED"));
+        assert!(auth.validate_session(&session));
+    }
+
+    #[test]
+    fn browser_authorization_survives_idle_while_surface_leases_expire() {
+        let mut auth = AuthManager::new(Some("idle-test".into()));
+        let (session, csrf) = auth.exchange_bootstrap("idle-test").unwrap();
+        let surface = auth.register_surface(&session, None).unwrap();
+        auth.reap_expired_at(Instant::now() + Duration::from_secs(48 * 3600));
+        assert!(
+            auth.validate_session(&session),
+            "idle browser authorization must remain valid"
+        );
+        assert!(auth.validate_csrf(&session, &csrf));
+        assert!(
+            !auth.owns_active_surface(&session, &surface),
+            "an idle authorization must not preserve module resources"
+        );
+        assert!(auth.register_surface(&session, None).is_ok());
+        auth.revoke_session(&session);
+        assert!(!auth.validate_session(&session));
+    }
 
     #[test]
     fn sessions_are_bounded_without_evicting_active_owners() {

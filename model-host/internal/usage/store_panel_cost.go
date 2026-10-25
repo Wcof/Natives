@@ -5,9 +5,9 @@ import "fmt"
 // 调用方持有 Store 读锁；三种面板投影共用零计费记录的完整读取。
 func (s *Store) zeroCostRowsLocked(key, where string, args []any) ([]zeroCostRow, error) {
 	if where == "" {
-		where = "WHERE cost_micro = 0 AND total_tokens > 0"
+		where = "WHERE cost_micro = 0 AND total_tokens > 0 AND usage_status != 'missing'"
 	} else {
-		where += " AND cost_micro = 0 AND total_tokens > 0"
+		where += " AND cost_micro = 0 AND total_tokens > 0 AND usage_status != 'missing'"
 	}
 	rows, err := s.db.Query(fmt.Sprintf(`SELECT %s AS k, provider, model,
 		COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0),

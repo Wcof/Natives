@@ -7,6 +7,7 @@ mod diagnostics;
 mod drawings;
 mod holding_detail;
 pub mod home_api;
+mod home_snapshot;
 mod import_api;
 pub mod information_api;
 mod nav_api;
@@ -17,7 +18,7 @@ pub(crate) mod portfolio_benchmark_api;
 mod positions;
 mod positions_detail;
 mod positions_history;
-mod positions_income;
+use crate::holding_income as positions_income;
 pub mod reports_api;
 mod rules_api;
 mod sources_api;
@@ -454,14 +455,12 @@ pub fn handle_api_request(
     if route == "/api/home/group-plan/import-preview" && request.method == "GET" {
         return home_api::api_group_plan_import_preview(store);
     }
-    if route == "/api/home/snapshot/generate" && request.method == "POST" {
-        if !request.body.is_empty()
-            && !serde_json::from_slice::<serde_json::Value>(&request.body)
-                .is_ok_and(|v| v.as_object().is_some_and(|o| o.is_empty()))
-        {
-            return Err(api_error(400, "FIN_INVALID", "生成请求不接受数据字段"));
-        }
-        return home_api::api_home_generate(store, &request.path);
+    if matches!(
+        route,
+        "/api/home/snapshot/generate" | "/api/home/valuation/observe"
+    ) && request.method == "POST"
+    {
+        return home_snapshot::write_snapshot(store, request, route);
     }
     if route == "/api/home/snapshot" && request.method == "GET" {
         return api_home_snapshot(store, request.path.as_str());

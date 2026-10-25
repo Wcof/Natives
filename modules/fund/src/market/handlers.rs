@@ -2,8 +2,8 @@
 
 use super::cache::cached;
 use super::quotes::{
-    agent, fetch_tencent_quotes, quote_json, CN_INDEX_CODES, CORE_ETFS, HOT_STOCKS, TENCENT_QT,
-    THEME_ETFS, US_INDEX_CODES,
+    agent, fetch_tencent_quotes, quote_json, CN_INDEX_CODES, CORE_ETFS, HK_INDEX_CODES, HOT_STOCKS,
+    TENCENT_QT, THEME_ETFS, US_INDEX_CODES,
 };
 use super::sectors::{
     fetch_live_sector_stocks, fetch_tencent_sectors_by_type, sector_json, sina_sector_node,
@@ -14,22 +14,31 @@ use app_runtime_core::http::HttpRequest;
 use std::io::Read;
 use std::time::{Duration, Instant};
 
-/// GET /api/market/indices — 大盘指数（A 股）+ 美股指数（腾讯批量）。
+/// GET /api/market/indices — 大盘指数（A 股／港股／美股，腾讯批量）。
 pub fn api_market_indices(_request: &HttpRequest) -> Result<String, (u16, String)> {
     // 3s TTL：与前端 3s 轮询错峰，TTL 内直接复用上游实测响应
     cached("indices", Duration::from_secs(3), || {
         let mut codes: Vec<&str> = CN_INDEX_CODES.iter().map(|(c, _)| *c).collect();
+        codes.extend(HK_INDEX_CODES.iter().map(|(c, _)| *c));
         codes.extend(US_INDEX_CODES.iter().map(|(c, _)| *c));
         let mut names: Vec<(usize, &str)> = CN_INDEX_CODES
             .iter()
             .enumerate()
             .map(|(i, (_, n))| (i, *n))
             .collect();
+        let hk_offset = CN_INDEX_CODES.len();
+        names.extend(
+            HK_INDEX_CODES
+                .iter()
+                .enumerate()
+                .map(|(i, (_, n))| (hk_offset + i, *n)),
+        );
+        let us_offset = hk_offset + HK_INDEX_CODES.len();
         names.extend(
             US_INDEX_CODES
                 .iter()
                 .enumerate()
-                .map(|(i, (_, n))| (CN_INDEX_CODES.len() + i, *n)),
+                .map(|(i, (_, n))| (us_offset + i, *n)),
         );
         let quotes = fetch_tencent_quotes(&codes, Some(&names)).map_err(upstream_err)?;
         Ok(quote_json(&quotes))

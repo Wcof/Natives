@@ -1,6 +1,6 @@
 //! 会话相关 API 处理器（经 Model Host 8766 窄接口获取）。
 
-use super::stats::known_cost;
+use super::stats::{known_cost, known_tokens};
 use super::{api_error, json_str, parse_query_param};
 use crate::model_host::ModelUsageQueryClient;
 
@@ -21,14 +21,16 @@ pub(super) fn api_sessions(
             s.key.clone()
         };
         items.push(format!(
-            "{{\"sessionId\":{},\"sourceId\":{},\"title\":{},\"projectPath\":{},\"startedAt\":{},\"lastUsedAt\":{},\"totalTokens\":{},\"costUsd\":{},\"messageCount\":{}}}",
+            "{{\"sessionId\":{},\"sourceId\":{},\"title\":{},\"projectPath\":{},\"startedAt\":{},\"lastUsedAt\":{},\"totalTokens\":{},\"missingUsageRequests\":{},\"knownCostUsd\":{},\"costUsd\":{},\"messageCount\":{}}}",
             json_str(&sid),
             json_str(&s.tool_id),
             json_str(if s.title.is_empty() { &s.source } else { &s.title }),
             json_str(""),
             json_str(&s.first_at),
             json_str(&s.last_at),
-            s.tokens,
+            known_tokens(s.tokens, s.missing_usage_requests),
+            s.missing_usage_requests,
+            s.cost_usd,
             known_cost(s.cost_usd, s.priced),
             s.requests
         ));
@@ -66,10 +68,10 @@ pub(super) fn api_session_detail(
             json_str(&ev.id),
             json_str(""),
             json_str(&ev.model),
-            ev.input_tokens,
-            ev.output_tokens,
-            ev.cache_read_tokens,
-            ev.reasoning_tokens,
+            known_tokens(ev.input_tokens, i64::from(ev.usage_status == "missing")),
+            known_tokens(ev.output_tokens, i64::from(ev.usage_status == "missing")),
+            known_tokens(ev.cache_read_tokens, i64::from(ev.usage_status == "missing")),
+            known_tokens(ev.reasoning_tokens, i64::from(ev.usage_status == "missing")),
             known_cost(cost_usd, Some(ev.cost_status.as_deref() == Some("priced"))),
             json_str(&ev.requested_at)
         ));

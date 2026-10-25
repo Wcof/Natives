@@ -228,6 +228,49 @@ func TestTodayRangeUsesUserTimezone(t *testing.T) {
 	}
 }
 
+// TestInsertEventNormalizesOffsetsForTimeRanges 内部直连用本地偏移写入时
+// 必须归一化为 UTC，否则本地昨天晚间事件会被字符串比较误计入 today。
+func TestInsertEventNormalizesOffsetsForTimeRanges(t *testing.T) {
+	s, _ := tempStore(t)
+	defer s.Close()
+
+	loc, err := time.LoadLocation("Asia/Shanghai")
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().In(loc)
+	midnight := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
+	mk := func(id string, at time.Time) *Event {
+		return &Event{
+			ID: id, RequestedAt: at, CreatedAt: at,
+			Provider: "openai", Model: "gpt-4o", Result: ResultSuccess,
+			TotalTokens: 10,
+		}
+	}
+	for _, e := range []*Event{
+		mk("evt-offset-today", now),
+		mk("evt-offset-yesterday", midnight.Add(-time.Minute)),
+	} {
+		if err := s.InsertEvent(e); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var raw string
+	if err := s.db.QueryRow(`SELECT requested_at FROM usage_events WHERE id = 'evt-offset-today'`).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasSuffix(raw, "Z") {
+		t.Errorf("requested_at = %q, want UTC normalization", raw)
+	}
+	res, err := s.GetOverview(Filter{Range: "today", Timezone: "Asia/Shanghai"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Metrics.TotalRequests != 1 {
+		t.Errorf("today requests = %d, want 1 (local yesterday must not leak in)", res.Metrics.TotalRequests)
+	}
+}
+
 // TestCollectorPartialFileError 单文件权限失败：来源 partial、成功文件数据
 // 保留、lastSuccessAt 不更新（§4.4/§5.1）。
 func TestCollectorPartialFileError(t *testing.T) {

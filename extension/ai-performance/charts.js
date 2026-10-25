@@ -49,7 +49,7 @@ const numberCard = {
     // 协议单位：successRate 等百分比指标由 Host 以 0–100 提供，前端只格式化。
     const displayVal = dataset.number.isPercent
       ? `${Number(dataset.number.value ?? 0).toFixed(1)}%`
-      : ui.fmtValue(dataset.number.value);
+      : dataset.number.incomplete && !dataset.number.value ? "--" : ui.fmtValue(dataset.number.value) + (dataset.number.incomplete ? "+" : "");
     const subLabelHtml = dataset.number.subLabel
       ? `<div class="ai-perf-number-sub">${escapeHtml(dataset.number.subLabel)}</div>`
       : '';
@@ -77,7 +77,7 @@ const lineChart = {
     const points = dataset.trend;
     const wrap = document.createElement('div');
     wrap.className = 'ai-perf-chart';
-    if (!points || points.length < 2) {
+    if (!points || points.length < 2 || points.every(p => p.v == null)) {
       wrap.innerHTML = `<div class="ai-perf-empty">${escapeHtml(ui.t('aiPerfNoTrend', '时间段内暂无趋势数据'))}</div>`;
       container.append(wrap);
       return;
@@ -87,9 +87,9 @@ const lineChart = {
     const pad = 4;
     const max = Math.max(...points.map((p) => p.v), 1);
     const step = (w - pad * 2) / (points.length - 1);
-    const coords = points.map((p, i) => [pad + i * step, h - pad - (p.v / max) * (h - pad * 2)]);
-    const path = coords.map(([x, y], i) => `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
-    const area = `${path} L${coords[coords.length - 1][0].toFixed(1)},${h - pad} L${coords[0][0].toFixed(1)},${h - pad} Z`;
+    const coords = points.map((p, i) => p.v == null ? null : [pad + i * step, h - pad - (p.v / max) * (h - pad * 2)]);
+    const path = coords.map((point, i) => point ? `${i === 0 || !coords[i - 1] ? 'M' : 'L'}${point[0].toFixed(1)},${point[1].toFixed(1)}` : '').join(' ');
+    const area = coords.some(point => !point) ? "" : `${path} L${coords[coords.length - 1][0].toFixed(1)},${h - pad} L${coords[0][0].toFixed(1)},${h - pad} Z`;
     wrap.innerHTML = `
       <svg viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" class="ai-perf-line-svg" aria-hidden="true">
         <path class="ai-perf-line-area" d="${area}"></path>
@@ -123,7 +123,7 @@ const barChart = {
         <div class="ai-perf-bar-row"${typeof ui.openDrilldown === 'function' ? ' role="button" tabindex="0" data-drill-key="' + escapeHtml(item.key || '') + '"' : ''}>
           <span class="ai-perf-bar-name" title="${escapeHtml(item.name)}">${escapeHtml(item.name || '—')}</span>
           <span class="ai-perf-bar-track"><span class="ai-perf-bar-fill" style="width:${pct}%"></span></span>
-          <span class="ai-perf-bar-value">${escapeHtml(ui.fmtRank(item.value))}</span>
+          <span class="ai-perf-bar-value">${escapeHtml((item.incomplete && !item.value ? "--" : ui.fmtRank(item.value) + (item.incomplete ? "+" : "")))}</span>
         </div>`;
     });
     wrap.innerHTML = `<div class="ai-perf-bars">${rows.join('')}</div>`;
@@ -280,18 +280,18 @@ function tableColumnsFor(metricId, t) {
   if (metricId === 'ai_cost') {
     // 金额列：本地估算值；未计价部分不由表格冒充 0（§9.1）。
     return [
-      { label: t('aiPerfColCost', '费用(估算)'), cell: (r) => `$${Number(r.cost ?? 0).toFixed(4)}` },
-      { label: t('aiPerfColTokens', 'Token'), cell: (r) => fmtInt(r.tokens) },
+      { label: t('aiPerfColCost', '费用(估算)'), cell: (r) => r.priced === false && !r.cost ? "--" : `${r.priced === false ? "≥" : ""}$${Number(r.cost ?? 0).toFixed(4)}` },
+      { label: t('aiPerfColTokens', 'Token'), cell: (r) => (r.missingUsageRequests > 0 && !r.tokens ? "--" : fmtInt(r.tokens) + (r.missingUsageRequests > 0 ? "+" : "")) },
     ];
   }
   if (metricId === 'request_count' || metricId === 'session_duration' || metricId === 'ai_sessions') {
     return [
       { label: t('aiPerfColRequests', '请求'), cell: (r) => fmtInt(r.requests) },
-      { label: t('aiPerfColTokens', 'Token'), cell: (r) => fmtInt(r.tokens) },
+      { label: t('aiPerfColTokens', 'Token'), cell: (r) => (r.missingUsageRequests > 0 && !r.tokens ? "--" : fmtInt(r.tokens) + (r.missingUsageRequests > 0 ? "+" : "")) },
     ];
   }
   return [
-    { label: t('aiPerfColTokens', 'Token'), cell: (r) => fmtInt(r.tokens) },
+    { label: t('aiPerfColTokens', 'Token'), cell: (r) => (r.missingUsageRequests > 0 && !r.tokens ? "--" : fmtInt(r.tokens) + (r.missingUsageRequests > 0 ? "+" : "")) },
     { label: t('aiPerfColRequests', '请求'), cell: (r) => fmtInt(r.requests) },
   ];
 }

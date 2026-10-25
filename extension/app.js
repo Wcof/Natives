@@ -134,7 +134,13 @@ export function createAppShell({
       await ownedHost.call('app:handshake', {protocolVersion:2,appId,productVersion:app.version,activationGeneration:activation});
       const started = await ownedHost.call('app:start', {appId,requestId:randomId(),expectedActivationGeneration:activation});
       if (current !== run || frame !== ownedFrame) return;
-      if (started.state !== 'ready' || !validLoopbackPort(started.port) || new URL(ownedFrame.src).port !== String(started.port)) throw Error('APP_RUNTIME_REPLACED');
+      if (started.state !== 'ready' || !validLoopbackPort(started.port)) throw Error('APP_RUNTIME_REPLACED');
+      if (new URL(ownedFrame.src).port !== String(started.port)) {
+        // An idle Worker was reclaimed; rebuild its sandbox on the new port.
+        disconnect();
+        await open();
+        return;
+      }
       instanceId = started.instanceId; generation = started.generation; challenge = randomId();
       ownedFrame.contentWindow?.postMessage({type:'init',generation,challenge,appearance:document.documentElement.dataset.theme==='volt'?'dark':'light'},'*');
     } catch {

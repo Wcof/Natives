@@ -134,6 +134,16 @@ async function renderWidget(config) {
 
 console.log('--- AI Performance Widget Tests ---');
 
+{
+  const api = { getUsageOverview: async () => ({status:'ready', metrics:{totalRequests:1,totalTokens:0,estimatedCostUsd:0,priced:false,missingUsageRequests:1},tokens:{},trend:[{timestamp:'2026-10-20',tokens:0,costUsd:0,priced:false,missingUsageRequests:1}]}) };
+  const token = await fetchDataset(api, METRICS.token_usage, 'today', {overview:true});
+  const cost = await fetchDataset(api, METRICS.ai_cost, 'today', {overview:true});
+  assert.equal(token.number.value, null);
+  assert.equal(token.incomplete, true);
+  assert.equal(token.trend[0].v, null, 'unknown usage is a gap, not a zero-valued point');
+  assert.equal(cost.number.value, null);
+}
+
 // 1. Metric mapping: one dataset per metric from the same aggregated protocol data.
 {
   const api = {

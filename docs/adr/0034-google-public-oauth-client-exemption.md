@@ -1,6 +1,6 @@
 # ADR-0034：Google Antigravity 公共 OAuth client 凭据的豁免登记（Google Antigravity Public OAuth Client Credentials Exemption）
 
-- 状态：已接受（accepted，2026-09-28）
+- 状态：已被 [ADR-0044](./0044-retire-model-proxy-and-direct-inference.md) 取代（代理 OAuth 登录已退役，本豁免不再适用）
 - 决策者：产品方（用户）
 - 关联文档：ADR-0020（R-S4 Secret 边界）、ADR-0033、审计行动项 E1/S-09、`docs/standards/technical/02-security.md`
 

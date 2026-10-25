@@ -51,11 +51,11 @@ export async function verifyHomeUsability(page, { width, theme, shots }) {
   await show(baseline.goals);
   assert.notEqual(await page.locator('#home-cumulative-value').innerText(), '–');
   const order = await page.evaluate(() => {
-    const ids = ['hc-total', 'home-goal-body', 'home-distribution-body', 'home-combination-body', 'home-ai-body', 'home-all-income', 'home-history-chart', 'home-market-body', 'home-today-body'];
+    const ids = ['hc-total', 'home-goal-body', 'home-all-income', 'home-market-body', 'home-history-chart', 'home-distribution-body', 'home-combination-body', 'home-ai-body', 'home-today-body'];
     return ids.every((id, i) => !i || !!(document.getElementById(ids[i - 1])
       .compareDocumentPosition(document.getElementById(id)) & Node.DOCUMENT_POSITION_FOLLOWING));
   });
-  assert.equal(order, true, 'reading order matches the confirmed prototype: assets, full-width goal, distribution, AI, returns, folded history');
+  assert.equal(order, true, 'reading order: assets, goal, merged returns/market/history, allocation, AI, daily review');
   if (width === 1280) {
     const left = await page.locator('.home-ledger-strip').boundingBox();
     const right = await page.locator('.home-goal').boundingBox();

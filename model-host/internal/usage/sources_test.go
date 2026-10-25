@@ -3,7 +3,7 @@ package usage
 import "testing"
 
 // TestUsageSourcesBaseline13 T2：矩阵必须覆盖 13 个基线工具
-// （用户明确名单 ∪ agentclients 注册表并集），缺一即阻断“完整支持”声明。
+// （用户明确名单 ∪ 冻结的本机工具清单），缺一即阻断“完整支持”声明。
 func TestUsageSourcesBaseline13(t *testing.T) {
 	want := map[string]bool{
 		"claude-code": false, "codex": false, "opencode": false, "pi": false,

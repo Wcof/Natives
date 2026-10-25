@@ -31,7 +31,8 @@
 #### R-S4 · Secret 只由 OS Keychain 持有
 
 - **等级**：MUST
-- 持久 API key、OAuth token、refresh token 和模块 Secret 只进 OS Keychain。
+- 持久 API key、仅用于额度查询的导入 OAuth token／refresh token 和模块 Secret 只进 OS Keychain。
+- 代理登录已退役；历史导入的 OAuth 凭据只可读取用于额度查询，不得用于反向开启推理代理或账号池。
 - SQLite、JSON、前端 storage、产品清单、日志和错误只保存引用或掩码。
 - Keychain locked/denied/unavailable 必须显示可恢复错误，不回退明文文件。
 - 删除 Secret 是独立危险操作，必须二次确认并可重试。
@@ -39,9 +40,10 @@
 #### R-S5 · Model Host 网络边界
 
 - **等级**：MUST
-- Local Proxy 只绑定 `127.0.0.1` 动态或受控端口并鉴权。
-- 不暴露通用管理 API、任意文件/进程能力或企业多租户控制面。
-- Provider 请求、OAuth callback 和工具探测必须有超时、取消、重定向/来源校验和日志脱敏。
+- Model Host 不提供推理代理／网关监听、访问密钥或管理 API；除 ADR-0033 登记的只读 8766 查询口外不绑定入站端口。
+- 出站只调用用户已配置且启用的 Provider endpoint；页面与模块不能传任意 URL、headers、密钥或管理能力。
+- 地址、DNS／重定向、私网授权、超时、响应大小和日志脱敏必须使用现有网络策略。
+- Provider 请求和额度查询必须有超时、取消、重定向/来源校验和日志脱敏。
 
 #### R-S6 · App iframe sandbox 固定
 
@@ -108,6 +110,12 @@
 | `i.pravatar.cc` | 头像占位图 |
 | `api.coingecko.com` | 行情 Widget |
 | `www.google.com` / `duckduckgo.com` | 搜索快捷入口（页面跳转） |
+
+本机 Web 入口不受 `host_permissions` 保护。仅针对不返回 CORS 头的已登记
+`www.bing.com` 背景源，允许 Files Host 通过固定端点
+`space_background_bing` 中继归档元数据：Host 不接受页面传入 URL、headers
+或凭据，仅接受登记市场与 `idx` 0–7，并执行超时、响应大小、重定向上限；
+该中继不是通用 URL 代理。
 
 ## 合规自检
 

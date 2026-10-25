@@ -68,9 +68,9 @@ Chrome 扩展页面 ── Native Messaging Relay ─┐
 
 针对普通浏览器访问，确立双重信任链与零特权泄漏原则：
 
-1. **首次配对与会话交换（Bootstrap & Pairing）**：
+1. **首次会话交换（Bootstrap；配对码已由 [ADR-0045](0045-retire-browser-pairing.md) 退役）**：
    - **自动化启动链路**：Launcher/CLI 生成一次性 256-bit 随机 Bootstrap Token（有效期 <=60 秒），通过 URL Fragment（`#token=...`）传递给打开的页面。前端读取后立即执行 `history.replaceState` 清空 URL，并通过同源 POST 请求交换会话；
-   - **手动访问链路**：用户在无扩展浏览器手动输入 `http://127.0.0.1:8770` 时，呈现配对界面。用户从 Natives 诊断或 CLI 获取短期配对码（10 位随机 Base32，5 分钟有效，单个码最多 5 次失败，全实例每分钟限速 10 次）；
+   - **手动访问链路**：已有 Cookie 授权直接恢复；没有授权时显示从 Natives 入口重新打开的非模态提示及连接重试，不生成或输入配对码。授权在当前 Core 实例内不因闲置／固定时长失效，注销／替换／服务退出仍撤销；详见 ADR-0045。
    - 严禁通过查询参数、Referer 或静态日志泄露 Token。
 2. **会话保持与 CSRF 防御**：
    - 会话通过 Host-only、HttpOnly、`SameSite=Strict` Cookie 保持，Path 为 `/`。正式环境与开发环境使用不同 Cookie 名称；
@@ -92,6 +92,7 @@ Chrome 扩展页面 ── Native Messaging Relay ─┐
 2. **租约与生命周期回收（Lease & Graceful Shutdown）**：
    - **租约心跳**：可见状态下的 Surface 每 20 秒发送一次心跳续约，租约 TTL 为 75 秒；
    - **隐藏休眠**：页面隐藏（hidden）后停止普通高频轮询，60 秒后释放非任务租约；
+     ADR-0047 补充：网页 document 保留每页唯一、无业务 Surface 的被动 SSE 连接，业务模块仍按原时限回收；返回页面重新获取租约并按需启动，pagehide 释放 document 连接。
    - **单窗口关闭**：关闭单个 Surface（调用 `DELETE /web/surfaces/{id}` 或断开对应 Native Relay）仅撤销该 `surfaceId` 的资源，不影响其他正在访问该模块的窗口；
    - **最后租约回收**：当某个内置模块的最后一个 Surface 租约释放且无正在执行的保护级写入任务时，进入 60 秒宽限期；宽限期结束未收到新租约则进入优雅停机（shutdown），并在 `<=2 秒` 内彻底退出进程，释放数据库连接与端口。
 

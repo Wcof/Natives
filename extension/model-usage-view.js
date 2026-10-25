@@ -106,7 +106,7 @@ function renderOverviewTab(container, data, filter, t) {
     </div>
     <div class="model-metric-card">
       <span class="muted">${escapeText(t('modelMetricTotalTokens', 'Token 消耗总量'))}</span>
-      <strong>${formatNumber(metrics.totalTokens || 0)}</strong>
+      <strong>${metrics.missingUsageRequests > 0 && !metrics.totalTokens ? "--" : formatNumber(metrics.totalTokens || 0) + (metrics.missingUsageRequests > 0 ? "+" : "")}</strong>
     </div>
     <div class="model-metric-card">
       <span class="muted">${escapeText(t('modelMetricSuccessRate', '请求成功率'))}</span>
@@ -122,10 +122,16 @@ function renderOverviewTab(container, data, filter, t) {
     </div>
     <div class="model-metric-card">
       <span class="muted">${escapeText(t('modelMetricEstimatedCost', '估算总费用'))}</span>
-      <strong class="text-primary">$${(metrics.estimatedCostUsd || 0).toFixed(4)}</strong>
+      <strong class="text-primary">${metrics.priced === false && !metrics.estimatedCostUsd ? "--" : (metrics.priced === false ? "≥" : "") + "$" + (metrics.estimatedCostUsd || 0).toFixed(4)}</strong>
     </div>
   `;
   container.append(cardsGrid);
+  if (metrics.missingUsageRequests > 0) {
+    const note = document.createElement('p');
+    note.className = 'muted';
+    note.textContent = t('aiPerfUsageIncomplete', '部分请求未报告用量，显示已知部分。');
+    container.append(note);
+  }
 
   
   const tokenSection = document.createElement('div');
@@ -135,23 +141,23 @@ function renderOverviewTab(container, data, filter, t) {
     <div class="model-token-composition-grid">
       <div class="model-token-item">
         <span class="muted">${escapeText(t('modelTokenInput', '输入 Token'))}</span>
-        <strong>${formatNumber(tokens.input || 0)}</strong>
+        <strong>${metrics.missingUsageRequests > 0 && !tokens.input ? "--" : formatNumber(tokens.input || 0) + (metrics.missingUsageRequests > 0 ? "+" : "")}</strong>
       </div>
       <div class="model-token-item">
         <span class="muted">${escapeText(t('modelTokenOutput', '输出 Token'))}</span>
-        <strong>${formatNumber(tokens.output || 0)}</strong>
+        <strong>${metrics.missingUsageRequests > 0 && !tokens.output ? "--" : formatNumber(tokens.output || 0) + (metrics.missingUsageRequests > 0 ? "+" : "")}</strong>
       </div>
       <div class="model-token-item">
         <span class="muted">${escapeText(t('modelTokenCacheRead', '缓存读取'))}</span>
-        <strong>${formatNumber(tokens.cacheRead || 0)}</strong>
+        <strong>${metrics.missingUsageRequests > 0 && !tokens.cacheRead ? "--" : formatNumber(tokens.cacheRead || 0) + (metrics.missingUsageRequests > 0 ? "+" : "")}</strong>
       </div>
       <div class="model-token-item">
         <span class="muted">${escapeText(t('modelTokenCacheWrite', '缓存写入'))}</span>
-        <strong>${formatNumber(tokens.cacheWrite || 0)}</strong>
+        <strong>${metrics.missingUsageRequests > 0 && !tokens.cacheWrite ? "--" : formatNumber(tokens.cacheWrite || 0) + (metrics.missingUsageRequests > 0 ? "+" : "")}</strong>
       </div>
       <div class="model-token-item">
         <span class="muted">${escapeText(t('modelTokenReasoning', '思考 Token'))}</span>
-        <strong>${formatNumber(tokens.reasoning || 0)}</strong>
+        <strong>${metrics.missingUsageRequests > 0 && !tokens.reasoning ? "--" : formatNumber(tokens.reasoning || 0) + (metrics.missingUsageRequests > 0 ? "+" : "")}</strong>
       </div>
     </div>
   `;
@@ -168,7 +174,7 @@ function renderOverviewTab(container, data, filter, t) {
           <div class="model-trend-row">
             <span class="muted">${escapeText(p.timestamp.replace('T', ' ').replace('Z', ''))}</span>
             <span>${formatNumber(p.requests)} reqs</span>
-            <span>${formatNumber(p.tokens)} tokens</span>
+            <span>${p.missingUsageRequests > 0 && !p.tokens ? "--" : formatNumber(p.tokens) + (p.missingUsageRequests > 0 ? "+" : "")} tokens</span>
             <span class="text-primary">$${p.costUsd.toFixed(4)}</span>
           </div>
         `).join('')}
@@ -251,21 +257,22 @@ function renderEventsTab(container, data, filter, t) {
             <td class="model-col-model" title="${escapeText(e.model || '')}">
               <strong class="model-name-text">${escapeText(e.model || '—')}</strong>
               ${e.provider ? `<span class="usage-tag-pill">${escapeText(e.provider)}</span>` : ''}
+              ${e.usageStatus === 'missing' ? `<span class="usage-tag-pill">${escapeText(t('modelUsageMissing', '未报告用量'))}</span>` : ''}
             </td>
-            <td class="model-col-input align-center" title="${(e.inputTokens || 0).toLocaleString()} tokens">
-              ${compactNumber(e.inputTokens || 0)}
+            <td class="model-col-input align-center" title="${e.usageStatus === 'missing' ? escapeText(t('modelUsageMissing', '未报告用量')) : `${(e.inputTokens || 0).toLocaleString()} tokens`}">
+              ${e.usageStatus === 'missing' ? '—' : compactNumber(e.inputTokens || 0)}
             </td>
-            <td class="model-col-output align-center" title="${(e.outputTokens || 0).toLocaleString()} tokens">
-              ${compactNumber(e.outputTokens || 0)}
+            <td class="model-col-output align-center" title="${e.usageStatus === 'missing' ? escapeText(t('modelUsageMissing', '未报告用量')) : `${(e.outputTokens || 0).toLocaleString()} tokens`}">
+              ${e.usageStatus === 'missing' ? '—' : compactNumber(e.outputTokens || 0)}
             </td>
-            <td class="model-col-cache align-center" title="Read: ${(e.cacheReadTokens || 0).toLocaleString()} tokens${e.cacheWriteTokens > 0 ? ` / Creation: ${(e.cacheWriteTokens || 0).toLocaleString()} tokens` : ''}">
-              ${compactNumber(e.cacheReadTokens || 0)}
+            <td class="model-col-cache align-center" title="${e.usageStatus === 'missing' ? escapeText(t('modelUsageMissing', '未报告用量')) : `Read: ${(e.cacheReadTokens || 0).toLocaleString()} tokens${e.cacheWriteTokens > 0 ? ` / Creation: ${(e.cacheWriteTokens || 0).toLocaleString()} tokens` : ''}`}">
+              ${e.usageStatus === 'missing' ? '—' : compactNumber(e.cacheReadTokens || 0)}
             </td>
             <td class="model-col-cache-rate align-center">
-              ${formatCacheRate(e.inputTokens, e.cacheReadTokens)}
+              ${e.usageStatus === 'missing' ? '—' : formatCacheRate(e.inputTokens, e.cacheReadTokens)}
             </td>
-            <td class="model-col-total align-center" title="${(e.totalTokens || 0).toLocaleString()} tokens">
-              <strong>${compactNumber(e.totalTokens || 0)}</strong>
+            <td class="model-col-total align-center" title="${e.usageStatus === 'missing' ? escapeText(t('modelUsageMissing', '未报告用量')) : `${(e.totalTokens || 0).toLocaleString()} tokens`}">
+              <strong>${e.usageStatus === 'missing' ? '—' : compactNumber(e.totalTokens || 0)}</strong>
             </td>
             <td class="model-col-speed align-center">
               ${formatSpeed(e.outputTokens, e.latencyMs, e.ttftMs)}
@@ -276,8 +283,10 @@ function renderEventsTab(container, data, filter, t) {
             <td class="model-col-latency align-center" title="${e.latencyMs || 0} ms">
               ${compactNumber(e.latencyMs || 0)} ms
             </td>
-            <td class="model-col-cost align-center">
-              <span class="text-primary">$${((e.costMicro || 0) / 1000000.0).toFixed(4)}</span>
+            <td class="model-col-cost align-center" title="${e.costStatus === 'unpriced' ? escapeText(t('modelCostUnpriced', '缺少单价，费用未知')) : ''}">
+              ${e.costStatus === 'unpriced' || e.usageStatus === 'missing'
+                ? `<span class="muted">${escapeText(t('modelCostUnknown', '未知'))}</span>`
+                : `<span class="text-primary">$${((e.costMicro || 0) / 1000000.0).toFixed(4)}</span>`}
             </td>
             <td class="model-col-status align-center">
               <span class="model-status-badge ${e.result === 'success' ? 'status-ok' : 'status-err'}">

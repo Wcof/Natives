@@ -38,7 +38,11 @@ func (s *Store) migrate() error {
 		return err
 	}
 	// v3：三元来源实例身份、结构化来源运行状态、事件级归因关联。
-	return s.migrateV3()
+	if err := s.migrateV3(); err != nil {
+		return err
+	}
+	// v4：区分供应商报告用量与未报告用量（代理退役后直连写入）。
+	return s.migrateV4()
 }
 
 func (s *Store) Prune() error {

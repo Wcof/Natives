@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	CurrentSchemaVersion = 1
+	CurrentSchemaVersion = 4
 	MaxEventsRetention   = 500000
 	MaxDaysRetention     = 365
 )
@@ -129,6 +129,14 @@ func insertEventIfAbsent(e *Event, exec func(string, ...any) (sql.Result, error)
 	if e.CreatedAt.IsZero() {
 		e.CreatedAt = time.Now().UTC()
 	}
+	if e.UsageStatus == "" {
+		// 外部导入/历史路径自带计量证据；内部直连缺 usage 时由 Recorder 显式写 missing。
+		e.UsageStatus = "reported"
+	}
+	// 范围过滤按 RFC3339 字符串比较；统一写 UTC，避免 +08:00 等偏移
+	// 使本地昨天晚间事件落入 today 或被自定义结束边界排除。
+	e.RequestedAt = e.RequestedAt.UTC()
+	e.CreatedAt = e.CreatedAt.UTC()
 
 	query := `
 		INSERT OR IGNORE INTO usage_events (
@@ -136,14 +144,14 @@ func insertEventIfAbsent(e *Event, exec func(string, ...any) (sql.Result, error)
 			model, model_alias, source, endpoint, access_key_id, access_key_name,
 			result, http_status, error_code, error_summary,
 			input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
-			reasoning_tokens, total_tokens, cost_micro, service_tier, created_at,
+			reasoning_tokens, total_tokens, usage_status, cost_micro, service_tier, created_at,
 			billing_atom, session_id, tool_id, source_instance_id
 		) VALUES (
 			?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?,
 			?, ?, ?, ?,
-			?, ?, ?, ?, ?,
+			?, ?, ?, ?, ?, ?,
 			?, ?, ?, ?
 		)
 		`
@@ -153,7 +161,7 @@ func insertEventIfAbsent(e *Event, exec func(string, ...any) (sql.Result, error)
 		e.Model, e.ModelAlias, e.Source, e.Endpoint, e.AccessKeyID, e.AccessKeyName,
 		string(e.Result), e.HTTPStatus, e.ErrorCode, e.ErrorSummary,
 		e.InputTokens, e.OutputTokens, e.CacheReadTokens, e.CacheWriteTokens,
-		e.ReasoningTokens, e.TotalTokens, e.CostMicro, e.ServiceTier, e.CreatedAt.Format(time.RFC3339Nano),
+		e.ReasoningTokens, e.TotalTokens, e.UsageStatus, e.CostMicro, e.ServiceTier, e.CreatedAt.Format(time.RFC3339Nano),
 		e.BillingAtom, e.SessionID, e.ToolID, e.SourceInstanceID,
 	)
 	if err == nil {
@@ -274,6 +282,7 @@ func (s *Store) GetOverview(f Filter) (*OverviewResult, error) {
 	where, args := s.buildFilterWhereIn(f, loc)
 
 	var totalReqs, totalTokens, succCount, inputToks, outputToks, readToks, writeToks, reasToks, costMicro int64
+	var missingUsage int64
 	var minReq, maxReq sql.NullString
 
 	query := fmt.Sprintf(`
@@ -287,6 +296,7 @@ func (s *Store) GetOverview(f Filter) (*OverviewResult, error) {
 			COALESCE(SUM(cache_write_tokens), 0),
 			COALESCE(SUM(reasoning_tokens), 0),
 			COALESCE(SUM(cost_micro), 0),
+			COALESCE(SUM(CASE WHEN usage_status = 'missing' THEN 1 ELSE 0 END), 0),
 			MIN(requested_at),
 			MAX(requested_at)
 		FROM usage_events %s
@@ -295,7 +305,7 @@ func (s *Store) GetOverview(f Filter) (*OverviewResult, error) {
 	err = s.db.QueryRow(query, args...).Scan(
 		&totalReqs, &totalTokens, &succCount,
 		&inputToks, &outputToks, &readToks, &writeToks, &reasToks,
-		&costMicro, &minReq, &maxReq,
+		&costMicro, &missingUsage, &minReq, &maxReq,
 	)
 	if err != nil {
 		s.mu.RUnlock()
@@ -333,7 +343,8 @@ func (s *Store) GetOverview(f Filter) (*OverviewResult, error) {
 			%s as bucket,
 			COUNT(*),
 			SUM(total_tokens),
-			SUM(cost_micro)
+			SUM(cost_micro),
+			SUM(CASE WHEN usage_status = 'missing' THEN 1 ELSE 0 END)
 		FROM usage_events %s
 		GROUP BY bucket
 		ORDER BY bucket ASC
@@ -349,12 +360,13 @@ func (s *Store) GetOverview(f Filter) (*OverviewResult, error) {
 		for rows.Next() {
 			var p TrendPoint
 			var cMicro int64
-			if err := rows.Scan(&p.Timestamp, &p.Requests, &p.Tokens, &cMicro); err != nil {
+			if err := rows.Scan(&p.Timestamp, &p.Requests, &p.Tokens, &cMicro, &p.MissingUsageRequests); err != nil {
 				rows.Close()
 				s.mu.RUnlock()
 				return nil, err
 			}
 			p.CostUSD = float64(cMicro) / 1000000.0
+			p.Priced = p.MissingUsageRequests == 0
 			trend = append(trend, p)
 		}
 		if err := rows.Err(); err != nil {
@@ -364,8 +376,23 @@ func (s *Store) GetOverview(f Filter) (*OverviewResult, error) {
 		}
 		rows.Close()
 	}
+	trendZeroRows, err := s.zeroCostRowsLocked(bucketExpr, where, args)
+	if err != nil {
+		s.mu.RUnlock()
+		return nil, err
+	}
 	s.mu.RUnlock()
-	metricsPriced := true
+	metricsPriced := missingUsage == 0
+	trendEstimates, err := estimateZeroCostByGroup(s, trendZeroRows)
+	if err != nil {
+		return nil, err
+	}
+	for i := range trend {
+		if estimate, ok := trendEstimates[trend[i].Timestamp]; ok {
+			trend[i].CostUSD += float64(estimate.Micro) / 1e6
+			trend[i].Priced = trend[i].Priced && estimate.Priced
+		}
+	}
 	var zeroCostMicro int64
 	estimates, err := estimateZeroCostByGroup(s, zeroRows)
 	if err != nil {
@@ -406,13 +433,14 @@ func (s *Store) GetOverview(f Filter) (*OverviewResult, error) {
 		Status:           status,
 		TotalEventsCount: allCount,
 		Metrics: MetricCards{
-			TotalRequests:    totalReqs,
-			TotalTokens:      totalTokens,
-			SuccessRate:      successRate,
-			TPS:              tps,
-			CacheHitRate:     cacheHitRate,
-			EstimatedCostUSD: float64(costMicro+zeroCostMicro) / 1000000.0,
-			Priced:           metricsPriced,
+			MissingUsageRequests: missingUsage,
+			TotalRequests:        totalReqs,
+			TotalTokens:          totalTokens,
+			SuccessRate:          successRate,
+			TPS:                  tps,
+			CacheHitRate:         cacheHitRate,
+			EstimatedCostUSD:     float64(costMicro+zeroCostMicro) / 1000000.0,
+			Priced:               metricsPriced,
 		},
 		Trend: trend,
 		Tokens: TokenComposition{
@@ -434,6 +462,10 @@ func (s *Store) GetAnalytics(f Filter) (*AnalyticsResult, error) {
 	where, args := s.buildFilterWhereIn(f, loc)
 
 	var rankError error
+	var rankCosts []struct {
+		items []RankItem
+		rows  []zeroCostRow
+	}
 	runRankQuery := func(column, aliasCol string) []RankItem {
 		q := fmt.Sprintf(`
 			SELECT
@@ -441,7 +473,8 @@ func (s *Store) GetAnalytics(f Filter) (*AnalyticsResult, error) {
 				%s as n,
 				COUNT(*) as reqs,
 				SUM(total_tokens) as toks,
-				SUM(cost_micro) as cost
+				SUM(cost_micro) as cost,
+				SUM(CASE WHEN usage_status = 'missing' THEN 1 ELSE 0 END)
 			FROM usage_events %s
 			GROUP BY k
 			ORDER BY reqs DESC
@@ -460,11 +493,12 @@ func (s *Store) GetAnalytics(f Filter) (*AnalyticsResult, error) {
 		for rows.Next() {
 			var it RankItem
 			var cMicro int64
-			if err := rows.Scan(&it.Key, &it.Name, &it.Requests, &it.Tokens, &cMicro); err != nil {
+			if err := rows.Scan(&it.Key, &it.Name, &it.Requests, &it.Tokens, &cMicro, &it.MissingUsageRequests); err != nil {
 				rankError = err
 				return nil
 			} else {
 				it.CostUSD = float64(cMicro) / 1000000.0
+				it.Priced = it.MissingUsageRequests == 0
 				sumReqs += it.Requests
 				list = append(list, it)
 			}
@@ -473,6 +507,16 @@ func (s *Store) GetAnalytics(f Filter) (*AnalyticsResult, error) {
 			rankError = err
 			return nil
 		}
+		rows.Close()
+		zeroRows, err := s.zeroCostRowsLocked(column, where, args)
+		if err != nil {
+			rankError = err
+			return nil
+		}
+		rankCosts = append(rankCosts, struct {
+			items []RankItem
+			rows  []zeroCostRow
+		}{list, zeroRows})
 		for i := range list {
 			if sumReqs > 0 {
 				list[i].Percent = float64(list[i].Requests) / float64(sumReqs) * 100.0
@@ -496,14 +540,20 @@ func (s *Store) GetAnalytics(f Filter) (*AnalyticsResult, error) {
 	}
 
 	// 锁外按价格目录估算零成本行（FindPrice 内部会再取读锁，非重入）
-	byKeyCost, err := estimateZeroCostByGroup(s, byModelZeroRows)
-	if err != nil {
-		return nil, err
-	}
-	for i := range byModel {
-		if est, ok := byKeyCost[byModel[i].Key]; ok {
-			byModel[i].CostUSD += float64(est.Micro) / 1000000.0
-			byModel[i].Priced = est.Priced
+	rankCosts = append(rankCosts, struct {
+		items []RankItem
+		rows  []zeroCostRow
+	}{byModel, byModelZeroRows})
+	for _, group := range rankCosts {
+		byKeyCost, err := estimateZeroCostByGroup(s, group.rows)
+		if err != nil {
+			return nil, err
+		}
+		for i := range group.items {
+			if est, ok := byKeyCost[group.items[i].Key]; ok {
+				group.items[i].CostUSD += float64(est.Micro) / 1000000.0
+				group.items[i].Priced = group.items[i].Priced && est.Priced
+			}
 		}
 	}
 
@@ -525,7 +575,8 @@ func (s *Store) analyticsByModelLocked(where string, args []any) ([]RankItem, []
 		SELECT COALESCE(NULLIF(model_alias, ''), model) as k,
 			COUNT(*) as reqs,
 			COALESCE(SUM(total_tokens), 0) as toks,
-			COALESCE(SUM(cost_micro), 0) as cost
+			COALESCE(SUM(cost_micro), 0) as cost,
+			SUM(CASE WHEN usage_status = 'missing' THEN 1 ELSE 0 END)
 		FROM usage_events %s
 		GROUP BY k
 		ORDER BY toks DESC
@@ -540,13 +591,13 @@ func (s *Store) analyticsByModelLocked(where string, args []any) ([]RankItem, []
 		for rows.Next() {
 			var it RankItem
 			var cMicro int64
-			if err := rows.Scan(&it.Key, &it.Requests, &it.Tokens, &cMicro); err != nil {
+			if err := rows.Scan(&it.Key, &it.Requests, &it.Tokens, &cMicro, &it.MissingUsageRequests); err != nil {
 				rows.Close()
 				return nil, nil, err
 			} else {
 				it.Name = it.Key
 				it.CostUSD = float64(cMicro) / 1000000.0
-				it.Priced = true
+				it.Priced = it.MissingUsageRequests == 0
 				list = append(list, it)
 			}
 		}
@@ -611,8 +662,8 @@ func (s *Store) GetEvents(f Filter) (*EventsResult, error) {
 			model, model_alias, source, endpoint, access_key_id, access_key_name,
 			result, http_status, error_code, error_summary,
 			input_tokens, output_tokens, cache_read_tokens, cache_write_tokens,
-			reasoning_tokens, total_tokens, cost_micro, service_tier, created_at,
-			session_id, tool_id, source_instance_id
+			reasoning_tokens, total_tokens, usage_status, cost_micro, service_tier, created_at,
+			session_id, tool_id, source_instance_id, billing_atom
 		FROM usage_events %s
 		ORDER BY %s %s
 		LIMIT ? OFFSET ?
@@ -633,8 +684,8 @@ func (s *Store) GetEvents(f Filter) (*EventsResult, error) {
 			&e.Model, &e.ModelAlias, &e.Source, &e.Endpoint, &e.AccessKeyID, &e.AccessKeyName,
 			&e.Result, &e.HTTPStatus, &e.ErrorCode, &e.ErrorSummary,
 			&e.InputTokens, &e.OutputTokens, &e.CacheReadTokens, &e.CacheWriteTokens,
-			&e.ReasoningTokens, &e.TotalTokens, &e.CostMicro, &e.ServiceTier, &creStr,
-			&e.SessionID, &e.ToolID, &e.SourceInstanceID,
+			&e.ReasoningTokens, &e.TotalTokens, &e.UsageStatus, &e.CostMicro, &e.ServiceTier, &creStr,
+			&e.SessionID, &e.ToolID, &e.SourceInstanceID, &e.BillingAtom,
 		)
 		if err != nil {
 			return nil, err
@@ -744,7 +795,8 @@ func (s *Store) GetSessions(f Filter) (*SessionsResult, error) {
 	// 按工具排名：每个工具的 distinct 三元会话数。
 	srcRows, err := s.db.Query(fmt.Sprintf(`
 		SELECT tool_id as k, tool_id as n, COUNT(DISTINCT %s) as sessions,
-			COUNT(*) as reqs, COALESCE(SUM(total_tokens),0) as toks, COALESCE(SUM(cost_micro),0) as cost
+			COUNT(*) as reqs, COALESCE(SUM(total_tokens),0) as toks, COALESCE(SUM(cost_micro),0) as cost,
+			SUM(CASE WHEN usage_status = 'missing' THEN 1 ELSE 0 END)
 		FROM usage_events %s
 		GROUP BY tool_id ORDER BY sessions DESC LIMIT 100
 	`, sessKey, sessWhere), args...)
@@ -760,12 +812,13 @@ func (s *Store) GetSessions(f Filter) (*SessionsResult, error) {
 			var cMicro int64
 			var sessions int64
 			// RankItem.Requests 在此承载 distinct 会话数；Tokens 承载该工具总 Token。
-			if err := srcRows.Scan(&it.Key, &it.Name, &sessions, &it.Requests, &it.Tokens, &cMicro); err != nil {
+			if err := srcRows.Scan(&it.Key, &it.Name, &sessions, &it.Requests, &it.Tokens, &cMicro, &it.MissingUsageRequests); err != nil {
 				s.mu.RUnlock()
 				return nil, err
 			} else {
 				it.Requests = sessions
 				it.Name = it.Key
+				it.Priced = it.MissingUsageRequests == 0
 				it.CostUSD = float64(cMicro) / 1000000.0
 				bySource = append(bySource, it)
 			}
@@ -789,11 +842,12 @@ func (s *Store) GetSessions(f Filter) (*SessionsResult, error) {
 		offset = 0
 	}
 	sessRows, err := s.db.Query(fmt.Sprintf(`
-		SELECT s.sk, s.tool_id, s.source_instance_id, s.reqs, s.toks, s.cost,
+		SELECT s.sk, s.tool_id, s.source_instance_id, s.reqs, s.toks, s.cost, s.missing,
 			s.first_at, s.last_at, COALESCE(us.label, '')
 		FROM (
 			SELECT %s as sk, tool_id, source_instance_id, COUNT(*) as reqs,
 				COALESCE(SUM(total_tokens),0) as toks, COALESCE(SUM(cost_micro),0) as cost,
+				SUM(CASE WHEN usage_status = 'missing' THEN 1 ELSE 0 END) as missing,
 				MIN(requested_at) as first_at, MAX(requested_at) as last_at, session_id
 			FROM usage_events %s
 			GROUP BY sk ORDER BY MAX(requested_at) DESC
@@ -811,13 +865,13 @@ func (s *Store) GetSessions(f Filter) (*SessionsResult, error) {
 			var st SessionStat
 			var cMicro int64
 			var firstStr, lastStr string
-			if err := sessRows.Scan(&st.Key, &st.ToolID, &st.SourceInstanceID, &st.Requests, &st.Tokens, &cMicro, &firstStr, &lastStr, &st.Title); err != nil {
+			if err := sessRows.Scan(&st.Key, &st.ToolID, &st.SourceInstanceID, &st.Requests, &st.Tokens, &cMicro, &st.MissingUsageRequests, &firstStr, &lastStr, &st.Title); err != nil {
 				sessRows.Close()
 				s.mu.RUnlock()
 				return nil, err
 			} else {
 				st.CostUSD = float64(cMicro) / 1000000.0
-				st.Priced = true
+				st.Priced = st.MissingUsageRequests == 0
 				st.FirstAt = firstStr
 				st.LastAt = lastStr
 				sessions = append(sessions, st)
@@ -837,6 +891,11 @@ func (s *Store) GetSessions(f Filter) (*SessionsResult, error) {
 		s.mu.RUnlock()
 		return nil, err
 	}
+	sourceZeroRows, err := s.zeroCostRowsLocked("tool_id", sessWhere, args)
+	if err != nil {
+		s.mu.RUnlock()
+		return nil, err
+	}
 
 	s.mu.RUnlock()
 
@@ -844,10 +903,20 @@ func (s *Store) GetSessions(f Filter) (*SessionsResult, error) {
 	if err != nil {
 		return nil, err
 	}
+	sourceCosts, err := estimateZeroCostByGroup(s, sourceZeroRows)
+	if err != nil {
+		return nil, err
+	}
+	for i := range bySource {
+		if est, ok := sourceCosts[bySource[i].Key]; ok {
+			bySource[i].CostUSD += float64(est.Micro) / 1e6
+			bySource[i].Priced = bySource[i].Priced && est.Priced
+		}
+	}
 	for i := range sessions {
 		if est, ok := byKeyCost[sessions[i].Key]; ok {
 			sessions[i].CostUSD += float64(est.Micro) / 1000000.0
-			sessions[i].Priced = est.Priced
+			sessions[i].Priced = sessions[i].Priced && est.Priced
 		}
 	}
 

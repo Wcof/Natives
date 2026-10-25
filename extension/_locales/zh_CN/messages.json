@@ -160,210 +160,6 @@
   "addWidget": {
     "message": "添加卡片"
   },
-  "agentAppVersion": {
-    "message": "App 版本"
-  },
-  "agentApply": {
-    "message": "应用配置修改"
-  },
-  "agentApplyDone": {
-    "message": "配置已更新"
-  },
-  "agentClaudeMappingHint": {
-    "message": "将 Claude 角色请求路由到网关中的具体模型；开启 1M 后上下文长度按百万级处理。"
-  },
-  "agentClaudeMappingTitle": {
-    "message": "Claude 模型映射"
-  },
-  "agentCliVersion": {
-    "message": "CLI 版本"
-  },
-  "agentClientDetected": {
-    "message": "已检测到客户端"
-  },
-  "agentClientMissing": {
-    "message": "未检测到客户端"
-  },
-  "agentClientVersion": {
-    "message": "客户端版本"
-  },
-  "agentClientsDetected": {
-    "message": "个本机客户端"
-  },
-  "agentCloseConfig": {
-    "message": "关闭配置修改"
-  },
-  "agentCloseConfirm": {
-    "message": "确定关闭配置修改并还原原配置吗？"
-  },
-  "agentCodexClear": {
-    "message": "清空配置"
-  },
-  "agentCodexClearConfirm": {
-    "message": "确定清空 Codex 配置与凭据文件吗？"
-  },
-  "agentCodexCleared": {
-    "message": "已清空 $1 个文件"
-  },
-  "agentCodexDangerHint": {
-    "message": "移除由本工具写入的 Codex 配置与凭据文件，恢复未接管状态。"
-  },
-  "agentCodexDangerTitle": {
-    "message": "Codex 配置清理"
-  },
-  "agentCompactPct": {
-    "message": "触发压缩百分比"
-  },
-  "agentCoreConfig": {
-    "message": "核心配置"
-  },
-  "agentDefault": {
-    "message": "默认配置"
-  },
-  "agentDetectFailed": {
-    "message": "检测失败"
-  },
-  "agentDetecting": {
-    "message": "正在检测本机客户端…"
-  },
-  "agentDisableCompact": {
-    "message": "禁止自动压缩"
-  },
-  "agentInstallStatus": {
-    "message": "安装状态"
-  },
-  "agentInstalled": {
-    "message": "已安装"
-  },
-  "agentInstalledKeepConfig": {
-    "message": "已安装 · 保持原配置"
-  },
-  "agentLaunch": {
-    "message": "启动"
-  },
-  "agentLaunchDirPrompt": {
-    "message": "启动工作目录（留空使用主目录）："
-  },
-  "agentLaunched": {
-    "message": "已启动"
-  },
-  "agentLocalClients": {
-    "message": "本机客户端"
-  },
-  "agentLocalClientsHint": {
-    "message": "选择需要管理的智能体"
-  },
-  "agentManualClient": {
-    "message": "该客户端由本工具自动接管网关参数"
-  },
-  "agentManualClientHint": {
-    "message": "启动后即通过本地代理调用模型。"
-  },
-  "agentMaxContext": {
-    "message": "最大上下文 Token"
-  },
-  "agentModelLabel": {
-    "message": "默认模型"
-  },
-  "agentModelNoMatch": {
-    "message": "没有匹配的模型"
-  },
-  "agentModelSearchPlaceholder": {
-    "message": "搜索或选择模型"
-  },
-  "agentModelsEmpty": {
-    "message": "本地代理暂未发现可用模型，请先在模型设置中添加供应商或账户。"
-  },
-  "agentModelsHint": {
-    "message": "个可用模型，首次默认选择第一项"
-  },
-  "agentModelsLoading": {
-    "message": "正在读取可用模型…"
-  },
-  "agentModified": {
-    "message": "已修改"
-  },
-  "agentModifyHint": {
-    "message": "应用或关闭配置后，请完全退出并重新启动客户端；默认模型和上下文长度会在新会话中生效。"
-  },
-  "agentModifyTitle": {
-    "message": "配置修改"
-  },
-  "agentNoClientsFound": {
-    "message": "未检测到支持的智能体客户端"
-  },
-  "agentNotInstalled": {
-    "message": "未检测到安装"
-  },
-  "agentNotInstalledHint": {
-    "message": "安装后点击「重新检测」。"
-  },
-  "agentNotInstalledTitle": {
-    "message": "未检测到安装"
-  },
-  "agentPiDone": {
-    "message": "Pi 插件操作完成"
-  },
-  "agentPiInstall": {
-    "message": "安装插件"
-  },
-  "agentPiInstalled": {
-    "message": "Pi provider 插件已安装"
-  },
-  "agentPiMissing": {
-    "message": "Pi provider 插件未安装"
-  },
-  "agentPiPluginVersion": {
-    "message": "插件版本"
-  },
-  "agentPiRepair": {
-    "message": "修复插件"
-  },
-  "agentPiTitle": {
-    "message": "Pi Provider 插件"
-  },
-  "agentPiUninstall": {
-    "message": "卸载插件"
-  },
-  "agentPiUpdate": {
-    "message": "更新插件"
-  },
-  "agentRedetect": {
-    "message": "重新检测"
-  },
-  "agentSelectHint": {
-    "message": "从左侧选择一个智能体客户端"
-  },
-  "agentSelectHintDetail": {
-    "message": "检测完成后即可查看安装状态并应用网关配置。"
-  },
-  "agentSessionDeleteConfirm": {
-    "message": "确定删除该会话记录吗？"
-  },
-  "agentSessionDeleted": {
-    "message": "会话已删除"
-  },
-  "agentSessionName": {
-    "message": "会话"
-  },
-  "agentSessionsEmpty": {
-    "message": "没有找到 Codex 会话记录"
-  },
-  "agentTabCore": {
-    "message": "核心配置"
-  },
-  "agentTabSessions": {
-    "message": "会话管理"
-  },
-  "agentUpdate": {
-    "message": "更新配置"
-  },
-  "agentUseModel": {
-    "message": "使用模型"
-  },
-  "agentVersionUnknown": {
-    "message": "未获取"
-  },
   "aiPerfAck": {
     "message": "标记已查看"
   },
@@ -456,6 +252,9 @@
   },
   "aiPerfLoadFailed": {
     "message": "用量数据加载失败"
+  },
+  "aiPerfUsageIncomplete": {
+    "message": "部分请求未报告用量，显示已知部分。"
   },
   "aiPerfLoading": {
     "message": "加载用量数据…"
@@ -1310,7 +1109,7 @@
     "message": "文件"
   },
   "filesCount": {
-    "message": "个文件"
+    "message": "个凭据"
   },
   "filterCurrentDirectory": {
     "message": "筛选当前目录"
@@ -1420,6 +1219,105 @@
   "fundHomeAddToSimulation": {
     "message": "加入模拟"
   },
+  "fundHomeAllocationEyebrow": {
+    "message": "资产配置概览"
+  },
+  "fundHomeAllocationTitle": {
+    "message": "资产配置"
+  },
+  "fundHomeAllocationSubtitle": {
+    "message": "实际分布与目标比例 · 每个资产只计入一次"
+  },
+  "fundHomeAllocationTotal": {
+    "message": "已归类资产"
+  },
+  "fundHomeAllocationTargetTotal": {
+    "message": "目标合计"
+  },
+  "fundHomeAllocationUnassigned": {
+    "message": "待归类"
+  },
+  "fundHomeAllocationActual": {
+    "message": "实际分布"
+  },
+  "fundHomeAllocationValuation": {
+    "message": "按当前估值"
+  },
+  "fundHomeAllocationTarget": {
+    "message": "目标 vs 实际"
+  },
+  "fundHomeAllocationDeviation": {
+    "message": "偏差"
+  },
+  "fundHomeAllocationNote": {
+    "message": "填色表示实际占比，空白表示剩余比例。目标仅作配置参照，不自动交易；缺失估值保留为未知。"
+  },
+  "fundHomeAllocationDetail": {
+    "message": "查看分类明细"
+  },
+  "fundHomeAllocationSummaryCount": {
+    "message": "{groups} 个分类 · {assets} 项资产"
+  },
+  "fundHomeAllocationPartial": {
+    "message": "部分分类缺少估值"
+  },
+  "fundHomeAllocationTargetNote": {
+    "message": "{groups} 个分类"
+  },
+  "fundHomeAllocationAllAssigned": {
+    "message": "全部资产已归类"
+  },
+  "fundHomeAllocationUnassignedNote": {
+    "message": "未纳入目标分类"
+  },
+  "fundHomeInsightsSubtitle": {
+    "message": "四类收益、资产走势与相关市场集中查看"
+  },
+  "fundHomeHistoryTitle": {
+    "message": "资产走势"
+  },
+  "fundHomeHistoryAllSeries": {
+    "message": "全部"
+  },
+  "fundHomeHistoryViewLabel": {
+    "message": "走势视图"
+  },
+  "fundHomeHistoryViewAmount": {
+    "message": "金额"
+  },
+  "fundHomeHistoryViewPercent": {
+    "message": "百分比"
+  },
+  "fundHomeHistoryViewAmountLocked": {
+    "message": "显示金额后可用"
+  },
+  "fundHomeHistoryGroupsCount": {
+    "message": "{n} 个分类"
+  },
+  "fundHomeHistorySubtitle": {
+    "message": "总资产常显；选择任一分类叠加查看。"
+  },
+  "fundHomeHistoryCategories": {
+    "message": "各分类走势"
+  },
+  "fundHomeHistoryCategoriesHint": {
+    "message": "点击切换主图 · 左右滚动查看更多分类"
+  },
+  "fundHomeMarket": {
+    "message": "市场"
+  },
+  "fundHomeMarketGroups": {
+    "message": "市场分组"
+  },
+  "fundHomeMarketA": {
+    "message": "A股"
+  },
+  "fundHomeMarketHK": {
+    "message": "港股"
+  },
+  "fundHomeMarketUS": {
+    "message": "美股"
+  },
   "fundHomeNewsPanelTitle": {
     "message": "资讯"
   },
@@ -1428,6 +1326,30 @@
   },
   "fundHomeAiPanelBadge": {
     "message": "原地分析"
+  },
+  "fundHomeAiReading": {
+    "message": "正在读取所选资讯…"
+  },
+  "fundHomeAiHoldings": {
+    "message": "正在结合当前持仓…"
+  },
+  "fundHomeAiReadingScope": {
+    "message": "阅读范围："
+  },
+  "fundHomeAiFullTextSent": {
+    "message": "已发送完整缓存正文。"
+  },
+  "fundHomeAiBodyTruncated": {
+    "message": "正文已截断，实际发送 {sent}/{total} 字符，模型未读全文。"
+  },
+  "fundHomeAiSummaryFallback": {
+    "message": "正文不可用或已过期，本次仅基于摘要分析。"
+  },
+  "fundHomeAiBasisSummary": {
+    "message": "仅基于摘要，全文未获取。"
+  },
+  "fundHomeAiBasisTitle": {
+    "message": "仅有标题，资料不足。"
   },
   "fundHomeNewsAiBtn": {
     "message": "AI 决策"
@@ -2059,7 +1981,7 @@
     "message": "分组"
   },
   "fundHomeGroupAdjust": {
-    "message": "调整配置"
+    "message": "管理分类"
   },
   "fundHomeGroupAllocationPlan": {
     "message": "财务分配"
@@ -2224,6 +2146,9 @@
   "fundHomeIndexShenzhen": {
     "message": "深证成指"
   },
+  "fundHomeIndexBeijing50": {
+    "message": "北证 50"
+  },
   "fundHomeIndexStar50": {
     "message": "科创 50"
   },
@@ -2245,6 +2170,15 @@
   },
   "fundHomeInformationContentExpired": {
     "message": "正文已超过 24 小时或抓取时间未知，请主动刷新核对来源。"
+  },
+  "fundHomeInformationContentLoading": {
+    "message": "正在获取正文，摘要仍可阅读…"
+  },
+  "fundHomeInformationRetry": {
+    "message": "重新读取"
+  },
+  "fundHomeInformationContentUnavailable": {
+    "message": "来源暂未提供可读取的正文，可打开原文查看。"
   },
   "fundHomeInformationCouldNotLoad": {
     "message": "资讯加载失败：",
@@ -2269,7 +2203,7 @@
     "description": "P06 information: fundHomeInformationEmpty"
   },
   "fundHomeInformationFetchContent": {
-    "message": "获取公告正文",
+    "message": "获取正文",
     "description": "P06 information: fundHomeInformationFetchContent"
   },
   "fundHomeInformationFilter": {
@@ -2319,7 +2253,7 @@
     "description": "P06 information: fundHomeInformationRefreshDone"
   },
   "fundHomeInformationRefreshPartial": {
-    "message": "资讯刷新完成，但部分来源失败：",
+    "message": "资讯刷新完成，但部分来源未完整返回：",
     "description": "P06 information: fundHomeInformationRefreshPartial"
   },
   "fundHomeInformationRelations": {
@@ -2481,9 +2415,6 @@
   },
   "fundHomeMarkUnread": {
     "message": "标未读"
-  },
-  "fundHomeMarket": {
-    "message": "市场"
   },
   "fundHomeMarketDataCouldNotLoad": {
     "message": "行情加载失败（"
@@ -3169,9 +3100,6 @@
   "fundHomeOverviewFlowExcluded": {
     "message": "按已核对估值计算，剔除外部净投入。"
   },
-  "fundHomeOverviewFlowTiming": {
-    "message": "收益采用日末现金流约定；估值变化曲线包含净投入，不能直接当作收益率。"
-  },
   "fundHomeOverviewHealth": {
     "message": "持仓体检"
   },
@@ -3181,29 +3109,14 @@
   "fundHomeOverviewHistoryHidden": {
     "message": "隐藏模式不显示投资曲线。"
   },
-  "fundHomeOverviewHistoryLabel": {
-    "message": "真实保存估值的归一化曲线，缺失日期不连线。"
-  },
   "fundHomeOverviewHoldings": {
     "message": "查看持仓"
-  },
-  "fundHomeOverviewMissingBaseline": {
-    "message": "缺少所选区间的期初估值，收益暂不可计算。"
-  },
-  "fundHomeOverviewMissingDays": {
-    "message": "历史估值日期有缺口，曲线保留真实日点，不推算缺失收益。"
-  },
-  "fundHomeOverviewMissingEnd": {
-    "message": "缺少今日核对估值，收益暂不可计算。"
   },
   "fundHomeOverviewMissingPrice": {
     "message": "缺价记录"
   },
   "fundHomeOverviewNoBenchmark": {
     "message": "尚无同日期真实基准序列，超额收益不可计算。"
-  },
-  "fundHomeOverviewNoHistory": {
-    "message": "至少保存两个真实估值日点后显示曲线。"
   },
   "fundHomeOverviewNoLookThrough": {
     "message": "同一证券跨账户合并；基金未穿透成分。现金及线下投资不在证券集中度分母内。"
@@ -3252,12 +3165,6 @@
   },
   "fundHomeOverviewUnrealized": {
     "message": "证券持仓浮盈"
-  },
-  "fundHomeOverviewUnverified": {
-    "message": "历史估值或资金流水尚未完整核对。"
-  },
-  "fundHomeOverviewZeroBaseline": {
-    "message": "估值分母非正，时间加权收益不可计算。"
   },
   "fundHomeOverweight": {
     "message": "高配"
@@ -3645,9 +3552,6 @@
   },
   "fundHomeSettlementStatus": {
     "message": "到账状态／账户"
-  },
-  "fundHomeShowAmounts": {
-    "message": "显示金额"
   },
   "fundHomeShowArchived": {
     "message": "包含已归档记录"
@@ -4549,7 +4453,7 @@
     "message": "导入"
   },
   "importAuthFilesHint": {
-    "message": "点击“导入”上传 .json 凭据文件，或登录后自动保存。"
+    "message": "导入 .json 凭据文件，或保留既有 OAuth 账户后即可查询额度。"
   },
   "importCancelled": {
     "message": "导入已取消"
@@ -4941,42 +4845,6 @@
   "modelAccessKeyUnavailable": {
     "message": "尚未生成访问密钥"
   },
-  "modelAccountActive": {
-    "message": "可用"
-  },
-  "modelAccountModelsEmpty": {
-    "message": "没有可用模型"
-  },
-  "modelAccountModelsLoadFailed": {
-    "message": "模型加载失败"
-  },
-  "modelAccountModelsSaved": {
-    "message": "账号模型设置已保存"
-  },
-  "modelAccountModelsSearch": {
-    "message": "搜索模型"
-  },
-  "modelAccountModelsSelectAll": {
-    "message": "全部开启"
-  },
-  "modelAccountModelsSelectNone": {
-    "message": "全部关闭"
-  },
-  "modelAccountModelsSelectVisible": {
-    "message": "切换当前结果"
-  },
-  "modelAccountModelsSummary": {
-    "message": "$1 个模型，已开启 $2 个"
-  },
-  "modelAccountModelsTitle": {
-    "message": "账号模型"
-  },
-  "modelAccountNeedsReauth": {
-    "message": "需要重新登录"
-  },
-  "modelAccounts": {
-    "message": "账户"
-  },
   "modelActions": {
     "message": "操作"
   },
@@ -4984,7 +4852,7 @@
     "message": "手动确认支出"
   },
   "modelAddProvider": {
-    "message": "添加自定义供应商"
+    "message": "添加 AI 连接"
   },
   "modelAdvBasic": {
     "message": "基础控制"
@@ -4994,15 +4862,6 @@
   },
   "modelAdvBasicTitle": {
     "message": "代理运行控制"
-  },
-  "modelAdvKernel": {
-    "message": "内核设置"
-  },
-  "modelAdvKernelDesc": {
-    "message": "设置失败重试范围；保存后运行中的代理会安全重启。"
-  },
-  "modelAdvKernelTitle": {
-    "message": "内核重试设置"
   },
   "modelAdvKeys": {
     "message": "访问密钥"
@@ -5024,9 +4883,6 @@
   },
   "modelAdvancedSettingsDescription": {
     "message": "管理代理运行、访问密钥、网络路由与内核参数。"
-  },
-  "modelAgentSettings": {
-    "message": "智能体配置"
   },
   "modelAlias": {
     "message": "别名"
@@ -5184,9 +5040,6 @@
   "modelCustomRange": {
     "message": "自定义时间"
   },
-  "modelDeleteAccountConfirm": {
-    "message": "确定删除这个 OAuth 账户吗？"
-  },
   "modelDeleteKeyConfirm": {
     "message": "确定删除此访问密钥吗？删除后客户端将无法使用该密钥访问网关。"
   },
@@ -5202,15 +5055,6 @@
   "modelEndpointUnavailable": {
     "message": "代理地址当前不可用"
   },
-  "modelErrorGatewayRestart": {
-    "message": "配置已保存，但代理重启失败，请重试。"
-  },
-  "modelErrorGatewayStart": {
-    "message": "本地模型代理启动失败。"
-  },
-  "modelErrorGatewayStop": {
-    "message": "本地模型代理停止失败。"
-  },
   "modelErrorInternal": {
     "message": "模型设置操作失败。"
   },
@@ -5222,9 +5066,6 @@
   },
   "modelErrorNotFound": {
     "message": "对应配置已不存在，请刷新。"
-  },
-  "modelErrorOAuthInProgress": {
-    "message": "已有 OAuth 授权正在进行。"
   },
   "modelErrorRevisionConflict": {
     "message": "配置已在其他页面更新，请刷新后重试。"
@@ -5301,15 +5142,6 @@
   "modelFetchModels": {
     "message": "自动获取模型"
   },
-  "modelGatewayBaseURL": {
-    "message": "当前 API URL"
-  },
-  "modelGatewayNotRunning": {
-    "message": "代理尚未运行"
-  },
-  "modelGatewaySummary": {
-    "message": "$1 个供应商 · $2 个账户 · $3 个模型"
-  },
   "modelGeminiCompat": {
     "message": "Gemini兼容格式"
   },
@@ -5337,48 +5169,6 @@
   "modelInvalidTimeRange": {
     "message": "结束时间必须晚于开始时间"
   },
-  "modelKernelCheckDone": {
-    "message": "已检查内核最新版本"
-  },
-  "modelKernelPhaseBuild": {
-    "message": "正在构建新内核（约 1 分钟）…"
-  },
-  "modelKernelPhasePatches": {
-    "message": "正在应用本地补丁…"
-  },
-  "modelKernelPhaseQueued": {
-    "message": "等待开始…"
-  },
-  "modelKernelPhaseRestart": {
-    "message": "正在重启内核…"
-  },
-  "modelKernelPhaseSource": {
-    "message": "正在同步上游源码…"
-  },
-  "modelKernelPhaseSwap": {
-    "message": "正在换装内核…"
-  },
-  "modelKernelUpToDate": {
-    "message": "已是最新"
-  },
-  "modelKernelMigrationRequired": {
-    "message": "上游内核需要 SDK 与本地补丁迁移，请更新完整 Natives 产品。"
-  },
-  "modelKernelUpdateFailed": {
-    "message": "内核更新失败"
-  },
-  "modelKernelUpdateTimeout": {
-    "message": "内核更新超时，请稍后重试"
-  },
-  "modelKernelUpdated": {
-    "message": "内核已成功更新"
-  },
-  "modelKernelUpdating": {
-    "message": "正在更新内核…"
-  },
-  "modelKernelVersion": {
-    "message": "内核版本"
-  },
   "modelKeyCopied": {
     "message": "密钥已复制到剪贴板"
   },
@@ -5394,23 +5184,11 @@
   "modelKeyRotatedAndCopied": {
     "message": "密钥已重置并复制到剪贴板"
   },
-  "modelLatestKernelVersion": {
-    "message": "最新版本"
-  },
   "modelList": {
     "message": "模型列表"
   },
   "modelLoading": {
     "message": "正在加载模型设置…"
-  },
-  "modelLocalProxy": {
-    "message": "本地代理"
-  },
-  "modelLocalProxyDescription": {
-    "message": "管理本地兼容接口、访问密钥与常驻状态。"
-  },
-  "modelLoginAddAccount": {
-    "message": "添加其他账户"
   },
   "modelLoginCancelAction": {
     "message": "取消授权"
@@ -5505,15 +5283,6 @@
   "modelNoUsageRecords": {
     "message": "暂无使用记录"
   },
-  "modelOAuthLogin": {
-    "message": "OAuth 登录"
-  },
-  "modelOAuthModels": {
-    "message": "OAuth"
-  },
-  "modelOAuthModelsHint": {
-    "message": "账户授权并启动代理后自动同步模型。"
-  },
   "modelOpenAICompat": {
     "message": "OpenAI兼容格式"
   },
@@ -5552,9 +5321,6 @@
   },
   "modelProviderOptional": {
     "message": "供应商（可选）"
-  },
-  "modelProxyURL": {
-    "message": "上游代理 URL"
   },
   "modelQuotaInquiry": {
     "message": "额度查询"
@@ -5604,9 +5370,6 @@
   "modelResident": {
     "message": "常驻（关闭浏览器后继续运行）"
   },
-  "modelRestartGateway": {
-    "message": "重启"
-  },
   "modelRestarting": {
     "message": "重启中"
   },
@@ -5638,16 +5401,13 @@
     "message": "模型与服务"
   },
   "modelSettingsDescription": {
-    "message": "管理模型供应商配置，包括自定义模型、OAuth 模型和本地代理设置。"
+    "message": "管理内置 AI 调用连接、用量与额度。"
   },
   "modelSettingsSaved": {
     "message": "网关设置已保存"
   },
   "modelSoftwareVersion": {
     "message": "软件版本"
-  },
-  "modelStartGateway": {
-    "message": "启动"
   },
   "modelStartTime": {
     "message": "开始时间"
@@ -5660,9 +5420,6 @@
   },
   "modelStatusRefreshed": {
     "message": "状态已刷新"
-  },
-  "modelStopGateway": {
-    "message": "停止"
   },
   "modelStopped": {
     "message": "已停止"
@@ -5845,7 +5602,7 @@
     "message": "暂无可查询凭据"
   },
   "noAuthFiles": {
-    "message": "暂无认证文件"
+    "message": "暂无可查询凭据"
   },
   "noFilterResults": {
     "message": "当前目录没有匹配项目"
@@ -7669,10 +7426,10 @@
   "fundChartDrawingDashdashed": {
     "message": "虚线"
   },
-  "fundChartDrawingDashdashed-dense": {
+  "fundChartDrawingDashdashedDense": {
     "message": "密虚线"
   },
-  "fundChartDrawingDashdashed-sparse": {
+  "fundChartDrawingDashdashedSparse": {
     "message": "疏虚线"
   },
   "fundChartDrawingVisible": {
@@ -8724,26 +8481,83 @@
   "fundHomeRangePartial": {
     "message": "仅覆盖部分日期"
   },
-  "fundHomeRangeTruncated": {
-    "message": "仅显示最近 400 个真实记录点"
-  },
-  "fundHomeHistoryOneValue": {
-    "message": "本次资产估值"
+  "fundHomeHistoryRecord": {
+    "message": "记录今日估值"
   },
   "fundHomeHistoryCurrentValue": {
     "message": "当前资产参考（非历史记录）"
   },
+  "fundHomeHistoryGroupTotal": {
+    "message": "总资产"
+  },
+  "fundHomeHistoryChange": {
+    "message": "区间变化"
+  },
+  "fundHomeHistoryGroupUnavailable": {
+    "message": "分类走势需要至少两个日期的有效估值；缺失历史不会回填。"
+  },
+  "fundHomeHistoryIntraday": {
+    "message": "日内估值观察；沿用最近可用价格，不代表已确认收益，超过 5 分钟的观察缺口不连线"
+  },
+  "fundHomeHistoryReconstructed": {
+    "message": "历史估值参考：按登记后的实际份额与当时已发布净值计算，分类按当前归属回看。沿用最近 7 天内可用净值，缺价断线；不是已核对收益。"
+  },
+  "fundHomeHistoryReplayLimit": {
+    "message": "持仓历史超出本次回放上限，仅展示已保存估值。"
+  },
+  "fundHomeHistoryIntradayOnePoint": {
+    "message": "已开始自动积累日内估值，下一个有效分钟观察到达后显示走势；页面隐藏或关闭期间不采集。"
+  },
+  "fundHomeHistoryGroupValue": {
+    "message": "分类资产估值"
+  },
+  "fundHomeHistoryGroupMissing": {
+    "message": "当前分类缺少可用估值，请核对分类资产的价格或估值。"
+  },
   "fundHomeHistoryOnePoint": {
     "message": "目前仅有一次估值，尚不足以形成走势。记录今日估值后，可逐日积累真实历史。"
   },
-  "fundHomeHistoryValuationGap": {
-    "message": "部分资产缺少价格或估值已过期；这里只展示已知金额，请先核对估值。"
+  "fundHomeHistoryOneValue": {
+    "message": "本次资产估值"
   },
   "fundHomeHistoryRangeEmpty": {
     "message": "所选区间没有估值记录。已有的当前资产不能用来补造过去的走势。"
   },
-  "fundHomeHistoryRecord": {
-    "message": "记录今日估值"
+  "fundHomeHistorySeries": {
+    "message": "选择要显示的资产走势"
+  },
+  "fundHomeHistoryValuationGap": {
+    "message": "部分资产缺少价格或估值已过期；这里只展示已知金额，请先核对估值。"
+  },
+  "fundHomeOverviewFlowTiming": {
+    "message": "收益采用日末现金流约定；估值变化曲线包含净投入，不能直接当作收益率。"
+  },
+  "fundHomeOverviewHistoryLabel": {
+    "message": "总资产与所选分类按区间首日归一化的估值走势；缺失日期不连线。"
+  },
+  "fundHomeOverviewMissingBaseline": {
+    "message": "缺少所选区间的期初估值，收益暂不可计算。"
+  },
+  "fundHomeOverviewMissingDays": {
+    "message": "历史估值日期有缺口，曲线保留真实日点，不推算缺失收益。"
+  },
+  "fundHomeOverviewMissingEnd": {
+    "message": "缺少今日核对估值，收益暂不可计算。"
+  },
+  "fundHomeOverviewNoHistory": {
+    "message": "至少保存两个真实估值日点后显示曲线。"
+  },
+  "fundHomeOverviewUnverified": {
+    "message": "历史估值或资金流水尚未完整核对。"
+  },
+  "fundHomeOverviewZeroBaseline": {
+    "message": "估值分母非正，时间加权收益不可计算。"
+  },
+  "fundHomeRangeTruncated": {
+    "message": "历史较长，仅显示最近一段有效数据（最多 400 个点）"
+  },
+  "fundHomeShowAmounts": {
+    "message": "显示金额"
   },
   "fundHomeStockIncome": {
     "message": "股票收益"
@@ -9034,7 +8848,7 @@
     "message": "目标与实际分布逐项对照"
   },
   "fundHomeCombinationEdit": {
-    "message": "编辑比例"
+    "message": "编辑目标"
   },
   "fundHomeGroupActual": {
     "message": "实际"
@@ -9475,9 +9289,6 @@
   "fundHomeAiEmpty": {
     "message": "模型未返回可用正文，请核对所选模型后重试。"
   },
-  "modelKernelMigrationAvailable": {
-    "message": "上游新版需要完整产品迁移，当前内核仍可使用；此处不能直接升级主版本。"
-  },
   "sharedPreferencesImport": {
     "message": "导入当前扩展偏好"
   },
@@ -9499,17 +9310,14 @@
   "sharedPreferencesReviewLatest": {
     "message": "其他页面已修改设置，请先核对最新版本后再保存。"
   },
-  "webPairingMismatch": {
-    "message": "配对码不正确，请重新输入。"
+  "webConnectionRequiredTitle": {
+    "message": "请从 Natives 打开此页面"
   },
-  "webPairingExpired": {
-    "message": "配对码已过期，请在本机重新获取。"
+  "webConnectionRequiredDescription": {
+    "message": "当前浏览器尚未建立本机连接。请从 Natives 入口重新打开，无需配对码。服务已恢复时，也可以重试连接。"
   },
-  "webPairingLocked": {
-    "message": "尝试次数过多，请获取新的配对码。"
-  },
-  "webPairingNotFound": {
-    "message": "配对码无效或已被使用，请重新获取。"
+  "webConnectionRetry": {
+    "message": "重试连接"
   },
   "fundHomeInformationBusy": {
     "message": "另一项资讯任务正在结束，请稍后重试；账本数据未发生冲突。",
@@ -9889,5 +9697,83 @@
   },
   "fundChartCandleEmpty": {
     "message": "暂无 K 线数据"
+  },
+  "modelAISettings": {
+    "message": "AI 设置"
+  },
+  "modelConnections": {
+    "message": "AI 连接"
+  },
+  "modelConnectionsDescription": {
+    "message": "统一配置 Base URL、API Key、协议和模型，供各模块调用 AI。"
+  },
+  "modelDefaultModel": {
+    "message": "全局默认模型"
+  },
+  "modelDefaultModelNone": {
+    "message": "未设置（调用时需要选择模型）"
+  },
+  "modelDefaultModelHint": {
+    "message": "各模块使用此默认模型调用 AI，无需重复配置地址和 API Key。用量与费用统一记录在 Tokenusage。"
+  },
+  "modelDefaultModelUnavailable": {
+    "message": "原默认模型不可用，请重新选择"
+  },
+  "modelSetAsDefault": {
+    "message": "设为全局默认模型"
+  },
+  "modelProxyRetiredNotice": {
+    "message": "本地模型代理与路由已退役；Natives 不再为第三方工具注入代理配置，也不再提供代理访问密钥。"
+  },
+  "modelResidentHost": {
+    "message": "关闭页面后保持 AI 服务运行（常驻）"
+  },
+  "modelQuotaDescription": {
+    "message": "额度查询仅读取已导入凭据或既有 OAuth 账户，不参与模型推理。"
+  },
+  "modelQuotaCredentialNote": {
+    "message": "凭据仅用于额度查询，不参与模型推理，也不会被写入第三方工具配置。"
+  },
+  "modelLegacyReadOnly": {
+    "message": "既有账户（只读）"
+  },
+  "modelErrorUnavailable": {
+    "message": "所选模型已不可用，请刷新后重试。"
+  },
+  "modelErrorDefaultUnavailable": {
+    "message": "默认模型不可用，请重新选择。"
+  },
+  "modelErrorDefaultChanged": {
+    "message": "默认模型配置已变化，请重新预览。"
+  },
+  "modelUsageMissing": {
+    "message": "未报告用量"
+  },
+  "modelCostUnpriced": {
+    "message": "缺少单价，费用未知"
+  },
+  "modelCostUnknown": {
+    "message": "未知"
+  },
+  "fundHomeAiPrivacyCancelled": {
+    "message": "已因隐私隐藏停止分析；切回可见后，可手动重新分析。"
+  },
+  "fundHomeExternalLinkFailed": {
+    "message": "未能打开原文链接，请允许本站打开新标签页后重试。"
+  },
+  "fundHomeGoalLegacyInformation": {
+    "message": "历史信息，不参与当前金额目标计算"
+  },
+  "fundHomeQualityReady": {
+    "message": "已登记资产估值完整"
+  },
+  "fundHomeQualityPartial": {
+    "message": "部分资产待核实"
+  },
+  "fundHomeQualityEmpty": {
+    "message": "尚无资产"
+  },
+  "fundHomeQualityStale": {
+    "message": "估值已过时"
   }
 }

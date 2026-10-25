@@ -1,6 +1,13 @@
 // ADR-0037：通用会话代理，不解释模块业务或提供凭据。
 import {acquireModelApi,releaseModelApi} from './ai-usage-client/client.js';
-export function createModuleInferenceBroker({context,acquire=acquireModelApi,release=releaseModelApi,openLink=url=>chrome.tabs.create({url}),openSettings}) {
+function openExternalLink(url) {
+ if (globalThis.chrome?.tabs?.create) return chrome.tabs.create({url});
+ const tab = window.open('about:blank', '_blank');
+ if (!tab) throw Error('EXTERNAL_LINK_BLOCKED');
+ tab.opener = null;
+ tab.location.replace(url);
+}
+export function createModuleInferenceBroker({context,acquire=acquireModelApi,release=releaseModelApi,openLink=openExternalLink,openSettings}) {
  // mode/T06：openSettings 由页面装配入口注入（下层不回导上层设置页）；
  // 缺依赖在装配期明确失败，不静默无响应。
  if (typeof openSettings !== 'function') throw new Error('module-inference-broker: openSettings is required (inject from the page assembly entry)');
@@ -49,8 +56,8 @@ export function createModuleInferenceBroker({context,acquire=acquireModelApi,rel
     try{result=await client.inferenceStart(startParams);}finally{starting=false;}
     if(epoch!==before){try{await client.inferenceCancel({owner,id:result.id});}catch{}return true;}
     job=result.id;
-    // 返回实际采用的 providerId/modelId/route，供结果记录真实身份。
-    reply({started:true,providerId:result.providerId,modelId:result.modelId,route:result.route});return true;
+    // 返回实际采用的 providerId/modelId，供结果记录真实身份（无全局别名路由）。
+    reply({started:true,providerId:result.providerId,modelId:result.modelId});return true;
    }
    if(m.op==='cancel' && starting && !job){reply({cancelled:true});epoch++;return true;}
    if(!job)throw Error('没有运行中的分析');

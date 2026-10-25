@@ -4,6 +4,10 @@
 
 ## 进行中
 
+- 2026-10-21 22:55：首页收益与走势重组进行中（展示层于 2026-10-22 合入“收益与表现”卡片，见最近完成；本条整体市场／分类历史验收状态保持）。已移除“财务分配与核对工具”“机会与投资依据”，把市场并入收益卡；市场接入 A股／港股／美股真实行情，按大类切换。总资产曲线保留，新增当前资金分类选择与分类曲线；新保存估值在 `breakdown_json.groupValues` 记录分类值，旧快照无分类历史时明确提示、不按当前占比反推。已保存估值日期列表移除，金额前不再加 `+`。Fund 375 项、workspace 625 项、新 Chrome 首页专项（A/HK/US、分类曲线、旧历史空态、隐私、320px）及 UI／Extension／perf／architecture／diff 门禁通过。日股／韩股／欧股／亚太尚无已核实行情源，未伪造；完整 Native／真实用户账本未验。见 [契约](docs/contracts/fund-holding-detail-contract.md#首页资产走势与市场合并2026-10-21)、[UI 专项](scripts/modules/home-insights-browser.test.mjs)。2026-10-24 资产走势区块按设计 demo 复刻补齐（见最近完成）。
+
+- 2026-10-20 22:17：资讯“一键 AI 分析”按 [ADR-0046](docs/adr/0046-news-one-click-ai-analysis.md) 实施（UI＋Fund 证据，不改 schema／Model Host 凭据／计费 owner）。首页、资讯列表／详情、持股摘要统一为一次点击：自动读取详情／正文、生成当前持仓聚合背景（跨账户合并、无账户／金额／流水）和程序内置原则，直接调用全局默认模型；无预览／确认，无默认模型明确报错，重复点击／快照更新不重发。正文支持有效缓存、自动补取、摘要／标题降级和 16000 字符预算显式裁剪；结果复用既有校验／保存／历史。证据：Fund 373 项、workspace 617 项、UI 合约（一次点击=一次推理、无确认、重复／快照不重发、缺正文自动补取、无默认模型不回退）及 standards／architecture／Extension／perf／diff 通过。真实隔离 Native 一键链当前被夹具 Model Host 的 `MODEL_HOST_DISCONNECTED`／合成凭据配置阻塞；真实供应商、真实持仓、双主题／中英文／窄窗人工 Chrome 未验，未提交／推送／安装。见 [契约](docs/contracts/fund-holding-detail-contract.md#资讯一键-ai-分析adr-0046)、[UI 合约测试](scripts/modules/news-one-click-ui.test.mjs)。
+
 - 2026-10-20 09:49：Chrome 扩展＋本机独立 Web 仍未整体验收。Files 已续修取消误提交、搜索／目录竞态、Tab 焦点与字号；Space 已续修便签丢字／peer 覆盖、快照重排失焦及空间表单。PDF 按明确授权落 ADR-0043 后限定修复，真实 E/W 内容、单多页、原生翻页／缩放、适宽、16 个布局、真实禁用及拒绝／释放路径通过；原生搜索人工核验受 Mac 锁屏阻塞。最终 perf 门禁通过。其他模块／全弹窗／视觉、安全与 Release 资源计数未齐；30 分钟最后核验，未重复长测、安装、提交、push 或修改真实用户库。见 [施工与证据](/Users/ldh/Downloads/project/plan/memory/dual-entry-migration/evidence/20261018-full-acceptance/execution.md) 、[PDF 分项结果](/Users/ldh/Downloads/project/plan/memory/dual-entry-migration/evidence/20261018-full-acceptance/pdf-acceptance.md) 。
 
 - 2026-10-13 18:38：macOS 顶栏今日计量修复已按授权应用至真实开发环境。此前合成测试漏掉 Codex 两套不等累计计数混算；现改为新版稳定响应 ID＋单次 usage，旧版独立累计求差，解析模式跨批／重启持久化并恢复旧游标。真实库先完整备份，再仅校正今日 2 个会话的 396 条响应、移除 378 条重复累计：150,175,266,763→101,596,860 Token，其他事件及非游标表逐行不变、完整性通过。新版顶栏及 worker 重启补采后今日 113,579,341 Token；455 条 Codex 响应与原日志模型／缓存分桶／单次用量逐条一致，差异 0，再查没有重复增量；原生生产数据函数输出 113.6M · --（缺单价）。Go 219 项／14 packages、实测回放、升级／重启／归档专项与最终串行门禁通过；保留首轮快照超时。更早历史未重算，界面工具不识别无应用包的顶栏进程，屏幕显示未直接确认；未提交／推送／发布。见 [既有用量契约](docs/development/ai-efficiency-remediation-implementation-plan.md)、[Chrome 面板](scripts/statusbar-browser.test.mjs) 与 [原生 owner](scripts/statusbar-owner.test.m) 。
@@ -24,10 +28,40 @@
 
 ## 最近完成
 
+- 2026-10-25 10:39：资产走势 v2 按用户要求重做交互与视图：pill 改多选并新增行首「全部」重置（默认全部线同图，全选下点分组＝单看「总资产＋该组」，非全选＝切换该线），主图新增金额/百分比双视图且默认金额（y 轴金额刻度紧凑万/亿格式，隐私遮金额的 percent/hidden 模式强制百分比并禁用金额按钮），选中说明与各分类走势卡同步多选态，全关时自动回全部。同步更新 `home-history-browser`（data-series 具体分组 id、重置点击）与 `home-insights-browser`（选中说明断言）两测试的过时断言；门禁 `modules:ui:build/check`、`extension:check`、`perf:files`、`git diff --check` 全过，真实账本（13 只场外基金）链路 13 项断言（默认全选 9 线、金额轴 1万/5,000/0、单看、重置、视图切换、隐私联动）与双主题截图/局部小图复核通过；locales 新增 6 键 zh/en 同步。附全页复检：35+ 项断言中管理资产 9,352.74 与库内权威估值对账吻合、基金浮亏 -1,471.42 与成本 10,824.16 分毫不差，弹窗/刷新/区间/隐私三态/390px 无溢出正常；「国内核心宽基与总资产同 -9.39%」系其他基金缺回放期净值（状态文案已注明缺价断线），非渲染缺陷；偶发 `Fund is not defined`（仅高频交互脚本出现过 2 次、7 轮纯浏览与冷启动均零复现）待观察。未提交／推送／安装。
+- 2026-10-24 18:29：首页「资产走势」区块按设计 demo（`.tmp/home-insights-redesign-demo`）复刻补齐：分类 pill 增加分组彩点并与主图分类线／分类卡共用同一 palette；头部重排为「标题＋副题＋区间切换」，新增大数字行（期间净收益＋时间加权收益＋「本月 · 总资产 + 某分类」选中说明）；日期轴从首尾两点扩为按真实点等距采样（≤5 段、缺日期不补造）；主图下方新增「各分类走势」横向卡条（彩点＋名称＋区间变化＋sparkline，点击切换主图，不足两点不画线，隐私三态遮蔽与 pill 同口径）。改动限于 `home-overview.js`、`styles/home.css`、`partials/view-home.html` 与 locales 新增 3 键（zh/en 同步）；`modules:ui:build`、`modules:ui:check`、`extension:check` 及 Chrome 回归（home-history 8 布局、home-insights 8 布局、custom 区间／隐私／焦点诊断脚本）通过，双主题截图与 demo 图像比对确认元素到位。`home-browser`／`home-tab-retention` 两测试因既存「机会区／财务工具已移除」断言过时在第 67 行前失败（与本次改动无关，见 2026-10-21 22:55 进行中条目）；完整 Native 链与真实用户账本未验。未提交／推送／安装。
+- 2026-10-23 20:20：投资首页全页复检完成。真实 Chrome 对照同一快照核对财富四量、收益与日估算、分组／目标、历史末点、资讯去重、三态隐私及弹窗／区间／范围切换；修复首页资讯默认范围回到“持仓相关”、日期型公告按 `timePrecision=day` 只显示日期而不伪造 00:00:00、北证指数显示“北证 50 / 899050”（英文 BSE 50），单次采集达到上限时提示“部分来源未完整返回”而非失败。数据口径与契约一致，未改 schema／Rust／用户账本；门禁与未验项见最近验证及 [复检记录](docs/development/evidence/home-functional-fixes-2026-10-23.md#首页全页复检2026-10-23-2020)。
+
+- 2026-10-23 19:49：首页五处实测问题完成修复并在真实 Chrome 本地 Web 复验：无现金登记时已投资市值 I=A，且卡片与详情共用同一质量状态；资讯“打开来源”按钮点击／Enter 均打开真实原文；港股／美股显示上游市场时间且窄列不截断；目标编辑历史字段合并为单条提示；同标题跨源资讯按来源族＋规范标题＋北京时间日折叠，阅读／收藏变化不复活副本，公告不合并。Fund 392 项、Rust workspace 644 passed、fmt、模块 UI build/check、最终 perf:check 通过；真实列表 50 条／50 条唯一标题。扩展 tab 外链未再次人工打开；未提交／推送／安装。见 [修复与验收记录](docs/development/evidence/home-functional-fixes-2026-10-23.md)。
+
+- 2026-10-23 04:49：补全已有基金持仓历史走势：同一只读快照按登记、确认交易及校准回放历史份额，乘当时本地 NAV，生成总额及当前分类参考曲线；未知成本可显示有价市值，缺价断开，混合资产不冒充完整总额，已保存记录优先。最多 200 个身份／10000 条操作／400 天／96 KiB，无新增持久化或网络任务。已验证隔离真实签名 Core → Runtime → SQLite → Chrome；无需重新录入持仓，实际开发进程重启后启用。见 [修复与证据](docs/development/evidence/asset-holding-history-2026-10-23.md)。
+
+- 2026-10-22 21:49：资产日内走势数据记录、查询与图表已补全。Fund v29 同库派生观察复用可见刷新，每分钟保留最新值、历史日压缩并保留 400 天；今天按真实时间绘图，相同金额画平线，缺值／超过 5 分钟断线。仅今天有数据的区间及无跨日历史的新分类自动展示真实日内点，不要求反复选区间；不把观察当收益基线、不补造历史。GET／空间卡只读，隐藏取消，重开保留。当前源码与签名隔离 Native 8 组、Rust 全仓及最终门禁通过；未替换真实开发源或迁移真实用户库，正常重启 `npm start` 后启用。见 [实现与验证](docs/development/evidence/asset-valuation-intraday-2026-10-22.md)。
+
+- 2026-10-22 21:18：按用户更正保留 `home-history-series` 与本次资产估值，修复分类金额未接入及单点误显示总资产：当前分类读同一快照的 `groupAllocation.currentMinor`，历史只读已保存分类值；分类曲线使用自身金额尺度，缺口不连线，零值／未知／隐私／历史范围分开处理，不反推或补造历史。此前收益与走势合并卡片同步完成最终集成门禁，保留区间、市场、基准和归因，位于资产配置上方。Chrome 分类专项及真实隔离 Web → Fund SQLite 验证通过；未替换正在运行的开发源／Worker，未读写真实投资库。见 [契约](docs/contracts/fund-holding-detail-contract.md#首页资产走势与市场合并2026-10-21)、[分类回归](scripts/modules/home-history-browser.test.mjs)。
+
+- 2026-10-22 21:00：本地 `npm start` 缺少 `esbuild` 已修复。核实整个 `node_modules` 缺失，按现有锁文件执行 `npm ci --include=dev` 恢复 2 个包，未修改依赖版本或锁文件；Node 20／22 均能导入并运行 esbuild 0.28.2。使用本机已有 Node 20.20.2 启动现有开发流程，重新构建 Host、注册原有开发入口并密封用户目录产品源，日志达到 `Natives ready. (Web only)`；8771 健康检查通过，受信 `web:open` 返回 `opened_web`。README 补充 Node 与首次依赖恢复步骤，未改全局 Node 配置或凭据；未做浏览器渲染核验。
+
+- 2026-10-21 22:21：投资首页合并资产配置卡片完成，并修正“目标 vs 实际”条形语义：填色直接等于当前实际占比，空白表示剩余比例，目标／偏差由数值列展示；未知不画条、零值保留空条。首页外层稳定滚动槽位，分类／目标／资讯／AI 正文右侧至少留 12 px。Chrome 8 组、强制滚动条几何断言、真实隔离 Web → Runtime → SQLite 保存／重开／刷新与 80%／20% 真实条形通过；未改真实用户库，未替换旧开发源／Worker。见 [实现与验证](docs/development/evidence/asset-allocation-merge-2026-10-21.md)。
+
+- 2026-10-21 11:48：投资首页阅读顺序调整：将“收益与表现”标题与四张收益卡从资讯／AI 之后移至目标水位之下、资讯之上；资产分布／组合设置、资讯／AI、折叠历史及业务数据与接口未改。`modules:ui:build` 重新生成 Fund dist，`modules:ui:check` 通过；真实 Chrome 顺序与几何断言覆盖 Archive／Volt、1280／640／320 px、中英文及 200% 缩放，无横向溢出、`errors=[]`，首页隐私／表单／AI／语言／键盘回归通过。未读取真实用户账本，未运行真实 Native 链与人工读屏；未提交／推送／安装。
+- 2026-10-21 11:11：空间背景与卡片顶部对齐修复：撤销 2026-10-20 引入的全局 72px 工具栏预留与槽位滚动限制，topLeft／topCentre／topRight 恢复真实顶部、middle 槽恢复 50% 居中，悬浮工具栏仅覆盖不占布局。本机 Web 入口因 Bing 归档接口无 CORS 而无法加载每日壁纸，Files Host 新增只读 `space_background_bing` 中继（固定 `www.bing.com/HPImageArchive.aspx`、登记市场与 `idx` 0–7、8 秒超时、64 KiB 上限、0 重定向、仅返回 `/th?` 图片地址，不接受页面传 URL／headers／凭据）；扩展入口保持直连并在失败时回退该中继。同步修复含连字符的 Fund 扩展 locale 键（会导致未打包扩展整体拒绝加载）并重建模块 i18n。验证：native-file-host 115 项、Rust workspace、Extension、模块 UI 构建／检查、`perf:native-host`（Release 2.8 MiB／4 MiB，目录 p95 44.42 ms；首轮 50.29 ms 超 0.29 ms，隔离复跑 42.65 ms、完整 `perf:check` 复跑退出 0，未改预算）、`perf:check`、standards、fmt 与 diff 通过；真实 Chrome 中打包扩展（稳定 ID）直连 Bing 得到 blob 壁纸，隔离 Core 的本机 Web 在 Archive／Volt、1280／320 px 均经中继得到壁纸且 topLeft 卡片顶边为 16 px，24 组布局矩阵与工具栏键盘可达通过。未验证真实用户已安装扩展的升级、真实网络波动、带真实工作区的扩展完整 Native 链（扩展侧用合成 Dashboard 验证）及 Windows／正式安装发布；未修改真实用户空间、持仓或凭据，未提交／推送／安装。
+
+- 2026-10-21 10:18：网页空闲恢复与断线文案修复完成：按 [ADR-0047](docs/adr/0047-web-document-connection-and-idle-resume.md) 分离 Web document 连接与业务 Surface，隐藏回收 Worker，返回自动新租约／新 sandbox；连接文案从 locale 单源生成，离线／超时／缺 key 不显示内部标识。两轮真实 Chrome／隔离 Fund 隐藏约 141 秒后 Worker=0／Surface=0，返回自动新 PID，关闭最后页面约 62 秒 Core 退出。已通过现有入口启动本地服务，8771 有 2 个活动 Surface，四项脚本与修复源码一致；未改持仓／凭据或安装配置。见 [证据](docs/development/evidence/web-idle-recovery-2026-10-21.md)。
+
+- 2026-10-20 21:00：按用户要求与 ADR-0045 退役网页配对码、弹窗、生成／交换接口和 CLI／npm 入口；浏览器授权在当前 Core 内不因闲置／固定时长撤销，保留 Cookie／CSRF／Origin、短期 Bootstrap 和独立 Surface 回收。无授权只显示非模态连接说明，不要求验证码。Rust 全仓、最终 Native、模块 UI、真实 Chrome→隔离 Core 8 组及 perf 门禁通过；未更新正在运行的旧服务或真实数据。见 [改动与验收](docs/development/evidence/browser-pairing-retirement-2026-10-20.md) 。
+
+- 2026-10-20 20:44：资讯正文／空详情修复完成：四类来源统一按保存身份抓取，公告分页与 64 KiB 截断语义、基金条目原文链接、原地加载／重试／保留摘要／取消迟到响应齐备。公开实网四来源与隔离 Fund 服务落库通过；Rust workspace 613 项、模块 UI、Chrome 8 组与最终 perf 门禁通过。未覆盖正在运行的开发安装，完整 Chrome Native 链受测试浏览器缺失限制。见 [专项证据](docs/development/evidence/information-fulltext-2026-10-20.md) 。
+
+- 2026-10-20 20:21：全局 AI 连接配置流程完成：默认模型移至页面顶部，新连接一次保存地址／协议／Keychain 凭据及首个模型，可显式设为默认；已有默认不自动替换，失败保留配置／密钥与页面草稿，失效模型明确提示。沿用模块 Broker 和 Tokenusage 单一计费 owner，无新代理或 schema。Go、最终 perf 门禁与 Chrome 8 组隔离界面检查通过；未更新真实安装或凭据，完整真实供应商链未验。见 [专项证据](docs/development/evidence/model-proxy-closeout-2026-10-20.md#全局-ai-连接配置补充2021) 。
+
+- 2026-10-20 19:43：代理退役后两项正确性缺陷已修复：缺失 usage 在汇总／趋势／排名／会话及 Tokenusage、空间、设置、顶栏中保持未知／部分语义，不再伪装免费；Responses 终态正文受 8000 字符上限，未完成响应不报告成功，usage 保留。源码／生成资源、Go 182 项、Rust workspace、模块 UI、首次集成及定向回归通过，后续顶栏独立复验通过；重复集成在既有 Widget 网络句柄处未退出，已停止并保留记录。整页 Native 浏览器链仍受候选扩展加载失败限制，真实供应商与发布未验，不扩大为整体迁移完成。见 [专项修复与证据](docs/development/evidence/model-proxy-closeout-2026-10-20.md) 。
+
+- 2026-10-20 17:45：按 [ADR-0044](docs/adr/0044-retire-model-proxy-and-direct-inference.md) 退役模型代理／路由业务：删除 Gateway、访问密钥、别名路由、账号池、OAuth 登录、代理内核、第三方工具配置注入、`third_party/cliproxyapi` 及 SDK／补丁依赖；Provider 收敛为设置内 AI 连接，内部调用由 Model Host 以 `providerId`+`modelId` 直连 OpenAI Chat／Responses、Anthropic、Gemini。Tokenusage 仍由 `model-host/internal/usage` 单一写入，新增 `usage_status` 区分报告／缺失用量，state schema 4 幂等迁移并保留历史。验证：model-host 170 项、usage／host `-race` 128 项、Extension、模块 UI 构建／检查、Rust workspace、最终 `perf:check`（含端口白名单 8766／8770／8771）与 `git diff --check` 通过；保留旧用量 schema 3→4 夹具与事件合并／EOF 冲刷回归，新增 `requested_at` UTC 归一化回归，避免本地偏移把昨晚事件误计入 today。真实 Chrome 隔离签名候选已跑通扩展入口链：Fund 预览经默认模型、Broker、Native Messaging、Core Model Session 直达可控 SSE 供应商，1 次 `/v1/chat/completions`（测试 Bearer、`stream=true`），落库 1 条 `reported/success` 10／10／20 事件，Tokenusage 显示 20 Token／缺价 `--`，8317 无监听，第二 Surface 关闭后第一页仍可交互；同时修复设置控制器空引用。本机 Web 独立断链、真实供应商、安装包／发布载荷、平台与人工验收未做；未修改真实用户库／Keychain／工具配置（诊断只读扫描本地日志到临时库并已删除），未提交或推送。
+
 - 2026-10-18 14:23：双入口本轮缺陷修复已完成相关回归：事件／配对恢复、基金表单保留、SSE 权限、大文件导入、跨入口持仓刷新、订单重试幂等、定投状态及只读快照冲突；同步候选构建顺序和原始证据。整体迁移仍在进行，见 [收尾核验](/Users/ldh/Downloads/project/plan/memory/dual-entry-migration/evidence/20261018-closeout/acceptance.md) 。
 
 - 2026-10-18 09:19：按用户要求统一长测频率：现行技术 04、AGENTS／文档入口及双入口施工包明确「一次有效验收、后续按影响复用」，普通功能／样式／文档、重新构建或摘要变化不自动触发；必要补验先定位和短测，禁止盲目循环至绿。5 个 Release 性能样本不代表 5 次长测；历史失败和现有未验状态保持。本次仅改文档，未启动长测。见 [现行规则](docs/standards/technical/04-performance.md#长测频率与结果复用) 。
-
 
 - 2026-10-15 09:41：Model Host 路由内核由 CLIProxyAPI v7.3.17 迁移至上游 v8.0.28（commit `0d18d3b365be000eeaee7de4615f9da596b2059d`）；同步 v8 SDK 导入、依赖、编译版本和可重放的 Natives 补丁，保留有界用量、Antigravity 地域重试、静态模型及 JSON→SSE 兼容。开发更新器现支持同主版本 v8 更新并继续阻止未来跨主版本直接换装；未改 schema、真实配置、Keychain、用户数据或供应商凭据。见 [ADR-0041](docs/adr/0041-cliproxyapi-v8-kernel-migration.md) 与 [内核说明](third_party/cliproxyapi/NATIVES_FORK.md) 。
 
@@ -35,37 +69,35 @@
 
 - 2026-10-14 22:32：首页资产分布／组合设置固定为同高 480 px，尺寸通过 Fund 主题变量维护；仅正文纵向滚动，标题／编辑动作常驻；可键盘聚焦滚动，刷新保留正文滚动位置。测试及验证脚本未修改。
 
-- 2026-10-14 18:36：首页／资讯／AI 选材统一可读来源、摘要／完整／截断提示及北京时间；资讯详情不再把截断正文标作完整摘录。基金详情按当日日期识别正式收益，过期收益不阻止当天估算，正式当日净值不再被标作估算。仅改生产 UI 与生成资源，测试／验证脚本未修改。
-
-- 2026-10-14 12:27：资讯恢复 Demo 阅读层次及默认收起的高级筛选；全部整合公开财经与持仓／自选，新增财经范围。接入东方财富四类财经栏目，有界采集、主题排序、来源开关与配置导入一致，无持仓也有真实资讯。未修改真实用户库。见 [实现与证据](/Users/ldh/Downloads/project/plan/memory/evidence/20261014-information-layout/README.md) 。
-
-- 2026-10-13 21:29：持仓「账户管理与持仓汇总」常驻展示；首页原待到账按用户确认改为证券今日收益，与持仓顶部／卡片同日正式及基金估算口径对齐，正负／未知／覆盖状态分开。基金卡片和详情新增真实公开主题／跟踪指数与来源；拒绝热门推荐冒充归属，独立资料 owner 有界、取消、缓存、重试及焦点／隐私齐备。生成 UI、Runtime 与开发源一致，未读写真实账本或提交／推送。见 [专项证据](/Users/ldh/Downloads/project/plan/memory/evidence/20261013-holdings-daily-themes/README.md) 。
-
-- 2026-10-13 20:46：持仓管理文案、首次切页取消不恢复及行情竞争账本读取修复；已加载卡片保留。基金当日公布净值／涨幅优先，待公布阶段沿现有可见页面 owner 每 60 秒检查；最近季度公开境内股票与同日报价生成部分贡献参考收益／净值，标明覆盖率及未覆盖不变假设，不写入确认收益、历史与目标。源码、生成 UI、Runtime 与开发源一致，未操作真实投资库或提交／推送。见 [专项证据](/Users/ldh/Downloads/project/plan/memory/evidence/20261013-positions-current-data/README.md) 。
-
-- 2026-10-13 18:35：投资资讯空数据修复：独立页原先只读缓存、没有采集入口，现默认全部并首次获取持仓／自选；启用来源未采集或尝试超过 15 分钟才自动取一次，手动刷新／取消／下一批复用现有任务。结果／错误在当前页显示，语言重绘、失败保留、隐藏／离开取消和游标范围绑定齐备；保留来源禁用，不自动 AI。源码、生成 UI、Runtime 与本地开发源同步，未读写真实账本、未提交／推送。见 [资讯证据](/Users/ldh/Downloads/project/plan/memory/evidence/20261013-information-data/README.md) 。
-
-- 2026-10-13 16:49：投资全部 14 个生产视图及维护弹窗按确认 Demo 继续还原：资产卡片、持仓次级管理、自选分组、真实市场候选、股票四卡摘要与记录／资讯／研究、基金切换、独立资讯／历史、设置概览、流水检索、导入步骤和 NAV。修复机会重绘丢失筛选按钮焦点、资讯详情抓取错误在当前弹窗不可见；保留真实数据 owner、精确金额及隐私。UI／Runtime／本地开发源摘要一致，未提交或推送。见 [全页面核验](docs/development/evidence/investment-remediation-2026-10-11.md)、[对照预览](/Users/ldh/Downloads/project/demo/natives/investment-all-pages-review.html) 。
-
-- 2026-10-12 22:54：投资视觉与 UE 复刻更正：按确认 Demo 恢复居中容器／导航、共同字体与卡片角色、首页顺序／等高 AI、水位标题比例／固定刻度、持仓卡牌与基金详情；额外能力折叠保留，日期浮层离开触发点安全收起。生成 UI／隔离候选／开发源同步，79 个文件摘要一致，旧页面需重载重开。见 [核验](docs/development/evidence/investment-remediation-2026-10-11.md)。
-
-- 2026-10-12 20:13：投资独立整改本地交付：基金四部分详情与历史真实数量／费用／校准、两期公开披露比较及正确证券身份、v28 资讯决定绑定报告与历史回看、默认统一 AI／预览／取消／保存幂等、股票分页与身份、组合展开状态／说明、水位、期初恢复、主题按钮与空间安全区。当前源码／生成 UI 与隔离受验签候选一致；未更新真实安装源或真实投资库、未提交／推送。分项与剩余人工范围见 [证据](docs/development/evidence/investment-remediation-2026-10-11.md) 。
-
-- 2026-10-10 21:25：自选单目标移动更正：单项／批量只选一次目标，打开实时读取完整分组，来源组不列为目标；全部统一归目标，具体组仅移当前归属；已有目标合并保留元信息，原子回滚／409 复核／失败重试／取消与语言保留。复用行同步身份及详情回调，清理旧来源选择文案；源码／dist／本地开发源同步，领域／全仓／真实 Native 与最终门禁通过，未触真实用户库。入口：[核验](/Users/ldh/Downloads/project/plan/des/evidence/20261010-watchlist-one-target/checks.json) 。
-
-- 2026-10-10 20:57：趋势分析按用户更正保留老版外观，仅修搜索／报价分行、工具分组和正常图表比例：宽窗保留工具与两栏，图表独立滚动；窄窗上下，容器 resize 同实例／缩放并重投影绘图锚点，pagehide／BFCache 清理恢复。主题高度角色／源码／dist／本地开发源同步；真实扩展和合成各 16 布局组合、专注／绘图／NAV 与最终门禁通过，无行情／指标算法或真实用户数据变更。入口：[核验](/Users/ldh/Downloads/project/plan/des/evidence/20261010-trends-layout/checks.json) 。
-
-- 2026-10-10 20:18：首页收益拆为股票／基金（场内＋场外）／线下投资／全资产四卡：分类账本、清仓已实现及独立缺口；线下累计账面收益／净回收／待到账，未知成本或退出历史不完整标待核实；全资产今日／所选期间／TWR／仓位保留。四／两／单列、双语和隐私通过，源码／生成 UI／本地开发源同步；无 schema 或真实用户数据变更。入口：[核验](/Users/ldh/Downloads/project/plan/des/evidence/20261010-home-income-cards/checks.json) 。
-
-- 2026-10-10 20:18：自选单条／批量移动本地门禁收口：前轮单项／批量／真实 Chrome／原子回滚验证保持，最新 workspace 与串行 perf:check（Files p95 38.701041 ms＜50 ms）通过，本地源同步。保留原 65.712209／50.870209 ms 失败，不宣称其根因修复；仅本地验收。入口：[原专项及后续复验](/Users/ldh/Downloads/project/plan/des/evidence/20261010-watchlist-moves/checks.json) 。
-
-- 2026-10-10 18:54：自选默认全部及分组栏修复：跨组 symbol 去重、实际组写入与增删调用统一；分组导航／工具两行、8px token 间距、36px 控件与窄窗换行，复用按钮避免刷新失焦。生成 UI／本地开发源同步；真实 Native 隔离账本八组矩阵和最终门禁通过，未触碰真实用户库。入口：[核验](/Users/ldh/Downloads/project/plan/des/evidence/20261010-watchlist-groups/checks.json) 。
-
-- 2026-10-10 18:42：资产走势空白修复：单个真实点从边缘移至可读估值卡，显示金额／日期；历史为空时区分当前已估值部分、纯历史区间与隐私，不补造曲线或自动保存。提供记录今日估值入口、聚焦既有核对表单、默认不勾核对，取消零写入。Home UI／双语／生成资源、本地开发源同步；最终门禁与真实 Native 隔离账本通过，未碰真实数据。入口：[核验](/Users/ldh/Downloads/project/plan/des/evidence/20261010-home-history/checks.json) 。
-
-- 2026-10-09 20:37：首页全资产净收益与区间修复：用户指定全资产为主，真实基线／净投入／当前只读参考与部分覆盖，不伪造核对快照；今天／本月／今年／以来／自定义联动收益、历史、归因和配置基准，移除固定 60 日及误绑定。单个原生双月日期 Popover，选完自动应用、窄窗／键盘／焦点与失败保留；开市消费配置刷新周期及行情更新。最终门禁与真实 Native 隔离账本通过，本地源码／Runtime／产品源同步，未碰真实账本。入口：[证据](/Users/ldh/Downloads/project/plan/des/evidence/20261009-home-ranges/checks.json) 。
-
 ## 最近验证
+
+- 2026-10-24 08:19：解锁后用原生 Chrome 补验本机 Web 投资页：资讯详情自动取得真实正文、点击原文按钮打开对应东方财富文章；首页“自选 → 查看全部”后资讯页保留自选筛选，目标历史名称／日期说明已核对。仅补验记录，未追加生产代码修改，未再次发送真实持仓给 AI；资讯采集仍明确提示 `item_limit_reached`，不代表全量返回。见 [补验记录](docs/development/evidence/home-functional-fixes-2026-10-23.md#解锁后原生-chrome-补验2026-10-24-0819)。
+
+- 2026-10-23 20:20：首页全页复检：真实 Chrome 本地 Web 对照同一快照核对财富四量、收益／日估算、分组／目标、历史末点、资讯去重与三态隐私；四档宽度（1024／768／560／390）、中英文、区间（含双击日期自定义）、资讯范围／详情／收藏往返、目标／分类／现金／规则／资料／报告弹窗、决策历史与持仓跳转通过，正常交互 `errors=[]`。修复首页资讯默认范围、日期型公告时间、北证指数展示与部分来源未完整返回提示。`modules:ui:build/check`、`perf:check`（含 Extension／Files／Apps／边界／安全／端口）、`git diff --check` 退出 0；本轮未改 Rust，未重跑 workspace。页面加载时基准请求在账本版本推进后出现一次 409，客户端按既有冲突路径重试成功。未保存目标／现金／分组／规则变更，未做扩展 tab、真实 AI 推理、人工读屏与写路径复验；见 [复检记录](docs/development/evidence/home-functional-fixes-2026-10-23.md#首页全页复检2026-10-23-2020)。
+
+- 2026-10-23 19:49：首页功能修复完成真实路径复验：Fund 392 项、Rust workspace 28 目标／644 passed／0 failed、fmt、模块 UI build/check、最终 perf:check（含 Extension／Files／Apps／边界／安全）通过。真实 Chrome 本地 Web → Fund 页面核对已投资市值与详情一致（9,419.33／估值完整／待核实项无）、A／HK／US 上游时间（卡片完整显示、无溢出）、目标弹窗单条历史说明、资讯 50 条／50 条唯一标题，以及原文链接点击与 Enter 均打开真实 URL，`errors=[]`。既有 `recovery.test.mjs` 固定 tick 等待改为有界观察首个事件流后通过，未放宽断言。扩展 tab 外链未再次人工打开，见 [记录](docs/development/evidence/home-functional-fixes-2026-10-23.md)。
+
+- 2026-10-23 04:49：历史走势 API 先复现 4 天数据只显示 1 点，再修复通过。Rust workspace 28 套件／638 passed／0 failed／13 ignored，fmt、模块 UI build/check、最终 perf:check（含 Extension／Files／Apps，目录 p95 39.359 ms）通过。Chrome 专项与隔离真实 Native 8 组覆盖总额 30→33、分类 10→13／20 平线、缺价、刷新、GET 只读、隐私与键盘；截图已检查，errors=[]。报告 `.tmp/holding-history/run-rz7XPL/report.json`，日志 `.tmp/holding-history/workspace.log`、`perf.log`。真实用户库仅核对计数／日期，未修改；未替换运行中开发源，未做 Windows／人工读屏／新长测。见 [边界及证据](docs/development/evidence/asset-holding-history-2026-10-23.md)。
+
+- 2026-10-22 21:49：日内走势当前源码 `cargo test --workspace` 28 套件／633 passed／0 failed／13 ignored，fmt、UI build/check、最终 `perf:check`（含 Extension／Files／Apps；目录 p95 45.125 ms）、standards／diff 通过。Chrome 专项覆盖日内上升／平线／缺口、新分类、零／未知、隐私、失败保留／隐藏取消／GET 只读及 8 组主题语言宽度；真实签名 Core → Runtime → Fund SQLite 跨真实分钟确认总资产 10,000→11,000、分类 8,000→9,000、另一分类 2,000 平线，重载保留且手动收益快照为 0，`pageerror=[]`，截图已检查。报告 `.tmp/intraday-history/run-91okgz/report.json`，全仓／集成日志 `.tmp/intraday-history/workspace-final.log`、`perf-final.log`。保留首轮旧 Core 导致的 Native 超时及旧全页脚本退役区块断言失败；未以专项冒充该旧脚本或整版产品通过。未做 Windows／人工读屏／新长测及真实用户库迁移，见 [边界与证据](docs/development/evidence/asset-valuation-intraday-2026-10-22.md)。
+
+- 2026-10-22 21:18：分类估值红例先复现“选中 250.00 却显示总资产 123,456.78”，修复后首页／历史 Chrome 专项通过，覆盖 Archive／Volt、中英文、1280／320 px、零值／未知／历史缺口／隐藏与键盘。真实签名隔离 Core → Runtime → SQLite 以表单配置分类，确认 8,000.00／2,000.00 与总资产 10,000.00，单点无伪造曲线，刷新持久化、8 组布局及 `pageerror=[]`；报告 `.tmp/history-series-completion/run-smIae8/report.json`，相关截图已检查。`modules:ui:build`、最终 `perf:check`（含 Extension／Files／模块 UI／Apps；目录 p95 39.298 ms）通过，日志 `.tmp/history-series-completion/perf-final.log`；本轮完整门禁通过不改变此前 Files 偶发失败及根因未确认的事实。未跑长测／Windows／人工读屏，未替换真实旧开发进程。
+
+- 2026-10-22 21:00：启动恢复验证：`npm ci --include=dev --no-audit --no-fund` 成功；Node 20.20.2 与 22.23.2 下 esbuild 导入及真实 transform 均通过；`npm start -- --no-open` 在 Node 20 下达到 dev／Web ready，`GET /healthz` 返回 `ok:true`，`npm run web:open` 返回 `opened_web`。开发进程保留运行，未重复全仓功能／性能测试，未声称浏览器已渲染。锁文件 diff 为空；standards 与 diff 检查见本轮结果。
+
+- 2026-10-22 10:38：收益卡片合并：UI 构建、`apps:check`（含模块 UI）、首页专项 8 组、历史与资产配置回归、真实隔离 Web → Fund SQLite 8 组、`perf:model-host`、standards／diff 通过。Native 报告 `.tmp/performance-card-merge/run-cmO6lt/report.json`：真实区间切换、卡片顺序、分类目标保存／重开／刷新通过，pageerror 为空，截图已检查。完整 `perf:check` 两次在本次未修改的 Files 目录性能项失败：p95 50.581／91.181 ms＞50 ms；独立同项 43.450 ms 通过，但不替代完整门禁。日志保留在 `.tmp/performance-card-merge/` 的 `perf-final.log`、`perf-serial.log`、`files-isolated.log`；未改 Files、预算或断言，不声明根因已确认。Runtime 已重新编译嵌入 dist；未跑长测／Windows／人工读屏，未替换真实旧开发源。见 [专项测试](scripts/modules/home-insights-browser.test.mjs)。
+
+- 2026-10-21 22:22：资产配置条形与右侧留白复验：新增回归先复现实际 50% 却绘制目标 60%／40%，修复后 Chrome 8 组、0%／100%／未知／隐私及 16 px 强制滚动条边界断言通过；真实隔离 Web → Fund SQLite 8 组确认 80%／20% 实际填色、目标修改和刷新持久化通过。`modules:ui:build`、最终串行 `perf:check`（含 Extension／模块 UI／Files／Apps，Files p95 39.150 ms）、standards 与 diff 检查通过。未改 Rust 业务，无长测／Windows／人工读屏，未替换真实旧开发进程。见 [记录](docs/development/evidence/asset-allocation-merge-2026-10-21.md)。
+
+- 2026-10-21 10:18：空闲恢复：Rust workspace 27 suites／618 passed／0 failed／13 ignored，最终 Native 110 项、fmt、模块 UI build/check、串行最终 perf:check（含 Extension／Files／Apps／边界／安全）、standards／diff 通过；真实 Chrome 8 组离线文案／键盘及两轮 Fund 回收→恢复→Core 退出通过。Release 同隔离 SSE、每版 60 秒／5 窗口，after Core RSS max=6064 KiB、CPU max=0.0832%；保留首轮循环依赖、夹具环境、Files p95 51.8 ms 和隔离启动失败；最终串行 Files p95=45.126 ms。完整长测／Windows／人工用户屏幕未验，见 [专项记录](docs/development/evidence/web-idle-recovery-2026-10-21.md)。
+
+- 2026-10-20 21:00：配对退役：旧闲置期限红例转绿，Rust workspace 614 项／0 失败、最终 Native 109 项、fmt、模块 UI build/check、平台会话与最终 perf:check／Extension／Files／Apps 通过；真实 Chrome／HTTP 8 组验证无配对表单、刷新复用、注销拒绝、启动恢复、键盘及原有限速，未放宽安全规则。部署／Windows 与整版长测未验，见 [专项证据](docs/development/evidence/browser-pairing-retirement-2026-10-20.md) 。
+
+- 2026-10-20 20:44：资讯修复：Rust workspace 27 suites／613 passed／0 failed／13 ignored、fmt、最终 Fund package、模块 UI build/check、perf:check／Extension／Files／Apps 及 diff 通过；正文单测、公开四来源、真实隔离 service→正文任务→落库→详情及 Chrome 8 组失败／缓存／键盘／关闭迟到回归通过。真实投资库与完整扩展安装链未验，见 [记录](docs/development/evidence/information-fulltext-2026-10-20.md) 。
+
+- 2026-10-20 20:21：全局 AI 连接：Go 190 项／13 packages、Go 格式检查、`perf:check`（含 Extension／Files／Apps）通过；生产设置 view/controller 的 Chrome 隔离 API fixture 覆盖双主题／双语／宽窄共 8 组及键盘、失败保留草稿、原默认保留、不可用提示。未把 fixture 当作真实 Native 或供应商验收。见 [证据](docs/development/evidence/model-proxy-closeout-2026-10-20.md#全局-ai-连接配置补充2021) 。
+
+- 2026-10-20 19:43：用量／直连修复先复现两项红例后通过；Go 182 项／13 packages、Rust workspace／fmt、模块 UI build/check、首次 perf:check（含 Extension／Apps）、diff 通过，后续顶栏独立复验通过。定向 race 10 项、host／inference race、顶栏原生与 Chrome 面板、Tokenusage 8 组主题／语言／窗口及键盘通过；单独真实 Native Messaging→可控供应商→1 条 missing 事件→汇总／明细通过。保留全包 race 的 10 万事件 ScaleProbe 超时、Chrome 扩展 ERR_BLOCKED_BY_CLIENT 及重复集成 Widget 断言后网络句柄未退出（终止码 143）；不冒充完整双入口、真实供应商或发布验收。见 [验收及限制](docs/development/evidence/model-proxy-closeout-2026-10-20.md) 。
 
 - 2026-10-20 09:49：PDF 冻结源码后 perf:check 退出 0，包含 Extension／Apps／规模／主题／双语及安全门禁；新增 controller 回归通过。双入口当前 Blob 原生成功渲染、单多页、翻页／125% 缩放、适宽、关闭释放、Host 拒绝坏 magic／超限、真实禁用 reader、HTML 脚本隔离及 16 布局通过。Files 导入／移动／副本／隔离回收站／PNG／WAV 相关闭环复跑通过；搜索栏人工结果未验，不以按键或外框冒充成功。见 [PDF 证据](/Users/ldh/Downloads/project/plan/memory/dual-entry-migration/evidence/20261018-full-acceptance/pdf-acceptance.md) 。
 
@@ -78,31 +110,3 @@
 - 2026-10-18 01:20：双入口续修复验：`perf:check` 通过（bundle 359598B／drift 20426；native 39.86ms；Model 776.91ms）；本地安装候选已组装并审计 payload；30 分钟真实标签页运行中止（486 轮/173 样本）；9 轮 smoke E +13.64%／W +6.50%；无有效最终长测；200 文件批处理进度/取消/解压取消通过；Web BFCache persisted 恢复通过，Extension 未进入 BFCache；入口 gzip E 159888/98785、W 164207/103104B；SQL Core 10/10/10、Fund 2/0/0；UI 64.7／63.6ms、缓存 85.8／141.2ms、FPS 60.97／60.51。本地候选已组装；真实安装、全业务弹窗、SQL 时长、真实 AI 仍未验。见 [证据](/Users/ldh/Downloads/project/plan/memory/dual-entry-migration/evidence/20261017-final-continuation/acceptance.md) 。
 
 - 2026-10-17 16:12：双入口关键修复分项复验：Rust workspace／fmt、Extension、模块 UI／契约／边界／鉴权与最终 perf 门禁通过；保留契约文档／旧鉴权脚本及 pending Surface 关闭竞态的首次失败，后者红→绿并覆盖重开竞态。真实隔离 Chrome E/W 共享 Fund、关闭一页另一页继续；224 张投资主视图截图布局溢出 0、错误 0，差异对照仍未整体验收。真实协议观察 Fund 1 个 Worker、加 Tokenusage 后 2 个，所有 owner 释放约 60.81 秒后 0 个；第三卡和私有任务／令牌边界通过。Release Core 空闲 60 秒前后各 5 样本 CPU max 0.7499%→0.3832%、after RSS max 6752 KiB；串行 RPC p95 2.94→6.89 ms，10k 目录 p95 49.43 ms，未放宽预算。完整候选 handoff、Core 偏好／事件／其他模块闭环、Chrome 30 分钟和查询／连接计数未完成；没有真实用户库、提交／push／系统安装。见 [本轮证据](/Users/ldh/Downloads/project/plan/memory/dual-entry-migration/evidence/20261017-critical-fixes-1559/acceptance.md) 。
-
-- 2026-10-16 19:51：macOS accepted socket 断连先在真实 Chrome 复现；修正后隔离 Web 配对、Space 四项 Core RPC、双网页续租／关闭、70 秒可见停留以及中英文 App Center／投资 iframe／文件页真实链通过。首次最终规模门禁发现 715 行服务路由违规，按 Surface 职责拆分后复跑架构、Rust workspace／fmt、Extension、perf:check、standards 和 diff 通过。产品源静态页面烟测通过；未做扩展与 Web 同模块 Worker、投资全页、完整安装候选及 30 分钟长测，不计整体验收。见 [本轮证据](/Users/ldh/Downloads/project/plan/memory/dual-entry-migration/evidence/20261016-followup-1933/acceptance.md) 。
-
-- 2026-10-16 14:58：双入口后续复核：全仓 Rust、fmt、Extension、模块 UI build/check、Model Host、最终 perf:check 和 diff 通过；真实无扩展 Chrome 隔离页面验证 Web 配对、Space RPC、双主题／双语／1440 和 320 px 与键盘焦点。Release 目录性能首轮及复跑分别 134.98／140.89 ms 超 50 ms，隔离修复后 43.13／43.21 ms；单服务 58 秒空闲 CPU 0.74%。完整双入口同开、投资 14 视图、资源 30 分钟与 5 个 Release 样本未验证，不计通过。见 [证据](/Users/ldh/Downloads/project/plan/memory/dual-entry-migration/evidence/20261016-followup-1431/acceptance.md) 。
-
-- 2026-10-16 03:50：双入口独立复核：standards、architecture、UI、Apps、Extension、Rust fmt、当前服务编译及服务／会话各 6 个现有单测通过；5 项独立安全／SSE／多 Surface 契约探针全部失败，原始输出保留。真实无扩展 Chrome 经当前生产 HTTP／资源处理器、内存鉴权及无数据库 owner 的诊断链复现 Model 不支持、SSE 404、配对语言和焦点缺陷；不冒充真实账本／完整产品链。旧 CSV、图片摘要与测试动作逐项核对，发现直接填 PASS、复制截图及未测性能；原集成脚本会打开默认用户 Core 库，未直接执行。Release 长测／全页矩阵／完整候选及其他平台未测，不计通过。见 [证据](/Users/ldh/Downloads/project/plan/memory/dual-entry-migration/evidence/20261016-independent-audit-0347/acceptance.md) 。
-
-- 2026-10-15 09:41：v8.0.28 补丁从干净上游重放后与生产 `internal/`、`sdk/` 逐文件一致；`model:host:check` 218 项／14 包、SDK usage 与 OpenAICompat／Antigravity 定向测试、Model Host 构建及 `perf:check` 通过（首快照 809.12 ms、RSS 121296 KiB、空闲 CPU 0%、EOF 11.06 ms、Files p95 39.209 ms）。隔离 Native 报告 `kernelVersion=v8.0.28`；复用既有 Keychain 引用的真实 SenseNova 路由以公开合成提示完成 waiting→reasoning→writing，未发送持仓或修改配置。完整 executor 套件仍有上游两项 `thinkingLevel`／`thinkingBudget` 断言失败，已确认干净 v8.0.28 同样复现，不冒充全量上游测试通过；现有测试只迁移 v8 导入与版本夹具，未弱化断言。
-
-- 2026-10-14 22:56：Go 218 项／14 包、SDK OpenAICompat 与补丁重放、首页 Chrome、真实隔离 Native AI 完整保存／决定／回看及 12 布局组合通过；真实商汤合成公开证据 7 秒返回 JSON，未发送持仓。最终 UI build／perf:check／源摘要一致；保留超时、JSON 兼容、准备竞态和三轮资源／规模失败。v8 主版本迁移未做，旧 worker 需重启开发会话。见 [记录](/Users/ldh/Downloads/project/plan/memory/evidence/20261014-news-ai-redesign/README.md) 。
-
-- 2026-10-14 22:32：Chrome 实际加载生产 HTML／CSS，Archive／Volt×1280／320 四组合验证卡高 480 px、正文溢出与 End 键滚动、标题可见及无横向溢出；首次即时取 scrollTop 早于浏览器滚动完成，等待实际滚动后通过。UI build 与 perf:check（包含 UI／Extension／Apps）通过，正式开发源已刷新。隔离长列表仅用于布局验证，未操作真实投资库。
-
-- 2026-10-14 18:36：现有资讯、基金详情、首页 Chrome 检查通过；原有 Native --inline-ai 完成预览→显式推理→保存→决定→历史及 12 主题／语言／宽度组合，errors=[]（隔离账本、合成供应商）。UI build、perf:check（包含 UI／Extension／Apps）、standards、diff 通过，开发源 UI／清单一致。脚本内容摘要逐一确认无改动；未测试真实供应商与真实用户库，本轮未改 Rust 业务。
-
-- 2026-10-14 12:27：资讯专项、首页／112 布局回归、真实隔离 Native 8 组合通过；真实财经 30 条、关联新闻 13 条。最终 fmt／workspace、UI build/check、perf:check（p95 43.098417 ms）、开发源摘要一致性通过。保留初次配置往返失败并修复，网络取消／409 分列；真实 AI／用户库／人工平台项未验。见 [记录](/Users/ldh/Downloads/project/plan/memory/evidence/20261014-information-layout/README.md) 。
-
-- 2026-10-13 21:29：汇总折叠及首页读线下应收红→绿；主题身份／推荐排除与 Chrome 空／错／重试／焦点／隐私通过。真实隔离 Native 验证首页／持仓 -4.30 对齐、场内主题与场外主题／公开红利低波指数及初次切页恢复。持仓／首页／基金／112 布局、fmt／workspace、UI build/check、Extension 与串行 perf 通过（Files p95 42.730292 ms＜50 ms），开发源摘要一致。保留只读快照／旧视觉夹具及未指定测试浏览器路径的失败事实；没有真实用户库／开市估算／人工平台验收。见 [范围与结果](/Users/ldh/Downloads/project/plan/memory/evidence/20261013-holdings-daily-themes/README.md) 。
-
-- 2026-10-13 20:46：文案归属、切页／行情竞争及净值重试红→绿；季度估算 2 项、持仓／基金／首页 Chrome、112 布局组合、真实隔离 Native 切页与公开当日 NAV、fmt／workspace、UI build/check、串行 perf 全通过（Files p95 40.703333 ms＜50 ms），开发源摘要一致。正式源样本已公布净值，开市现场估算未观察；首次空 Core 初始化锁失败保留，测试预初始化不代表生产并发修复。真实用户页面因工具 policy 失败未检查，未读取实际账本。见 [证据与边界](/Users/ldh/Downloads/project/plan/memory/evidence/20261013-positions-current-data/README.md) 。
-
-- 2026-10-13 18:38：真实顶栏采集链：准确匹配开发版顶栏／worker 后正常停止，完整 SQLite backup 保存 ~/.natives/backups/usage-20261013-174202-before-codex-today-repair.db（权限 0600、完整性通过），仅今日 2 个获授权会话事务修复；其他事件／非游标表与备份逐行一致，integrity_check=ok。新 Go／clang 二进制构建并重启；实际 overview（Asia/Shanghai）113,579,341 Token／458 条请求，455 条 Codex 响应与来源 usage、模型、缓存分桶逐条一致（0 差异），再次读取增量 0；生产原生数据函数输出 113.6M · --。Cua 不识别无应用包的 natives-statusbar，未直接读屏；较早历史未修复、缺单价金额仍 unknown，未做上游／发布或其他用户库操作。
-
-- 2026-10-13 18:35：资讯首次采集回归从 0≠1 红到绿；缓存／手动刷新／取消／游标范围／失败保留／禁用／隐私检查通过。真实 Chrome→Native→公开适配器隔离链获取 12 条近期文章，8 个主题／语言／宽窄组合、键盘刷新及隐私通过，errors=[]。首页回归、14 页 112 组合、UI build/check、最终 perf:check（Files p95 42.335167 ms＜50 ms）、standards／diff 通过；本轮未修改 Rust／schema，未重跑全仓或真实用户库／AI。英语状态残留及测试中缺少首页动态按钮的失败已保留并修正；来源可用性以采集结果为准。见 [证据](/Users/ldh/Downloads/project/plan/memory/evidence/20261013-information-data/README.md) 。
-
-- 2026-10-13 17:16：105B 真实计量整改：实测脱敏 JSONL 回放红（150,126,366,521）→绿（75,765,501），最小不等双计量器／单响应／升级前缀恢复／重启／归档去重通过；Go 全套 219 项／14 packages（隔离 config dir、GOFLAGS=-p=1）、gofmt、standards、diff 通过。最终串行 perf:check（含 extension:check／perf:files／apps:check）退出 0，Files p95 44.586ms，Model snapshot 762.97ms；保留首轮并行 1507.49ms＞1500ms 失败与独立 746.64ms 通过，不宣称性能改善。真实用量库只读备份副本试修约 150.17B→98.74M，其他工具逐行一致，SQLite integrity_check=ok；真实修改／重启待授权，较早历史未修复。
-
-- 2026-10-13 16:51：顶栏复查：模型／续读／部分费用／自动刷新红→绿；用量 99 项，全量 Go 217 项／14 包（GOFLAGS=-p=1、隔离 config root）通过；Objective-C 数据／原生真实 NSStatusItem owner／Chrome 生产面板、gofmt、clang 调试构建、任务 diff、standards 通过。原生覆盖单飞、旧面板／旧 worker 回调、缺额度、英文窗口分类与跳转白名单；Chrome 覆盖空周期、未知金额、估算标记、额度先到、趋势顺序、刷新通知及键盘。串行最终 perf:check 全通过，Files p95 41.659 ms、Model 首快照 822.29 ms、idle CPU 0%、RSS 70928 KiB、EOF 47.14 ms。保留首次并行运行首快照 1563.44 ms＞1500 ms 的失败；独立复验 739.73 ms 与最终串行通过不证明波动根因或性能提升。Namespace／加号时区 fixture 修正后通过；未弱化规则。真实安装／历史库／上游与多屏人工验收未做；投资文件未由本任务改动。

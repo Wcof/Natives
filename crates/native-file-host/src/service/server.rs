@@ -12,7 +12,6 @@ use super::surface_routes::handle_surfaces;
 use crate::app_store::AppStore;
 use crate::workspace_store::WorkspaceStore;
 use app_runtime_core::http::HttpRequest;
-use app_runtime_core::session::constant_time_eq;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::io;
@@ -166,7 +165,13 @@ fn handle_native_ping(stream: &mut TcpStream, state: &ServiceState, req: &HttpRe
 
 fn handle_session_exchange(stream: &mut TcpStream, state: &ServiceState, req: &HttpRequest) {
     state.touch_activity();
-    if !validate_origin(req, state.port) {
+    if !validate_origin(req, state.port)
+        || req
+            .header("content-type")
+            .and_then(|value| value.split(';').next())
+            .map(str::trim)
+            != Some("application/json")
+    {
         let _ = write_http_raw(
             stream,
             403,
@@ -183,10 +188,13 @@ fn handle_session_exchange(stream: &mut TcpStream, state: &ServiceState, req: &H
         return;
     };
 
-    let exchange_res = if let Some(token) = payload.get("bootstrapToken").and_then(Value::as_str) {
+    let exchange_res = if let Some(token) = payload
+        .as_object()
+        .filter(|object| object.len() == 1)
+        .and_then(|object| object.get("bootstrapToken"))
+        .and_then(Value::as_str)
+    {
         state.auth.lock().unwrap().exchange_bootstrap(token)
-    } else if let Some(code) = payload.get("pairingCode").and_then(Value::as_str) {
-        state.auth.lock().unwrap().exchange_pairing_code(code)
     } else {
         Err("ERR_PARAM_REQUIRED")
     };
@@ -224,35 +232,6 @@ fn handle_session_exchange(stream: &mut TcpStream, state: &ServiceState, req: &H
             let body = json!({ "ok": false, "error": err });
             let bytes = serde_json::to_vec(&body).unwrap_or_default();
             let _ = write_http_raw(stream, 401, "Unauthorized", "application/json", &[], &bytes);
-        }
-    }
-}
-
-fn handle_session_pair_code(stream: &mut TcpStream, state: &ServiceState, req: &HttpRequest) {
-    state.touch_activity();
-    let provided_secret = req.header("x-natives-relay-secret").unwrap_or("");
-    if provided_secret.is_empty() || !constant_time_eq(provided_secret, &state.relay_secret) {
-        let _ = write_http_raw(
-            stream,
-            403,
-            "Forbidden",
-            "text/plain",
-            &[],
-            b"unauthorized pair-code access",
-        );
-        return;
-    }
-
-    match state.auth.lock().unwrap().generate_pairing_code() {
-        Ok(code) => {
-            let body = json!({ "ok": true, "pairingCode": code });
-            let bytes = serde_json::to_vec(&body).unwrap_or_default();
-            let _ = write_http_raw(stream, 200, "OK", "application/json", &[], &bytes);
-        }
-        Err(err) => {
-            let body = json!({ "ok": false, "error": err });
-            let bytes = serde_json::to_vec(&body).unwrap_or_default();
-            let _ = write_http_raw(stream, 500, "Error", "application/json", &[], &bytes);
         }
     }
 }
@@ -375,8 +354,6 @@ pub(crate) fn handle_client(mut stream: TcpStream, state: Arc<ServiceState>) {
         handle_relay(&mut stream, &state, &req);
     } else if route == "/web/session/exchange" && req.method == "POST" {
         handle_session_exchange(&mut stream, &state, &req);
-    } else if route == "/web/session/pair-code" && req.method == "POST" {
-        handle_session_pair_code(&mut stream, &state, &req);
     } else if route == "/web/session" {
         handle_session_check(&mut stream, &state, &req);
     } else if route.starts_with("/web/surfaces") {

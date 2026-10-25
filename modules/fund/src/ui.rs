@@ -127,6 +127,8 @@ const BUNDLE_JS: &str = concat!(
     "\n",
     include_str!("../ui/dist/home-manage.js"),
     "\n",
+    include_str!("../ui/dist/home-information-detail.js"),
+    "\n",
     include_str!("../ui/dist/home-evidence.js"),
     include_str!("../ui/dist/home-report-feedback.js"),
     "\n",

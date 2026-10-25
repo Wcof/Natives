@@ -43,7 +43,7 @@ async function information(){
  try{const data=await api('GET','/api/information/items?scope=holdings&asset='+encodeURIComponent('security:CN:stock:'+h.fundCode),null,{signal:controller.signal});if(own!==generation||currentTab!=='information'||home.privacy())return;
  root.innerHTML=(data.items||[]).map(item=>`<article class="info-item"><h3>${esc(item.title)}</h3><small>${esc(item.sourceId)} · ${esc(item.publishedAt||t('fundHomeSourceTimestampUnknown'))}</small><p>${esc(item.summary||t('fundHomeContentNotRetrieved'))}</p><button type="button" data-info="${item.id}">${esc(t('fundHomeOpenSource'))}</button><button type="button" data-ai="${item.id}">${esc(t('fundHomeNewsAiBtn'))}</button></article>`).join('')||`<p>${esc(t('fundHomeInformationEmpty'))}</p>`;
  root.querySelectorAll('[data-info]').forEach(b=>b.onclick=()=>home.openInformationDetail(Number(b.dataset.info)));
- root.querySelectorAll('[data-ai]').forEach(b=>b.onclick=()=>{const item=data.items.find(i=>i.id===Number(b.dataset.ai));document.getElementById('tab-home').click();home.selectNewsForAI(item);});
+ root.querySelectorAll('[data-ai]').forEach(b=>b.onclick=()=>{const item=data.items.find(i=>i.id===Number(b.dataset.ai));document.getElementById('tab-home').click();home.analyzeNewsForAI(item);});
  }catch(e){if(own===generation&&e.name!=='AbortError'){root.innerHTML=`<p>${esc(t('fundHomeInformationCouldNotLoad'))}</p><button data-retry>${esc(t('fundLedgerRetry'))}</button>`;root.querySelector('[data-retry]').onclick=information;}}
 }
 async function records(inline=false){

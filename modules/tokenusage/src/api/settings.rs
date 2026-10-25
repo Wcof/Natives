@@ -1,6 +1,6 @@
 //! 设置 / 设备 / 同步 / 采集 / 托盘状态相关 API 处理器。
 
-use super::stats::{format_compact_tokens, known_cost};
+use super::stats::{format_compact_tokens, known_cost, known_tokens};
 use super::{api_error, json_str};
 use crate::model_host::ModelUsageQueryClient;
 use crate::storage::Store;
@@ -103,7 +103,16 @@ pub(super) fn api_tray_state(client: &ModelUsageQueryClient) -> Result<String, (
         .map_err(|e| api_error(503, "MODEL_HOST_UNAVAILABLE", &e.to_string()))?;
     let tokens = overview.metrics.total_tokens;
     let cost = overview.metrics.estimated_cost_usd;
-    let formatted_tokens = format_compact_tokens(tokens);
+    let missing = overview.metrics.missing_usage_requests > 0;
+    let formatted_tokens = if missing && tokens == 0 {
+        "--".into()
+    } else {
+        format!(
+            "{}{}",
+            format_compact_tokens(tokens),
+            if missing { "+" } else { "" }
+        )
+    };
     let formatted_cost = if overview.metrics.priced == Some(true) {
         format!("${:.2}", cost)
     } else {
@@ -115,7 +124,7 @@ pub(super) fn api_tray_state(client: &ModelUsageQueryClient) -> Result<String, (
         "{{\"display\":{},\"displayText\":{},\"tokens\":{},\"cost\":{},\"formattedTokens\":{},\"formattedCost\":{}}}",
         json_str(&display_text),
         json_str(&display_text),
-        tokens,
+        known_tokens(tokens, overview.metrics.missing_usage_requests),
         known_cost(cost, overview.metrics.priced),
         json_str(&formatted_tokens),
         json_str(&formatted_cost)

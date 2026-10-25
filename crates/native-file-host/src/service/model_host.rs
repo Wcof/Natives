@@ -123,11 +123,6 @@ impl ModelHostManager {
             if request.method == "model_surface_events" {
                 return Ok(worker.events());
             }
-            if request.method == "model_oauth_cancel"
-                && !worker.owns_oauth(request.params["sessionId"].as_str().unwrap_or(""))
-            {
-                return Err("MODEL_TASK_NOT_OWNED".into());
-            }
             let mut owned = request.clone();
             if matches!(
                 request.method.as_str(),

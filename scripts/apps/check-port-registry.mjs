@@ -31,7 +31,7 @@ const SCOPES = [
   'crates', 'modules', 'model-host',
   'installers/macos/resources',
 ];
-const EXCLUDE = /(^|\/)(third_party|dist|node_modules|target|docs|archive|tests|testdata|fixtures?)(\/|$)/;
+const EXCLUDE = /(^|\/)(dist|node_modules|target|docs|archive|tests|testdata|fixtures?)(\/|$)/;
 function inScope(file) {
   if (EXCLUDE.test(file)) return false;
   if (!SCOPES.some((s) => file === s || file.startsWith(s + '/'))) return false;

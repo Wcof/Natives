@@ -31,14 +31,6 @@ func DefaultStatePath() (string, error) {
 	return filepath.Join(dir, "Natives", "model-host", "state.json"), nil
 }
 
-func DefaultRuntimeConfigPath() (string, error) {
-	statePath, err := DefaultStatePath()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(filepath.Dir(statePath), "runtime.yaml"), nil
-}
-
 func (r *Repository) Load() (Snapshot, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -58,6 +50,7 @@ func (r *Repository) Update(expected *int64, mutate func(*Snapshot) error) (Snap
 	if err = mutate(&snapshot); err != nil {
 		return Snapshot{}, err
 	}
+	snapshot.SchemaVersion = SchemaVersion
 	snapshot.Revision++
 	snapshot.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
 	if err = r.saveUnlocked(snapshot); err != nil {
@@ -78,39 +71,40 @@ func (r *Repository) loadUnlocked() (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("read model state: %w", err)
 	}
-	var snapshot Snapshot
-	if err = json.Unmarshal(data, &snapshot); err != nil {
+	var header struct {
+		SchemaVersion int `json:"schemaVersion"`
+	}
+	if err = json.Unmarshal(data, &header); err != nil {
 		return Snapshot{}, fmt.Errorf("decode model state: %w", err)
 	}
-	if snapshot.Revision < 1 {
+	if header.SchemaVersion < 1 {
 		return Snapshot{}, errors.New("unsupported model state schema")
 	}
-	// Migrate old snapshots to the current gateway defaults.
-	if snapshot.SchemaVersion == 1 {
-		now := time.Now().UTC().Format(time.RFC3339Nano)
-		if len(snapshot.Gateway.AccessKeys) == 0 {
-			defaultKey := GatewayAccessKey{
-				ID:        "key_default",
-				Name:      "默认密钥",
-				SecretRef: "gateway:access-key",
-				Mask:      snapshot.Gateway.AccessKeyMask,
-				Enabled:   true,
-				CreatedAt: now,
-				UpdatedAt: now,
-			}
-			snapshot.Gateway.AccessKeys = []GatewayAccessKey{defaultKey}
+	if header.SchemaVersion == SchemaVersion {
+		var snapshot Snapshot
+		if err = json.Unmarshal(data, &snapshot); err != nil {
+			return Snapshot{}, fmt.Errorf("decode model state: %w", err)
 		}
-		if snapshot.Gateway.PreferredPort > 0 && snapshot.Gateway.Settings.PreferredPort == 0 {
-			snapshot.Gateway.Settings.PreferredPort = snapshot.Gateway.PreferredPort
+		if snapshot.Revision < 1 {
+			return Snapshot{}, errors.New("unsupported model state schema")
 		}
+		return snapshot, nil
 	}
-	if snapshot.SchemaVersion == 1 || snapshot.SchemaVersion == 2 {
-		snapshot.Gateway.Settings.RequestRetry = DefaultRequestRetry
-		snapshot.Gateway.Settings.MaxRetryIntervalSeconds = DefaultMaxRetryIntervalSeconds
-		snapshot.SchemaVersion = SchemaVersion
-		_ = r.saveUnlocked(snapshot)
-	} else if snapshot.SchemaVersion != SchemaVersion {
+	if header.SchemaVersion > SchemaVersion {
 		return Snapshot{}, errors.New("unsupported model state schema")
+	}
+	var legacy legacySnapshot
+	if err = json.Unmarshal(data, &legacy); err != nil {
+		return Snapshot{}, fmt.Errorf("decode legacy model state: %w", err)
+	}
+	if legacy.Revision < 1 {
+		return Snapshot{}, errors.New("unsupported model state schema")
+	}
+	snapshot := legacy.migrate()
+	// The migration is monotonic and idempotent: the first successful load
+	// persists schema 4; later loads take the fast path above.
+	if err = r.saveUnlocked(snapshot); err != nil {
+		return Snapshot{}, fmt.Errorf("migrate model state: %w", err)
 	}
 	return snapshot, nil
 }
@@ -151,4 +145,93 @@ func (r *Repository) saveUnlocked(snapshot Snapshot) error {
 		_ = directory.Close()
 	}
 	return nil
+}
+
+// legacySnapshot decodes schema 1-3. Its gateway, access keys and aliases are
+// read only to preserve the user resident choice; they are never re-emitted.
+type legacySnapshot struct {
+	SchemaVersion int              `json:"schemaVersion"`
+	Revision      int64            `json:"revision"`
+	Providers     []legacyProvider `json:"providers"`
+	Accounts      []Account        `json:"accounts"`
+	Gateway       legacyGateway    `json:"gateway"`
+	DefaultModel  DefaultModelRef  `json:"defaultModel"`
+	UpdatedAt     string           `json:"updatedAt"`
+}
+
+type legacyProvider struct {
+	ID             string   `json:"id"`
+	Kind           string   `json:"kind"`
+	OAuthProvider  string   `json:"oauthProvider,omitempty"`
+	Name           string   `json:"name"`
+	BaseURL        string   `json:"baseUrl,omitempty"`
+	Protocol       Protocol `json:"protocol,omitempty"`
+	Enabled        bool     `json:"enabled"`
+	AllowLAN       bool     `json:"allowLan"`
+	SecretRef      string   `json:"secretRef,omitempty"`
+	CredentialMask string   `json:"credentialMask,omitempty"`
+	Models         []struct {
+		ID            string   `json:"id"`
+		DisplayName   string   `json:"displayName"`
+		Alias         string   `json:"alias,omitempty"`
+		ContextLength int64    `json:"contextLength,omitempty"`
+		AccountIDs    []string `json:"accountIds,omitempty"`
+		Enabled       bool     `json:"enabled"`
+		Manual        bool     `json:"manual"`
+	} `json:"models"`
+	UpdatedAt string `json:"updatedAt"`
+}
+
+type legacyGateway struct {
+	Resident bool `json:"resident"`
+}
+
+func (legacy legacySnapshot) migrate() Snapshot {
+	snapshot := Snapshot{
+		SchemaVersion: SchemaVersion,
+		Revision:      legacy.Revision + 1,
+		Providers:     make([]Provider, 0, len(legacy.Providers)),
+		Accounts:      append([]Account(nil), legacy.Accounts...),
+		DefaultModel:  legacy.DefaultModel,
+		Resident:      legacy.Gateway.Resident,
+		UpdatedAt:     time.Now().UTC().Format(time.RFC3339Nano),
+	}
+	for _, old := range legacy.Providers {
+		if old.Kind != "custom" {
+			// OAuth providers served the retired routing kernel. Their Keychain
+			// entries and account metadata remain for quota inquiry only.
+			continue
+		}
+		provider := Provider{
+			ID: old.ID, Kind: "custom", Name: old.Name, BaseURL: old.BaseURL,
+			Protocol: old.Protocol, Enabled: old.Enabled, AllowLAN: old.AllowLAN,
+			SecretRef: old.SecretRef, CredentialMask: old.CredentialMask,
+			Models: make([]Model, 0, len(old.Models)), UpdatedAt: old.UpdatedAt,
+		}
+		for _, model := range old.Models {
+			provider.Models = append(provider.Models, Model{
+				ID: model.ID, DisplayName: model.DisplayName,
+				ContextLength: model.ContextLength, Enabled: model.Enabled, Manual: model.Manual,
+			})
+		}
+		snapshot.Providers = append(snapshot.Providers, provider)
+	}
+	if snapshot.DefaultModel.ProviderID != "" {
+		valid := false
+		for _, provider := range snapshot.Providers {
+			if provider.ID != snapshot.DefaultModel.ProviderID {
+				continue
+			}
+			for _, model := range provider.Models {
+				if model.ID == snapshot.DefaultModel.ModelID {
+					valid = true
+					break
+				}
+			}
+		}
+		if !valid {
+			snapshot.DefaultModel = DefaultModelRef{}
+		}
+	}
+	return snapshot
 }

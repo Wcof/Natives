@@ -320,7 +320,7 @@ fn content_requires_existing_item_and_supported_source() {
         content(r#"{"id":42,"expectedVersion":1,"requestId":"missing"}"#).0,
         404
     );
-    // 基金公告来源无正文端点 → 明确 unsupported（不伪造正文）。
+    // 旧基金列表的纯数字 ID 不能映射公告正文身份，仍明确 unsupported。
     let fund_item = information::adapters::RawItem {
         source_id: information::adapters::SRC_FUND_ANN,
         external_id: "111".into(),

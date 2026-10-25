@@ -3,7 +3,7 @@
 import assert from 'node:assert/strict';
 import {dispatchNativeScenario} from './home-native-dispatch.mjs';
 import { chromium } from 'playwright-core';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn, spawnSync, execFileSync } from 'node:child_process';
 import { createServer } from 'node:http';
 import { mkdirSync, mkdtempSync, writeFileSync, readFileSync, existsSync, copyFileSync } from 'node:fs';
 import { resolve, join } from 'node:path';
@@ -34,7 +34,7 @@ const fakeHome = join(out, 'home');
 const config = join(out, 'model-config');
 const realHome = homedir();
 const env = { ...process.env, HOME: fakeHome, NATIVES_DEV_PRODUCT_SOURCE: join(fakeHome, '.natives-local/product-source'), NATIVES_MODEL_HOST_CONFIG_DIR: config, NATIVES_MODEL_HOST_PROCESS_TEST: '1', RUSTUP_HOME: join(realHome, '.rustup'), CARGO_HOME: join(realHome, '.cargo') };
-const isolatedPaths = Object.fromEntries(['HOME', 'NATIVES_DEV_PRODUCT_SOURCE', 'NATIVES_MODEL_HOST_CONFIG_DIR', 'NATIVES_MODEL_HOST_PROCESS_TEST'].map(key => [key, env[key]]));
+const isolatedPaths = Object.fromEntries(['HOME', 'NATIVES_DEV_PRODUCT_SOURCE', 'NATIVES_MODEL_HOST_CONFIG_DIR', 'NATIVES_MODEL_HOST_PROCESS_TEST', 'NATIVES_MODEL_HOST_PROCESS_TEST'].map(key => [key, env[key]]));
 delete env.NATIVES_APPS_ROOT; delete env.NATIVES_HOME; delete env.CARGO_TARGET_DIR;
 if (soak) env.NATIVES_APPS_ROOT = join(fakeHome, '.natives-local/apps');
 if (soak) isolatedPaths.NATIVES_APPS_ROOT = env.NATIVES_APPS_ROOT;
@@ -87,6 +87,9 @@ try {
   page.on('response', response => {
     if(response.url().startsWith('http://127.0.0.1:') && response.status() >= 400) (report.failedResponses ||= []).push({url:response.url(),status:response.status()});
   });
+  page.on('console', message => {
+    if (message.type() === 'error' || message.type() === 'warning') (report.console ||= []).push({type: message.type(), text: message.text()});
+  });
   await page.addInitScript(installNativeTimings);
   nativeChecks: {
   const start = performance.now();
@@ -137,7 +140,10 @@ try {
   const sample=(await sampleResponse.json()).data.list[0];
   assert.ok(sample.art_code&&sample.notice_date&&sample.title);
   const sampleFile=join(out,'public-announcement.json');writeFileSync(sampleFile,JSON.stringify(sample));
-  const initialPid=JSON.parse(readFileSync(join(out,'spawns.jsonl'),'utf8').trim().split('\n').filter(line=>JSON.parse(line).host==='com.natives.local.app_runtime').at(-1)).pid;
+  const stoppedRuntimePath=join(fakeHome,'.natives-local/product-source/hosts/natives-app-runtime');
+  const stoppedRuntimePids=execFileSync('pgrep',['-f',stoppedRuntimePath],{encoding:'utf8'}).trim().split(/\s+/).map(Number).filter(Boolean);
+  assert.ok(stoppedRuntimePids.length>0,'fixture setup requires a running Runtime');
+  const initialPid=stoppedRuntimePids.at(-1);
   await page.goto('about:blank');
   const stopUntil=performance.now()+2000;
   while(performance.now()<stopUntil){try{process.kill(initialPid,0);}catch{break;}await new Promise(resolve=>setTimeout(resolve,20));}
@@ -238,7 +244,7 @@ c.commit();c.close()
   await frame.locator('dialog[open] [data-send]').click();
   await frame.locator('dialog[open] [data-result]').getByText('Synthetic full-chain explanation', { exact: false }).waitFor({ timeout: 35000 });
   assert.equal(report.providerRequests.length, 1);
-  report.steps.push({ name: 'AI round trip via selection=default through real broker, Native Messaging, Model Host and CLIProxyAPI; synthetic local provider' });
+  report.steps.push({ name: 'AI round trip via selection=default through real broker, Native Messaging and direct Model Host provider call; synthetic local provider' });
   // 方案 11 §7：用户主动保存报告（resultText + start 返回的真实身份）。
   await frame.locator('dialog[open] [data-save-report]').click();
   await frame.locator('dialog[open] [data-result]').getByText('报告已保存', { exact: false }).waitFor({ timeout: 15000 });

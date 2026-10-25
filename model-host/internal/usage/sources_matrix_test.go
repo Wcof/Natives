@@ -3,8 +3,8 @@ package usage
 // 13 工具逐能力矩阵证据测试（方案 §9.0 完成门槛；整改 E0）。
 //
 // 强制不变量：
-//   1. 矩阵 = agentclients 生产注册表 ∪ 用户明确名单，缺一即失败（直接读
-//      agentclients.Definitions()，注册表新增工具后本测试立即暴露缺口）；
+//   1. 矩阵必须覆盖冻结的本机工具清单 ∪ 用户明确名单；代理退役后不再有
+//      配置注入注册表，该清单只表示用量来源，不表示可改写工具配置；
 //   2. 每个工具的七项能力字段全部显式声明，取值必须在已知状态词表内；
 //   3. unsupported/unavailable 必须填写审计结论（"还没来得及做"不许冒充
 //      产品限制，§9.0：unsupported 不能表示没来得及做）；
@@ -16,11 +16,16 @@ import (
 	"context"
 	"strings"
 	"testing"
-
-	"github.com/ldh/natives/model-host/internal/agentclients"
 )
 
-// userNamedToolIDs 为用户明确名单（产品冻结输入；不在 agentclients 注册表）。
+// formerAgentClientIDs 是代理退役前纳入配置管理的本机工具清单。配置注入
+// 已删除，但这些工具仍是用量采集来源，矩阵不得遗漏。
+var formerAgentClientIDs = []string{
+	"claude-code", "claude-desktop", "codex", "deepseek-harness", "opencode",
+	"pi", "grok-build", "zcode", "kimi-code", "openclaw", "hermes",
+}
+
+// userNamedToolIDs 为用户明确名单（产品冻结输入）。
 var userNamedToolIDs = []string{"cursor", "atomcode"}
 
 func TestCapabilityMatrixCoversRegistryAndUserList(t *testing.T) {
@@ -31,10 +36,9 @@ func TestCapabilityMatrixCoversRegistryAndUserList(t *testing.T) {
 		}
 		have[s.ID] = true
 	}
-	// E0：注册表 ID 直接来自生产 agentclients.Definitions()，禁止手写副本。
-	for _, def := range agentclients.Definitions() {
-		if !have[def.ID] {
-			t.Errorf("registry tool %q missing from capability matrix (add it to usageSources with an audit conclusion)", def.ID)
+	for _, id := range formerAgentClientIDs {
+		if !have[id] {
+			t.Errorf("former managed tool %q missing from capability matrix (add it to usageSources with an audit conclusion)", id)
 		}
 	}
 	for _, id := range userNamedToolIDs {

@@ -158,11 +158,15 @@ func (h *clientHub) outputPump(c *client) {
 	for {
 		select {
 		case payload := <-c.responses:
-			c.pending.Add(-int64(len(payload) + 4))
+			size := int64(len(payload) + 4)
 			if err := c.writer.WriteEncoded(payload); err != nil {
+				c.pending.Add(-size)
 				h.remove(c, false)
 				return
 			}
+			// Decrement only after the frame is on the wire so EOF flush waits
+			// for the write rather than closing the connection mid-response.
+			c.pending.Add(-size)
 		case <-c.evReady:
 			for {
 				c.evMu.Lock()
@@ -178,11 +182,13 @@ func (h *clientHub) outputPump(c *client) {
 				}
 				delete(c.events, evType)
 				c.evMu.Unlock()
-				c.pending.Add(-int64(len(payload) + 4))
+				size := int64(len(payload) + 4)
 				if err := c.writer.WriteEncoded(payload); err != nil {
+					c.pending.Add(-size)
 					h.remove(c, false)
 					return
 				}
+				c.pending.Add(-size)
 			}
 		case <-c.closing:
 			return

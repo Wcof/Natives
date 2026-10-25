@@ -110,6 +110,8 @@ rtk env -u CARGO_TARGET_DIR cargo test --workspace
 | F7 | Windows singleinstance 忽略目录参数，使用固定命名管道；开发与正式命名空间隔离不完整，未做 Windows 实测 | `model-host/internal/singleinstance/instance_windows.go` |
 | F8 | 日志遍历限制匹配文件数和读取字节，但未限制遍历节点、目录扇出及错误列表总量，也不能取消 | `model-host/internal/usage/collector*.go` |
 
+> ADR-0044（2026-10-20）退役模型代理／路由后，F1 的 CLIProxyAPI SDK 路径、F3 的 agent 启动器、F4 中 OAuth／内核取消路径及 `internal/usage/plugin.go` 已从生产树删除；本表保留为当时的审查证据，不代表这些文件仍存在。当前生命周期与用量 owner 见 ADR-0044 和现行 Standards。
+
 2026-10-04 隔离 Go 生命周期检查报告 8 项通过、2 个 package，覆盖单实例、非驻留最后连接关闭、常驻 EOF、浏览器退出和桥接重启。项目进程及直接子进程的当次快照未见 Z；单次 RSS 不能证明无泄漏。慢客户端、无界队列、启动器 reap、采集中退出、Windows 实机及 30 分钟真实 Chrome 循环仍待补证据。不得把历史绿测试写成本节整改已经完成。
 
 ### L1 · 生命周期 owner 与模块边界

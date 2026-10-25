@@ -3,7 +3,6 @@ package host
 import (
 	"context"
 	"crypto/rand"
-	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -16,7 +15,6 @@ import (
 	log "github.com/sirupsen/logrus"
 
 	"github.com/ldh/natives/model-host/internal/authfiles"
-	clipadapter "github.com/ldh/natives/model-host/internal/cliproxy"
 	"github.com/ldh/natives/model-host/internal/domain"
 	"github.com/ldh/natives/model-host/internal/lifecycle"
 	"github.com/ldh/natives/model-host/internal/nativeio"
@@ -26,37 +24,23 @@ import (
 )
 
 type Engine struct {
-	inferenceMu         sync.Mutex
-	inferenceJobs       map[string]*inferenceJob
-	repo                *domain.Repository
-	secrets             secrets.Store
-	authStore           *clipadapter.AuthStore
-	auth                clipadapter.LoginManager
-	runtime             clipadapter.Runtime
-	runtimeConfigPath   string
-	emit                func(nativeio.Response)
-	usageStore          *usage.Store
-	usageCalculator     *usage.Calculator
-	usageImporter       *usage.Importer
-	usagePlugin         *usage.NativesUsagePlugin
-	authFiles           *authfiles.Manager
-	quotaClient         *quota.Client
-	mu                  sync.Mutex
-	gatewayMu           sync.Mutex
-	secretMu            sync.Mutex
-	kernelMu            sync.Mutex
-	kernelJob           *kernelUpdateJob
-	kernelFetchLatest   func(ctx context.Context) (string, error)
-	kernelRunUpdate     func(job *kernelUpdateJob, target string)
-	kernelIdentityCheck func() error
-	kernelCtx           context.Context
-	kernelCancel        context.CancelFunc
-	sessions            map[string]context.CancelFunc
-	oauthTimeout        time.Duration
-	collectMu           sync.Mutex
-	lastCollectAt       time.Time
-	isCollecting        bool
-	aiQuery             *aiQueryServer // ADR-0033 只读 AI 数据查询端口（绑定失败时为 nil）
+	inferenceMu     sync.Mutex
+	inferenceJobs   map[string]*inferenceJob
+	inferenceWG     sync.WaitGroup
+	repo            *domain.Repository
+	secrets         secrets.Store
+	emit            func(nativeio.Response)
+	usageStore      *usage.Store
+	usageCalculator *usage.Calculator
+	usageImporter   *usage.Importer
+	recorder        *usage.Recorder
+	authFiles       *authfiles.Manager
+	quotaClient     *quota.Client
+	secretMu        sync.Mutex
+	collectMu       sync.Mutex
+	lastCollectAt   time.Time
+	isCollecting    bool
+	aiQuery         *aiQueryServer // ADR-0033 只读 AI 数据查询端口（绑定失败时为 nil）
 	// tasks 登记采集等 Engine 后台任务：取消、共同 deadline 等待与 stopping
 	// 判定原子（方案 L1）。
 	tasks *lifecycle.Registry
@@ -70,17 +54,7 @@ func NewEngine(repo *domain.Repository, secretStore secrets.Store, emit func(nat
 	if err != nil {
 		return nil, err
 	}
-	ids := make([]string, 0, len(snapshot.Accounts))
-	for _, account := range snapshot.Accounts {
-		ids = append(ids, account.ID)
-	}
-	authStore := clipadapter.NewAuthStore(secretStore, ids, nil)
-	authStore.OnAccountSaved(maskSecret, func(view clipadapter.AccountView) error { return syncAccountFromView(repo, emit, view) })
-	authManager := clipadapter.NewLoginFlow(authStore)
-	runtimeConfigPath, err := domain.DefaultRuntimeConfigPath()
-	if err != nil {
-		return nil, err
-	}
+	_ = snapshot
 
 	usageDBPath, err := usage.DefaultDBPath()
 	if err != nil {
@@ -92,80 +66,23 @@ func NewEngine(repo *domain.Repository, secretStore secrets.Store, emit func(nat
 	}
 	usageCalc := usage.NewCalculator(usageStore)
 	usageImp := usage.NewImporter(usageStore, usageCalc)
-
-	type usageKey struct{ id, name, secret string }
-	var usageKeyMu sync.RWMutex
-	usageKeys := make([]usageKey, 0, len(snapshot.Gateway.AccessKeys)+1)
-	reloadUsageKeys := func() {
-		snap, loadErr := repo.Load()
-		if loadErr != nil {
-			return
-		}
-		keys := make([]usageKey, 0, len(snap.Gateway.AccessKeys)+1)
-		for _, key := range snap.Gateway.AccessKeys {
-			if secret, getErr := secretStore.Get(key.SecretRef); getErr == nil && secret != "" {
-				keys = append(keys, usageKey{key.ID, key.Name, secret})
-			}
-		}
-		if secret, getErr := secretStore.Get(gatewaySecretRef); getErr == nil && secret != "" {
-			keys = append(keys, usageKey{"default", "默认密钥", secret})
-		}
-		usageKeyMu.Lock()
-		usageKeys = keys
-		usageKeyMu.Unlock()
-	}
-	resolveUsageKey := func(apiKey string) (string, string) {
-		usageKeyMu.RLock()
-		defer usageKeyMu.RUnlock()
-		for _, key := range usageKeys {
-			if subtle.ConstantTimeCompare([]byte(apiKey), []byte(key.secret)) == 1 {
-				return key.id, key.name
-			}
-		}
-		return "", ""
-	}
-	reloadUsageKeys()
-	keyResolver := func(apiKey string) (string, string) {
-		if id, name := resolveUsageKey(apiKey); id != "" {
-			return id, name
-		}
-		reloadUsageKeys() // A rotated or newly-created key misses once, then remains memory-only.
-		return resolveUsageKey(apiKey)
-	}
-
-	broadcastFunc := func(eventType string, data interface{}) {
-		if emit != nil {
-			emit(nativeio.Response{OK: true, Event: eventType, Result: data})
-		}
-	}
-
-	usagePlg := usage.NewNativesUsagePlugin(usageStore, usageCalc, keyResolver, broadcastFunc)
-	clipadapter.RegisterUsagePlugin("natives-usage", usagePlg)
+	recorder := usage.NewRecorder(usageStore, usageCalc)
 
 	afManager, _ := authfiles.NewManager("")
 	qClient := quota.NewClient()
 
 	engine := &Engine{
-		repo:              repo,
-		secrets:           secretStore,
-		authStore:         authStore,
-		auth:              authManager,
-		emit:              emit,
-		usageStore:        usageStore,
-		usageCalculator:   usageCalc,
-		usageImporter:     usageImp,
-		usagePlugin:       usagePlg,
-		authFiles:         afManager,
-		quotaClient:       qClient,
-		sessions:          make(map[string]context.CancelFunc),
-		runtimeConfigPath: runtimeConfigPath,
-		oauthTimeout:      6 * time.Minute,
+		repo:            repo,
+		secrets:         secretStore,
+		emit:            emit,
+		usageStore:      usageStore,
+		usageCalculator: usageCalc,
+		usageImporter:   usageImp,
+		recorder:        recorder,
+		authFiles:       afManager,
+		quotaClient:     qClient,
 	}
-	engine.kernelCtx, engine.kernelCancel = context.WithCancel(context.Background())
 	engine.tasks = lifecycle.NewRegistry()
-	clipadapter.SetModelRegistryHook(func(accountID string, models []clipadapter.ModelInfo) {
-		catalogUpdate(engine, accountID, models)
-	})
 	// §7.5：不做启动隐式扫描、无常驻定时器（ADR-0030）。采集有两个事件驱动入口：
 	// 显式 model_usage_collect 方法，与 Native Messaging 连接建立时的
 	// TriggerCollectAsync（内置 10s 防抖），见收口方案 Phase 0.4。
@@ -196,69 +113,45 @@ func (e *Engine) Handle(ctx context.Context, request nativeio.Request) nativeio.
 // Close 按 L4 统一顺序收口，全程共享一个绝对 deadline（非驻留 worker 从最后
 // 合法连接关闭起 ≤1s 退出；本函数是其中最后一段，预算 800ms 留出连接收口）：
 // 原子进入 stopping → 取消 Engine 任务并等待 → 撤销查询端口 → 取消 owner 任务
-// → 停网关 → 停用量 producer 并排空已接收记录 → 关闭存储。
+// → 等待推理线程退出并排空用量 → 关闭存储。
 func (e *Engine) Close() {
 	// 第一步：原子拒绝新请求（Handle 与重复 Close 快速返回）。
 	if e.closed.Swap(true) {
 		return
 	}
 	shutdown := lifecycle.NewShutdown(800 * time.Millisecond)
-	if e.kernelCancel != nil {
-		e.kernelCancel()
-	}
 	tasksCtx, tasksCancel := shutdown.Context()
 	defer tasksCancel()
 	stopResult := e.tasks.Stop(tasksCtx)
 	if len(stopResult.TimedOut) > 0 {
 		log.Warnf("engine close: tasks did not finish in deadline: %v", stopResult.TimedOut)
 	}
-	e.cancelInferenceAndSessions()
+	e.cancelInference()
 	if e.aiQuery != nil {
 		e.aiQuery.Close()
 	}
-	clipadapter.ClearModelRegistryHook()
-	gatewayCtx, gatewayCancel := shutdown.Context()
-	stopErr := e.stopRuntime(gatewayCtx)
-	gatewayCancel()
-	pluginCtx, pluginCancel := shutdown.Context()
-	if e.usagePlugin != nil {
-		e.usagePlugin.Close(pluginCtx)
+	waitCtx, waitCancel := shutdown.Context()
+	waitDone := make(chan struct{})
+	go func() { e.inferenceWG.Wait(); close(waitDone) }()
+	select {
+	case <-waitDone:
+	case <-waitCtx.Done():
+		log.Warn("engine close: inference jobs did not finish within deadline")
 	}
-	pluginCancel()
+	waitCancel()
 	if e.usageStore != nil {
 		_ = e.usageStore.Close()
 	}
-	if stopErr != nil {
-		log.Warnf("engine close: gateway stop did not finish within deadline: %v", stopErr)
-	}
-	snapshot, err := e.repo.Load()
-	if err == nil && !snapshot.Gateway.Resident && snapshot.Gateway.State != "stopped" {
-		_, _ = e.repo.Update(nil, resetGateway)
-	}
 }
 
-// stopRuntime 在 gatewayMu 保护下停网关；持锁时间由 ctx 期限约束，
-// 不在锁内做无限等待。Runtime.Stop 自身对未启动状态幂等返回 nil。
-func (e *Engine) stopRuntime(ctx context.Context) error {
-	e.gatewayMu.Lock()
-	defer e.gatewayMu.Unlock()
-	return e.runtime.Stop(ctx)
-}
-
-// cancelInferenceAndSessions 取消全部推理任务与 OAuth 会话（Engine 收口路径）。
-func (e *Engine) cancelInferenceAndSessions() {
+// cancelInference 取消全部推理任务（Engine 收口路径）。
+func (e *Engine) cancelInference() {
 	e.inferenceMu.Lock()
 	for id, j := range e.inferenceJobs {
 		j.cancel()
 		delete(e.inferenceJobs, id)
 	}
 	e.inferenceMu.Unlock()
-	e.mu.Lock()
-	for id, cancel := range e.sessions {
-		cancel()
-		delete(e.sessions, id)
-	}
-	e.mu.Unlock()
 }
 
 // CancelInferenceForOwners 只取消给定 owner（发起客户端）的推理任务；
@@ -291,66 +184,32 @@ func (e *Engine) dispatch(ctx context.Context, method string, raw json.RawMessag
 		return e.inferenceStatus(raw, false)
 	case "model_inference_cancel":
 		return e.inferenceStatus(raw, true)
-	case "model_snapshot", "model_gateway_status":
-		snapshot, err := e.repo.Load()
-		snapshot.Gateway.KernelVersion = getLocalKernelVersion()
-		return snapshot, err
+	case "model_snapshot":
+		return e.repo.Load()
 	case "model_collect_status":
 		return e.collectStatus(), nil
 	case "model_provider_create":
-		return e.reconfigureGateway(e.createProvider(raw))
+		return e.createProvider(raw)
 	case "model_provider_update":
-		return e.reconfigureGateway(e.updateProvider(raw))
+		return e.updateProvider(raw)
 	case "model_provider_delete":
-		return e.reconfigureGateway(e.deleteProvider(raw))
+		return e.deleteProvider(raw)
 	case "model_provider_set_enabled":
-		return e.reconfigureGateway(e.setProviderEnabled(raw))
+		return e.setProviderEnabled(raw)
 	case "model_provider_test":
 		return e.testProvider(ctx, raw)
 	case "model_models_upsert":
-		return e.reconfigureGateway(e.upsertModel(raw))
+		return e.upsertModel(raw)
 	case "model_models_delete":
-		return e.reconfigureGateway(e.deleteModel(raw))
+		return e.deleteModel(raw)
 	case "model_models_set_enabled":
-		return e.reconfigureGateway(e.setModelEnabled(raw))
+		return e.setModelEnabled(raw)
 	case "model_models_refresh":
-		return e.reconfigureGateway(e.refreshModels(ctx, raw))
+		return e.refreshModels(ctx, raw)
 	case "model_default_model_set":
 		return e.setDefaultModel(raw)
-	case "model_gateway_set_resident":
+	case "model_host_set_resident":
 		return e.setResident(raw)
-	case "model_gateway_restart":
-		return e.restartGateway(ctx, raw)
-	case "model_gateway_settings_update":
-		return e.updateGatewaySettings(raw)
-	case "model_gateway_key_create":
-		return e.createGatewayKey(raw)
-	case "model_gateway_key_update":
-		return e.updateGatewayKey(raw)
-	case "model_gateway_key_delete":
-		return e.deleteGatewayKey(raw)
-	case "model_gateway_key_rotate", "model_gateway_rotate_access_key":
-		return e.rotateGatewayKey(raw)
-	case "model_gateway_key_reveal", "model_gateway_reveal_access_key":
-		return e.revealGatewayKeyByID(raw)
-	case "model_gateway_start":
-		return e.startGateway(ctx, raw)
-	case "model_gateway_stop":
-		return e.stopGateway(ctx, raw)
-	case "model_kernel_check_update":
-		return e.checkKernelUpdate()
-	case "model_kernel_update":
-		return e.updateKernel(ctx)
-	case "model_kernel_update_status":
-		return e.kernelUpdateStatus()
-	case "model_oauth_start", "model_account_reauth":
-		return e.startOAuth(ctx, raw)
-	case "model_oauth_cancel":
-		return e.cancelOAuth(raw)
-	case "model_account_set_enabled":
-		return e.setAccountEnabled(raw)
-	case "model_account_delete":
-		return e.deleteAccount(raw)
 
 	// Usage & Analytics methods
 	case "model_usage_status":
@@ -406,7 +265,8 @@ func (e *Engine) dispatch(ctx context.Context, method string, raw json.RawMessag
 	case "model_usage_import_cancel":
 		return e.cancelUsageImport(raw)
 
-	// Auth Files and Quota Inquiry methods
+	// Auth files and quota inquiry remain read-only consumers of credentials;
+	// they never participate in inference or routing.
 	case "model_auth_files_list":
 		return e.listAuthFiles()
 	case "model_auth_files_import":
@@ -417,10 +277,6 @@ func (e *Engine) dispatch(ctx context.Context, method string, raw json.RawMessag
 		return e.deleteAuthFile(raw)
 	case "model_auth_files_open_dir":
 		return e.openAuthDir()
-	case "model_account_models":
-		return e.accountModels(raw)
-	case "model_account_models_update":
-		return e.updateAccountModels(raw)
 	case "model_quota_query":
 		return e.queryQuota(ctx, raw)
 	case "model_quota_cached":
@@ -429,26 +285,6 @@ func (e *Engine) dispatch(ctx context.Context, method string, raw json.RawMessag
 			return nil, invalid("额度缓存查询不接受参数")
 		}
 		return cachedQuotaResult(), nil
-
-	// Agent clients (智能体配置)
-	case "model_agent_clients_list":
-		return e.listAgentClients()
-	case "model_agent_clients_sync":
-		return e.syncAgentClientConfigs(ctx)
-	case "model_agent_client_models":
-		return e.agentClientModels(ctx, raw)
-	case "model_agent_client_apply":
-		return e.applyAgentClientConfig(ctx, raw, "apply")
-	case "model_agent_client_default":
-		return e.applyAgentClientConfig(ctx, raw, "default")
-	case "model_agent_client_close":
-		return e.applyAgentClientConfig(ctx, raw, "close")
-	case "model_agent_client_launch":
-		return e.launchAgentClient(raw)
-	case "model_agent_codex_auth_check", "model_agent_codex_clear",
-		"model_agent_codex_sessions_list", "model_agent_codex_sessions_delete",
-		"model_agent_pi_status", "model_agent_pi_action":
-		return e.agentClientExtras(ctx, raw, method)
 
 	default:
 		return nil, invalid("不支持的模型设置操作")
@@ -517,12 +353,6 @@ func findAccount(snapshot *domain.Snapshot, id string) (*domain.Account, error) 
 		}
 	}
 	return nil, notFound()
-}
-
-func (e *Engine) emitSnapshot(event string, snapshot domain.Snapshot) {
-	if e.emit != nil {
-		e.emit(nativeio.Response{OK: true, Event: event, Result: map[string]any{"snapshot": snapshot}})
-	}
 }
 
 var errSecretMissing = errors.New("secret is not configured")

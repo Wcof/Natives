@@ -352,62 +352,7 @@ pub fn api_home_preferences(
     )
 }
 
-pub fn api_home_snapshot(store: &Store, path: &str) -> Result<String, (u16, String)> {
-    home_snapshot(store, path, false)
-}
-pub(crate) fn api_home_generate(store: &Store, path: &str) -> Result<String, (u16, String)> {
-    home_snapshot(store, path, true)
-}
-fn home_snapshot(store: &Store, path: &str, generate: bool) -> Result<String, (u16, String)> {
-    let range = crate::market::query_param(path, "range").unwrap_or_else(|| "all".into());
-    let valid = matches!(
-        range.as_str(),
-        "today" | "month" | "year" | "all" | "custom"
-    );
-    if !valid {
-        return Err(super::api_error(400, "FIN_INVALID", "收益区间无效"));
-    }
-    let from = crate::market::query_param(path, "from");
-    let to = crate::market::query_param(path, "to");
-    crate::home::checked_range(
-        &range,
-        from.as_deref(),
-        to.as_deref(),
-        &crate::finance::today_cn(),
-    )
-    .map_err(|e| err(400, &e))?;
-    let refresh = crate::market::query_param(path, "refreshEstimates").as_deref() == Some("1");
-    let _budget = crate::network::limit_duration(std::time::Duration::from_secs(20));
-    if refresh {
-        let today = crate::finance::today_cn();
-        let rows = store
-            .with_read(|conn| crate::assets::collect(conn, &today))
-            .map_err(|e| super::api_error(500, e.code(), &e.message()))?;
-        crate::nav::warm_estimates(&rows.funds, &today);
-        if generate {
-            crate::home::build_snapshot_range(store, &range, from.as_deref(), to.as_deref())
-                .map_err(|e| err(400, &e))?;
-        }
-    }
-    let snapshot = if generate {
-        crate::opportunity_records::generate_home(store, &range, from.as_deref(), to.as_deref())
-    } else if !refresh {
-        crate::home::cached_snapshot_range(store, &range, from.as_deref(), to.as_deref())
-    } else {
-        crate::home::build_snapshot_range(store, &range, from.as_deref(), to.as_deref())
-    }
-    .map_err(|e| {
-        err(
-            match e {
-                FinanceError::Conflict(_) => 409,
-                FinanceError::Db(_) => 500,
-                _ => 400,
-            },
-            &e,
-        )
-    })?;
-    Ok(snapshot.to_string())
-}
+pub use super::home_snapshot::api_home_snapshot;
 
 // ---------------------------------------------------------------------------
 // 现金与资金事件

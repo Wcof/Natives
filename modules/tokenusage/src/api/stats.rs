@@ -18,11 +18,11 @@ pub(super) fn api_overview(client: &ModelUsageQueryClient) -> Result<String, (u1
         .map_err(|e| api_error(503, "MODEL_HOST_UNAVAILABLE", &e.to_string()))?;
 
     Ok(format!(
-        "{{\"currency\":\"USD\",\"periods\":{{\"today\":{{\"totalTokens\":{},\"costUsd\":{},\"sessionCount\":{}}},\"thisWeek\":{{\"totalTokens\":{},\"costUsd\":{},\"sessionCount\":{}}},\"thisMonth\":{{\"totalTokens\":{},\"costUsd\":{},\"sessionCount\":{}}},\"allTime\":{{\"totalTokens\":{},\"costUsd\":{},\"sessionCount\":{}}}}}}}",
-        today.metrics.total_tokens, known_cost(today.metrics.estimated_cost_usd,today.metrics.priced), today.total_events_count,
-        week.metrics.total_tokens, known_cost(week.metrics.estimated_cost_usd,week.metrics.priced), week.total_events_count,
-        month.metrics.total_tokens, known_cost(month.metrics.estimated_cost_usd,month.metrics.priced), month.total_events_count,
-        all.metrics.total_tokens, known_cost(all.metrics.estimated_cost_usd,all.metrics.priced), all.total_events_count
+        "{{\"currency\":\"USD\",\"periods\":{{\"today\":{{\"totalTokens\":{},\"missingUsageRequests\":{},\"knownCostUsd\":{},\"costUsd\":{},\"sessionCount\":{}}},\"thisWeek\":{{\"totalTokens\":{},\"missingUsageRequests\":{},\"knownCostUsd\":{},\"costUsd\":{},\"sessionCount\":{}}},\"thisMonth\":{{\"totalTokens\":{},\"missingUsageRequests\":{},\"knownCostUsd\":{},\"costUsd\":{},\"sessionCount\":{}}},\"allTime\":{{\"totalTokens\":{},\"missingUsageRequests\":{},\"knownCostUsd\":{},\"costUsd\":{},\"sessionCount\":{}}}}}}}",
+        known_tokens(today.metrics.total_tokens, today.metrics.missing_usage_requests), today.metrics.missing_usage_requests, today.metrics.estimated_cost_usd, known_cost(today.metrics.estimated_cost_usd,today.metrics.priced), today.total_events_count,
+        known_tokens(week.metrics.total_tokens, week.metrics.missing_usage_requests), week.metrics.missing_usage_requests, week.metrics.estimated_cost_usd, known_cost(week.metrics.estimated_cost_usd,week.metrics.priced), week.total_events_count,
+        known_tokens(month.metrics.total_tokens, month.metrics.missing_usage_requests), month.metrics.missing_usage_requests, month.metrics.estimated_cost_usd, known_cost(month.metrics.estimated_cost_usd,month.metrics.priced), month.total_events_count,
+        known_tokens(all.metrics.total_tokens, all.metrics.missing_usage_requests), all.metrics.missing_usage_requests, all.metrics.estimated_cost_usd, known_cost(all.metrics.estimated_cost_usd,all.metrics.priced), all.total_events_count
     ))
 }
 
@@ -54,12 +54,14 @@ pub(super) fn api_tools(
         let sessions = stats.map(|st| st.requests).unwrap_or(0);
 
         items.push(format!(
-            "{{\"id\":{},\"name\":{},\"category\":{},\"enabled\":{},\"totalTokens\":{},\"costUsd\":{},\"requestCount\":{},\"lastScannedAt\":{}}}",
+            "{{\"id\":{},\"name\":{},\"category\":{},\"enabled\":{},\"totalTokens\":{},\"missingUsageRequests\":{},\"knownCostUsd\":{},\"costUsd\":{},\"requestCount\":{},\"lastScannedAt\":{}}}",
             json_str(&s.id),
             json_str(&s.display_name),
             json_str(&s.category),
             s.enabled,
-            tokens,
+            known_tokens(tokens, stats.map(|st| st.missing_usage_requests).unwrap_or(0)),
+            stats.map(|st| st.missing_usage_requests).unwrap_or(0),
+            stats.map(|st| st.cost_usd).unwrap_or(0.0),
             cost_usd,
             sessions,
             json_str(&s.last_success_at)
@@ -80,9 +82,11 @@ pub(super) fn api_models(
     let mut items = Vec::new();
     for m in analysis.by_model {
         items.push(format!(
-            "{{\"model\":{},\"totalTokens\":{},\"inputTokens\":null,\"outputTokens\":null,\"costUsd\":{}}}",
+            "{{\"model\":{},\"totalTokens\":{},\"missingUsageRequests\":{},\"knownCostUsd\":{},\"inputTokens\":null,\"outputTokens\":null,\"costUsd\":{}}}",
             json_str(&m.name),
-            m.tokens,
+            known_tokens(m.tokens, m.missing_usage_requests),
+            m.missing_usage_requests,
+            m.cost_usd,
             known_cost(m.cost_usd,m.priced)
         ));
     }
@@ -138,10 +142,12 @@ pub(super) fn api_trends(
     let mut items = Vec::new();
     for p in overview.trend {
         items.push(format!(
-            "{{\"date\":{},\"sourceId\":\"all\",\"totalTokens\":{},\"costUsd\":{},\"sessionCount\":{}}}",
+            "{{\"date\":{},\"sourceId\":\"all\",\"totalTokens\":{},\"missingUsageRequests\":{},\"knownCostUsd\":{},\"costUsd\":{},\"sessionCount\":{}}}",
             json_str(&p.timestamp),
-            p.tokens,
-            known_cost(p.cost_usd,overview.metrics.priced),
+            known_tokens(p.tokens, p.missing_usage_requests),
+            p.missing_usage_requests,
+            p.cost_usd,
+            known_cost(p.cost_usd,p.priced),
             p.requests
         ));
     }
@@ -161,6 +167,14 @@ pub fn format_compact_tokens(n: i64) -> String {
     }
 }
 
+pub(super) fn known_tokens(value: i64, missing: i64) -> String {
+    if missing > 0 && value == 0 {
+        "null".into()
+    } else {
+        value.to_string()
+    }
+}
+
 pub(super) fn known_cost(value: f64, priced: Option<bool>) -> String {
     if priced == Some(true) {
         format!("{value:.4}")
@@ -171,7 +185,14 @@ pub(super) fn known_cost(value: f64, priced: Option<bool>) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::known_cost;
+    use super::{known_cost, known_tokens};
+
+    #[test]
+    fn missing_tokens_are_unknown_but_known_subtotals_survive() {
+        assert_eq!(known_tokens(0, 0), "0");
+        assert_eq!(known_tokens(0, 1), "null");
+        assert_eq!(known_tokens(10, 1), "10");
+    }
 
     #[test]
     fn unknown_cost_is_distinct_from_a_known_zero_price() {

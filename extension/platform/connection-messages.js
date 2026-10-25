@@ -1,0 +1,2 @@
+// Generated from extension/_locales by modules:ui:build.
+export const connectionMessages = {"zh_CN":{"webConnectionRequiredTitle":"请从 Natives 打开此页面","webConnectionRequiredDescription":"当前浏览器尚未建立本机连接。请从 Natives 入口重新打开，无需配对码。服务已恢复时，也可以重试连接。","webConnectionRetry":"重试连接"},"en":{"webConnectionRequiredTitle":"Open this page from Natives","webConnectionRequiredDescription":"This browser has no local connection yet. Reopen the page from Natives; no pairing code is needed. If the service has recovered, retry the connection.","webConnectionRetry":"Retry connection"}};

@@ -1,6 +1,6 @@
 # ADR-0020: AI Native Personal Workspace 产品与 Native Backend 重构
 
-- **状态**: 已接受（目标与迁移约束）；生产切换按 Gate 逐项验收
+- **状态**: 已接受（目标与迁移约束）；生产切换按 Gate 逐项验收。§6.1 中模型代理内核、loopback gateway、访问密钥与路由部分已由 [ADR-0044](./0044-retire-model-proxy-and-direct-inference.md) 取代，其余 Host、Secret、生命周期与产品边界继续有效。
 - **取代范围注记**: §1「首页就是 V1 唯一 Personal Workspace Home；不新增 Workspace 一级菜单、Workspace CRUD 或多工作台数据域」与 §3「Home 布局复用 settings K/V 单份版本化 JSON」及「禁止 Infinite Canvas 与嵌套容器」中与 [ADR-0021](./0021-multi-workspace-design-system-v2.md)（含 2026-08-23 PWSV2 修订）冲突的部分由后者取代；其余决策（产品身份、停止建设、领域边界、Host authority、Secret、迁移纪律）继续有效。
 - **Apps 补充**：[ADR-0027](0027-managed-apps-independent-delivery.md) 与 [ADR-0029](0029-unified-suite-preinstalled-apps.md) 精确限定官方子应用运行、统一套件预装及开发/发布分级验收。Natives 仍为唯一产品，业务不并入 Core；旧 Tauri 默认描述不得要求恢复已删除产品路径。
 - **2026-09-12 路线收敛（取代上述 Apps 补充中与单一产品整包路线冲突的表述）**：基金等均为 Natives 内置模块，随完整安装包一起安装、更新和修复；取消模块独立下载/安装/更新/卸载、在线 Catalog 驱动新 appId 与 Fund 独立 nap 发布；更新统一为"更新 Natives"。§4 官方托管应用例外中的"独立原生可执行程序交付"改读为"随完整产品交付的固定内置模块代码"；系统目录例外扩展为已签名完整产品内的固定模块文件（仍不存用户业务数据）。**允许唯一主产品薄 Natives Launcher**（只负责打开 Chrome、定位扩展目录、简短可见诊断，结束即退出）作为本 ADR 顶层结构的精确例外；仍禁止 Workbench.app、Fund.app 或业务桌面界面。详见[实施方案 §5 P0](../development/app-center-fund-implementation-plan.md)。

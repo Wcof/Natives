@@ -90,12 +90,12 @@ export const installHomeFixture = () => {
           return json(result);
         }
         if(window.holdBenchmark && path.startsWith('/api/portfolio/benchmark')) await new Promise(resolve=>{window.releaseBenchmark=resolve;});
-        if (window.holdHomeReads && (path.startsWith('/api/home/snapshot') || path === '/api/market/indices' || path === '/api/check/run' || path === '/api/home/preferences')) {
+        if (window.holdHomeReads && (path.startsWith('/api/home/snapshot') || path.startsWith('/api/home/valuation/observe') || path === '/api/market/indices' || path === '/api/check/run' || path === '/api/home/preferences')) {
           // 故意忽略 AbortSignal，复现已返回响应仍迟到的竞态。
           await new Promise(resolve => window.heldHomeRequests.push({ path, resolve, signal: options?.signal }));
         }
         const isGoalConflict = path === '/api/goals/update';
-        if (path.startsWith('/api/home/snapshot')) {
+        if (path.startsWith('/api/home/snapshot') || path.startsWith('/api/home/valuation/observe')) {
           if(window.failRange)return json({error:'FIN_DB'},500);
           if(path.startsWith('/api/home/snapshot/generate')&&window.failGeneration)return json({error:'FIN_DB',message:'中文内部错误'},500);
           // 快照注入只存在于本测试 stub（隔离测试传输）：override 由测试用例
@@ -124,7 +124,7 @@ export const installHomeFixture = () => {
           : path === '/api/assets' ? { funds: [{ accountId: 1, fundId: 9, name: 'Synthetic Fund', code: '000001', account: 'Private Account', value: 100000, stale: false }], manual: [{ id: 3, name: 'Manual gold', marketValue: 20000, stale: false }] }
           : path === '/api/home/preferences' ? { displayMode: 'hidden', privacyHidden: true, notificationsEnabled: false }
           : path === '/api/check/run' ? { eventCount: 1, actions: [{ resultType: '等待', objectName: 'Private Holding', reason: 'Private 98765', amountCapMinor: 1234500, missing: [], eventId: 3 }] }
-          : path === '/api/market/indices' ? { quotes: [{ code: '000001', name: '上证指数', price: 3000, changePct: 0.5, asOf: '2026-09-30 15:00' }] }
+          : path === '/api/market/indices' ? { quotes: [{ code: '000001', name: '上证指数', price: 3000, changePct: 0.5, asOf: '2026-09-30 15:00' }, { code: 'hkHSI', name: '恒生指数', price: 23651.87, changePct: -0.9, asOf: '2026-09-30 15:00' }, { code: 'usSPX', name: '标普500', price: 7721.1, changePct: 0.11, asOf: '2026-09-30 15:00' }] }
           : path.startsWith('/api/portfolio/benchmark') ? { dataRevision:snapshot.dataRevision,symbol:new URL(path,'http://isolated.test').searchParams.get('symbol') || 'sh000300',status:'ready',from:'2026-09-27',to:'2026-09-30',source:'synthetic-test',portfolioPpm:'100000',benchmarkPpm:'50000',excessPpm:'50000',points:[{date:'2026-09-27',portfolioPpm:'0',benchmarkPpm:'0'},{date:'2026-09-30',portfolioPpm:'100000',benchmarkPpm:'50000'}] }
           : path.split('?')[0] === '/api/goals' ? { goals: [{ id: 7, name: 'Synthetic native goal', targetMinor: 20000000, targetDate: '2027-12-31', scopeKind: 'A', assetBindings: '[]', isPrimary: true, archived: false, monthlyPlanMinor: null, version: 1, note: '' }] }
           : path === '/api/rules' ? { rules: [] }

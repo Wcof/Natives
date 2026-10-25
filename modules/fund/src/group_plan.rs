@@ -890,3 +890,63 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod snapshot_group_values_tests {
+    use super::*;
+
+    #[test]
+    fn saved_valuation_captures_custom_group_values() {
+        let store = Store::open_in_memory().unwrap();
+        let plan = save_plan_tx(
+            &store,
+            &GroupPlanInput {
+                groups: vec![
+                    GroupInput {
+                        group_id: String::new(),
+                        name: "权益".into(),
+                        description: "测试分类说明".into(),
+                        ratio_tenths: 600,
+                        sort_order: 0,
+                        fund_bindings: vec![],
+                        manual_bindings: vec![],
+                        offline_bindings: vec![],
+                        cash_bindings: vec![],
+                    },
+                    GroupInput {
+                        group_id: String::new(),
+                        name: "现金".into(),
+                        description: "测试分类说明".into(),
+                        ratio_tenths: 400,
+                        sort_order: 1,
+                        fund_bindings: vec![],
+                        manual_bindings: vec![],
+                        offline_bindings: vec![],
+                        cash_bindings: vec![],
+                    },
+                ],
+                expected_revision: 0,
+            },
+        )
+        .unwrap();
+        assert_eq!(plan.groups.len(), 2);
+        let summary = crate::assets::AssetsSummary {
+            complete_value_minor: Some(100),
+            known_value_minor: Some(100),
+            quality: "ready".into(),
+            ..Default::default()
+        };
+        crate::returns::save_value_snapshot(&store, &summary, 0, "", "2026-10-21").unwrap();
+        let text: String = store.with_read(|c| c.query_row(
+            "SELECT breakdown_json FROM value_snapshots WHERE taken_at='2026-10-21' ORDER BY id DESC LIMIT 1",
+            [], |r| r.get(0),
+        )).unwrap();
+        let value: Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(value["groupValues"].as_array().unwrap().len(), 2);
+        assert!(value["groupValues"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|group| group["name"] == "权益"));
+    }
+}

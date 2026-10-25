@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 #[serde(rename_all = "camelCase")]
 pub struct MetricCardsDTO {
     #[serde(default)]
+    pub missing_usage_requests: i64,
+    #[serde(default)]
     pub total_requests: i64,
     #[serde(default)]
     pub total_tokens: i64,
@@ -24,6 +26,10 @@ pub struct MetricCardsDTO {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct TrendPointDTO {
+    #[serde(default)]
+    pub priced: Option<bool>,
+    #[serde(default)]
+    pub missing_usage_requests: i64,
     #[serde(default)]
     pub timestamp: String,
     #[serde(default)]
@@ -68,6 +74,8 @@ pub struct OverviewResultDTO {
 #[serde(rename_all = "camelCase")]
 pub struct RankItemDTO {
     #[serde(default)]
+    pub missing_usage_requests: i64,
+    #[serde(default)]
     pub key: String,
     #[serde(default)]
     pub name: String,
@@ -103,6 +111,8 @@ pub struct AnalyticsResultDTO {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct SessionStatDTO {
+    #[serde(default)]
+    pub missing_usage_requests: i64,
     #[serde(default)]
     pub key: String,
     #[serde(default)]
@@ -166,6 +176,8 @@ pub struct SessionsResultDTO {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct EventDTO {
+    #[serde(default)]
+    pub usage_status: String,
     #[serde(default)]
     pub id: String,
     #[serde(default)]

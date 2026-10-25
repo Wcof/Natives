@@ -48,6 +48,7 @@ pub(crate) fn is_allowed_web_rpc_method(method: &str) -> bool {
             | "batch_cancel"
             | "diagnostics_get"
             | "diagnostics_reset"
+            | "space_background_bing"
     ) || method.starts_with("workspace_")
         || method.starts_with("settings_")
         || method.starts_with("preferences_")
@@ -85,6 +86,23 @@ pub(crate) fn dispatch_service_request<'a>(
             ok: true,
             result: Some(sql_diag::snapshot()),
             error: None,
+        };
+    }
+
+    if request.method == "space_background_bing" {
+        return match crate::wallpaper::bing_wallpaper(&request.params) {
+            Ok(result) => Response {
+                id: &request.id,
+                ok: true,
+                result: Some(result),
+                error: None,
+            },
+            Err(error) => Response {
+                id: &request.id,
+                ok: false,
+                result: None,
+                error: Some(safe_error(error)),
+            },
         };
     }
 

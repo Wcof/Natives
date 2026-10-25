@@ -6,12 +6,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"os/exec"
 	"os/user"
-	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -32,19 +30,16 @@ func TestModelHostProcessHelper(t *testing.T) {
 				os.Exit(0)
 			}
 			_ = writer.Write(nativeio.Response{ID: request.ID, OK: true})
-			if request.Method == "restart" {
-				os.Exit(workerRestartExitCode)
-			}
 		}
 	}
 	if os.Getenv("NATIVES_MODEL_HOST_PROCESS_TEST") != "1" {
 		return
 	}
 	store := secrets.NewMemoryStore()
-	store.Values["gateway:access-key"] = "process-test-key"
-	store.Values["process-provider"] = "process-upstream-key"
+	if ref, value := os.Getenv("NATIVES_MODEL_HOST_PROCESS_SECRET_REF"), os.Getenv("NATIVES_MODEL_HOST_PROCESS_SECRET_VALUE"); ref != "" && value != "" {
+		store.Values[ref] = value
+	}
 	if ref := os.Getenv("NATIVES_MODEL_HOST_PROCESS_REAL_SECRET_REF"); ref != "" {
-		// security resolves the login keychain via HOME; restore isolation before run.
 		isolatedHome, homeSet := os.LookupEnv("HOME")
 		account, lookupErr := user.Current()
 		if lookupErr != nil {
@@ -61,14 +56,13 @@ func TestModelHostProcessHelper(t *testing.T) {
 			fmt.Fprintln(os.Stderr, "read-only upstream credential unavailable")
 			os.Exit(2)
 		}
-		// Only read the existing credential; all writes remain in this process.
 		store.Values[ref] = value
 	}
 	run(store)
 	os.Exit(0)
 }
 
-func TestBridgeReadsChromeInputOnceAcrossWorkerRestart(t *testing.T) {
+func TestBridgeForwardsChromeInputOnce(t *testing.T) {
 	t.Setenv("NATIVES_MODEL_HOST_RESTART_TEST", "1")
 	inputReader, input, err := os.Pipe()
 	if err != nil {
@@ -82,7 +76,6 @@ func TestBridgeReadsChromeInputOnceAcrossWorkerRestart(t *testing.T) {
 	}
 	defer output.Close()
 	defer outputWriter.Close()
-	// Run only the child helper when the bridge launches this test executable.
 	originalArgs := os.Args
 	os.Args = []string{originalArgs[0], "-test.run=^TestModelHostProcessHelper$", "--"}
 	defer func() { os.Args = originalArgs }()
@@ -90,18 +83,11 @@ func TestBridgeReadsChromeInputOnceAcrossWorkerRestart(t *testing.T) {
 	go func() { done <- bridgeModelHost(t.TempDir(), inputReader, outputWriter) }()
 	output.SetReadDeadline(time.Now().Add(5 * time.Second))
 	if response := readResponse(t, output); response.Event != "ready" {
-		t.Fatal("first worker not ready")
+		t.Fatal("worker not ready")
 	}
-	writeRequest(t, input, nativeio.Request{ID: "restart", Method: "restart"})
-	if response := readResponse(t, output); response.ID != "restart" {
-		t.Fatal("restart response missing")
-	}
-	if response := readResponse(t, output); response.Event != "ready" {
-		t.Fatal("replacement worker not ready")
-	}
-	writeRequest(t, input, nativeio.Request{ID: "after", Method: "snapshot"})
-	if response := readResponse(t, output); response.ID != "after" {
-		t.Fatal("replacement worker lost Chrome request")
+	writeRequest(t, input, nativeio.Request{ID: "first", Method: "snapshot"})
+	if response := readResponse(t, output); response.ID != "first" {
+		t.Fatal("bridge lost a Chrome request")
 	}
 	input.Close()
 	select {
@@ -114,136 +100,61 @@ func TestBridgeReadsChromeInputOnceAcrossWorkerRestart(t *testing.T) {
 	}
 }
 
-func TestResidentGatewaySurvivesBrowserProcessTermination(t *testing.T) {
-	for _, termination := range []struct {
-		name   string
-		signal syscall.Signal
-	}{
-		{"graceful", syscall.SIGTERM},
-		{"forced", syscall.SIGKILL},
-	} {
-		t.Run(termination.name, func(t *testing.T) {
-			dir := t.TempDir()
-			complete := make(chan struct{})
-			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				w.Header().Set("Content-Type", "text/event-stream")
-				_, _ = io.WriteString(w, "data: {\"id\":\"stream\",\"object\":\"chat.completion.chunk\",\"model\":\"process-model\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"before-close\"},\"finish_reason\":null}]}\n\n")
-				w.(http.Flusher).Flush()
-				select {
-				case <-complete:
-					_, _ = io.WriteString(w, "data: {\"id\":\"stream\",\"object\":\"chat.completion.chunk\",\"model\":\"process-model\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"after-close\"},\"finish_reason\":\"stop\"}]}\n\ndata: [DONE]\n\n")
-				case <-r.Context().Done():
-				}
-			}))
-			t.Cleanup(upstream.Close)
-			initial, err := domain.NewRepository(filepath.Join(dir, "state.json")).Update(nil, func(s *domain.Snapshot) error {
-				s.Providers = append(s.Providers, domain.Provider{ID: "process-provider", Kind: "custom", Name: "Process test", BaseURL: upstream.URL + "/v1", Protocol: domain.ProtocolOpenAIChat, Enabled: true, SecretRef: "process-provider", Models: []domain.Model{{ID: "process-model", Enabled: true}}})
-				return nil
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			browser := startProcessClient(t, dir)
-			snapshot := browser.call(t, "model_gateway_set_resident", fmt.Sprintf(`{"expectedRevision":%d,"resident":true}`, initial.Revision))
-			snapshot = browser.call(t, "model_gateway_start", fmt.Sprintf(`{"expectedRevision":%d}`, snapshot.Revision))
-			assertGatewayResponds(t, snapshot.Gateway.BaseURL)
-			workerPID := snapshot.Gateway.PID
-			t.Cleanup(func() { _ = syscall.Kill(workerPID, syscall.SIGTERM) })
-			request, err := http.NewRequest(http.MethodPost, snapshot.Gateway.BaseURL+"/v1/chat/completions", strings.NewReader(`{"model":"process-model","messages":[{"role":"user","content":"hello"}],"stream":true}`))
-			if err != nil {
-				t.Fatal(err)
-			}
-			request.Header.Set("Authorization", "Bearer process-test-key")
-			request.Header.Set("Content-Type", "application/json")
-			stream, err := (&http.Client{Timeout: 5 * time.Second}).Do(request)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer stream.Body.Close()
-
-			// Chromium can terminate the Native Messaging process group after closing its pipes.
-			if err := syscall.Kill(-browser.cmd.Process.Pid, termination.signal); err != nil {
-				t.Fatal(err)
-			}
-			browser.wait(t)
-			assertGatewayResponds(t, snapshot.Gateway.BaseURL)
-			close(complete)
-			body, err := io.ReadAll(stream.Body)
-			if err != nil || stream.StatusCode != http.StatusOK || !strings.Contains(string(body), "after-close") || !strings.Contains(string(body), "[DONE]") {
-				t.Fatalf("browser termination interrupted the in-flight stream: status=%d, error=%v", stream.StatusCode, err)
-			}
-
-			reopened := startProcessClient(t, dir)
-			snapshot = reopened.call(t, "model_snapshot", `{}`)
-			if snapshot.Gateway.PID != workerPID || snapshot.Gateway.State != "running" {
-				t.Fatalf("reopening replaced the resident gateway: pid=%d, state=%s", snapshot.Gateway.PID, snapshot.Gateway.State)
-			}
-			snapshot = reopened.call(t, "model_gateway_stop", fmt.Sprintf(`{"expectedRevision":%d}`, snapshot.Revision))
-			if snapshot.Gateway.State != "stopped" {
-				t.Fatal("explicit stop did not stop the gateway")
-			}
-			reopened.call(t, "model_gateway_set_resident", fmt.Sprintf(`{"expectedRevision":%d,"resident":false}`, snapshot.Revision))
-			_ = reopened.input.Close()
-			reopened.wait(t)
-			waitForProcessExit(t, workerPID)
-		})
-	}
-}
-
-func TestGatewayFollowsLastNonResidentPage(t *testing.T) {
+func TestResidentHostSurvivesNativeEOF(t *testing.T) {
 	dir := t.TempDir()
 	first := startProcessClient(t, dir)
-	snapshot := first.call(t, "model_gateway_start", `{"expectedRevision":1}`)
-	workerPID := snapshot.Gateway.PID
+	snapshot := first.call(t, "model_host_set_resident", `{"expectedRevision":1,"resident":true}`)
+	workerPID := singleChildPID(t, first.cmd.Process.Pid)
 	t.Cleanup(func() { _ = syscall.Kill(workerPID, syscall.SIGTERM) })
-	second := startProcessClient(t, dir)
-	if other := second.call(t, "model_snapshot", `{}`); other.Gateway.PID != workerPID {
-		t.Fatal("two pages started separate gateways")
-	}
 	_ = first.input.Close()
 	first.wait(t)
-	assertGatewayResponds(t, snapshot.Gateway.BaseURL)
+	assertProcessRunning(t, workerPID)
+
+	second := startProcessClient(t, dir)
+	reopened := second.call(t, "model_snapshot", `{}`)
+	if !reopened.Resident || reopened.Revision != snapshot.Revision {
+		t.Fatalf("reopening saw a different authority: %#v", reopened)
+	}
+	if children := childProcessIDs(t, second.cmd.Process.Pid); len(children) != 0 {
+		t.Fatalf("relay spawned a replacement worker: %v", children)
+	}
+	second.call(t, "model_host_set_resident", fmt.Sprintf(`{"expectedRevision":%d,"resident":false}`, reopened.Revision))
 	_ = second.input.Close()
 	second.wait(t)
 	waitForProcessExit(t, workerPID)
 }
 
-func TestResidentGatewaySurvivesNativeEOF(t *testing.T) {
+func TestNonResidentHostExitsAfterLastClient(t *testing.T) {
 	dir := t.TempDir()
 	first := startProcessClient(t, dir)
-	snapshot := first.call(t, "model_gateway_set_resident", `{"expectedRevision":1,"resident":true}`)
-	snapshot = first.call(t, "model_gateway_start", fmt.Sprintf(`{"expectedRevision":%d}`, snapshot.Revision))
-	workerPID := snapshot.Gateway.PID
+	_ = first.call(t, "model_snapshot", `{}`)
+	workerPID := singleChildPID(t, first.cmd.Process.Pid)
 	t.Cleanup(func() { _ = syscall.Kill(workerPID, syscall.SIGTERM) })
 	_ = first.input.Close()
 	first.wait(t)
-	assertGatewayResponds(t, snapshot.Gateway.BaseURL)
-	second := startProcessClient(t, dir)
-	snapshot = second.call(t, "model_snapshot", `{}`)
-	if snapshot.Gateway.PID != workerPID {
-		t.Fatal("reopening replaced the resident worker")
-	}
-	second.call(t, "model_gateway_set_resident", fmt.Sprintf(`{"expectedRevision":%d,"resident":false}`, snapshot.Revision))
-	_ = second.input.Close()
-	second.wait(t)
 	waitForProcessExit(t, workerPID)
 }
 
 func TestNativeRelayCompletesRequestBeforeEOF(t *testing.T) {
 	dir := t.TempDir()
 	first := startProcessClient(t, dir)
-	snapshot := first.call(t, "model_gateway_start", `{"expectedRevision":1}`)
-	workerPID := snapshot.Gateway.PID
+	snapshot := first.call(t, "model_host_set_resident", `{"expectedRevision":1,"resident":true}`)
+	workerPID := singleChildPID(t, first.cmd.Process.Pid)
 	t.Cleanup(func() { _ = syscall.Kill(workerPID, syscall.SIGTERM) })
 	relay := startProcessClient(t, dir)
 	_ = relay.output.SetReadDeadline(time.Now().Add(2 * time.Second))
 	writeRequest(t, relay.input, nativeio.Request{ID: "last-request", Method: "model_snapshot", Params: json.RawMessage(`{}`)})
 	_ = relay.input.Close()
 	response := readResponse(t, relay.output)
-	if !response.OK || response.ID != "last-request" || decodeSnapshot(t, response.Result).Gateway.PID != workerPID {
+	if !response.OK || response.ID != "last-request" || decodeSnapshot(t, response.Result).Revision != snapshot.Revision {
 		t.Fatal("relay discarded the response to a request received before EOF")
 	}
 	relay.wait(t)
+	second := startProcessClient(t, dir)
+	current := second.call(t, "model_snapshot", `{}`)
+	second.call(t, "model_host_set_resident", fmt.Sprintf(`{"expectedRevision":%d,"resident":false}`, current.Revision))
+	_ = second.input.Close()
+	second.wait(t)
 	_ = first.input.Close()
 	first.wait(t)
 	waitForProcessExit(t, workerPID)
@@ -285,11 +196,8 @@ func startProcessClient(t *testing.T, dir string) *processClient {
 		_ = input.Close()
 		_ = output.Close()
 		_ = cmd.Process.Kill()
-		// A failed assertion must not leave a detached test gateway behind.
-		data, readErr := os.ReadFile(filepath.Join(dir, "state.json"))
-		var snapshot domain.Snapshot
-		if readErr == nil && json.Unmarshal(data, &snapshot) == nil && snapshot.Gateway.PID > 0 {
-			_ = syscall.Kill(snapshot.Gateway.PID, syscall.SIGTERM)
+		for _, pid := range childProcessIDs(t, cmd.Process.Pid) {
+			_ = syscall.Kill(pid, syscall.SIGTERM)
 		}
 	})
 	return client
@@ -319,33 +227,49 @@ func (c *processClient) wait(t *testing.T) {
 	t.Helper()
 	select {
 	case <-c.done:
-	case <-time.After(2 * time.Second):
+	case <-time.After(3 * time.Second):
 		t.Fatal("Native Messaging process did not exit")
 	}
 }
 
-func assertGatewayResponds(t *testing.T, baseURL string) {
+func childProcessIDs(t *testing.T, parent int) []int {
 	t.Helper()
-	client := &http.Client{Timeout: time.Second}
-	request, err := http.NewRequest(http.MethodGet, baseURL+"/v1/models", nil)
+	output, err := exec.Command("pgrep", "-P", strconv.Itoa(parent)).Output()
 	if err != nil {
-		t.Fatal(err)
+		return nil
 	}
-	request.Header.Set("Authorization", "Bearer process-test-key")
-	response, err := client.Do(request)
-	if err != nil {
-		t.Fatalf("resident gateway stopped after browser disconnect: %v", err)
+	var ids []int
+	for _, field := range strings.Fields(string(output)) {
+		if value, err := strconv.Atoi(field); err == nil {
+			ids = append(ids, value)
+		}
 	}
-	defer response.Body.Close()
-	_, _ = io.Copy(io.Discard, response.Body)
-	if response.StatusCode != http.StatusOK {
-		t.Fatalf("gateway status = %d", response.StatusCode)
+	return ids
+}
+
+func singleChildPID(t *testing.T, parent int) int {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if ids := childProcessIDs(t, parent); len(ids) == 1 {
+			return ids[0]
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("expected exactly one model worker child for %d", parent)
+	return 0
+}
+
+func assertProcessRunning(t *testing.T, pid int) {
+	t.Helper()
+	if err := syscall.Kill(pid, 0); err != nil {
+		t.Fatalf("resident worker %d is not running: %v", pid, err)
 	}
 }
 
 func waitForProcessExit(t *testing.T, pid int) {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		if syscall.Kill(pid, 0) == syscall.ESRCH {
 			return

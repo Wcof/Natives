@@ -1,16 +1,9 @@
 import { renderUsageView } from './model-usage-view.js';
-import { renderAdvancedView } from './model-advanced-view.js';
-import { renderGateway } from './model-gateway-view.js';
-import { renderOAuthLoginView } from './model-oauth-login-view.js';
 import { renderAuthFilesView } from './model-auth-files-view.js';
-import { renderQuotaView } from './model-quota-view.js';
-import { renderAgentView } from './model-agent-view.js';
 
 export function createModelSettingsView({ t, onAction }) {
-  let activePage = 'oauth';
-  let activeOAuthTab = 'login'; // 'login' | 'authFiles' | 'quota'
+  let activePage = 'custom';
   let activeUsageTab = 'overview';
-  let activeAdvancedTab = 'basic';
   let toastTimer = null;
   let noticeTimer = null;
   let loadingFocus = null;
@@ -55,13 +48,10 @@ export function createModelSettingsView({ t, onAction }) {
         </div>
         <div class="model-settings-nav-group">
           <span data-role="navGroup"></span>
-          <nav class="model-settings-subnav" aria-label="Model settings">
+          <nav class="model-settings-subnav" aria-label="AI settings">
             <button type="button" data-action="select-model-page" data-page="custom"><svg class="icon" aria-hidden="true"><use href="#i-pen" /></svg><span data-role="customNav"></span></button>
-            <button type="button" data-action="select-model-page" data-page="oauth"><svg class="icon" aria-hidden="true"><use href="#i-globe" /></svg><span data-role="oauthNav"></span></button>
-            <button type="button" data-action="select-model-page" data-page="gateway"><svg class="icon" aria-hidden="true"><use href="#i-bolt" /></svg><span data-role="gatewayNav"></span></button>
             <button type="button" data-action="select-model-page" data-page="usage"><svg class="icon" aria-hidden="true"><use href="#i-list" /></svg><span data-role="usageNav"></span></button>
-            <button type="button" data-action="select-model-page" data-page="agent"><svg class="icon" aria-hidden="true"><use href="#i-target" /></svg><span data-role="agentNav"></span></button>
-            <button type="button" data-action="select-model-page" data-page="advanced"><svg class="icon" aria-hidden="true"><use href="#i-gear" /></svg><span data-role="advancedNav"></span></button>
+            <button type="button" data-action="select-model-page" data-page="quota"><svg class="icon" aria-hidden="true"><use href="#i-globe" /></svg><span data-role="quotaNav"></span></button>
           </nav>
         </div>
       </aside>
@@ -81,53 +71,23 @@ export function createModelSettingsView({ t, onAction }) {
             </header>
             <div class="model-apps-container" data-role="appsContainer">
               <div class="apps-list" data-role="appsList" role="list"></div>
-              <!-- 模块内嵌视图：点击模块时在对话框内容区渲染，左侧导航保持不变 -->
               <div id="app-stage" hidden></div>
             </div>
           </section>
           <section class="model-settings-page" data-page-panel="custom">
             <header class="model-page-heading"><div><h3 data-role="customTitle"></h3><p class="muted" data-role="customDescription"></p></div><button type="button" class="model-add-provider" data-action="new-provider" disabled></button></header>
+            <div class="model-retirement-notice" data-role="retirementNotice" role="note"></div>
+            <div data-role="defaultModel"></div>
+            <label class="model-checkbox model-resident-toggle"><input type="checkbox" data-action="resident" data-role="resident"> <span data-role="residentLabel"></span></label>
             <div class="model-settings-layout"><aside class="model-provider-pane"><div class="model-provider-scroll" data-role="providerList"></div></aside><div class="model-provider-detail" data-role="detail"></div></div>
-          </section>
-          <section class="model-settings-page" data-page-panel="oauth" hidden>
-            <header class="model-page-heading">
-              <div>
-                <div class="model-oauth-tabs-nav" role="tablist">
-                  <button type="button" class="model-oauth-tab-btn selected" data-action="select-oauth-tab" data-tab="login" role="tab" aria-selected="true" data-role="tabLogin">OAuth 登录</button>
-                  <button type="button" class="model-oauth-tab-btn" data-action="select-oauth-tab" data-tab="authFiles" role="tab" aria-selected="false" data-role="tabAuthFiles">认证文件</button>
-                  <button type="button" class="model-oauth-tab-btn" data-action="select-oauth-tab" data-tab="quota" role="tab" aria-selected="false" data-role="tabQuota">额度查询</button>
-                </div>
-                <div class="model-oauth-header-text">
-                  <span class="model-oauth-section-tag" data-role="oauthSectionTag">OAUTH</span>
-                  <h3 data-role="oauthTitle"></h3>
-                </div>
-              </div>
-            </header>
-            <div class="model-oauth-panel" data-oauth-panel="login">
-              <div class="model-oauth-login-container" data-role="oauthLoginContainer"></div>
-            </div>
-            <div class="model-oauth-panel" data-oauth-panel="authFiles" hidden>
-              <div class="model-auth-files-container" data-role="authFilesContainer"></div>
-            </div>
-            <div class="model-oauth-panel" data-oauth-panel="quota" hidden>
-              <div class="model-quota-container" data-role="quotaContainer"></div>
-            </div>
-          </section>
-          <section class="model-settings-page" data-page-panel="gateway" hidden>
-            <header class="model-page-heading"><div><h3 data-role="gatewayTitle"></h3><p class="muted" data-role="gatewayDescription"></p></div></header>
-            <div class="model-gateway-view" data-role="gateway"></div>
           </section>
           <section class="model-settings-page" data-page-panel="usage" hidden>
             <header class="model-page-heading"><div><h3 data-role="usageTitle"></h3><p class="muted" data-role="usageDescription"></p></div></header>
             <div class="model-usage-container" data-role="usageContainer"></div>
           </section>
-          <section class="model-settings-page" data-page-panel="agent" hidden>
-            <header class="model-page-heading"><div><span class="model-oauth-section-tag">AGENT CLIENTS</span><h3 data-role="agentTitle"></h3></div></header>
-            <div class="model-agent-container" data-role="agentContainer"></div>
-          </section>
-          <section class="model-settings-page" data-page-panel="advanced" hidden>
-            <header class="model-page-heading"><div><h3 data-role="advancedTitle"></h3><p class="muted" data-role="advancedDescription"></p></div></header>
-            <div class="model-advanced-container" data-role="advancedContainer"></div>
+          <section class="model-settings-page" data-page-panel="quota" hidden>
+            <header class="model-page-heading"><div><h3 data-role="quotaTitle"></h3><p class="muted" data-role="quotaDescription"></p></div></header>
+            <div class="model-auth-files-container" data-role="authFilesContainer"></div>
           </section>
         </div>
       </main>
@@ -160,7 +120,7 @@ export function createModelSettingsView({ t, onAction }) {
       dialog.close();
     },
     setPage(page) {
-      activePage = page;
+      activePage = ['apps', 'custom', 'usage', 'quota'].includes(page) ? page : 'custom';
       for (const item of dialog.querySelectorAll('[data-page]')) {
         const selected = item.dataset.page === activePage;
         item.classList.toggle('selected', selected);
@@ -168,46 +128,25 @@ export function createModelSettingsView({ t, onAction }) {
       }
       for (const panel of dialog.querySelectorAll('[data-page-panel]')) panel.hidden = panel.dataset.pagePanel !== activePage;
       const titleEl = dialog.querySelector('#model-settings-title');
-      if (titleEl) {
-        titleEl.textContent = activePage === 'apps' ? t('appsCenter', '应用中心') : t('modelSettings', '模型与服务');
-      }
+      if (titleEl) titleEl.textContent = activePage === 'apps' ? t('appsCenter', '应用中心') : t('modelSettings', '模型与服务');
       if (roles.subtitle) {
-        roles.subtitle.textContent = activePage === 'apps' ? t('appsCenterSub', '管理可选 Natives 应用') : t('modelSettingsDescription', '管理模型供应商配置，包括自定义模型、OAuth 和本地代理设置。');
+        roles.subtitle.textContent = activePage === 'apps'
+          ? t('appsCenterSub', '管理可选 Natives 应用')
+          : t('modelSettingsDescription', '管理内置 AI 调用连接、用量与额度。');
       }
     },
-    setOAuthTab(tab) {
-      activeOAuthTab = tab;
-      for (const btn of dialog.querySelectorAll('[data-action="select-oauth-tab"]')) {
-        const selected = btn.dataset.tab === activeOAuthTab;
-        btn.classList.toggle('selected', selected);
-        btn.setAttribute('aria-selected', String(selected));
-      }
-      for (const panel of dialog.querySelectorAll('[data-oauth-panel]')) {
-        panel.hidden = panel.dataset.oauthPanel !== activeOAuthTab;
-      }
-      
-      if (roles.oauthSectionTag) {
-        roles.oauthSectionTag.textContent = activeOAuthTab === 'login' ? 'OAUTH' : activeOAuthTab === 'authFiles' ? 'AUTH FILES' : 'QUOTA';
-      }
-      if (roles.oauthTitle) {
-        roles.oauthTitle.textContent = activeOAuthTab === 'login' ? t('modelOAuthLogin', 'OAuth 登录') : activeOAuthTab === 'authFiles' ? t('modelAuthFiles', '认证文件') : t('modelQuotaInquiry', '额度查询');
-      }
-    },
-    get activeOAuthTab() { return activeOAuthTab; },
     setUsageTab(tab) { activeUsageTab = tab; },
-    setAdvancedTab(tab) { activeAdvancedTab = tab; },
     get activePage() { return activePage; },
     get activeUsageTab() { return activeUsageTab; },
-    get activeAdvancedTab() { return activeAdvancedTab; },
     setLoading(loading) {
-      const pages=dialog.querySelector('.model-settings-pages');
-      const controls=()=>Array.from(pages.querySelectorAll('button,input,select,textarea'));
-      if(loading&&pages.contains(document.activeElement))loadingFocus={node:document.activeElement,index:controls().indexOf(document.activeElement)};
-      roles.loading.hidden = !loading; dialog.setAttribute('aria-busy', String(loading)); pages.inert=loading;
-      if(!loading&&loadingFocus){
-        const {node,index}=loadingFocus;loadingFocus=null;
-        if(document.activeElement===document.body||document.activeElement===dialog){
-          (node.isConnected?node:controls()[index])?.focus();
+      const pages = dialog.querySelector('.model-settings-pages');
+      const controls = () => Array.from(pages.querySelectorAll('button,input,select,textarea'));
+      if (loading && pages.contains(document.activeElement)) loadingFocus = { node: document.activeElement, index: controls().indexOf(document.activeElement) };
+      roles.loading.hidden = !loading; dialog.setAttribute('aria-busy', String(loading)); pages.inert = loading;
+      if (!loading && loadingFocus) {
+        const { node, index } = loadingFocus; loadingFocus = null;
+        if (document.activeElement === document.body || document.activeElement === dialog) {
+          (node.isConnected ? node : controls()[index])?.focus();
         }
       }
     },
@@ -231,64 +170,39 @@ export function createModelSettingsView({ t, onAction }) {
     showToast(message) {
       triggerToast(message);
     },
-    render(snapshot, selectedID, pendingOAuth, usageContext = {}, oauthContext = {}) {
+    render(snapshot, selectedID, usageContext = {}, quotaContext = {}) {
       roles.refresh.textContent = t('modelRefresh', '刷新');
       roles.close.textContent = t('close', '关闭');
       roles.loading.textContent = t('modelLoading', '正在加载模型设置…');
       roles.error.querySelector('button').textContent = t('retry', '重试');
-      dialog.querySelector('.model-add-provider').textContent = `＋ ${t('modelAddProvider', '添加自定义供应商')}`;
+      dialog.querySelector('.model-add-provider').textContent = `＋ ${t('modelAddProvider', '添加 AI 连接')}`;
       dialog.querySelector('.model-add-provider').disabled = false;
       roles.close.textContent = `← ${t('modelBackToWorkspace', '返回工作区')}`;
       roles.appsNavGroup.textContent = t('appsCenter', '应用中心');
       roles.appsListNav.textContent = t('appsList', '应用列表');
       roles.appsTitle.textContent = t('appsList', '应用列表');
       roles.appsDescription.textContent = t('appsCenterSub', '管理可选 Natives 应用');
-      roles.navGroup.textContent = t('modelModelsAndServices', '模型与服务');
-      roles.customNav.textContent = t('modelCustomModels', '自定义模型');
-      roles.oauthNav.textContent = 'OAuth';
-      roles.gatewayNav.textContent = t('modelLocalProxy', '本地代理');
+      roles.navGroup.textContent = t('modelAISettings', 'AI 设置');
+      roles.customNav.textContent = t('modelConnections', 'AI 连接');
       roles.usageNav.textContent = t('modelUsageRecords', '使用记录');
-      roles.agentNav.textContent = t('modelAgentSettings', '智能体配置');
-      roles.advancedNav.textContent = t('modelAdvancedSettings', '高级设置');
-
-      dialog.querySelector('#model-settings-title').textContent = activePage === 'apps' ? t('appsCenter', '应用中心') : t('modelSettings', '模型与服务');
-      roles.subtitle.textContent = activePage === 'apps' ? t('appsCenterSub', '管理可选 Natives 应用') : t('modelSettingsDescription', '管理模型供应商配置，包括自定义模型、OAuth 和本地代理设置。');
-      roles.customTitle.textContent = t('modelCustomModels', '自定义模型');
-      roles.customDescription.textContent = t('modelCustomModelsDescription', '配置兼容接口、API Key 与可用模型。');
-      roles.gatewayTitle.textContent = t('modelLocalProxy', '本地代理');
-      roles.gatewayDescription.textContent = t('modelLocalProxyDescription', '管理本地兼容接口、访问密钥与常驻状态。');
+      roles.quotaNav.textContent = t('modelQuotaInquiry', '额度与凭据');
+      roles.customTitle.textContent = t('modelConnections', 'AI 连接');
+      roles.customDescription.textContent = t('modelConnectionsDescription', '统一配置 Base URL、API Key、协议和模型，供各模块调用 AI。');
+      roles.retirementNotice.textContent = t('modelProxyRetiredNotice', '本地模型代理与路由已退役；Natives 不再为第三方工具注入代理配置，也不再提供代理访问密钥。');
+      roles.residentLabel.textContent = t('modelResidentHost', '关闭页面后保持 AI 服务运行（常驻）');
+      roles.resident.checked = Boolean(snapshot.resident);
+      roles.defaultModel.replaceChildren(renderDefaultModelSelector(snapshot, t));
       roles.usageTitle.textContent = t('modelUsageRecords', '使用记录');
       roles.usageDescription.textContent = t('modelUsageRecordsDescription', '查看调用指标、Token 消耗、透视分析与费率定价。');
-      roles.agentTitle.textContent = t('modelAgentSettings', '智能体配置');
-      roles.advancedTitle.textContent = t('modelAdvancedSettings', '高级设置');
-      roles.advancedDescription.textContent = t('modelAdvancedSettingsDescription', '管理多访问密钥、调度路由负载、上游网络代理与数据迁移。');
+      roles.quotaTitle.textContent = t('modelQuotaInquiry', '额度与凭据');
+      roles.quotaDescription.textContent = t('modelQuotaDescription', '额度查询仅读取已导入凭据或既有 OAuth 账户，不参与模型推理。');
 
-      renderGateway(roles.gateway, snapshot, t);
       renderCustomProviderList(roles.providerList, snapshot, selectedID, t);
       const selectedCustom = snapshot.providers.find((provider) => provider.id === selectedID && provider.kind === 'custom');
       roles.detail.replaceChildren();
       if (selectedCustom) renderCustomDetail(roles.detail, selectedCustom, snapshot, t);
-      else roles.detail.append(emptyState(t('modelNoCustomProviders', '尚未添加自定义供应商'), t('modelNoModelsHint', '添加供应商后即可配置和调用模型。')));
+      else roles.detail.append(emptyState(t('modelNoCustomProviders', '尚未添加 AI 连接'), t('modelNoModelsHint', '添加连接后即可配置和调用模型。')));
 
-      
-      renderOAuthLoginView(roles.oauthLoginContainer, { snapshot, pendingOAuth, results: oauthContext.results, t });
-      renderAuthFilesView(roles.authFilesContainer, {
-        files: oauthContext.authFiles || [],
-        quotaMap: oauthContext.quotaMap || {},
-        filter: oauthContext.authFileFilter || {},
-        t,
-        onAction,
-      });
-      renderQuotaView(roles.quotaContainer, {
-        files: oauthContext.authFiles || [],
-        quotaMap: oauthContext.quotaMap || {},
-        t,
-        onAction,
-      });
-
-      this.setOAuthTab(activeOAuthTab);
-
-      
       renderUsageView(roles.usageContainer, {
         activeSubTab: activeUsageTab,
         overviewData: usageContext.overviewData,
@@ -301,24 +215,9 @@ export function createModelSettingsView({ t, onAction }) {
         onAction,
       });
 
-      renderAgentView(roles.agentContainer, {
-        clients: usageContext.agentStatuses || [],
-        selectedId: usageContext.agentSelectedId || '',
-        models: usageContext.agentModels ?? null,
-        modelsError: usageContext.agentModelsError || '',
-        selection: usageContext.agentSelections || {},
-        busy: usageContext.agentBusy || false,
-        activeTab: usageContext.agentActiveTab || 'core',
-        sessions: usageContext.agentSessions || [],
-        loadError: usageContext.agentLoadError || '',
-        detecting: Boolean(usageContext.agentDetecting),
-        t,
-        onAction,
-      });
-
-      renderAdvancedView(roles.advancedContainer, {
-        activeSubTab: activeAdvancedTab,
-        snapshot,
+      renderAuthFilesView(roles.authFilesContainer, {
+        files: quotaContext.authFiles || [],
+        quotaMap: quotaContext.quotaMap || {},
         t,
         onAction,
       });
@@ -331,10 +230,10 @@ export function createModelSettingsView({ t, onAction }) {
 
 function renderCustomProviderList(container, snapshot, selectedID, t) {
   container.replaceChildren();
-  container.append(element('h3', '', t('modelCustomProviders', '自定义供应商')));
-  const custom = snapshot.providers.filter((item) => item.kind === 'custom');
-  if (!custom.length) container.append(element('p', 'model-empty muted', t('modelNoCustomProviders', '尚未添加自定义供应商')));
-  for (const provider of custom) container.append(providerButton(provider, selectedID, `${provider.models.length}`, provider.name));
+  container.append(element('h3', '', t('modelConnections', 'AI 连接')));
+  const providers = snapshot.providers;
+  if (!providers.length) container.append(element('p', 'model-empty muted', t('modelNoCustomProviders', '尚未添加 AI 连接')));
+  for (const provider of providers) container.append(providerButton(provider, selectedID, `${provider.models.length}`, provider.name));
 }
 
 function providerButton(provider, selectedID, badge, label) {
@@ -349,20 +248,20 @@ function providerButton(provider, selectedID, badge, label) {
   return item;
 }
 
-// 全局"默认大模型"选择区块：唯一入口，跨所有自定义供应商选择一个已启用模型。
 function renderDefaultModelSelector(snapshot, t) {
   const section = element('div', 'model-default-model-section');
-  const label = element('h3', 'model-list-title', t('modelDefaultModel', '默认大模型'));
+  const label = element('h3', 'model-list-title', t('modelDefaultModel', '全局默认模型'));
   const select = document.createElement('select');
   select.name = 'defaultModel';
-  select.setAttribute('aria-label', t('modelDefaultModel', '默认大模型'));
+  select.setAttribute('aria-label', t('modelDefaultModel', '全局默认模型'));
   const current = snapshot.defaultModel || {};
   const placeholder = document.createElement('option');
   placeholder.value = '';
-  placeholder.textContent = t('modelDefaultModelNone', '未设置（各处使用各自回退模型）');
+  placeholder.textContent = t('modelDefaultModelNone', '未设置（内置调用将要求显式选择）');
   select.append(placeholder);
+  let available = false;
   for (const provider of snapshot.providers) {
-    if (provider.kind !== 'custom' || !provider.enabled) continue;
+    if (!provider.enabled) continue;
     const enabled = provider.models.filter((model) => model.enabled);
     if (!enabled.length) continue;
     const group = document.createElement('optgroup');
@@ -372,26 +271,34 @@ function renderDefaultModelSelector(snapshot, t) {
       option.value = `${provider.id}::${model.id}`;
       option.textContent = model.displayName || model.id;
       option.selected = current.providerId === provider.id && current.modelId === model.id;
+      if (option.selected) available = true;
       group.append(option);
     }
     select.append(group);
   }
+  if (current.providerId && current.modelId && !available) {
+    const unavailable = document.createElement('option');
+    unavailable.textContent = t('modelDefaultModelUnavailable', '原默认模型不可用，请重新选择');
+    unavailable.disabled = true;
+    unavailable.selected = true;
+    select.append(unavailable);
+  }
   select.addEventListener('change', () => {
-    const [providerId, modelId] = select.value.split('::');
+    const separator = select.value.indexOf('::');
+    const providerId = separator < 0 ? '' : select.value.slice(0, separator);
+    const modelId = separator < 0 ? '' : select.value.slice(separator + 2);
     select.dispatchEvent(new CustomEvent('model-default-model-change', {
       bubbles: true,
       detail: { providerId: providerId || '', modelId: modelId || '' },
     }));
   });
-  const hint = element('p', 'muted', t('modelDefaultModelHint', '全局唯一默认：AI 对话与智能体配置在未显式指定模型时将使用它。'));
+  const hint = element('p', 'muted', t('modelDefaultModelHint', '各模块使用此默认模型调用 AI，无需重复配置地址和 API Key。用量与费用统一记录在 Tokenusage。'));
   section.append(label, select, hint);
   return section;
 }
 
 function renderCustomDetail(container, provider, snapshot, t) {
   container.replaceChildren();
-  // 全局"默认大模型"选择器：跨所有自定义供应商唯一生效，避免每处各设默认导致歧义。
-  container.append(renderDefaultModelSelector(snapshot, t));
   const form = document.createElement('form');
   form.className = 'model-provider-form';
   form.dataset.providerId = provider.id;
@@ -415,7 +322,7 @@ function renderCustomDetail(container, provider, snapshot, t) {
     const nameEl = element('span', 'muted', model.displayName || model.id);
     nameEl.title = model.displayName || model.id;
     identity.append(idEl, nameEl);
-    const metadata = element('span', 'muted model-row-meta', [model.alias, model.contextLength ? `${model.contextLength}` : ''].filter(Boolean).join(' · '));
+    const metadata = element('span', 'muted model-row-meta', model.contextLength ? `${model.contextLength}` : '');
     if (metadata.textContent) metadata.title = metadata.textContent;
     row.append(identity, metadata);
     const actions = element('div', 'model-row-actions');
@@ -428,21 +335,24 @@ function renderCustomDetail(container, provider, snapshot, t) {
   list.append(modelForm(t)); container.append(list);
 }
 
-export function renderNewProvider(container, t) {
+export function renderNewProvider(container, t, snapshot) {
   container.innerHTML = `<form class="model-provider-form" data-new-provider>
-    <div class="model-detail-heading"><div>${escapeText(t('modelAddProvider', '添加自定义供应商'))}</div></div>
+    <div class="model-detail-heading"><div>${escapeText(t('modelAddProvider', '添加 AI 连接'))}</div></div>
     ${field(t('name', '名称'), 'name', '', 'text', true)}${field('Base URL', 'baseUrl', '', 'url', true)}
     <label><span>${escapeText(t('modelAPIFormat', 'API 格式'))}</span><select name="protocol">${protocolOptions('openai_chat')}</select></label>
     ${field('API Key', 'apiKey', '', 'password', false)}
+    <label><span>${escapeText(t('modelID', '模型 ID'))}</span><input name="modelId" required maxlength="200"></label>
+    <label class="model-checkbox"><input name="setAsDefault" type="checkbox" ${snapshot?.defaultModel?.modelId ? '' : 'checked'}> ${escapeText(t('modelSetAsDefault', '设为全局默认模型'))}</label>
     <label class="model-checkbox"><input name="enabled" type="checkbox" checked> ${escapeText(t('enable', '启用'))}</label>
     <label class="model-checkbox"><input name="allowLan" type="checkbox"> ${escapeText(t('modelAllowLAN', '允许局域网地址'))}</label>
-    <div class="model-form-actions"><button type="submit" class="primary">${escapeText(t('modelAddProvider', '添加自定义供应商'))}</button><button type="button" data-action="test-new-provider">${escapeText(t('modelTestConnection', '测试连接'))}</button><button type="button" data-action="cancel-new-provider">${escapeText(t('cancel', '取消'))}</button></div>
+    <div class="model-form-actions"><button type="submit" class="primary">${escapeText(t('modelAddProvider', '添加 AI 连接'))}</button><button type="button" data-action="test-new-provider">${escapeText(t('modelTestConnection', '测试连接'))}</button><button type="button" data-action="cancel-new-provider">${escapeText(t('cancel', '取消'))}</button></div>
   </form>`;
+  container.querySelector('[name="name"]').focus();
 }
 
 function modelForm(t) {
   const form = document.createElement('form'); form.className = 'model-add-form'; form.dataset.modelForm = '';
-  form.innerHTML = `<input name="id" required maxlength="200" aria-label="${escapeText(t('modelID', '模型 ID'))}" placeholder="${escapeText(t('modelID', '模型 ID'))}"><input name="displayName" maxlength="200" aria-label="${escapeText(t('modelDisplayName', '显示名称'))}" placeholder="${escapeText(t('modelDisplayName', '显示名称'))}"><input name="alias" maxlength="200" aria-label="${escapeText(t('modelAlias', '别名'))}" placeholder="${escapeText(t('modelAlias', '别名'))}"><input name="contextLength" type="number" min="0" max="100000000" aria-label="${escapeText(t('modelContextLength', '上下文'))}" placeholder="${escapeText(t('modelContextLength', '上下文'))}"><button class="primary" data-role="model-submit">${escapeText(t('add', '添加'))}</button><button type="button" data-action="cancel-model-edit" hidden>${escapeText(t('cancel', '取消'))}</button>`;
+  form.innerHTML = `<input name="id" required maxlength="200" aria-label="${escapeText(t('modelID', '模型 ID'))}" placeholder="${escapeText(t('modelID', '模型 ID'))}"><input name="displayName" maxlength="200" aria-label="${escapeText(t('modelDisplayName', '显示名称'))}" placeholder="${escapeText(t('modelDisplayName', '显示名称'))}"><input name="contextLength" type="number" min="0" max="100000000" aria-label="${escapeText(t('modelContextLength', '上下文'))}" placeholder="${escapeText(t('modelContextLength', '上下文'))}"><button class="primary" data-role="model-submit">${escapeText(t('add', '添加'))}</button><button type="button" data-action="cancel-model-edit" hidden>${escapeText(t('cancel', '取消'))}</button>`;
   return form;
 }
 

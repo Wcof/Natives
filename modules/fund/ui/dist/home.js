@@ -3,7 +3,7 @@
 (() => {
 const { state, actions, authFetch, api, t, formatMinorExact } = globalThis.Fund;
 const home = (globalThis.Fund.home = globalThis.Fund.home || {});
-const H = { snapshot: null, range: "month", from: "", to: "", privacy: true, detailOpen: null, marketTimer: null };
+const H = { snapshot: null, range: "month", from: "", to: "", privacy: true, detailOpen: null, marketTimer: null, marketGroup: "cn" };
 
 function fmtMinor(minor) {
   if (minor == null) return null;
@@ -33,7 +33,7 @@ function setStatus(text) {
 // ---------- 快照加载 ----------
 let snapshotGen = 0; // R06：区间快速切换时丢弃迟到响应
 let snapshotController = null;
-async function loadSnapshot(manual = false, valuationOnly = false, refreshEstimates = false) {
+async function loadSnapshot(manual = false, valuationOnly = false, refreshEstimates = false, observe = true) {
   if (document.hidden) return;
   const rangeStatus=document.getElementById("home-range-status");
   if(rangeStatus)rangeStatus.textContent=t("fundHomeRangeLoading");
@@ -46,7 +46,9 @@ async function loadSnapshot(manual = false, valuationOnly = false, refreshEstima
     const query = new URLSearchParams({ range: H.range });
     if(manual||refreshEstimates)query.set("refreshEstimates","1");
     if (H.range === "custom") { query.set("from", H.from); query.set("to", H.to); }
-    const request=()=>api(valuationOnly?"GET":"POST", `/api/home/snapshot${valuationOnly?"":"/generate"}?${query}`, valuationOnly?undefined:{}, {signal:controller.signal});
+    const readOnly=valuationOnly&&!observe;
+    const path=valuationOnly&&observe?"/api/home/valuation/observe":`/api/home/snapshot${valuationOnly?"":"/generate"}`;
+    const request=()=>api(readOnly?"GET":"POST", `${path}?${query}`, readOnly?undefined:{}, {signal:controller.signal});
     const publish=data=>{
       const focus=document.activeElement;
       const attributes=focus?[...focus.attributes].filter(a=>a.name==='id'||a.name==='name'||(a.name.startsWith('data-')&&a.name!=='data-i18n')):[];
@@ -147,7 +149,9 @@ function renderWealth(w) {
       ? `${t("fundHomeWealthKnownValue")}${mask(fmtMinor(w.knownA) ?? "–")}${gapParts.length ? " · " + gapParts.join(" · ") : ""}`
       : q === "ready"
         ? `${t("fundHomeCompleteValuationLastValued")}${w.latestValuation || "–"}`
-        : `${t("fundHomeSomeDataNeedsVerification")}${w.issues.map(i => reasonText(i.code)).join("、") || t("fundHomeMissingData")}）${gapParts.length ? " · " + gapParts.join(" · ") : ""}`;
+        : q === "stale"
+          ? `${t("fundHomeValuationStale")} · ${t("fundHomeLastValuationDate")}${w.latestValuation || "–"}${gapParts.length ? " · " + gapParts.join(" · ") : ""}`
+          : `${t("fundHomeSomeDataNeedsVerification")}${(w.issues||[]).map(i => reasonText(i.code,i.count)).join("、") || t("fundHomeMissingData")}）${gapParts.length ? " · " + gapParts.join(" · ") : ""}`;
   document.getElementById("home-currency-manage").hidden = H.displayMode !== "amount" || !(valuation.unconfirmedCurrencies > 0);
 
   setCard(invested, w.investedI, q);
@@ -159,7 +163,7 @@ function renderWealth(w) {
   const retSub = document.getElementById("hc-return-sub");
   if (["ready","partial","reference"].includes(r.status) && r.netReturnMinor != null) {
     const v = r.netReturnMinor;
-    retEl.textContent = mask((v > 0 ? "+" : "") + (fmtMinor(v) ?? "0"));
+    retEl.textContent = mask(fmtMinor(v) ?? "0");
     retEl.classList.toggle("hidden-amount", hideAmounts());
     retEl.style.color = hideAmounts() ? "" : v > 0 ? "var(--home-color-up, var(--color-up))" : v < 0 ? "var(--home-color-down, var(--color-down))" : "";
     retSub.textContent = `${r.from||""} -- ${r.to||""} · ${t(r.status==="reference"?"fundHomeRangeReference":"fundHomeRangeChecked")}${r.partialCoverage?" · "+t("fundHomeRangePartial"):""} · ${t("fundHomeNetContributionsExcluded")}`;
@@ -326,7 +330,7 @@ function renderEvidence(s) {
 // ---------- 自动资讯（方案 04：首页 5 条、scope 切换、来源状态显式） ----------
 let infoNextOffset=null,infoCollectionDays=7;
 let infoListGeneration=0;
-let infoScope = "all",newsScope="all",infoFilters={from:"",to:"",q:"",asset:"",type:"",sort:"relevance",group:""},infoFullGeneration=0;
+let infoScope = "holdings",newsScope="all",infoFilters={from:"",to:"",q:"",asset:"",type:"",sort:"relevance",group:""},infoFullGeneration=0;
 async function loadInformationList() {
   const body = document.getElementById("home-info-list");
   if (!body) return;
@@ -351,7 +355,7 @@ async function loadInformationList() {
       <details class="home-news-coverage"><summary>${t("fundHomeSources")}</summary><p class="evidence-hint">${t("fundHomeInformationCoverage")}</p></details>`;
     body.querySelectorAll("[data-act=news-ai]").forEach(btn => btn.addEventListener("click", () => {
       const it = items.find(i => i.id === Number(btn.dataset.id));
-      if (it) home.selectNewsForAI?.(it);
+      if (it) home.analyzeNewsForAI?.(it);
     }));
     body.querySelectorAll("[data-info-scope]").forEach(btn => btn.addEventListener("click", () => { cancelInformation();infoNextOffset=null;informationControls();infoScope = btn.dataset.infoScope; void loadInformationList(); }));
     body.querySelectorAll("[data-info-fav]").forEach(btn => btn.addEventListener("click", async () => {
@@ -438,46 +442,9 @@ async function refreshInformation(identityOffset=0) {
   finally{if(gen===informationGeneration){informationRunning=false;informationControls();}}
 }
 
-// 资讯详情（方案 02 §6）：来源/时间/完整度 → 正文 → 关联与依据；原文经 Shell 外链代理。
-home.openInformationDetail = async function (id) {
-  try {
-    const d = await api("GET", `/api/information/item?id=${id}`);
-    const rel = (d.relations || []).map(r => `${escapeHtml(r.instrumentRef)}（${t(r.relation === "direct" ? "fundHomeInformationDirect" : r.relation === "indirect" ? "fundHomeInformationIndirect" : "fundHomeNotConfirmed")}）：${escapeHtml(r.reason)}`).join("<br>");
-    let contentBlock = d.contentText
-      ? `<details open><summary>${escapeHtml(home.informationContentLabel(d))}</summary><pre style="white-space:pre-wrap">${escapeHtml(d.contentText)}</pre></details>`
-      : d.completeness === "link_only" && d.sourceId === "em_stock_ann"
-        ? `<p class="goal-warn">${t("fundHomeContentNotRetrieved")}；<button class="btn btn-sm" data-info-fetch="${id}">${t("fundHomeInformationFetchContent")}</button></p>`
-        : `<p class="evidence-hint">${t("fundHomeContentNotRetrieved")}</p>`;
-    if(d.contentCacheExpired && d.sourceId === "em_stock_ann")contentBlock+=`<p class="goal-warn">${t("fundHomeInformationContentExpired")} <button class="btn btn-sm" data-info-fetch="${id}">${t("fundHomeInformationFetchContent")}</button></p>`;
-    home.panel(() => t("fundHomeInformationDetail"), () => `
-      <p><b>${escapeHtml(d.title)}</b></p>
-      <p class="evidence-hint">${escapeHtml(home.informationSourceLabel(d.sourceId))} · ${escapeHtml(home.informationTimeLabel(d.publishedAt))}</p>
-      ${d.summary?`<p>${escapeHtml(d.summary)}</p>`:""}
-      ${contentBlock}
-      ${d.url ? `<p><a href="#" data-info-url="${escapeHtml(d.url)}">${t("fundHomeOpenSource")}</a></p>` : ""}
-      ${rel ? `<p class="evidence-hint">${t("fundHomeInformationRelations")}<br>${rel}</p>` : ""}${d.relatedItems?.length?`<h3>${t("fundHomeInformationPossibleRelated")}</h3><p>${t("fundHomeInformationPossibleRelatedHint")}</p>${d.relatedItems.map(item=>`<p><button data-related-info="${item.id}">${escapeHtml(item.title)}</button> · ${escapeHtml(home.informationSourceLabel(item.sourceId))}</p>`).join("")}`:""}<div class="row"><button type="button" data-detail-ai>${t('fundHomeNewsAiBtn')}</button></div>`,
-    root => {
-      root.querySelector('[data-detail-ai]').onclick=()=>{home.closePanel();document.getElementById('tab-home').click();home.selectNewsForAI?.(d);};
-      root.querySelectorAll("[data-related-info]").forEach(b=>b.onclick=()=>home.openInformationDetail(Number(b.dataset.relatedInfo)));
-      const fetchBtn = root.querySelector(`[data-info-fetch="${id}"]`);
-      if (fetchBtn) fetchBtn.onclick = async () => {
-        home.failure({message:''},root);
-        fetchBtn.disabled = true;
-        try {
-          const result=await informationRequest("/api/information/content", { id,expectedVersion:d.contentVersion });
-          if(result&&root.isConnected)home.openInformationDetail(id);
-        } catch (e) { const message=`${t("fundHomeInformationCouldNotLoad")}${e.message}`;setStatus(message);home.failure({message},root); }
-        finally { if(fetchBtn.isConnected)fetchBtn.disabled=false; }
-      };
-      const link = root.querySelector("[data-info-url]");
-      if (link) link.onclick = e => { e.preventDefault(); home.openExternal?.(link.dataset.infoUrl); };
-    },true);
-  } catch (e) { setStatus(`${t("fundHomeInformationCouldNotLoad")}${e.message}`); }
-};
-
 // ---------- 详情展开 ----------
 function toggleDetail(kind) {
-  if(kind==='information'){document.getElementById('tab-news').click();return;}
+  if(kind==='information'){newsScope=infoScope;document.getElementById('tab-news').click();return;}
   const panel = document.getElementById("home-detail-panel");
   const body = document.getElementById("home-detail-body");
   if (!panel || !body) return;
@@ -518,7 +485,7 @@ async function loadInformationFull(page = 1) {
     const focusKey=focused?.name?`[name="${CSS.escape(focused.name)}"]`:focused?.hasAttribute('data-info-scope')?`[data-info-scope="${focused.dataset.infoScope}"]`:null;
     const advancedOpen=body.querySelector('.news-advanced')?.open||Boolean(infoFilters.from||infoFilters.to||infoFilters.asset||infoFilters.group||infoFilters.type);
     const items = (data.items || []).map(item => `<article class="info-item">
-      <div class="news-item-heading"><span class="news-category">${t(item.sourceId==='em_finance'?'fundHomeFinanceNews':item.importance>=2?'fundHomeNewsImportant':'fundHomeNewsRelated')}</span><time>${escapeHtml(home.informationTimeLabel(item.publishedAt))}</time></div>
+      <div class="news-item-heading"><span class="news-category">${t(item.sourceId==='em_finance'?'fundHomeFinanceNews':item.importance>=2?'fundHomeNewsImportant':'fundHomeNewsRelated')}</span><time>${escapeHtml(home.informationTimeLabel(item.publishedAt,item.timePrecision))}</time></div>
       <h3>${escapeHtml(item.title)}</h3>
       <p>${escapeHtml(item.summary||t('fundHomeContentNotRetrieved'))}</p>
       <span class="info-meta">${escapeHtml(home.informationSourceLabel(item.sourceId))} · ${escapeHtml(home.informationContentLabel(item))}${item.archived ? ` · ${t("fundHomeArchived")}` : ""}</span>
@@ -542,7 +509,7 @@ async function loadInformationFull(page = 1) {
       try { await api("POST", "/api/information/archive", { id: Number(btn.dataset.infoArch) }); void loadInformationFull(page); } catch (e) { setStatus(`${t("fundHomeRequestFailed")}${e.message}`); }
     }));
     body.querySelectorAll("[data-info-open]").forEach(btn => btn.addEventListener("click", () => home.openInformationDetail?.(Number(btn.dataset.infoOpen))));
-    body.querySelectorAll('[data-info-ai]').forEach(btn=>btn.onclick=()=>{const item=data.items.find(i=>i.id===Number(btn.dataset.infoAi));if(item){document.getElementById('tab-home').click();home.selectNewsForAI?.(item);}});
+    body.querySelectorAll('[data-info-ai]').forEach(btn=>btn.onclick=()=>{const item=data.items.find(i=>i.id===Number(btn.dataset.infoAi));if(item){document.getElementById('tab-home').click();home.analyzeNewsForAI?.(item);}});
     const moreBtn = body.querySelector("#home-info-more");
     if (moreBtn) moreBtn.onclick = () => void loadInformationFull(Number(moreBtn.dataset.page));
     informationControls();
@@ -602,6 +569,7 @@ document.addEventListener("fund:market-indices",e=>{if(active&&!document.hidden&
 document.addEventListener("fund:market-indices-failed",()=>{if(active&&!document.hidden){H.marketFailure=true;if(H.market)void renderMarket(H.market);else document.getElementById("home-market-time").textContent=t("fundHomeMarketDataIsUnavailableTheLocalLedger");}});
 async function renderMarket(cached) {
   const body = document.getElementById("home-market-body");
+  const tabs = document.getElementById("home-market-tabs");
   if (!body || (!cached && (!active || document.hidden))) return;
   const gen = ++marketGen;
   marketController?.abort();
@@ -616,40 +584,65 @@ async function renderMarket(cached) {
       H.marketFailure = false;
     }
     if (gen !== marketGen) return; // 迟到响应丢弃
-    // 后端契约（market/quote_json）：{"quotes":[{code,name,price,changePct,...}]}
     const list = (data && data.quotes) || [];
     H.market = data;
-    const top = list.slice(0, 5);
-    if (!top.length) {
+    const groupDefs = [
+      { id: "cn", label: t("fundHomeMarketA"), match: code => /^(sh|sz|bj)/i.test(code) || /^\d{6}$/.test(code) },
+      { id: "hk", label: t("fundHomeMarketHK"), match: code => /^hk/i.test(code) },
+      { id: "us", label: t("fundHomeMarketUS"), match: code => /^us/i.test(code) },
+    ];
+    const available = groupDefs.filter(group => list.some(item => group.match(String(item.code || ""))));
+    if (!available.length) {
+      if (tabs) tabs.replaceChildren();
       body.innerHTML = `<div class="home-empty-hint">${t("fundHomeMarketDataIsUnavailableTheLocalLedger")}</div>`;
       return;
     }
-    body.innerHTML = top.map(idx => {
-      const labelKeys = {"000001":"fundHomeIndexShanghai","399001":"fundHomeIndexShenzhen","399006":"fundHomeIndexChiNext","000688":"fundHomeIndexStar50","000300":"fundHomeIndexCsi300"};
-      const key = labelKeys[String(idx.code).replace(/^(sh|sz)/,"")];
-      const name = key ? t(key) : state.language === "en" ? idx.code : idx.name || idx.code;
+    if (!available.some(group => group.id === H.marketGroup)) H.marketGroup = available[0].id;
+    if (tabs) {
+      tabs.innerHTML = available.map(group => `<button type="button" class="home-market-tab" data-market-group="${group.id}" aria-pressed="${group.id === H.marketGroup}">${home.escape(group.label)}</button>`).join("");
+      tabs.querySelectorAll("[data-market-group]").forEach(button => {
+        button.onclick = () => {
+          H.marketGroup = button.dataset.marketGroup;
+          void renderMarket(H.market);
+          requestAnimationFrame(() => document.querySelector(`#home-market-tabs [data-market-group="${H.marketGroup}"]`)?.focus());
+        };
+      });
+    }
+    const labelKeys = {"000001":"fundHomeIndexShanghai","399001":"fundHomeIndexShenzhen","399006":"fundHomeIndexChiNext","000688":"fundHomeIndexStar50","000300":"fundHomeIndexCsi300","899050":"fundHomeIndexBeijing50","hkHSI":"fundHomeMarketHK","hkHSTECH":"fundHomeMarketHK"};
+    const activeGroup = available.find(group => group.id === H.marketGroup) || available[0];
+    const quotes = list.filter(item => activeGroup.match(String(item.code || ""))).slice(0, 5);
+    if (!quotes.length) {
+      body.innerHTML = `<div class="home-empty-hint">${t("fundHomeMarketDataIsUnavailableTheLocalLedger")}</div>`;
+      return;
+    }
+    body.innerHTML = `<div class="home-market-grid">${quotes.map(idx => {
+      const rawCode = String(idx.code || "").replace(/^(sh|sz|hk|us|bj)/i, "");
+      const key = labelKeys[rawCode] || labelKeys[String(idx.code || "")];
+      const name = key && key !== "fundHomeMarketHK" ? t(key) : state.language === "en" ? rawCode : idx.name || rawCode;
       const pct = idx.changePct != null ? `${idx.changePct > 0 ? "+" : ""}${Number(idx.changePct).toFixed(2)}%` : "–";
       const cls = idx.changePct > 0 ? "up" : idx.changePct < 0 ? "down" : "flat";
-      return `<div class="market-row">
-        <span class="market-name">${escapeHtml(name || "")}</span>
-        <span class="market-val ${cls}">${idx.price != null ? Number(idx.price).toFixed(2) : "–"}</span>
-        <span class="market-chg ${cls}">${pct}</span>
-        <span class="market-meta">${escapeHtml(idx.asOf || t("fundHomeSourceTimestampUnknown"))}</span>
+      return `<div class="home-market-card">
+        <span class="home-market-name">${escapeHtml(name || "")}</span>
+        <div class="home-market-line"><strong>${idx.price != null ? Number(idx.price).toLocaleString(state.language,{minimumFractionDigits:2,maximumFractionDigits:2}) : "–"}</strong><em class="${cls}">${pct}</em></div>
+        <span class="home-market-meta" title="${escapeHtml(rawCode)} · ${escapeHtml(idx.asOf || t("fundHomeSourceTimestampUnknown"))}">${escapeHtml(rawCode)} · ${escapeHtml(idx.asOf || t("fundHomeSourceTimestampUnknown"))}</span>
       </div>`;
-    }).join("");
+    }).join("")}</div>`;
     const tEl = document.getElementById("home-market-time");
-    if (tEl) tEl.textContent = H.marketFailure ? t("fundHomeMarketDataIsUnavailableTheLocalLedger") : `${t("fundHomeTencentMarketData")}${top[0]?.asOf || t("fundHomeSourceTimestampUnknown")}`;
+    if (tEl) tEl.textContent = H.marketFailure ? t("fundHomeMarketDataIsUnavailableTheLocalLedger") : `${t("fundHomeTencentMarketData")}${quotes[0]?.asOf || t("fundHomeSourceTimestampUnknown")}`;
   } catch (e) {
     if (gen !== marketGen || controller.signal.aborted) return;
     H.marketFailure = true;
-    if (H.market?.quotes?.length) { renderMarket(H.market); return; }
+    if (H.market?.quotes?.length) { void renderMarket(H.market); return; }
+    if (tabs) tabs.replaceChildren();
     body.innerHTML = `<div class="home-empty-hint">${t("fundHomeMarketDataCouldNotLoad")}${escapeHtml(e.message)}${t("fundHomeTheLocalLedgerRemainsAvailable")}</div>`;
   } finally {
     if (marketController === controller) marketController = null;
   }
 }
 
-function reasonText(code) {
+function reasonText(code, count) {
+  if (code === "missing_quote") return t("fundHomeValuationMissingQuotes", { n: count ?? 1 });
+  if (code === "missing_price") return t("fundHomeValuationMissingNavs", { n: count ?? 1 });
   const map = {
     assets_empty: t("fundHomeNoAssetsRecorded"),
     incomplete: t("fundHomeSomeValuationsCurrenciesOrClassificationsNeedVerification"),
@@ -902,7 +895,7 @@ Object.assign(home, {
   privacy: () => displayMode !== "amount",
   // 读取时冻结（幂等）：无论 owner 存储路径如何，公开返回值都是不可变快照。
   snapshot: () => freezeSnapshot(H.snapshot),
-  readSnapshot: async () => { await entryPending; return loadSnapshot(false, true); },
+  readSnapshot: async () => { await entryPending; return loadSnapshot(false, true, false, false); },
   // 基准序列只读投影（基准调试/验收用；写入唯一走 refreshBenchmark）。
   benchmark: () => freezeSnapshot(H.benchmark),
   // 行情加载失败态只读投影（错误区域验证用；写入唯一在 loadMarket）。

@@ -25,7 +25,7 @@
 
 ## 2. 必须保持的架构边界
 
-- Model Host 继续作为 AI 用量归一、存储与查询的唯一权威；Local Proxy 只是采集来源之一。
+- Model Host 继续作为 AI 用量归一、存储与查询的唯一权威；内部直连、外部工具日志与账单是采集来源（ADR-0044 已退役 Local Proxy）。
 - 不恢复 Tauri、Daemon、Jobs、Agent Runtime、Harness Runtime 或通用 Plugin Runtime。
 - 扩展页面不直接读取工具目录、SQLite、账单文件或 Secret；这些操作由 Model Host 在用户授权后执行。
 - 查询不得隐式扫描工具目录。采集只由显式导入、显式刷新或已审阅的一次性工具事件触发。
@@ -95,7 +95,7 @@ Tokenusage `/api/sessions/detail?id=<key>&offset=<n>` 每页 50 条，响应含
 
 ### 4.3 事件与收费原子
 
-每次可计量调用必须拥有稳定 `billingAtom`。同一调用由 Proxy、原生日志、OTel 或账单重复观察时只保留一个收费原子；来源证据可以追加，金额不得重复。
+每次可计量调用必须拥有稳定 `billingAtom`。同一调用由内部直连、外部工具日志、OTel 或账单重复观察时只保留一个收费原子；来源证据可以追加，金额不得重复。
 
 Codex rollout 使用 `session_meta` 的会话 ID 与最近 `turn_context.model`；缺模型保留 `unknown`。新版 `token_usage_record` 以稳定 `response_id` 和单响应 `usage` 为权威，输入扣除缓存后分桶；`thread_token_usage` 可能包含继承的历史，不能计入今日。新版伴随的旧版 `token_count.info.total_token_usage` 属于另一套累计计数器，不能混算；只有纯旧版日志使用累计求差。解析模式使用已有游标 `parser_version` 保存，跨批／重启仍忽略新版伴随快照。游标的会话／模型与累计基线、事件同事务提交；旧游标首次续读可在既有来源字节上限内只解析已提交前缀恢复上下文，不重复入库。历史错误事件不在此过程中重写；重算历史是另一个需授权的数据修复操作。专项入口：`rtk go test ./internal/usage`（在 model-host 目录）与 `rtk node scripts/statusbar-browser.test.mjs`（仓库根）。真实脱敏日志回放通过 `CODEX_USAGE_REPLAY` 指向本机白名单元数据，原始日志与用户数据不进入 Git。
 
@@ -110,7 +110,7 @@ Codex rollout 使用 `session_meta` 的会话 ID 与最近 `turn_context.model`�
 | 异步资源归属与安全动作 | NativesStatusBar.m／NativesStatusBar.h／launcher-main.m | owner 用例：重复查询合并；旧面板／旧 worker 回调不清新状态；未知跳转拒绝；保留已注册 tokenusage 入口；退出不清扫后来启动的实例 |
 | 无效来源与持久基线失败不伪装成成功 | usage/native_log.go／collector_codex.go | native_log_test.go：时间缺失、负数、缓存越界、Token 加法溢出和缺累计字段报来源错误；取消不继续入库；SQL 失败显式传播 |
 
-`priced` 表示有用量的记录全部有存储计费或价格覆盖；已知小计保留在数值字段，但覆盖不完整时顶栏显示未知。金额属于用量费用估算，不等同实际订阅扣款。Native owner 用例使用隔离投影驱动真实 NSStatusItem／WKWebView owner，不替代已安装版本、真实用户用量库或上游账户的验收。
+`missingUsageRequests` 是当前筛选范围内未收到 usage 的请求数，随 overview metrics、趋势桶、维度排名和会话投影传递；缺省为 0，以兼容既有响应。缺失 usage 不等于零用量，不能因为事件计数列为 0 就把金额标为已知零费用。`priced` 仅在没有缺失 usage 且全部有用量的记录都有存储计费或价格覆盖时为 true；报告的真实零用量仍可保持已知零值。已知 Token／费用小计保留，Tokenusage API 用 `null` 表示完全未知 Token、用 `knownCostUsd` 保留未完整计价的小计；界面以 `--`、`10+`、`≥$0.25` 区分未知、已知部分及真实零值，趋势不得把未知画成零点。顶栏只读旧库不迁移，无 `usage_status` 列时按旧报告语义读取。金额属于用量费用估算，不等同实际订阅扣款。Native owner 用例使用隔离投影驱动真实 NSStatusItem／WKWebView owner，不替代已安装版本、真实用户用量库或上游账户的验收。
 
 新增或补齐事件与归因的关联表：
 
@@ -402,7 +402,7 @@ widget/aiSavings
 - [ ] 同一 session 两天各 10/20 次请求：区间会话 1，每日各 1，活跃日 2，请求 30。
 - [ ] 两个 profile 的相同 session ID：会话为 2。
 - [ ] 无 session ID：Token/成本保留，会话不增加，未归属增加。
-- [ ] Proxy 与本地日志重复观察同一 request ID：费用、Token、请求均只计一次。
+- [ ] 内部直连与本地日志／导入重复观察同一 request ID：费用、Token、请求均只计一次。
 - [ ] Codex 累计快照 1000 → 1000 → 1600：增量为 1000、0、600。
 - [ ] sessions 文件移入 archived：统计不增加。
 - [ ] 半行、损坏、权限撤销、轮转：游标不越过未完成记录，source 状态明确。

@@ -20,7 +20,7 @@ jobs:
         with:
           go-version: stable
       - run: cargo build -p native-file-host --release
-      # model-host 编译正确性（含 third_party/cliproxyapi 内嵌源码）由 CI 兜底（审计 F-14/D4）
+      # model-host 编译正确性（ADR-0044：无内嵌代理／路由内核）由 CI 兜底（审计 F-14/D4）
       - run: go build ./...
         working-directory: model-host
       - run: npm run perf:check
