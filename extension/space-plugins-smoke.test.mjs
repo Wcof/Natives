@@ -102,4 +102,4 @@ for (const key of BACKGROUND_KEYS) {
   console.log(`  ✓ Background ${key} smoke passed`);
 }
 
-console.log('\nAll 29 widgets and 9 backgrounds passed behavioral smoke testing!\n');
+console.log('\nAll 44 widgets and 9 backgrounds passed behavioral smoke testing!\n');

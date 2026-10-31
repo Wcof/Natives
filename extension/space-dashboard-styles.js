@@ -1,4 +1,4 @@
-export function buildDashboardStyles({ backgroundStyles = '', widgetStyles = '' } = {}) {
+export function buildDashboardStyles({ backgroundStyles = '', widgetStyles = '', cardStyles = '' } = {}) {
   return `
     :host { all: initial; }
     :host([data-widgets-hidden="true"]) .Slot,
@@ -223,6 +223,7 @@ export function buildDashboardStyles({ backgroundStyles = '', widgetStyles = '' 
       transform: translateX(-50%) scale(1.03);
     }
     ${backgroundStyles}
+    ${cardStyles}
     ${widgetStyles}
   `;
 }

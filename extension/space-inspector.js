@@ -1,6 +1,7 @@
 
 
 import { widgetPlugins, backgroundPlugins, pluginName } from './space-plugins.js';
+import { cardMeta } from './space-kit/index.js';
 import { createSpaceCatalog } from './space-catalog.js';
 import { createSpaceWidgetSettings } from './space-widget-settings.js';
 import { createSpaceBackgroundSettings } from './space-background-settings.js';
@@ -40,7 +41,7 @@ export function createSpaceInspector({
           order: (latestSnapshot?.widgets || []).length,
           enabled: true,
           configJson: { ...(plugin?.defaultData || {}) },
-          displayJson: { position: 'middleCentre' },
+          displayJson: { position: cardMeta(key)?.defaultPosition || 'middleCentre' },
         };
         return nativeCall('workspace_widget_upsert', {
           workspaceId: activeWorkspaceId,

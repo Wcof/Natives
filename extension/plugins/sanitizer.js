@@ -1,22 +1,10 @@
 
 
-export const WIDGET_KEYS = [
-  'widget/aiPerformance',
-  // 投资卡（ADR-0036 / 方案 02 §5）：静态 key，随构建期注册。
-  'widget/investmentHoldings', 'widget/investmentAssets',
-  'widget/investmentGoal', 'widget/investmentAllocation',
-  'widget/investmentAllocationCheck',
-  // R1（方案 §4.1）：七个独立 AI 效能组件（旧 aiPerformance 保留为兼容 key）。
-  'widget/aiCost', 'widget/aiTokens', 'widget/aiSessions',
-  'widget/aiRequests', 'widget/aiLimits', 'widget/aiAttention', 'widget/aiSavings',
-  'widget/binaryTime', 'widget/bookmarks', 'widget/countdown',
-  'widget/css', 'widget/currencyRates', 'widget/customText', 'widget/github',
-  'widget/greeting', 'widget/html', 'widget/ipInfo',
-  'widget/links', 'widget/message',
-  'widget/notes', 'widget/palette', 'widget/quote', 'widget/search',
-  'widget/since', 'widget/tallyCounter', 'widget/time',
-  'widget/todo', 'widget/topSites', 'widget/trello', 'widget/weather', 'widget/workHours',
-];
+import { WIDGET_KEYS } from '../space-kit/card-meta.js';
+
+// 卡片 key 的唯一前端来源是 space-kit/card-meta.js；这里 re-export 保持既有调用方不变。
+// Rust Host 的 workspace_store/schema.rs 仍持有一份白名单，新增 key 必须同步。
+export { WIDGET_KEYS };
 
 export const BACKGROUND_KEYS = [
   'background/apod', 'background/bing', 'background/colour', 'background/giphy',

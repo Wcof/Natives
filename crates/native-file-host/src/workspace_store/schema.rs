@@ -44,6 +44,14 @@ pub const WIDGET_KEYS: &[&str] = &[
     "widget/trello",
     "widget/weather",
     "widget/workHours",
+    // space-kit 卡片（与 extension/space-kit/card-meta.js 同步）。
+    "widget/dailyFocus",
+    "widget/quickNote",
+    "widget/scratchpad",
+    "widget/habit",
+    "widget/timeProgress",
+    "widget/worldClock",
+    "widget/dailyQuestion",
 ];
 
 pub const RETIRED_WIDGET_KEYS: &[&str] = &[

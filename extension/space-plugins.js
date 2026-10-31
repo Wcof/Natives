@@ -3,6 +3,7 @@
 import { WIDGET_KEYS, BACKGROUND_KEYS, POSITIONS, sanitizeHtml, escapeHtml } from './plugins/sanitizer.js';
 import { backgroundPlugins } from './plugins/backgrounds/index.js';
 import { widgetPlugins } from './plugins/widgets/index.js';
+import { cardMeta } from './space-kit/card-meta.js';
 
 export { WIDGET_KEYS, BACKGROUND_KEYS, POSITIONS, sanitizeHtml, escapeHtml, backgroundPlugins, widgetPlugins };
 
@@ -59,6 +60,11 @@ const DEFAULT_ZH_NAMES = {
 };
 
 export function pluginName(key, language = 'en', fallback = key, t = null) {
+  // 新卡片把中英展示名放在 space-kit 元数据里，目录/设置面板共用同一份。
+  const meta = cardMeta(key);
+  if (meta?.name) {
+    return language === 'zh_CN' ? (meta.nameZh || meta.name) : meta.name;
+  }
   if (typeof t === 'function') {
     const localeKey = `plugin_${key.replace('/', '_')}`;
     const localized = t(localeKey, fallback);

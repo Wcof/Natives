@@ -9775,5 +9775,176 @@
   },
   "fundHomeQualityStale": {
     "message": "Valuation is stale"
+  },
+  "dailyFocusTitle": {
+    "message": "Daily Focus"
+  },
+  "dailyFocusEmpty": {
+    "message": "Write down the three things that matter most today"
+  },
+  "dailyFocusToggle": {
+    "message": "Toggle completion"
+  },
+  "dailyFocusPlaceholder": {
+    "message": "What matters most today…"
+  },
+  "dailyFocusAdd": {
+    "message": "Add today's focus"
+  },
+  "dailyFocusFull": {
+    "message": "Today's focus is full. Complete or remove one first."
+  },
+  "dailyFocusHint": {
+    "message": "Resets automatically each day"
+  },
+  "dailyFocusSettingsHint": {
+    "message": "Change the limit above; clear today's focus here."
+  },
+  "dailyFocusClear": {
+    "message": "Clear today's focus"
+  },
+  "quickNoteTitle": {
+    "message": "Quick Notes"
+  },
+  "quickNoteCopy": {
+    "message": "Copy all"
+  },
+  "quickNoteCopied": {
+    "message": "Copied"
+  },
+  "quickNotePlaceholder": {
+    "message": "Capture a fleeting thought…"
+  },
+  "quickNoteAdd": {
+    "message": "Add quick note"
+  },
+  "quickNoteEmpty": {
+    "message": "No notes yet"
+  },
+  "quickNoteMore": {
+    "message": "Showing the latest {n}"
+  },
+  "quickNoteHint": {
+    "message": "Notes are saved in this workspace"
+  },
+  "quickNoteSettingsHint": {
+    "message": "Adjust the limit above; clearing cannot be undone."
+  },
+  "quickNoteClear": {
+    "message": "Clear all notes"
+  },
+  "scratchpadTitle": {
+    "message": "Scratchpad"
+  },
+  "scratchpadSaved": {
+    "message": "Saved"
+  },
+  "scratchpadSaving": {
+    "message": "Saving…"
+  },
+  "scratchpadPlaceholder": {
+    "message": "Write something down…"
+  },
+  "scratchpadSettingsHint": {
+    "message": "Content saves automatically after you stop typing; up to 20,000 characters."
+  },
+  "scratchpadClear": {
+    "message": "Clear scratchpad"
+  },
+  "habitTitle": {
+    "message": "Habits"
+  },
+  "habitEmpty": {
+    "message": "Add your first habit to begin"
+  },
+  "habitToday": {
+    "message": "Today {count}/{target}"
+  },
+  "habitRemove": {
+    "message": "Remove habit"
+  },
+  "habitPlaceholder": {
+    "message": "Add a habit…"
+  },
+  "habitAdd": {
+    "message": "Add habit"
+  },
+  "habitHint": {
+    "message": "Last 7 days · tap a cell to check in today"
+  },
+  "habitSettingsHint": {
+    "message": "Check-ins are kept for 30 days; clearing the log keeps your habits."
+  },
+  "habitClearLog": {
+    "message": "Clear check-in log"
+  },
+  "timeProgressTitle": {
+    "message": "Time Progress"
+  },
+  "progressToday": {
+    "message": "Today"
+  },
+  "progressWeek": {
+    "message": "This week"
+  },
+  "progressMonth": {
+    "message": "This month"
+  },
+  "progressYear": {
+    "message": "This year"
+  },
+  "progressHint": {
+    "message": "Time is passing"
+  },
+  "progressShowWeek": {
+    "message": "Show this week"
+  },
+  "progressShowMonth": {
+    "message": "Show this month"
+  },
+  "progressShowYear": {
+    "message": "Show this year"
+  },
+  "progressSettingsHint": {
+    "message": "Today is always shown; the other ranges can be hidden."
+  },
+  "worldClockTitle": {
+    "message": "World Clock"
+  },
+  "worldClockTomorrow": {
+    "message": "Tomorrow"
+  },
+  "worldClockYesterday": {
+    "message": "Yesterday"
+  },
+  "worldClockHint": {
+    "message": "Common time zones beyond local time"
+  },
+  "worldClockZones": {
+    "message": "Cities (up to 6)"
+  },
+  "worldClockMax": {
+    "message": "Selected cities are shown in a fixed order."
+  },
+  "dailyQuestionTitle": {
+    "message": "Daily Question"
+  },
+  "dailyQuestionSaved": {
+    "message": "Saved"
+  },
+  "dailyQuestionPlaceholder": {
+    "message": "Write your answer…"
+  },
+  "dailyQuestionHint": {
+    "message": "Answers are saved by date and kept for 120 days."
+  },
+  "dailyQuestionClear": {
+    "message": "Clear today's answer"
+  },
+  "cardDisplayLimit": {
+    "message": "Items shown"
+  },
+  "cardDisplayLimitHint": {
+    "message": "Up to {n}"
   }
 }

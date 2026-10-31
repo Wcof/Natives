@@ -8,7 +8,7 @@ import { isFundModuleKey } from './modules/fund-locales.mjs';
 
 export const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
 const OMIT = new Set(['node_modules', '.git', 'fixtures', 'test', 'tests', '__pycache__']);
-const FILES = /^(manifest\.json|(?!(?:ui-harness|test-dom-mock|files-preview)\.js$)(?:[^/]+|platform\/.+|plugins\/.+|apps\/.+|ai-performance\/.+|ai-usage-client\/.+|tokenusage\/.+)\.(?:html|css|js)|icons\/(?:agents\/)?(?!folder-source\.svg$)[^/]+|_locales\/[^/]+\/messages\.json)$/;
+const FILES = /^(manifest\.json|(?!(?:ui-harness|test-dom-mock|files-preview)\.js$)(?:[^/]+|platform\/.+|plugins\/.+|space-kit\/.+|apps\/.+|ai-performance\/.+|ai-usage-client\/.+|tokenusage\/.+)\.(?:html|css|js)|icons\/(?:agents\/)?(?!folder-source\.svg$)[^/]+|_locales\/[^/]+\/messages\.json)$/;
 
 // 生产 Extension 身份稳定化（本地加载已解压模式）：
 // manifest.json 注入固定 RSA 公钥（key 字段），Chrome 由此派生稳定 Extension ID，

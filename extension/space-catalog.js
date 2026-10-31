@@ -1,97 +1,7 @@
 
 
-import { WIDGET_KEYS, pluginName, widgetPlugins } from './space-plugins.js';
-
-export const WIDGET_CATEGORIES = [
-  {
-    id: 'investment',
-    nameKey: 'catInvestment',
-    fallback: '投资',
-    keys: [
-      // 投资卡（ADR-0036）：显示已登记的基金持仓数量、账户和成本状态。
-      'widget/investmentHoldings',
-      'widget/investmentAssets',
-      'widget/investmentGoal',
-      'widget/investmentAllocation',
-      'widget/investmentAllocationCheck',
-    ],
-  },
-  {
-    id: 'ai',
-    nameKey: 'catAiPerformance',
-    fallback: 'AI 效能',
-    keys: [
-      // R1（方案 §4.1）：七个独立 AI 效能组件；旧 widget/aiPerformance
-      // 保留兼容读取但从新增目录隐藏（方案 §8.2）。
-      'widget/aiCost',
-      'widget/aiTokens',
-      'widget/aiSessions',
-      'widget/aiRequests',
-      'widget/aiLimits',
-      'widget/aiAttention',
-      'widget/aiSavings',
-    ],
-  },
-  {
-    id: 'time',
-    nameKey: 'catTimeAndClocks',
-    fallback: '时间与时钟',
-    keys: [
-      'widget/time',
-      'widget/binaryTime',
-      'widget/since',
-      'widget/countdown',
-      'widget/workHours',
-    ],
-  },
-  {
-    id: 'productivity',
-    nameKey: 'catProductivity',
-    fallback: '生产力与工具',
-    keys: [
-      'widget/todo',
-      'widget/notes',
-      'widget/trello',
-      'widget/tallyCounter',
-      'widget/search',
-      'widget/links',
-      'widget/bookmarks',
-      'widget/topSites',
-    ],
-  },
-  {
-    id: 'information',
-    nameKey: 'catInformationFeeds',
-    fallback: '资讯与数据',
-    keys: [
-      'widget/weather',
-      'widget/currencyRates',
-      'widget/ipInfo',
-      'widget/github',
-    ],
-  },
-  {
-    id: 'inspiration',
-    nameKey: 'catInspirationText',
-    fallback: '灵感与问候',
-    keys: [
-      'widget/greeting',
-      'widget/quote',
-      'widget/palette',
-      'widget/message',
-      'widget/customText',
-    ],
-  },
-  {
-    id: 'advanced',
-    nameKey: 'catCustomAdvanced',
-    fallback: '自定义与扩展',
-    keys: [
-      'widget/html',
-      'widget/css',
-    ],
-  },
-];
+import { pluginName, widgetPlugins } from './space-plugins.js';
+import { CARD_CATEGORIES, cardsInCategory, cardMeta } from './space-kit/index.js';
 
 export function createSpaceCatalog({
   t,
@@ -136,10 +46,13 @@ export function createSpaceCatalog({
 
     
     const itemsByKey = {};
-    for (const key of WIDGET_KEYS) {
+    const allKeys = CARD_CATEGORIES.flatMap((cat) => cardsInCategory(cat.id));
+    for (const key of allKeys) {
       const plugin = widgetPlugins[key] || {};
+      const meta = cardMeta(key);
       const name = pluginName(key, language, plugin.name || key);
-      const desc = t(`${key.replace('widget/', 'desc_')}`, plugin.description || name);
+      const localizedDesc = language === 'zh_CN' ? meta?.descriptionZh : meta?.description;
+      const desc = localizedDesc || t(`${key.replace('widget/', 'desc_')}`, plugin.description || name);
       itemsByKey[key] = {
         key,
         name,
@@ -154,9 +67,9 @@ export function createSpaceCatalog({
       const q = query.trim().toLowerCase();
       let totalMatching = 0;
 
-      for (const cat of WIDGET_CATEGORIES) {
+      for (const cat of CARD_CATEGORIES) {
         const catName = t(cat.nameKey, cat.fallback);
-        const catItems = cat.keys
+        const catItems = cardsInCategory(cat.id)
           .map((k) => itemsByKey[k])
           .filter(Boolean)
           .filter((item) => !q || item.name.toLowerCase().includes(q) || item.desc.toLowerCase().includes(q) || item.key.toLowerCase().includes(q));

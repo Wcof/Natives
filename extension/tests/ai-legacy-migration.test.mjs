@@ -6,10 +6,10 @@
 //   - 旧 key 保留在安全白名单（兼容读取），但从新增目录隐藏。
 // 往返导出：解析是纯函数，同一旧配置反复解析得到同一结果，不产生写库副作用。
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
 import { normalizeView, VIEWS } from '../ai-performance/views.js';
 import { METRICS } from '../ai-performance/metrics.js';
 import { WIDGET_KEYS } from '../plugins/sanitizer.js';
+import { cardsInCategory } from '../space-kit/card-meta.js';
 
 // --- 1. 旧 key 兼容读取：留在白名单，但从新增目录隐藏 ---
 {
@@ -18,13 +18,11 @@ import { WIDGET_KEYS } from '../plugins/sanitizer.js';
     'widget/aiLimits', 'widget/aiAttention', 'widget/aiSavings']) {
     assert.ok(WIDGET_KEYS.includes(key), `新 key ${key} 在白名单`);
   }
-  // 目录层：ai 分类只列七个新 key，不含旧 key（隐藏而非删除）。
-  const catalogSrc = readFileSync(new URL('../space-catalog.js', import.meta.url), 'utf8');
-  const aiBlock = catalogSrc.slice(catalogSrc.indexOf("id: 'ai'"), catalogSrc.indexOf("id: 'time'"));
-  assert.ok(aiBlock.includes("'widget/aiCost'"), '目录列出 aiCost');
-  assert.ok(!aiBlock.includes("'widget/aiPerformance'"), '旧 key 不在新增目录（隐藏）');
-  const aiKeyCount = (aiBlock.match(/'widget\/ai[A-Z]/g) || []).length;
-  assert.equal(aiKeyCount, 7, 'ai 分类恰好七个独立条目');
+  // 目录层由 card-meta 的 ai 分类驱动：只列七个新 key，不含旧 key（隐藏而非删除）。
+  const aiKeys = cardsInCategory('ai');
+  assert.ok(aiKeys.includes('widget/aiCost'), '目录列出 aiCost');
+  assert.ok(!aiKeys.includes('widget/aiPerformance'), '旧 key 不在新增目录（隐藏）');
+  assert.equal(aiKeys.length, 7, 'ai 分类恰好七个独立条目');
 }
 
 // --- 2. 旧 session_duration 口径保留：不被静默改成真实会话指标 ---

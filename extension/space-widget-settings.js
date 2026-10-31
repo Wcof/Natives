@@ -1,6 +1,7 @@
 
 
 import { widgetPlugins, pluginName, escapeHtml } from './space-plugins.js';
+import { cardMeta, normalizeCardLimit } from './space-kit/index.js';
 
 export function createSpaceWidgetSettings({
   t,
@@ -51,6 +52,29 @@ export function createSpaceWidgetSettings({
     
     const body = document.createElement('div');
     body.className = 'inspector-body';
+
+    // 元数据声明的通用「显示数量」：卡片只读 config.limit，不必各自实现设置 UI。
+    const meta = cardMeta(widget.key);
+    if (meta?.limit) {
+      const limit = normalizeCardLimit(widget.key, config.limit);
+      const hint = t('cardDisplayLimitHint', '最多显示 {n} 条').replace('{n}', String(meta.limit.max));
+      const limitSec = document.createElement('div');
+      limitSec.className = 'inspector-section';
+      limitSec.innerHTML = `
+        <h3>${t('cardDisplayLimit', '显示数量')}</h3>
+        <label class="inspector-field">
+          <span>${hint}</span>
+          <input type="number" id="w-limit" min="1" max="${meta.limit.max}" step="1" value="${limit}" />
+        </label>
+      `;
+      const input = limitSec.querySelector('#w-limit');
+      input.onchange = () => {
+        const next = normalizeCardLimit(widget.key, input.value);
+        input.value = String(next);
+        onUpdateWidget({ ...widget, configJson: { ...config, limit: next } });
+      };
+      body.append(limitSec);
+    }
 
     
     if (plugin?.renderSettings) {

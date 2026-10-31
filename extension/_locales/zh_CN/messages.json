@@ -9775,5 +9775,176 @@
   },
   "fundHomeQualityStale": {
     "message": "估值已过时"
+  },
+  "dailyFocusTitle": {
+    "message": "今日重点"
+  },
+  "dailyFocusEmpty": {
+    "message": "写下今天最重要的三件事"
+  },
+  "dailyFocusToggle": {
+    "message": "切换完成状态"
+  },
+  "dailyFocusPlaceholder": {
+    "message": "今天最重要的事…"
+  },
+  "dailyFocusAdd": {
+    "message": "添加今日重点"
+  },
+  "dailyFocusFull": {
+    "message": "今日重点已满，完成或删除后再添加"
+  },
+  "dailyFocusHint": {
+    "message": "每天自动清空，只保留当天重点"
+  },
+  "dailyFocusSettingsHint": {
+    "message": "数量上限可在上方「显示数量」调整；这里可以清空今天的重点。"
+  },
+  "dailyFocusClear": {
+    "message": "清空今日重点"
+  },
+  "quickNoteTitle": {
+    "message": "快速记录"
+  },
+  "quickNoteCopy": {
+    "message": "复制全部"
+  },
+  "quickNoteCopied": {
+    "message": "已复制"
+  },
+  "quickNotePlaceholder": {
+    "message": "记下一闪而过的想法…"
+  },
+  "quickNoteAdd": {
+    "message": "添加快速记录"
+  },
+  "quickNoteEmpty": {
+    "message": "还没有记录"
+  },
+  "quickNoteMore": {
+    "message": "仅显示最近 {n} 条"
+  },
+  "quickNoteHint": {
+    "message": "记录会保存在当前空间"
+  },
+  "quickNoteSettingsHint": {
+    "message": "显示数量可在上方调整；清空后无法恢复。"
+  },
+  "quickNoteClear": {
+    "message": "清空全部记录"
+  },
+  "scratchpadTitle": {
+    "message": "便签"
+  },
+  "scratchpadSaved": {
+    "message": "已保存"
+  },
+  "scratchpadSaving": {
+    "message": "保存中…"
+  },
+  "scratchpadPlaceholder": {
+    "message": "随手写点什么…"
+  },
+  "scratchpadSettingsHint": {
+    "message": "内容会在输入停止后自动保存，最多 20000 字。"
+  },
+  "scratchpadClear": {
+    "message": "清空便签"
+  },
+  "habitTitle": {
+    "message": "习惯打卡"
+  },
+  "habitEmpty": {
+    "message": "添加第一个习惯，开始打卡"
+  },
+  "habitToday": {
+    "message": "今日 {count}/{target}"
+  },
+  "habitRemove": {
+    "message": "删除习惯"
+  },
+  "habitPlaceholder": {
+    "message": "添加一个习惯…"
+  },
+  "habitAdd": {
+    "message": "添加习惯"
+  },
+  "habitHint": {
+    "message": "最近 7 天 · 点击方格完成今日打卡"
+  },
+  "habitSettingsHint": {
+    "message": "打卡记录只保留最近 30 天；清空记录不会删除习惯。"
+  },
+  "habitClearLog": {
+    "message": "清空打卡记录"
+  },
+  "timeProgressTitle": {
+    "message": "时间进度"
+  },
+  "progressToday": {
+    "message": "今天"
+  },
+  "progressWeek": {
+    "message": "本周"
+  },
+  "progressMonth": {
+    "message": "本月"
+  },
+  "progressYear": {
+    "message": "今年"
+  },
+  "progressHint": {
+    "message": "时间正在流逝"
+  },
+  "progressShowWeek": {
+    "message": "显示本周"
+  },
+  "progressShowMonth": {
+    "message": "显示本月"
+  },
+  "progressShowYear": {
+    "message": "显示今年"
+  },
+  "progressSettingsHint": {
+    "message": "「今天」始终显示，其余维度可以单独关闭。"
+  },
+  "worldClockTitle": {
+    "message": "世界时钟"
+  },
+  "worldClockTomorrow": {
+    "message": "明天"
+  },
+  "worldClockYesterday": {
+    "message": "昨天"
+  },
+  "worldClockHint": {
+    "message": "本地时间之外的常用时区"
+  },
+  "worldClockZones": {
+    "message": "显示城市（最多 6 个）"
+  },
+  "worldClockMax": {
+    "message": "已选城市按固定顺序展示。"
+  },
+  "dailyQuestionTitle": {
+    "message": "每日一问"
+  },
+  "dailyQuestionSaved": {
+    "message": "已保存"
+  },
+  "dailyQuestionPlaceholder": {
+    "message": "写下你的答案…"
+  },
+  "dailyQuestionHint": {
+    "message": "答案按日期保存，只保留最近 120 天。"
+  },
+  "dailyQuestionClear": {
+    "message": "清空今天的答案"
+  },
+  "cardDisplayLimit": {
+    "message": "显示数量"
+  },
+  "cardDisplayLimitHint": {
+    "message": "最多显示 {n} 条"
   }
 }

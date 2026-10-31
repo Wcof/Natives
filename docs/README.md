@@ -36,6 +36,7 @@ Natives 是单一用户产品：共享页面供 Chrome 扩展与本机 Web 使�
 | 投资产品升级与 PanWatch R2 页面／功能迁移 | [最新方案目录](/Users/ldh/Downloads/project/plan/README.md)、[实施任务](/Users/ldh/Downloads/project/plan/06-implementation-tasks.md)、[验收](/Users/ldh/Downloads/project/plan/07-acceptance.md)、[执行提示词](/Users/ldh/Downloads/project/plan/08-agent-execution-prompt.md)；范围为持仓替换、首页／机会合并、单金额目标与财务设置；当前开发状态见根 ROADMAP.md |
 | 单一产品、内置 Fund 和 App Center | [托管应用契约](contracts/managed-app-contract.md)、[内置模块标准](standards/technical/06-built-in-modules.md)、[应用中心实施方案](development/app-center-fund-implementation-plan.md)。注：fund = 投资终端（含基金记账），displayName "投资/Invest" |
 | 安装、引导、打包和发布 | [应用中心实施方案](development/app-center-fund-implementation-plan.md)、[当前架构](architecture/ARCHITECTURE.md) |
+| 空间卡片、卡壳与复用层 | [space-kit 组件边界](development/space-card-kit.md)：卡片元数据单一来源、卡壳/原语职责、Rust 白名单同步与新增卡片清单 |
 | Files | [Files 审计](architecture/FILE_MANAGER_AUDIT.md) |
 | Files PDF 安全例外 | [ADR-0043](adr/0043-native-chrome-pdf-preview.md)：仅 Host 校验的 PDF Blob 使用 Chrome 内置阅读器，其余 iframe 沙箱不变 |
 | 网页连接与配对退役 | [ADR-0045](adr/0045-retire-browser-pairing.md)：无配对码／配对弹窗，受信启动建立授权，闲置不撤销浏览器授权；Surface 与 Cookie／CSRF 边界保持 |

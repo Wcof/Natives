@@ -1,5 +1,6 @@
 import { buildDashboardStyles } from './space-dashboard-styles.js';
 import { attachPositionGestures } from './space-position-gestures.js';
+import { SPACE_CARD_STYLES } from './space-kit/card-styles.js';
 
 const transformOriginMap = {
   topLeft: 'top left',
@@ -74,6 +75,7 @@ export function createSpaceDashboard({
     staticStyleContent = buildDashboardStyles({
       backgroundStyles: styles(backgroundPlugins),
       widgetStyles: styles(widgetPlugins),
+      cardStyles: SPACE_CARD_STYLES,
     });
     return staticStyleContent;
   }
@@ -328,9 +330,10 @@ export function createSpaceDashboard({
       return;
     }
 
-    const draft = entry.element.querySelector('.notes-textarea:focus');
-    // Preserve uncommitted typing, but still apply peer updates to an unchanged editor.
-    const dirty = draft && draft.value !== (prevWidget.configJson?.content || '');
+    // 输入中的多行编辑器不重建：保存回写会触发快照更新，重建会抢焦点/丢草稿。
+    // 单行新增表单不在此列，否则提交后新条目要等失焦才出现。
+    const focusedEditor = entry.element.querySelector('textarea:focus, [data-space-editor="true"]:focus');
+    const dirty = Boolean(focusedEditor);
     if (JSON.stringify(prevWidget.configJson) !== JSON.stringify(nextWidget.configJson) && !dirty) {
       const plugin = widgetPlugins[nextWidget.key];
       entry.disposer?.();
@@ -363,6 +366,13 @@ export function createSpaceDashboard({
     container.style.setProperty('--space-widget-text', textColor);
     container.style.setProperty('--space-widget-text-secondary', `color-mix(in srgb, ${textColor} 70%, transparent)`);
     container.style.setProperty('--space-widget-accent', textColor);
+    // R-U3：空间卡片的表面/边界/填充同样在这里解析，卡片只消费角色，
+    // 不在组件层用 color-mix 现算层级。
+    container.style.setProperty('--space-widget-surface', 'color-mix(in srgb, var(--space-widget-text) 7%, transparent)');
+    container.style.setProperty('--space-widget-surface-strong', 'color-mix(in srgb, var(--space-widget-text) 12%, transparent)');
+    container.style.setProperty('--space-widget-line', 'color-mix(in srgb, var(--space-widget-text) 18%, transparent)');
+    container.style.setProperty('--space-widget-line-strong', 'color-mix(in srgb, var(--space-widget-text) 45%, transparent)');
+    container.style.setProperty('--space-widget-fill', 'color-mix(in srgb, var(--space-widget-text) 45%, transparent)');
     container.style.setProperty('--space-widget-metric-size', disp.fontSize ? `${disp.fontSize}px` : '');
     // §5.5 字体设置：主指标字重必须响应用户 fontWeight——未设置时移除，
     // 让 renderer 用自己的默认 700；设置了则传导（不能让回退值吞掉用户设置）。
