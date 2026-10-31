@@ -199,7 +199,7 @@ fn positions_detail_snapshot_end_to_end() {
 }
 
 #[test]
-fn positions_value_uses_exact_round_down_and_currency_authority() {
+fn positions_value_rounds_to_nearest_cent_and_keeps_currency_authority() {
     let h = Harness::new();
     let date = fund_module::home::resolve_today(&rusqlite::Connection::open_in_memory().unwrap());
     h.ok("POST", "/api/openings", &format!(r#"{{"account":"小额","fundCode":"012414","quantity":"0.0123","totalCost":"0","asOf":"{date}"}}"#));
@@ -209,7 +209,7 @@ fn positions_value_uses_exact_round_down_and_currency_authority() {
     h.ok("POST", "/api/holding/valuation", &format!(r#"{{"fundId":{fund},"price":"1.2345","asOf":"{date}","navCurrency":"CNY","dataRevision":"{rev}"}}"#));
     let snap = h.detail("");
     let row = h.holding(&snap, "012414");
-    assert_eq!(row["marketValue"], "0.01"); // 0.01518435 向零截断，与账本一致。
+    assert_eq!(row["marketValue"], "0.02"); // 0.01518435 在最终分位四舍五入。
     assert_eq!(row["valuationQuality"], "complete");
     assert_eq!(row["costUnknown"], false);
     let rev = snap["dataRevision"].as_str().unwrap();
@@ -222,6 +222,86 @@ fn positions_value_uses_exact_round_down_and_currency_authority() {
     let (status, _) = h.call("GET", "/api/positions/detail?refresh=1&kind=invalid", "");
     assert_eq!(status, 400);
     assert_eq!(h.detail("")["dataRevision"], before);
+}
+
+#[test]
+fn valuation_rounding_is_shared_by_home_positions_groups_and_history() {
+    let h = Harness::new();
+    let calendar = rusqlite::Connection::open_in_memory().unwrap();
+    let date = fund_module::home::resolve_today(&calendar);
+    let start: String = calendar
+        .query_row("SELECT date(?1,'-1 day')", [&date], |r| r.get(0))
+        .unwrap();
+    h.ok(
+        "POST",
+        "/api/openings",
+        &serde_json::json!({"account":"Rounding fixture",
+        "fundCode":"110022","fundName":"Fixture","quantity":"100.0050",
+        "totalCost":"100.00","asOf":start})
+        .to_string(),
+    );
+    let detail = h.detail("");
+    let row = h.holding(&detail, "110022");
+    let (account, fund) = (row["accountId"].clone(), row["fundId"].clone());
+    h.ok(
+        "POST",
+        "/api/holding/valuation",
+        &serde_json::json!({"fundId":fund,
+        "price":"1.0000","asOf":start,"navCurrency":"CNY","dataRevision":detail["dataRevision"]})
+        .to_string(),
+    );
+    let detail = h.detail("");
+    h.ok(
+        "POST",
+        "/api/holding/valuation",
+        &serde_json::json!({"fundId":fund,
+        "price":"1.0000","asOf":date,"navCurrency":"CNY","dataRevision":detail["dataRevision"]})
+        .to_string(),
+    );
+    h.ok("POST", "/api/assets", &serde_json::json!({"account":"Rounding fixture",
+        "name":"Cash","productType":"cash","riskClass":"cash","marketValue":"100.00","valuedAt":date}).to_string());
+    h.ok(
+        "POST",
+        "/api/offline/assets",
+        &serde_json::json!({"productType":"other",
+        "name":"Pending fixture","location":"Fixture","valueMinor":"200",
+        "valuedAt":date,"costMinor":null,"riskClass":"unknown","attrs":{},"note":"Fixture"})
+        .to_string(),
+    );
+    h.ok(
+        "PUT",
+        "/api/home/group-plan",
+        &serde_json::json!({"expectedRevision":0,"groups":[{
+        "groupId":"","name":"Fixture","description":"Rounding fixture","ratioTenths":1000,
+        "sortOrder":0,"fundBindings":[{"accountId":account,"fundId":fund}],
+        "manualBindings":[],"offlineBindings":[],"cashBindings":[]}]})
+        .to_string(),
+    );
+    let detail = h.detail("");
+    let row = h.holding(&detail, "110022");
+    assert_eq!(row["quantity"], "100.005");
+    assert_eq!(row["cost"], "100");
+    assert_eq!(row["marketValue"], "100.01");
+    let home = h.ok("GET", "/api/home/snapshot?range=all", "");
+    assert_eq!(
+        home["dataRevision"], detail["dataRevision"],
+        "reading must not rewrite the ledger"
+    );
+    assert_eq!(home["wealth"]["totalA"], "20201");
+    assert_eq!(
+        home["portfolio"]["ledger"]["byType"]["fund"]["holdingProfitMinor"],
+        "1"
+    );
+    assert_eq!(
+        home["groupAllocation"]["groups"][0]["currentMinor"],
+        "10001"
+    );
+    let key = format!("fund-{}-{}", account, fund);
+    assert!(home["portfolio"]["history"]["points"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|point| point["holdingValues"][&key] == "10001"));
 }
 
 #[test]

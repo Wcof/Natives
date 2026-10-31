@@ -4,7 +4,7 @@
 :root {
   --bg:var(--natives-bg); --text:var(--natives-text-primary); --muted:var(--natives-text-muted);
   --surface:var(--natives-surface); --surface-2:var(--natives-surface-2); --surface-3:var(--natives-surface-3);
-  --line:var(--natives-border); --hover:var(--natives-surface-3); --selected:var(--natives-selected);
+  --line:var(--natives-edge); --hover:var(--natives-surface-3); --selected:var(--natives-selected);
   --accent:var(--natives-accent); --accent-strong:var(--natives-accent-strong); --on-accent:var(--natives-on-accent);
   --danger:var(--natives-danger); --on-danger:var(--natives-on-danger); --success:var(--natives-ok); --warning:var(--natives-warning);
   --backdrop:var(--natives-backdrop); --shadow:var(--natives-shadow);
@@ -477,3 +477,9 @@ button.action.danger:hover { border-color:var(--danger); color:var(--danger); }
 
 /* Module settings belong to the active embedded surface. */
 body:has(#app-stage[hidden]) #app-module-settings { display: none; }
+
+/* ADR-0048：嵌入运行（?standalone=1 或被框架承载）——应用中心不重复显示产品侧栏。 */
+html.standalone .apps-nav { display:none !important; }
+html.standalone body { display:block; }
+html.standalone .apps-content { width:100%; height:100%; }
+html.standalone #apps-expand-sidebar-btn { display:none !important; }

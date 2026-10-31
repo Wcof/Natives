@@ -141,7 +141,7 @@ impl IncomeBook {
         if assets::is_stale(priced_at, date) {
             return None;
         }
-        i64::try_from(quantity * *price as i128 / 1_000_000).ok()
+        crate::fixed::valuation_minor(quantity as i64, *price)
     }
 
     fn quantity(&self, date: &str) -> i128 {
@@ -257,8 +257,14 @@ impl IncomeBook {
         if quantity > 0 && baseline.is_none() {
             return unavailable("missing_baseline", Some(to));
         }
-        let initial = quantity * baseline.map(|(_, p)| *p as i128).unwrap_or(0) / 1_000_000;
-        let mut income = end_quantity * *end as i128 / 1_000_000 - initial;
+        let (Some(initial), Some(end_value)) = (
+            crate::fixed::valuation_minor(quantity as i64, baseline.map(|(_, p)| *p).unwrap_or(0)),
+            crate::fixed::valuation_minor(end_quantity as i64, *end),
+        ) else {
+            return unavailable("overflow", Some(to));
+        };
+        let initial = i128::from(initial);
+        let mut income = i128::from(end_value) - initial;
         let mut basis = initial;
         if let Some((q, _, date)) = self
             .opening
@@ -268,7 +274,10 @@ impl IncomeBook {
             let Some((_, price)) = price_at(date) else {
                 return unavailable("missing_opening_price", Some(to));
             };
-            let flow = *q as i128 * *price as i128 / 1_000_000;
+            let Some(flow) = crate::fixed::valuation_minor(*q, *price) else {
+                return unavailable("overflow", Some(to));
+            };
+            let flow = i128::from(flow);
             income -= flow;
             basis += flow;
         }
@@ -280,7 +289,10 @@ impl IncomeBook {
                 let Some((_, price)) = price_at(date) else {
                     return unavailable("missing_transfer_price", Some(to));
                 };
-                *q as i128 * *price as i128 / 1_000_000
+                let Some(flow) = crate::fixed::valuation_minor(*q, *price) else {
+                    return unavailable("overflow", Some(to));
+                };
+                i128::from(flow)
             } else if kind == "BUY" {
                 *amount as i128 + *fee as i128
             } else {

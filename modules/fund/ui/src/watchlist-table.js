@@ -316,6 +316,8 @@ function renderSortedRows(rows) {
 function buildRow(item) {
   const tr = document.createElement("tr");
   tr.className = "clickable";
+  // ADR-0049 D7-8 补齐：行本身可聚焦，键盘能到达并用 Enter/空格选中（原先只有鼠标）。
+  tr.tabIndex = 0;
   tr.dataset.symbol = item.symbol;
   tr.dataset.name = item.name;
   tr.dataset.assetType = item.assetType || "";
@@ -371,6 +373,14 @@ function buildRow(item) {
   tr.addEventListener("dblclick", function() {
     actions.openStockDetail(tr.dataset.symbol, tr.dataset.name, tr.dataset.assetType);
   });
+  // 键盘等价路径：Enter/空格走与点击同一个 handler，不另写一套选中逻辑。
+  tr.addEventListener("keydown", function(e) {
+    if (e.target !== tr) return; // 行内按钮/复选框自己处理键
+    if (e.key === "Enter" || e.key === " ") {
+      e.preventDefault();
+      tr.click();
+    }
+  });
   return tr;
 }
 
@@ -422,6 +432,9 @@ function updateRow(tr, item) {
   const hasAlert = state.alertRules[item.symbol] ? state.alertRules[item.symbol] + "%" : "–";
   if (tds[11].textContent !== hasAlert) tds[11].textContent = hasAlert;
   tr.classList.toggle("selected", item.symbol === state.currentSymbol);
+  // aria-current 与视觉选中同源，读屏能念出「当前行」。
+  if (item.symbol === state.currentSymbol) tr.setAttribute("aria-current", "true");
+  else tr.removeAttribute("aria-current");
 }
 
 // ---------- Sparkline（60px 原生 Canvas 微缩走势） ----------

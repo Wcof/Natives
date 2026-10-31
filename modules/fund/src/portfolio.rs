@@ -623,10 +623,9 @@ pub fn replay_history(
                 .optional()?;
             match nav {
                 Some(nav_raw) if !cost_unknown => {
-                    // share(4位) × nav(4位) → value(2位)：除以 10^(4+4-2)=10^6
-                    // ROUND_DOWN。
-                    let v: i128 = (*share_raw as i128) * (nav_raw as i128) / 1_000_000;
-                    value = value.map(|acc| acc + v as i64);
+                    value = value.and_then(|acc| {
+                        acc.checked_add(crate::fixed::valuation_minor(*share_raw, nav_raw)?)
+                    });
                 }
                 _ => value = None,
             }

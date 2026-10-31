@@ -71,11 +71,20 @@ pub(crate) fn holding_edit(
                 )));
             }
         }
-        let (cost, shares, derived, nav_raw, nav_date) =
-            holding_amounts(value_minor, gain_minor, shares_raw, nav)?;
+        let cleared =
+            mode == "calibration" && value_minor == 0 && gain_minor == 0 && shares_raw == Some(0);
+        let (cost, shares, derived, nav_raw, nav_date) = if cleared {
+            (0, Some(0), false, None, None)
+        } else {
+            holding_amounts(value_minor, gain_minor, shares_raw, nav)?
+        };
         let shares = shares
-            .filter(|shares| *shares > 0)
-            .ok_or_else(|| LedgerError::Invalid("更正份额须为正".into()))?;
+            .filter(|shares| *shares > 0 || cleared)
+            .ok_or_else(|| {
+                LedgerError::Invalid(
+                    "更正份额须为正；清仓校准须将份额、金额及当前收益同时设为零".into(),
+                )
+            })?;
         let result = if mode == "opening" {
             let version = expected_opening_version
                 .ok_or_else(|| LedgerError::Invalid("缺少期初版本号".into()))?;
@@ -178,4 +187,110 @@ fn calibrate(
     Ok(json!({"ok":true,"mode":"calibration",
         "deltaShares":Fixed::share(delta_shares.abs()).to_string_value(),
         "deltaCost":Fixed::amount(delta_cost.abs()).to_string_value(),"sharesDerived":derived}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn zero_calibration_preserves_history_without_inventing_a_sale_or_cash() {
+        let store = Store::open_in_memory().unwrap();
+        let today = crate::finance::today_cn();
+        let start = crate::assets::minus_days(&today, 1);
+        super::super::holding_create(
+            &store,
+            "A",
+            "110022",
+            "Fixture",
+            10000,
+            0,
+            Some(1000000),
+            &start,
+            true,
+            "opening",
+            &today,
+        )
+        .unwrap();
+        for (value, gain, shares, mode) in [
+            (1, 0, 0, "calibration"),
+            (0, 1, 0, "calibration"),
+            (0, 0, 1, "calibration"),
+            (0, 0, 0, "opening"),
+        ] {
+            assert!(holding_edit(
+                &store,
+                mode,
+                "A",
+                "110022",
+                value,
+                gain,
+                Some(shares),
+                &today,
+                "Invalid clear",
+                "invalid",
+                true,
+                None,
+                &today
+            )
+            .is_err());
+        }
+        let clear = || {
+            holding_edit(
+                &store,
+                "calibration",
+                "A",
+                "110022",
+                0,
+                0,
+                Some(0),
+                &today,
+                "User confirmed no remaining shares",
+                "clear",
+                true,
+                None,
+                &today,
+            )
+        };
+        clear().unwrap();
+        let revision = store.with_read(Store::data_revision).unwrap();
+        clear().unwrap();
+        assert_eq!(store.with_read(Store::data_revision).unwrap(), revision);
+        store
+            .with_read(|conn| -> rusqlite::Result<()> {
+                let position = crate::portfolio::replay_position(conn, 1, 1)
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(
+                    (
+                        position.quantity_raw,
+                        position.cost_raw,
+                        position.realized_raw
+                    ),
+                    (0, 0, 0)
+                );
+                assert_eq!(
+                    conn.query_row("SELECT quantity_raw FROM opening_snapshots", [], |r| r
+                        .get::<_, i64>(0))?,
+                    1000000
+                );
+                for (table, count) in [
+                    ("position_calibrations", 1),
+                    ("transactions", 0),
+                    ("cash_events", 0),
+                ] {
+                    assert_eq!(
+                        conn.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r
+                            .get::<_, i64>(0))?,
+                        count
+                    );
+                }
+                let book = crate::holding_income::load(conn, 1, 1).unwrap();
+                let prices = std::collections::BTreeMap::from([(start.clone(), 10000)]);
+                assert_eq!(book.valuation(&start, &prices), Some(10000));
+                assert_eq!(book.valuation(&today, &prices), Some(0));
+                Ok(())
+            })
+            .unwrap();
+    }
 }

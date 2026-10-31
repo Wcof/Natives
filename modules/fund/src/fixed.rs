@@ -1,7 +1,8 @@
 //! 十进制定点精度（实施方案 §7.2 / 审计 B11）。
 //!
 //! 份额、净值、单价一律 4 位小数；金额、费用一律 2 位小数；
-//! 内部用 i64 定点表示，ROUND_DOWN 舍入，禁用二进制浮点累计成本。
+//! 内部用 i64 定点表示；通用账本运算 ROUND_DOWN，估值在最终分位 half-up。
+//! 禁用二进制浮点累计成本。
 //! 输出为正规化字符串（去掉纯零尾随小数位），便于 UI 与 JSON 直接呈现。
 
 /// 定点数：`raw = 值 × 10^scale`。
@@ -17,6 +18,15 @@ pub struct PrecisionError;
 
 const SCALE_NAV: u32 = 4;
 const SCALE_AMOUNT: u32 = 2;
+
+/// 四位份额 × 四位价格，仅在最终人民币分位四舍五入。
+pub(crate) fn valuation_minor(quantity_raw: i64, price_raw: i64) -> Option<i64> {
+    if quantity_raw < 0 || price_raw < 0 {
+        return None;
+    }
+    let product = i128::from(quantity_raw) * i128::from(price_raw);
+    i64::try_from((product + 500_000) / 1_000_000).ok()
+}
 
 impl Fixed {
     pub fn zero(scale: u32) -> Self {
@@ -255,6 +265,26 @@ impl std::fmt::Display for Fixed {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn valuations_round_once_at_cent_boundary_and_reject_invalid_or_overflow() {
+        for (quantity, price, expected) in [
+            (10000, 49, 0),
+            (10000, 50, 1),
+            (10000, 51, 1),
+            (10000, 149, 1),
+            (10000, 150, 2),
+            (1000000, 12345, 12345),
+            (0, i64::MAX, 0),
+            (i64::MAX, 0, 0),
+        ] {
+            assert_eq!(valuation_minor(quantity, price), Some(expected));
+        }
+        assert_eq!(valuation_minor(-1, 1), None);
+        assert_eq!(valuation_minor(1, -1), None);
+        assert_eq!(valuation_minor(i64::MAX, i64::MAX), None);
+        assert_eq!(valuation_minor(i64::MAX, 1000000), Some(i64::MAX));
+    }
 
     #[test]
     fn integer_padding_overflow_is_rejected() {

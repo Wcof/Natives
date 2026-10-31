@@ -9,7 +9,9 @@ import {verifyInlineAI} from './home-inline-ai-native.mjs';
 import {verifyFilterFocus} from './home-filter-focus-native.mjs';
 import {verifyInformationData} from './home-native-information.mjs';
 import {verifyCurrentFundData} from './fund-current-native.mjs';
+import {verifyNativeWealth} from './home-wealth-native.mjs';
 export async function dispatchNativeScenario({page,frame,context,report,fakeHome,out,env,extensionId}) {
+  if(process.argv.includes('--home-wealth')){report.scope='home-wealth';await verifyNativeWealth(page,frame,report);return true;}
   if(process.argv.includes('--fund-current')){report.scope='fund-current';await verifyCurrentFundData(page,frame,report);return true;}
   if(process.argv.includes('--positions-loading')){report.scope='positions-loading';await verifyPositionsLoading(page,context,frame,report);return true;}
   if(process.argv.includes('--information-data')){report.scope='information-data';await verifyInformationData(page,frame,report);return true;}

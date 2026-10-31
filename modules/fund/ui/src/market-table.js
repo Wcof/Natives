@@ -83,8 +83,11 @@ function renderSectorsTable() {
   items.forEach(function(s, idx) {
     const tr = document.createElement("tr");
     tr.className = "clickable";
+    // ADR-0049 D7-8：板块行同样可聚焦，Enter/空格与点击等价。
+    tr.tabIndex = 0;
     if (currentSelectedSector && currentSelectedSector.code === s.code) {
       tr.classList.add("selected-sector");
+      tr.setAttribute("aria-current", "true");
     }
 
     const pct = s.changePct != null ? (s.changePct > 0 ? "+" : "") + s.changePct.toFixed(2) + "%" : "–";
@@ -114,6 +117,14 @@ function renderSectorsTable() {
       selectSector(s);
     });
 
+    tr.addEventListener("keydown", function(e) {
+      if (e.target !== tr) return;
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        tr.click();
+      }
+    });
+
     tbody.appendChild(tr);
   });
 
@@ -128,6 +139,7 @@ function selectSector(s) {
   document.querySelectorAll('[data-sector-code]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.sectorCode===s.code)));
   document.querySelectorAll("#sectors-table tbody tr").forEach(function(r) {
     r.classList.remove("selected-sector");
+    r.removeAttribute("aria-current");
   });
   renderSectorsTableSelection();
   updateSectorSidebar(s);
@@ -229,7 +241,7 @@ function updateSectorStockDetail(symbol, name) {
         (isFav ? "已自选" : "+ 加自选") +
       "</button>" +
     "</div>" +
-    "<div style='display:grid; grid-template-columns:1fr 1fr; gap:6px; font-size:var(--natives-fs-secondary); color:var(--natives-text-muted); padding:6px 0; border-top:1px solid var(--natives-border);'>" +
+    "<div style='display:grid; grid-template-columns:1fr 1fr; gap:6px; font-size:var(--natives-fs-secondary); color:var(--natives-text-muted); padding:6px 0; border-top:1px solid var(--natives-edge);'>" +
       "<div>成交量: <span class='num' style='color:var(--natives-text-primary);'>" + (st && st.volume ? (st.volume > 10000 ? (st.volume / 10000).toFixed(1) + "万手" : st.volume + "手") : "–") + "</span></div>" +
       "<div>换手率: <span class='num' style='color:var(--natives-text-primary);'>" + (st && st.turnover != null ? st.turnover.toFixed(2) + "%" : "–") + "</span></div>" +
       "<div>振幅: <span class='num' style='color:var(--natives-text-primary);'>" + (st && st.amplitude != null ? st.amplitude.toFixed(2) + "%" : "–") + "</span></div>" +
@@ -272,9 +284,9 @@ function renderSectorsTableSelection() {
   const rows = document.querySelectorAll("#sectors-table tbody tr");
   rows.forEach(function(r) {
     const nameCell = r.querySelector("td:nth-child(2)");
-    if (nameCell && currentSelectedSector && nameCell.textContent.trim() === currentSelectedSector.name) {
-      r.classList.add("selected-sector");
-    }
+    const on = !!(nameCell && currentSelectedSector && nameCell.textContent.trim() === currentSelectedSector.name);
+    r.classList.toggle("selected-sector", on);
+    if (on) r.setAttribute("aria-current", "true"); else r.removeAttribute("aria-current");
   });
 }
 
@@ -325,8 +337,11 @@ function renderSectorStocksTable() {
   items.forEach(function(st, idx) {
     const tr = document.createElement("tr");
     tr.className = "clickable";
+    // ADR-0049 D7-8 补齐：行可聚焦，Enter/空格与点击等价。
+    tr.tabIndex = 0;
     if (state.currentSymbol === st.code) {
       tr.classList.add("selected");
+      tr.setAttribute("aria-current", "true");
     }
 
     const price = st.price != null ? st.price.toFixed(2) : "–";
@@ -353,9 +368,18 @@ function renderSectorStocksTable() {
 
     tr.querySelector('[data-stock-open]').onclick=event=>{event.stopPropagation();actions.openStockDetail(st.code,st.name);};
     tr.addEventListener("click", function() {
-      document.querySelectorAll("#sector-stocks-table tbody tr").forEach(function(r) { r.classList.remove("selected"); });
+      document.querySelectorAll("#sector-stocks-table tbody tr").forEach(function(r) { r.classList.remove("selected"); r.removeAttribute("aria-current"); });
       tr.classList.add("selected");
+      tr.setAttribute("aria-current", "true");
       actions.selectSymbol(st.code, st.name, true);
+    });
+
+    tr.addEventListener("keydown", function(e) {
+      if (e.target !== tr) return;
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        tr.click();
+      }
     });
 
     tr.addEventListener("dblclick", function() {

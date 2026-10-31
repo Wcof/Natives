@@ -416,7 +416,6 @@ pub(super) fn positions_detail_with_sources(
             };
             // 当日/期间收益展示指标：份额 × 价格（净值）变动，全部现算。
             let pct_2dp = |now: i128, base: i128| -> f64 { ((now - base) as f64 / base as f64 * 10000.0).round() / 100.0 };
-            let pnl_minor = |diff_raw: i128| -> Option<i64> { i64::try_from(h.quantity_raw as i128 * diff_raw / 1_000_000).ok() };
             let nav_now = valuation.and_then(|v| v.nav_raw);
             let series = if venue == "otc" { otc_navs.get(&h.fund_id) } else { None };
             let daily_fact = daily_facts.get(&(h.account_id,h.fund_id));
@@ -426,7 +425,8 @@ pub(super) fn positions_detail_with_sources(
             }else{daily_fact.and_then(|f|f["rateBps"].as_str()).and_then(|v|v.parse::<i64>().ok()).map(|v|v as f64/100.0)};
             let period_pnl = |base: Option<i64>| -> Option<i64> {
                 match (nav_now, base) {
-                    (Some(now), Some(b)) => pnl_minor(now as i128 - b as i128),
+                    (Some(now), Some(b)) => crate::fixed::valuation_minor(h.quantity_raw, now)?
+                        .checked_sub(crate::fixed::valuation_minor(h.quantity_raw, b)?),
                     _ => None,
                 }
             };

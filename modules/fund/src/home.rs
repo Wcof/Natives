@@ -31,7 +31,8 @@ fn today_cn() -> String {
     crate::assets::civil_from_days((secs / 86400) as i64)
 }
 
-/// 收益区间解析：month（本月）/ year（今年）/ all（跟踪以来）/ custom。
+/// 收益区间解析：today（当日）/ week（本周）/ month（本月）/ half（近 6 个月）/
+/// year1（近 12 个月）/ year（今年，兼容旧客户端）/ all（跟踪以来）/ custom。
 /// 返回 (from, to, label)；缺基线时 from 仍为名义起点（收益结果标记 missing_baseline）。
 pub fn resolve_range(
     range: &str,
@@ -41,10 +42,19 @@ pub fn resolve_range(
 ) -> (String, String, String) {
     match range {
         "today" => (today.to_string(), today.to_string(), "today".into()),
+        "week" => {
+            // 周一起算：1970-01-01 是周四，回退 (d+3) mod 7 天即本周一。
+            let from = crate::assets::days_from_civil(today)
+                .map(|day| crate::assets::civil_from_days(day - (day + 3).rem_euclid(7)))
+                .unwrap_or_else(|| today.to_string());
+            (from, today.to_string(), "week".into())
+        }
         "month" => {
             let from = format!("{}-01", &today[..7]);
             (from, today.to_string(), "month".into())
         }
+        "half" => (minus_months(today, 6), today.to_string(), "half".into()),
+        "year1" => (minus_months(today, 12), today.to_string(), "year1".into()),
         "year" => {
             let from = format!("{}-01-01", &today[..4]);
             (from, today.to_string(), "year".into())
@@ -56,6 +66,40 @@ pub fn resolve_range(
         ),
         _ => (String::new(), today.to_string(), "all".into()),
     }
+}
+
+fn is_leap_year(year: i64) -> bool {
+    year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
+}
+
+fn days_in_month(year: i64, month: i64) -> i64 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if is_leap_year(year) => 29,
+        2 => 28,
+        _ => 30,
+    }
+}
+
+/// 自然月回退：日号超出目标月天数时取目标月末（如 8-31 回退半年到 2-28/29）。
+/// 输入不是合法 `YYYY-MM-DD` 时原样返回，由调用方保持既有失败语义。
+fn minus_months(date: &str, months: i64) -> String {
+    let (Some(year), Some(month), Some(day)) = (
+        date.get(0..4).and_then(|value| value.parse::<i64>().ok()),
+        date.get(5..7).and_then(|value| value.parse::<i64>().ok()),
+        date.get(8..10).and_then(|value| value.parse::<i64>().ok()),
+    ) else {
+        return date.to_string();
+    };
+    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+        return date.to_string();
+    }
+    let total = year * 12 + (month - 1) - months;
+    let target_year = total.div_euclid(12);
+    let target_month = total.rem_euclid(12) + 1;
+    let target_day = day.min(days_in_month(target_year, target_month));
+    format!("{target_year:04}-{target_month:02}-{target_day:02}")
 }
 
 fn quality_of(summary: &crate::assets::AssetsSummary) -> (&'static str, Vec<Value>) {
@@ -110,7 +154,11 @@ pub(crate) fn checked_range(
     to: Option<&str>,
     today: &str,
 ) -> Result<(String, String, String), FinanceError> {
-    if !["today", "month", "year", "all", "custom"].contains(&range) {
+    if ![
+        "today", "week", "month", "half", "year1", "year", "all", "custom",
+    ]
+    .contains(&range)
+    {
         return Err(FinanceError::Invalid("收益区间无效".into()));
     }
     if range == "custom" && (from.is_none() || to.is_none()) {

@@ -7,6 +7,7 @@
     <link rel="stylesheet" href="theme.css" />
     <link rel="stylesheet" href="files.css" />
     <link rel="stylesheet" href="model-settings.css" />
+    <script src="platform/standalone-boot.js"></script>
   </head>
   <body>
     <svg class="svg-sprite" aria-hidden="true">
@@ -92,7 +93,7 @@
         <label class="toggle compact-toggle"><input id="show-hidden" type="checkbox" /> <span data-i18n="showHidden">隐藏文件</span></label>
         <div id="sort-tabs" class="seg sort-tabs" role="radiogroup" data-i18n-aria-label="sort" aria-label="排序"><button type="button" class="sort-tab" data-sort="mtime" data-i18n="modified" aria-pressed="false">时间</button><button type="button" class="sort-tab" data-sort="size" data-i18n="size" aria-pressed="false">大小</button><button type="button" class="sort-tab" data-sort="name" data-i18n="name" aria-pressed="true">名称</button></div>
         <button id="sort-direction" class="icon-button" data-i18n-title="sortAscending" title="升序" aria-label="升序"><svg class="icon"><use href="#i-sort" /></svg></button>
-        <div class="view-buttons"><button id="list-view" class="icon-button" data-i18n-title="list" title="列表" aria-pressed="true" aria-keyshortcuts="Control+Shift+G Meta+Shift+G"><svg class="icon"><use href="#i-list" /></svg></button><button id="grid-view" class="icon-button" data-i18n-title="grid" title="网格" aria-pressed="false" aria-keyshortcuts="Control+Shift+G Meta+Shift+G"><svg class="icon"><use href="#i-grid" /></svg></button><button class="grid-size-button" id="grid-small" data-i18n-title="gridSmall" aria-pressed="false">·</button><button class="grid-size-button" id="grid-medium" data-i18n-title="gridMedium" aria-pressed="true">▪</button><button class="grid-size-button" id="grid-large" data-i18n-title="gridLarge" aria-pressed="false">◼</button></div>
+        <div class="view-buttons"><button id="list-view" class="icon-button" data-i18n-title="list" title="列表" aria-pressed="true" aria-keyshortcuts="Control+Shift+G Meta+Shift+G"><svg class="icon"><use href="#i-list" /></svg></button><button id="grid-view" class="icon-button" data-i18n-title="grid" title="网格" aria-pressed="false" aria-keyshortcuts="Control+Shift+G Meta+Shift+G"><svg class="icon"><use href="#i-grid" /></svg></button><button class="grid-size-button" id="grid-small" data-i18n-title="gridSmall" data-i18n-aria-label="gridSmall" title="小网格" aria-label="小网格" aria-pressed="false">·</button><button class="grid-size-button" id="grid-medium" data-i18n-title="gridMedium" data-i18n-aria-label="gridMedium" title="中网格" aria-label="中网格" aria-pressed="true">▪</button><button class="grid-size-button" id="grid-large" data-i18n-title="gridLarge" data-i18n-aria-label="gridLarge" title="大网格" aria-label="大网格" aria-pressed="false">◼</button></div>
       </div>
     </header>
 

@@ -33,6 +33,10 @@ export function createFilesEntriesRenderer({
     if (!box) return;
     box.replaceChildren();
     box.classList.toggle('grid', session.viewMode === 'grid');
+    // D6-8：home 态已在 renderHomeWelcome 摘掉 listbox 语义，进入目录时恢复。
+    box.setAttribute('role', 'listbox');
+    box.setAttribute('aria-label', t('files', '文件'));
+    box.setAttribute('aria-multiselectable', 'true');
     const emptyEl = $('empty');
     if (emptyEl) {
       emptyEl.hidden = session.entries.length > 0;

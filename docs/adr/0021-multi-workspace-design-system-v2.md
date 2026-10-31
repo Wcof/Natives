@@ -41,6 +41,8 @@ ADR-0020 将首页固定为「唯一 Personal Workspace Home」，Widget 固定�
 - 组件只消费语义 token，不接受“传 hex 换色”的 API；旧主题名（terminal-volt/frosted-jasmine）只读兼容，运行时不再产生新值。
 - 全部页面、组件、弹窗、浮层、图表、编辑态、空态、错误态与边缘流程统一迁移，禁止 V1/V2 长期并存。
 - 性能：不使用全屏 WebGL LiquidGlass；blur 局部使用；reduced motion / reduced transparency 有确定退化路径。
+- **四级 Surface 的 token 归属**（ADR-0049 补齐）：base=`--natives-bg`、raised=`--natives-surface-raised`、floating=`--natives-glass`、inset=`--natives-surface-well`；chrome（工具条/侧栏/表头）=`--natives-surface-chrome`。层级只能来自这几个角色 + `--natives-edge` + `--natives-elev-*` + `--natives-rim`。
+- **Liquid Crystal 的 specular 由白面与画布的亮度差承担**（浅色白面之间的 ΔL 不足以做高光），`--natives-rim` 在浅色只用于半透明浮层；Dark Glow 才用 rim 顶线。不要为了"看起来有高光"给白卡加灰边。
 
 ### 5. Legacy Death 范围不变
 

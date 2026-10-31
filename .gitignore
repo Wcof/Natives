@@ -124,3 +124,7 @@ Natives-source-clean.zip
 *.nap
 invest-host
 .workbuddy/
+
+# ADR-0048 DSH plugin delivery artifacts: payload snapshots and npm tarballs.
+integrations/dsh/*/payload/
+integrations/dsh/dist/

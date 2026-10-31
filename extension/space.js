@@ -1,5 +1,6 @@
 import { storage } from './platform/storage.js';
 import { subscribeCoreEvents } from './platform/events.js';
+import { resolveTheme } from './platform/theme-param.js';
 
 
 import { ensureAuthenticated } from './platform/web-session.js';
@@ -295,7 +296,8 @@ async function init() {
     getStored('natives-inspector-width', 360),
     getStored('natives-sidebar-width', 248),
   ]);
-  selectedTheme = ['volt', 'archive'].includes(storedTheme) ? storedTheme : 'archive';
+  // ?theme= 只覆盖本次渲染（DSH 插件入口），不写回 natives-theme 偏好。
+  selectedTheme = resolveTheme(storedTheme, location.search);
   inspectorWidth = Math.max(240, Math.min(620, Number(storedWidth) || 360));
   document.documentElement.style.setProperty('--inspector-width', `${inspectorWidth}px`);
   document.documentElement.dataset.theme = selectedTheme;
@@ -407,8 +409,12 @@ async function init() {
   // 应用的选中态——深链/刷新 ？app=fund 进入时菜单尚未渲染、握手后 revision
   // 变更会整体重渲染，两次时机都不回填就会出现「进入投资子应用但菜单项
   // 无高亮」。
-  mountAppMenu($('app-menu-apps'), { t, afterRender: () => setAppActive(embeddedAppId) }).catch(() => {});
-  bindEmbeddedAppNavigation();
+  // ADR-0048：DSH 独立运行（html.standalone）不挂载应用菜单；菜单选中态回填
+  // 一并跳过，产品级入口由 CSS 隐藏。
+  if (!document.documentElement.classList.contains('standalone')) {
+    mountAppMenu($('app-menu-apps'), { t, afterRender: () => setAppActive(embeddedAppId) }).catch(() => {});
+    bindEmbeddedAppNavigation();
+  }
 
   // ADR-0036：空间投资卡数据源——页面级一次短命只读投影查询。复用本页
   // 共享 Files Host client 做 apps:get 校验；App Runtime Port 由 feed 独立

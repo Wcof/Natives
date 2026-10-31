@@ -49,35 +49,44 @@
             <!-- ===== 左侧：图表 ===== -->
             <div class="left-panel">
               <div class="chart-toolbar" id="trends-chart-toolbar">
+                <!-- 第一行：周期 / 复权 / 区间，区间读数靠右；窄屏整组换行，不在组内拆散。 -->
                 <div class="chart-query-tools">
-                <button class="tb-btn active" id="view-dayk"><span data-i18n="fundTrendsUi11">日K</span></button>
-                <button class="tb-btn" id="view-week"><span data-i18n="fundTrendsUi12">周K</span></button>
-                <button class="tb-btn" id="view-month"><span data-i18n="fundTrendsUi13">月K</span></button>
-                <button class="tb-btn" id="view-minute"><span data-i18n="fundTrendsUi14">分时</span></button>
-                <label id="trends-fq-group"><span data-i18n="fundTrendsAdjustment">复权</span><select id="trends-fq"><option value="qfq" data-i18n="fundTrendsQfq">前复权</option><option value="hfq" data-i18n="fundTrendsHfq">后复权</option><option value="bf" data-i18n="fundTrendsBf">不复权</option></select></label>
-                <div class="tb-sep" id="sep-range"></div>
-                <button class="tb-btn" data-range="20"><span data-i18n="fundTrendsUi15">1月</span></button>
-                <button class="tb-btn active" data-range="60"><span data-i18n="fundTrendsUi16">3月</span></button>
-                <button class="tb-btn" data-range="120"><span data-i18n="fundTrendsUi17">半年</span></button>
-                <button class="tb-btn" data-range="250"><span data-i18n="fundTrendsUi18">1年</span></button>
-                <button class="tb-btn" data-range="0"><span data-i18n="fundTrendsUi19">全部</span></button>
-                <div class="tb-sep"></div>
+                  <div class="tb-group" role="group">
+                    <button class="tb-btn active" id="view-dayk"><span data-i18n="fundTrendsUi11">日K</span></button>
+                    <button class="tb-btn" id="view-week"><span data-i18n="fundTrendsUi12">周K</span></button>
+                    <button class="tb-btn" id="view-month"><span data-i18n="fundTrendsUi13">月K</span></button>
+                    <button class="tb-btn" id="view-minute"><span data-i18n="fundTrendsUi14">分时</span></button>
+                  </div>
+                  <label id="trends-fq-group" class="tb-field"><span data-i18n="fundTrendsAdjustment">复权</span><select id="trends-fq"><option value="qfq" data-i18n="fundTrendsQfq">前复权</option><option value="hfq" data-i18n="fundTrendsHfq">后复权</option><option value="bf" data-i18n="fundTrendsBf">不复权</option></select></label>
+                  <div class="tb-range-tools" id="trends-range-tools">
+                    <div class="tb-group" role="group">
+                      <button class="tb-btn" data-range="20"><span data-i18n="fundTrendsUi15">1月</span></button>
+                      <button class="tb-btn active" data-range="60"><span data-i18n="fundTrendsUi16">3月</span></button>
+                      <button class="tb-btn" data-range="120"><span data-i18n="fundTrendsUi17">半年</span></button>
+                      <button class="tb-btn" data-range="250"><span data-i18n="fundTrendsUi18">1年</span></button>
+                      <button class="tb-btn" data-range="0"><span data-i18n="fundTrendsUi19">全部</span></button>
+                    </div>
+                  </div>
+                  <span class="tb-label tb-meta" id="zoom-info"></span>
                 </div>
+                <!-- 第二行：划线工具 / 对象操作。 -->
                 <div class="chart-drawing-tools">
-                <!-- 划线工具：复用 tb-btn 样式；trendline=趋势线 horizontal=水平线(止损价) rectangle=矩形 channel=通道 -->
-                <button class="tb-btn td-btn" data-tool="cursor" title="光标（选中/拖拽已画线条，Delete 删除选中）"><span data-i18n="fundTrendsUi20">光标</span></button>
-                <button class="tb-btn td-btn" data-tool="trendline" title="趋势线：按下拖动绘制"><span data-i18n="fundTrendsUi21">趋势线</span></button>
-                <button class="tb-btn td-btn" data-tool="horizontal" title="水平线（止损/支撑/压力价）：单击放置"><span data-i18n="fundTrendsUi22">水平线</span></button>
-                <button class="tb-btn td-btn" data-tool="rectangle" title="矩形区域：按下拖动绘制"><span data-i18n="fundTrendsUi23">矩形</span></button>
-                <button class="tb-btn td-btn" data-tool="channel" title="通道：先拖出基线，再拖动定平行线宽度"><span data-i18n="fundTrendsUi24">通道</span></button>
-                <button type="button" class="tb-btn td-btn" data-tool="polyline" data-i18n="fundChartToolpolyline">折线</button>
-                <button type="button" class="tb-btn td-btn" data-tool="circle" data-i18n="fundChartToolcircle">椭圆</button>
-                <button type="button" class="tb-btn td-btn" data-tool="fibonacci" data-i18n="fundChartToolfibonacci">斐波那契</button>
-                <button type="button" class="tb-btn td-btn" data-tool="measure" data-i18n="fundChartToolmeasure">测距</button>
-                <button type="button" class="tb-btn td-btn" data-tool="text" data-i18n="fundChartTooltext">文字</button>
-                <button class="tb-btn td-btn" id="btn-draw-clear" title="删除当前选中的划线"><span data-i18n="fundTrendsUi25">删除</span></button>
-                <div class="tb-sep"></div>
-                <span class="tb-label" id="zoom-info"></span>
+                  <!-- 划线工具：复用 tb-btn 样式；trendline=趋势线 horizontal=水平线(止损价) rectangle=矩形 channel=通道 -->
+                  <div class="tb-group tb-tools" role="group">
+                    <button class="tb-btn td-btn" data-tool="cursor" title="光标（选中/拖拽已画线条，Delete 删除选中）"><span data-i18n="fundTrendsUi20">光标</span></button>
+                    <button class="tb-btn td-btn" data-tool="trendline" title="趋势线：按下拖动绘制"><span data-i18n="fundTrendsUi21">趋势线</span></button>
+                    <button class="tb-btn td-btn" data-tool="horizontal" title="水平线（止损/支撑/压力价）：单击放置"><span data-i18n="fundTrendsUi22">水平线</span></button>
+                    <button class="tb-btn td-btn" data-tool="rectangle" title="矩形区域：按下拖动绘制"><span data-i18n="fundTrendsUi23">矩形</span></button>
+                    <button class="tb-btn td-btn" data-tool="channel" title="通道：先拖出基线，再拖动定平行线宽度"><span data-i18n="fundTrendsUi24">通道</span></button>
+                    <button type="button" class="tb-btn td-btn" data-tool="polyline" data-i18n="fundChartToolpolyline">折线</button>
+                    <button type="button" class="tb-btn td-btn" data-tool="circle" data-i18n="fundChartToolcircle">椭圆</button>
+                    <button type="button" class="tb-btn td-btn" data-tool="fibonacci" data-i18n="fundChartToolfibonacci">斐波那契</button>
+                    <button type="button" class="tb-btn td-btn" data-tool="measure" data-i18n="fundChartToolmeasure">测距</button>
+                    <button type="button" class="tb-btn td-btn" data-tool="text" data-i18n="fundChartTooltext">文字</button>
+                  </div>
+                  <div class="tb-actions" id="trends-draw-actions">
+                    <button class="tb-btn" id="btn-draw-clear" title="删除当前选中的划线"><span data-i18n="fundTrendsUi25">删除</span></button>
+                  </div>
                 </div>
               </div>
 

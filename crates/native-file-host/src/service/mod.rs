@@ -3,6 +3,7 @@
 pub mod app_runtime;
 pub mod auth;
 pub mod dispatch;
+mod embed;
 mod events;
 mod files;
 mod http_helpers;

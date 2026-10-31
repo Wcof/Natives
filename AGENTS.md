@@ -67,6 +67,10 @@
 - ADR-0047 separates the Web document connection from business leases: one authenticated
   dormant SSE may retain Core while the page remains open; modules still reclaim on idle.
   Page close releases that owner and starts the existing Core grace period.
+- ADR-0048 adds the DeepSeek Harness plugin as a third business surface. It reuses the
+  same Core, `~/.natives` data and 8770, adds no port, process boundary or data writer,
+  and must keep the Chrome, Web and Launcher entries working. Do not reverse-proxy
+  Natives, strip `X-Frame-Options`/CSP, or merge it into the DSH origin.
 - A change that relaxes a MUST requires an ADR first. Do not silently work
   around it.
 - Use the task map in `docs/README.md`; do not duplicate architecture or

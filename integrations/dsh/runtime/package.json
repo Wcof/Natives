@@ -1,0 +1,12 @@
+{
+  "name": "@natives/dsh-runtime",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "description": "Shared Host runtime for the Natives DSH plugins: Core resolution, schema guard and authenticated page URL.",
+  "exports": {
+    ".": "./index.js"
+  },
+  "files": ["index.js"],
+  "dependencies": {}
+}

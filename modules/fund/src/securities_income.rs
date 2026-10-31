@@ -40,8 +40,13 @@ pub(crate) fn daily(
         return Ok(unavailable("missing_baseline"));
     }
     let change = now as i128 - base;
-    let amount = i64::try_from(row.quantity_raw as i128 * change / 1_000_000)
-        .map_err(|_| AssetError::Overflow("daily income".into()))?;
+    let amount = i64::try_from(base)
+        .ok()
+        .and_then(|base| {
+            crate::fixed::valuation_minor(row.quantity_raw, now)?
+                .checked_sub(crate::fixed::valuation_minor(row.quantity_raw, base)?)
+        })
+        .ok_or_else(|| AssetError::Overflow("daily income".into()))?;
     let rate = if base > 0 {
         i64::try_from(change * 10_000 / base).ok()
     } else {

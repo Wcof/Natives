@@ -6,69 +6,81 @@
     <title>Token Monitor</title>
     <link rel="stylesheet" href="/styles/theme.css" />
     <link rel="stylesheet" href="/styles/layout.css" />
-
+    <script>
+      /* 首帧主题前移：宿主建帧 URL 携带 ?theme=（volt|archive），绘制前同步设置
+         data-theme；宿主嵌入时再带 ?standalone=1 打类，让 theme.css 的宿主色板
+         （html.standalone）与 DSH 同色系。模块页永远在 iframe 里，因此不使用
+         「被框架承载」判定——那会把 Chrome 扩展里的模块也误判为宿主嵌入。 */
+      try {
+        var q = new URLSearchParams(location.search);
+        var t = q.get('theme');
+        if (t === 'volt' || t === 'archive') document.documentElement.dataset.theme = t;
+        if (q.get('standalone') === '1') document.documentElement.classList.add('standalone');
+      } catch (e) {}
+    </script>
   </head>
   <body>
-    <div class="shell">
-      <!-- Titlebar -->
-      <header class="titlebar">
-        <div>
-          <div class="app-title">
-            <span class="app-title-text" data-i18n="title">Token Monitor</span>
-            <span class="app-title-mark">Σ</span>
+    <div class="page">
+      <header class="page-header">
+        <div class="page-heading">
+          <h1 class="page-title">
+            <span data-i18n="title">Token 用量</span>
             <span class="live-dot" id="live-dot" hidden></span>
-          </div>
-          <div class="status-text" id="status-text" data-i18n="localData">Local-first · Live</div>
+          </h1>
+          <p class="status-text" id="status-text" data-i18n="localData">本机数据</p>
         </div>
-        <nav class="period-tabs" aria-label="Period" data-i18n-aria="period">
-          <button class="period-tab active" data-period="today" data-i18n="today">天</button>
-          <button class="period-tab" data-period="week" data-i18n="week">周</button>
-          <button class="period-tab" data-period="month" data-i18n="month">月</button>
-          <button class="period-tab" data-period="allTime" data-i18n="allTime">总</button>
-        </nav>
+        <div class="header-controls">
+          <nav class="period-tabs" aria-label="Period" data-i18n-aria="period">
+            <button class="period-tab active" data-period="today" data-i18n="today">今天</button>
+            <button class="period-tab" data-period="week" data-i18n="week">7 天</button>
+            <button class="period-tab" data-period="month" data-i18n="month">30 天</button>
+            <button class="period-tab" data-period="allTime" data-i18n="allTime">全部</button>
+          </nav>
+          <button id="btn-refresh" class="btn-icon" title="刷新数据" data-i18n-title="refresh" aria-label="刷新数据" data-i18n-aria="refresh"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M5.4 8a7 7 0 0 1 11.5-3L20 8M4 16l3.1 3A7 7 0 0 0 18.6 16"/></svg></button>
+        </div>
       </header>
 
-      <!-- Total Panel -->
-      <section class="total-panel">
-        <div class="total-label" data-i18n="totalTokens">TOTAL TOKENS</div>
-        <p id="usage-coverage" class="status-text" data-i18n="usageIncomplete" hidden></p>
-        <div class="total-number-row">
-          <div id="totalTokens" class="total-number">--</div>
-          <div id="cost" class="cost">--</div>
+      <!-- 核心统计：周期汇总（overview API），覆盖缺口只在存在时展开说明 -->
+      <section class="stat-grid" aria-label="Overview" data-i18n-aria="overview">
+        <div class="stat-card">
+          <span class="stat-label" data-i18n="totalTokens">总 Token</span>
+          <span class="stat-value" id="totalTokens">--</span>
+          <span id="usage-coverage" class="stat-note" data-i18n="usageIncomplete" hidden></span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label" data-i18n="costUsd">费用（USD）</span>
+          <span class="stat-value stat-accent" id="cost">--</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label" data-i18n="requests">请求数</span>
+          <span class="stat-value" id="requestCount">--</span>
+        </div>
+        <div class="stat-card">
+          <span class="stat-label" data-i18n="activeTools">活跃工具</span>
+          <span class="stat-value" id="activeTools">--</span>
         </div>
       </section>
 
-      <!-- View Switcher -->
       <nav class="view-switcher" role="tablist">
-        <button class="view-btn active" data-view="home" data-i18n="home">--</button>
-        <button class="view-btn" data-view="limits" data-i18n="limits">--</button>
-        <button class="view-btn" data-view="tools" data-i18n="tools">--</button>
-        <button class="view-btn" data-view="sessions" data-i18n="sessions">--</button>
-        <button class="view-btn" data-view="models" data-i18n="models">--</button>
-        <button class="view-btn" data-view="trends" data-i18n="trends">--</button>
+        <button class="view-btn active" data-view="home" data-i18n="home">概览</button>
+        <button class="view-btn" data-view="limits" data-i18n="limits">额度</button>
+        <button class="view-btn" data-view="tools" data-i18n="tools">工具</button>
+        <button class="view-btn" data-view="sessions" data-i18n="sessions">会话</button>
+        <button class="view-btn" data-view="models" data-i18n="models">模型</button>
+        <button class="view-btn" data-view="trends" data-i18n="trends">趋势</button>
       </nav>
 
-      <!-- Content Area -->
       <main class="content-area" id="content-area">
-        <!-- 1. Home View -->
-        <section id="view-home" class="breakdown">
-          <!-- Populated by JS -->
-        </section>
-
-        <!-- 2. Limits View -->
-        <section id="view-limits" class="limits-grid" style="display:none;">
-          <!-- Populated by JS -->
-        </section>
-
-        <!-- 3. Tools View -->
-        <section id="view-tools" style="display:none;">
+        <section id="view-home" class="breakdown" role="tabpanel"></section>
+        <section id="view-limits" class="limits-grid" style="display:none;" role="tabpanel"></section>
+        <section id="view-tools" style="display:none;" role="tabpanel">
           <table class="data-table">
             <thead>
               <tr>
                 <th data-i18n="toolName">工具名称</th>
                 <th data-i18n="category">分类</th>
                 <th data-i18n="tokens">Token 消耗</th>
-                <th data-i18n="costUsd">费用 (USD)</th>
+                <th data-i18n="costUsd">费用（USD）</th>
                 <th data-i18n="requests">请求数</th>
                 <th data-i18n="status">状态</th>
               </tr>
@@ -76,9 +88,7 @@
             <tbody id="tools-table-body"></tbody>
           </table>
         </section>
-
-        <!-- 4. Sessions View -->
-        <section id="view-sessions" style="display:none;">
+        <section id="view-sessions" style="display:none;" role="tabpanel">
           <table class="data-table">
             <thead>
               <tr>
@@ -93,25 +103,21 @@
             <tbody id="sessions-table-body"></tbody>
           </table>
         </section>
-
-        <!-- 5. Models View -->
-        <section id="view-models" style="display:none;">
+        <section id="view-models" style="display:none;" role="tabpanel">
           <table class="data-table">
             <thead>
               <tr>
                 <th data-i18n="model">模型</th>
                 <th data-i18n="input">输入</th>
                 <th data-i18n="output">输出</th>
-                <th data-i18n="totalTokens">总 Token</th>
+                <th data-i18n="tokens">Token 消耗</th>
                 <th data-i18n="cost">费用</th>
               </tr>
             </thead>
             <tbody id="models-table-body"></tbody>
           </table>
         </section>
-
-        <!-- 6. Trends View -->
-        <section id="view-trends" style="display:none;">
+        <section id="view-trends" style="display:none;" role="tabpanel">
           <table class="data-table">
             <thead>
               <tr>
@@ -126,25 +132,13 @@
           </table>
         </section>
       </main>
-
-      <!-- Footer -->
-      <footer class="footer">
-        <div class="live-token-rate">
-
-          <span id="liveRateText">--</span>
-        </div>
-        <div class="footer-actions">
-          <button id="btn-refresh" class="btn-icon" title="刷新数据" data-i18n-title="refresh" aria-label="刷新数据" data-i18n-aria="refresh"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5M5.4 8a7 7 0 0 1 11.5-3L20 8M4 16l3.1 3A7 7 0 0 0 18.6 16"/></svg></button>
-        </div>
-      </footer>
     </div>
 
-    <!-- Session Detail Modal -->
     <dialog id="session-modal" class="modal-backdrop" aria-labelledby="modal-title">
       <div class="modal-window">
-        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:12px;">
-          <strong id="modal-title" style="font-size:13px;" data-i18n="sessionDetails">会话明细</strong>
-          <button id="btn-modal-close" aria-label="关闭" data-i18n-aria="close" class="btn-icon" style="border:none;"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m6 6 12 12M6 18 18 6"/></svg></button>
+        <div class="modal-heading">
+          <strong id="modal-title" data-i18n="sessionDetails">会话明细</strong>
+          <button id="btn-modal-close" aria-label="关闭" data-i18n-aria="close" class="btn-icon"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m6 6 12 12M6 18 18 6"/></svg></button>
         </div>
         <div id="modal-content"></div>
       </div>

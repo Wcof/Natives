@@ -101,6 +101,7 @@ pub fn group_allocation(
                                 .unwrap_or_else(|| "现金账户".into())
                         };
                         group_assets.push(json!({
+                            "historyId":format!("{kind}-{id}"),
                             "name": asset_name,
                             "kind": kind,
                             "valueMinor": value,
@@ -123,6 +124,7 @@ pub fn group_allocation(
                         _ => None, // 任一引用缺价 → 该组金额未知
                     };
                     group_assets.push(json!({
+                        "historyId":format!("fund-{a}-{f}"),
                         "name": name,
                         "code": code,
                         "kind": "fund",
@@ -152,6 +154,7 @@ pub fn group_allocation(
                         _ => None,
                     };
                     group_assets.push(json!({
+                        "historyId":format!("manual-{id}"),
                         "name": name,
                         "kind": ptype,
                         "valueMinor": v,

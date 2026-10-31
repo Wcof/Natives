@@ -306,7 +306,8 @@ function initToolbar() {
   document.querySelectorAll('.td-btn[data-tool]').forEach(b => {
     b.addEventListener('click', () => setDrawingTool(b.dataset.tool));
   });
-  const objects=document.createElement('button');objects.type='button';objects.className='tb-btn';objects.textContent=Fund.t('fundChartDrawingObjects');objects.dataset.i18n='fundChartDrawingObjects';objects.onclick=()=>{cancelDraft();persistence.manage();};document.getElementById('trends-chart-toolbar').append(objects);
+  const objects=document.createElement('button');objects.type='button';objects.className='tb-btn';objects.textContent=Fund.t('fundChartDrawingObjects');objects.dataset.i18n='fundChartDrawingObjects';objects.onclick=()=>{cancelDraft();persistence.manage();};
+  (document.getElementById('trends-draw-actions')||document.getElementById('trends-chart-toolbar')).append(objects);
   const clearBtn = document.getElementById('btn-draw-clear');
   if (clearBtn) {
     clearBtn.addEventListener('click', () => {

@@ -1276,17 +1276,107 @@
   "fundHomeHistoryTitle": {
     "message": "资产走势"
   },
-  "fundHomeHistoryAllSeries": {
-    "message": "全部"
+  "fundHomeHistoryLatestLabel": {
+    "message": "总资产最新估值"
+  },
+  "fundHomeHistoryDeltaLabel": {
+    "message": "区间资产变化"
+  },
+  "fundHomeHistoryDeltaNote": {
+    "message": "资产变化含资金进出 · 非投资收益率"
+  },
+  "fundHomeHistoryDeltaInsufficient": {
+    "message": "记录不足，暂不计算"
+  },
+  "fundHomeHistoryStartLabel": {
+    "message": "区间起点"
+  },
+  "fundHomeHistoryStartNote": {
+    "message": "按首个有效记录计算"
+  },
+  "fundHomeHistorySelectedCount": {
+    "message": "已选 {n} / {m} 项"
+  },
+  "fundHomeHistoryHoldingsCount": {
+    "message": "已选 {n} / {m} 项持仓"
+  },
+  "fundHomeHistoryAllHoldings": {
+    "message": "全部持仓"
+  },
+  "fundHomeHistoryAllAssets": {
+    "message": "全部资产"
+  },
+  "fundHomeHistoryAssetsTotal": {
+    "message": "共 {n} 项资产"
+  },
+  "fundHomeHistoryAllHoldingsTitle": {
+    "message": "全部持仓"
+  },
+  "fundHomeHistoryAllHoldingsHint": {
+    "message": "点资产可只看它所属的分类"
+  },
+  "fundHomeHistoryExpandCards": {
+    "message": "点击展开（还有 {n} 项）"
+  },
+  "fundHomeHistoryCollapseCards": {
+    "message": "收起"
+  },
+  "fundHomeHistoryCategoryTitle": {
+    "message": "资产分类"
+  },
+  "fundHomeHistoryHoldingTitle": {
+    "message": "具体持仓"
+  },
+  "fundHomeHistoryCategoryHint": {
+    "message": "点卡片只看该分类的资产；再点一次回到全部资产"
+  },
+  "fundHomeHistoryHoldingHint": {
+    "message": "点资产可单独显示或隐藏这条曲线"
+  },
+  "fundHomeHistoryInspectLabel": {
+    "message": "查看各时间点资产，使用左右方向键"
+  },
+  "fundHomeHistoryNoRecord": {
+    "message": "暂无记录"
+  },
+  "fundHomeHistoryMissingDay": {
+    "message": "该日缺少记录"
+  },
+  "fundHomeHistoryUnitNote": {
+    "message": "金额单位：人民币元"
+  },
+  "fundHomeHistoryScopeAmount": {
+    "message": "资产金额变化包含资金进出；纵轴按当前数值范围缩放。"
+  },
+  "fundHomeHistoryScopePercent": {
+    "message": "各序列以区间首个有效点为 0%；对比资产变化幅度。"
+  },
+  "fundHomeHistoryScopeChild": {
+    "message": "持仓走势按登记份额与当时已发布净值回放；缺价持仓保留当前值不画线。"
+  },
+  "fundHomeHistoryNoHoldings": {
+    "message": "该分类暂无持仓"
+  },
+  "fundHomeHistoryChoose": {
+    "message": "选择任意一项查看走势"
+  },
+  "fundHomeHistoryNone": {
+    "message": "未选择资产序列"
+  },
+  "fundHomeHistoryDetailsCount": {
+    "message": "已选 {n} / {m} 项明细"
+  },
+  "fundHomeHistoryPickType": {
+    "message": "选择类型查看走势"
   },
   "fundHomeHistoryViewLabel": {
     "message": "走势视图"
   },
   "fundHomeHistoryViewAmount": {
-    "message": "金额"
+    "message": "资产金额"
   },
   "fundHomeHistoryViewPercent": {
-    "message": "百分比"
+    "message": "变化对比"
   },
   "fundHomeHistoryViewAmountLocked": {
     "message": "显示金额后可用"
@@ -1295,7 +1385,7 @@
     "message": "{n} 个分类"
   },
   "fundHomeHistorySubtitle": {
-    "message": "总资产常显；选择任一分类叠加查看。"
+    "message": "选择分类查看其资产走势；全部资产包含总资产线。"
   },
   "fundHomeHistoryCategories": {
     "message": "各分类走势"
@@ -2324,7 +2414,7 @@
     "message": " 项"
   },
   "fundHomeItemsToVerify": {
-    "message": "待核实项"
+    "message": "数据缺口"
   },
   "fundHomeLastChecked": {
     "message": " · 最近检查 "
@@ -2441,7 +2531,7 @@
     "message": "缺少净值"
   },
   "fundHomeMissingOpeningBaselineSaveAValuationSnapshot": {
-    "message": "缺少期初基线：在「资产」页保存一次估值快照（期初建账），之后即可计算区间净收益。"
+    "message": "未记录区间起点的完整资产估值，暂不能计算全资产收益；公开净值不能替代个人资产历史。"
   },
   "fundHomeMissingOpeningBaselineSaveAValuationSnapshotf0dbb6": {
     "message": "缺少期初基线：在「资产」保存估值快照后建立跟踪"
@@ -2471,10 +2561,10 @@
     "message": "名称"
   },
   "fundHomeNeedsVerification": {
-    "message": "待核实："
+    "message": "缺少数据："
   },
   "fundHomeNeedsVerificationccf920": {
-    "message": "待核实"
+    "message": "暂无数据"
   },
   "fundHomeNetContributionsExcluded": {
     "message": " · 净投入已剔除"
@@ -3071,7 +3161,7 @@
     "message": "基准收益"
   },
   "fundHomeOverviewCheckData": {
-    "message": "先补齐缺价、成本或较旧估值，再评估投资行动。"
+    "message": "行情会自动刷新；缺失成本或历史记录的资产暂不计入完整收益。"
   },
   "fundHomeOverviewCheckRules": {
     "message": "查看规则依据与机会条件，再决定下一步。"
@@ -3089,7 +3179,7 @@
     "message": "全资产今日净收益"
   },
   "fundHomeOverviewDailyMissing": {
-    "message": "需要昨日和今日的真实核对估值。"
+    "message": "缺少完整的期初估值或资金流水，暂不能计算全资产收益。"
   },
   "fundHomeOverviewExcessReturn": {
     "message": "超额"
@@ -3575,10 +3665,10 @@
     "message": "存在未知分类资产"
   },
   "fundHomeSomeDataNeedsVerification": {
-    "message": "部分数据待核实（"
+    "message": "估值不完整（"
   },
   "fundHomeSomeValuationsCurrenciesOrClassificationsNeedVerification": {
-    "message": "部分估值/币种/分类待核实"
+    "message": "缺少估值、币种或分类记录"
   },
   "fundHomeSort": {
     "message": "排序",
@@ -3667,7 +3757,7 @@
     "message": "目标占比"
   },
   "fundHomeTargetWeightsRemainVisibleActualWeightsNeed": {
-    "message": "。目标比例继续展示，实绩待核实。"
+    "message": "。目标比例继续展示；缺少估值，暂不能计算实际比例。"
   },
   "fundHomeTargeta798ac": {
     "message": "目标 %"
@@ -3820,7 +3910,7 @@
     "message": "使用已闭合日线的 MA20 与 MA60，至少需要 61 根。"
   },
   "fundHomeUsesVerifiedLocalDataInsufficientDataIs": {
-    "message": "按本地已核对数据判断；数据不足时标记待核实，不生成成交指令。"
+    "message": "按已记录数据判断；数据不足时说明缺失项，不生成成交指令。"
   },
   "fundHomeValuation": {
     "message": "确认估值"
@@ -6872,10 +6962,10 @@
     "message": "{month} 月 {day} 日"
   },
   "fundLedgerIncomeDateUnknown": {
-    "message": "日期待核实"
+    "message": "日期未知"
   },
   "fundLedgerIncomeAgeUnknown": {
-    "message": "持有天数待核实"
+    "message": "持有起始日期未记录"
   },
   "fundLedgerIncomeHeldDays": {
     "message": "持有 {n} 天"
@@ -8445,6 +8535,24 @@
   "fundHomeToday": {
     "message": "今天"
   },
+  "fundHomePeriodToday": {
+    "message": "当日"
+  },
+  "fundHomePeriodWeek": {
+    "message": "本周"
+  },
+  "fundHomePeriodMonth": {
+    "message": "本月"
+  },
+  "fundHomePeriodHalf": {
+    "message": "半年"
+  },
+  "fundHomePeriodYear": {
+    "message": "一年"
+  },
+  "fundHomePeriodAll": {
+    "message": "全部"
+  },
   "fundHomeRangePickStart": {
     "message": "选择开始日期"
   },
@@ -8496,6 +8604,9 @@
   "fundHomeHistoryGroupUnavailable": {
     "message": "分类走势需要至少两个日期的有效估值；缺失历史不会回填。"
   },
+  "fundHomeHistoryTypeEmpty": {
+    "message": "该类型下没有可回放的资产，暂无走势可画"
+  },
   "fundHomeHistoryIntraday": {
     "message": "日内估值观察；沿用最近可用价格，不代表已确认收益，超过 5 分钟的观察缺口不连线"
   },
@@ -8522,9 +8633,6 @@
   },
   "fundHomeHistoryRangeEmpty": {
     "message": "所选区间没有估值记录。已有的当前资产不能用来补造过去的走势。"
-  },
-  "fundHomeHistorySeries": {
-    "message": "选择要显示的资产走势"
   },
   "fundHomeHistoryValuationGap": {
     "message": "部分资产缺少价格或估值已过期；这里只展示已知金额，请先核对估值。"
@@ -8590,7 +8698,7 @@
     "message": "场内基金＋场外基金"
   },
   "fundHomeIncomeGaps": {
-    "message": "{n} 项估值／成本待核实"
+    "message": "{n} 项缺少估值或成本"
   },
   "fundHomeOfflineBookIncome": {
     "message": "累计账面收益"
@@ -8611,13 +8719,13 @@
     "message": "{n} 项估值已过期"
   },
   "fundHomeIncomeMissing": {
-    "message": "分类收益待核实"
+    "message": "暂无收益数据"
   },
   "fundHomeRangeReturn": {
     "message": "所选期间净收益"
   },
   "fundHomeOfflineHistoryGap": {
-    "message": "旧退出历史不完整，收益待核实"
+    "message": "退出历史不完整，暂不能计算收益"
   },
   "fundWatchMoveAllHint": {
     "message": "选一次目标分组，所有选中自选将统一归到该组，并移除其他分组归属；已有项目合并去重，不影响持仓。"
@@ -8638,7 +8746,7 @@
     "message": "选中自选已经全部归属目标组，无需移动。"
   },
   "fundDetailMissing": {
-    "message": "待核实"
+    "message": "–"
   },
   "fundDetailDateUnknown": {
     "message": "日期未知"
@@ -8893,7 +9001,7 @@
     "message": "个人收益走势"
   },
   "fundDetailMixedSources": {
-    "message": "净值来源不一致，待核实"
+    "message": "来源不一致，未合并计算"
   },
   "fundHomeAiPublicMaterials": {
     "message": "公开资料"
@@ -9768,13 +9876,37 @@
     "message": "已登记资产估值完整"
   },
   "fundHomeQualityPartial": {
-    "message": "部分资产待核实"
+    "message": "部分资产缺少估值"
   },
   "fundHomeQualityEmpty": {
     "message": "尚无资产"
   },
   "fundHomeQualityStale": {
     "message": "估值已过时"
+  },
+  "fundHomeCashBalance": {
+    "message": "现金余额"
+  },
+  "fundHomeCashBalanceNoReserve": {
+    "message": "现金已到账；未设置投资预留，可投资额度暂不计算。"
+  },
+  "fundHomeCashDetails": {
+    "message": "现金明细"
+  },
+  "fundHomeReturnDetails": {
+    "message": "收益详情"
+  },
+  "fundHomeAssetDetails": {
+    "message": "资产详情"
+  },
+  "fundHomeReserveUnset": {
+    "message": "未设置"
+  },
+  "fundHomeAssetBreakdown": {
+    "message": "资产构成（当前分类）"
+  },
+  "fundHomeUngrouped": {
+    "message": "未分类资产"
   },
   "dailyFocusTitle": {
     "message": "今日重点"

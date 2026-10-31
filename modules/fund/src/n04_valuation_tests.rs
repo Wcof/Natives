@@ -104,6 +104,63 @@ fn quote_map(entries: &[(&str, &str, &str)]) -> BTreeMap<String, QuoteInput> {
     map
 }
 
+#[test]
+fn quote_values_round_each_asset_before_sum_and_daily_income_uses_same_endpoints() {
+    let store = Store::open_in_memory().unwrap();
+    let date = "2026-10-03";
+    opening(
+        &store,
+        "A",
+        "stock:SSE:600000",
+        "Stock fixture",
+        "3",
+        Some("3"),
+        date,
+    );
+    opening(
+        &store,
+        "A",
+        "etf:SSE:510300",
+        "ETF fixture",
+        "1.0050",
+        Some("1"),
+        date,
+    );
+    let mut quotes = quote_map(&[("sh600000", "1.0018", date), ("sh510300", "1.0000", date)]);
+    quotes.get_mut("sh600000").unwrap().change_raw = Some(20);
+    let mut collected: Collected = store.with_read(|c| assets::collect(c, date)).unwrap();
+    assert_eq!(assets::apply_quotes(&mut collected, &quotes, date), 2);
+    let stock = collected
+        .funds
+        .iter()
+        .find(|r| r.instrument_kind == "stock")
+        .unwrap();
+    assert_eq!(stock.value_minor, Some(301));
+    assert_eq!(
+        store
+            .with_read(|c| crate::securities_income::daily(c, stock, date))
+            .unwrap()["amount"],
+        "0.01"
+    );
+    let summary = assets::finalize(collected, date).unwrap();
+    assert_eq!(summary.complete_value_minor, Some(402));
+    quotes.get_mut("sh600000").unwrap().price_raw = 9998;
+    quotes.get_mut("sh600000").unwrap().change_raw = Some(-20);
+    let mut collected = store.with_read(|c| assets::collect(c, date)).unwrap();
+    assets::apply_quotes(&mut collected, &quotes, date);
+    let stock = collected
+        .funds
+        .iter()
+        .find(|r| r.instrument_kind == "stock")
+        .unwrap();
+    assert_eq!(
+        store
+            .with_read(|c| crate::securities_income::daily(c, stock, date))
+            .unwrap()["amount"],
+        "-0.01"
+    );
+}
+
 fn unified(store: &Store, quotes: &BTreeMap<String, QuoteInput>) -> assets::AssetsSummary {
     let mut collected = store
         .with_read(|conn| assets::collect(conn, "2026-10-03"))

@@ -269,19 +269,23 @@
 
     const totalEl = document.getElementById('totalTokens');
     const costEl = document.getElementById('cost');
+    const requestEl = document.getElementById('requestCount');
     const coverage = document.getElementById('usage-coverage');
     if (coverage) coverage.hidden = !(currentPeriod.missingUsageRequests > 0);
 
     if (totalEl) { totalEl.textContent = formatUsage(currentPeriod, false); totalEl.title = currentPeriod.missingUsageRequests > 0 ? t("usageIncomplete") : ""; }
     if (costEl) costEl.textContent = formatCost(currentPeriod);
+    if (requestEl) requestEl.textContent = formatNumber(currentPeriod.sessionCount);
   }
 
-  // 1. Home View Breakdown (Signature Token Monitor Style)
+  // 1. Home View Breakdown (per-tool usage distribution)
   function renderHomeBreakdown() {
     const container = document.getElementById('view-home');
     if (!container) return;
+    const activeToolsEl = document.getElementById('activeTools');
 
     const activeTools=toolsData.filter(tool=>tool.totalTokens>0 || tool.missingUsageRequests>0);
+    if (activeToolsEl) activeToolsEl.textContent = String(activeTools.length);
     if (!activeTools.length) {
       container.innerHTML = `<div style="text-align:center; padding:30px; color:var(--muted);">${t(failures.has('tools')?'unavailable':'noTools')}</div>`;
       return;

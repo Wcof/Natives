@@ -1,4 +1,5 @@
 import { storage } from './platform/storage.js';
+import { resolveTheme } from './platform/theme-param.js';
 import { createFilesSession } from './files-session.js';
 import { createFilesSidebar } from './files-sidebar.js';
 import { createFilesHomeView } from './files-home-view.js';
@@ -84,7 +85,8 @@ function applyTheme(theme, persist = true) {
   if (session?.entries?.length) renderEntries();
 }
 
-storageGet('natives-theme', 'archive').then((theme) => applyTheme(theme, false));
+// ?theme= 只覆盖本次渲染（DSH 插件入口），persist=false 不写回偏好。
+storageGet('natives-theme', 'archive').then((theme) => applyTheme(resolveTheme(theme, location.search), false));
 
 async function openModelSettings(returnFocus) {
   const module = await import('./model-settings.js');
@@ -359,6 +361,11 @@ function renderHomeWelcome() {
   if (box) {
     box.replaceChildren();
     box.classList.remove('grid');
+    // D6-8：home 态不是 listbox（只有一个搜索按钮），去掉 role 与 aria-label，
+    // 否则读屏会宣布一个没有任何 option 的列表框。渲染条目时再恢复。
+    box.removeAttribute('role');
+    box.removeAttribute('aria-label');
+    box.removeAttribute('aria-multiselectable');
   }
   if ($('empty')) $('empty').hidden = true;
   renderStatusBar();
@@ -696,8 +703,11 @@ async function init() {
       const stored = await storageGet('natives-last-path', '');
       const result = stored ? await call('stat', { path: stored }).catch(() => ({})) : {};
       const hasHarness = searchParams.has('ui-harness') || searchParams.has('self-test');
+      // ADR-0048 standalone: the product sidebar is hidden, so open the first
+      // root instead of leaving the "choose a directory" empty state.
+      const hasProductSidebar = !document.documentElement.classList.contains('standalone');
       if (result?.found && result.isDir) navigate(stored, false);
-      else if (hasHarness && roots[0]) navigate(roots[0].path, false);
+      else if ((hasHarness || !hasProductSidebar) && roots[0]) navigate(roots[0].path, false);
       else if (!appParam) renderHomeWelcome();
     }
   } catch (error) {
@@ -884,8 +894,11 @@ async function bootstrap() {
   // ADR-0025 D33/D37: the "应用" section is a projection UI cache rendered
   // from chrome.storage.local — no extra host round-trip is needed here
   // because refreshAppProjection() already updated it for this page.
-  mountAppMenu($('app-menu-apps'), { t }).catch(() => {});
-  bindEmbeddedAppNavigation();
+  // ADR-0048：DSH 独立运行（html.standalone）不挂载应用菜单，跨模块入口由 CSS 隐藏。
+  if (!document.documentElement.classList.contains('standalone')) {
+    mountAppMenu($('app-menu-apps'), { t }).catch(() => {});
+    bindEmbeddedAppNavigation();
+  }
   filesSidebar = createFilesSidebar({
     container: $('app-sidebar'),
     resizer: $('sidebar-resizer'),

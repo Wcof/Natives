@@ -11,5 +11,10 @@
 try {
   var t = new URLSearchParams(location.search).get("theme");
   if (t === "volt" || t === "archive") document.documentElement.dataset.theme = t;
+  /* 嵌入宿主（DSH）：只认显式 ?standalone=1——模块页本身永远在 iframe 里，
+     不能用「被框架承载」判定，否则 Chrome 扩展里的模块也会被当成宿主嵌入。 */
+  if (new URLSearchParams(location.search).get("standalone") === "1") {
+    document.documentElement.classList.add("standalone");
+  }
 } catch (e) {}
 </script>

@@ -17,7 +17,7 @@ function initECharts(el) {
 let generation = 0;
 const tickets = {minute:0,perf:0,profit:0};
 function getThemeColors() {
-  return {accent:Fund.themeColor('--natives-accent'),text:Fund.themeColor('--natives-text'),muted:Fund.themeColor('--natives-text-muted'),border:Fund.themeColor('--natives-border'),grid:Fund.themeColor('--natives-border')};
+  return {accent:Fund.themeColor('--natives-accent'),text:Fund.themeColor('--natives-text'),muted:Fund.themeColor('--natives-text-muted'),border:Fund.themeColor('--natives-edge'),grid:Fund.themeColor('--natives-edge')};
 }
 
 async function ensureEchartsReady() {

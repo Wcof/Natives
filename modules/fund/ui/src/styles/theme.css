@@ -12,8 +12,8 @@
 :root {
   /* 密度：圆角 / 字号 / 间距（8px 基线）/ 动效（集中定义，组件消费） */
   --natives-radius: 7px;
-  --fund-card-radius: 14px;
-  --fund-card-padding: 22px;
+  --fund-card-radius: 12px;
+  --fund-card-padding: 20px;
   --fund-allocation-height: 480px;
   --fund-content-width: 1280px;
   --fund-content-inset: 28px;
@@ -118,3 +118,14 @@ body {
   --color-up: #8cd6b3;
   --color-down: #ff9a9f;
 }
+
+/* ===== 嵌入态（DSH）涨跌色四象限（ADR-0049 收口）=====
+ * 上面两组只按 data-theme 取值，看不到 `html.standalone` 把整块调色板换成了 DSH 的
+ * 浅色/深色：DSH 深色下会落到 archive 的 #b13642/#217052，压在 #1b1b1c 上只有 2.85/2.87:1。
+ * 这里按「嵌入态 × 明暗 × cn/intl」补四条，特异性 (0,2,1)/(0,3,1) 稳压上面的 (0,2,0)。
+ * 实测（surface / chrome）：浅色 #b13642 6.04/5.54、#217052 5.99/5.49；
+ * 深色 #f25a5a 5.23/4.60、#22c55e 7.55/6.64 —— 全部 ≥4.5。 */
+html.standalone[data-theme] { --color-up: #b13642; --color-down: #217052; }
+html.standalone[data-theme][data-color-mode="intl"] { --color-up: #217052; --color-down: #b13642; }
+html.standalone[data-theme="volt"] { --color-up: #f25a5a; --color-down: #22c55e; }
+html.standalone[data-theme="volt"][data-color-mode="intl"] { --color-up: #22c55e; --color-down: #f25a5a; }

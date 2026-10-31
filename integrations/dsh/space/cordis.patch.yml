@@ -1,0 +1,3 @@
+- insert:
+    - id: natives-space
+      name: '@natives/dsh-space'

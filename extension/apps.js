@@ -10,19 +10,23 @@ import { storageGet, storageSet } from './files-preferences.js';
 import { classifyAppError } from './app-errors.js';
 import { createAppShell } from './app.js';
 import { getMessage, initI18n } from './platform/i18n.js';
+import { themeParam } from './platform/theme-param.js';
 
 // AC-11: standalone pages inherit the product appearance preference and
-// follow its changes instead of a hardcoded theme.
+// follow its changes instead of a hardcoded theme. ?theme= overrides this
+// render only (ADR-0048 DSH entry) and never rewrites the saved preference.
+const themeOverride = themeParam(globalThis.location?.search ?? '');
+const resolvePageTheme = (theme) => themeOverride ?? (['volt', 'archive'].includes(theme) ? theme : 'archive');
 Promise.resolve()
   .then(() => storageGet('natives-theme', 'archive'))
   .then((theme) => {
-    document.documentElement.dataset.theme = ['volt', 'archive'].includes(theme) ? theme : 'archive';
+    document.documentElement.dataset.theme = resolvePageTheme(theme);
   })
   .catch(() => {});
 storage.onChanged?.addListener((changes, area) => {
   if (area === 'local' && changes['natives-theme']) {
     const theme = changes['natives-theme'].newValue;
-    document.documentElement.dataset.theme = ['volt', 'archive'].includes(theme) ? theme : 'archive';
+    document.documentElement.dataset.theme = resolvePageTheme(theme);
   }
 });
 

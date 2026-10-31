@@ -19,7 +19,8 @@ export async function verifyHomeUsability(page, { width, theme, shots }) {
     await Fund.actions.refreshHome();
   });
   const show = async (goals, mode = 'amount') => { await inject({ goals }); await page.evaluate(mode => Fund.home.applyDisplayMode(mode, false), mode); };
-  const orb = page.locator('#home-goal-body .goal-water-content');
+  // ADR-0049 D7-3/D8：progressbar 语义只挂在 .goal-water（仪表层）上，指标仍在 .goal-water-content。
+  const orb = page.locator('#home-goal-body .goal-water');
   await show(baseline.goals, 'hidden');
   assert.equal(await orb.getAttribute('aria-valuenow'), null, 'private goal cannot expose progress');
   assert.equal(await page.locator('#home-goal-body .goal-water-fill').isVisible(), false, 'private water level is neutral');
@@ -29,7 +30,36 @@ export async function verifyHomeUsability(page, { width, theme, shots }) {
     // 动态小数契约：≤4 位小数并去尾零（0 显示 0% 而非 0.0%）。
     assert.equal(await orb.getAttribute('aria-valuetext'), `${ratioTenths / 10}`.replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '') + '%');
     assert.equal(await page.locator('#home-goal-body .goal-water-fill').isVisible(), ratioTenths > 0);
-    assert.match(await page.locator('#home-goal-progress').innerText(), new RegExp(`${ratioTenths / 10}\\.?(0)?%`));
+    // ADR-0049 D7-3：hero 固定 2 位小数（29.59% / 62.50% / 100.00%），
+    // aria-valuetext 仍是去尾零的 4 位（上一行已断言）。
+    assert.equal(await page.locator('#home-goal-progress strong').innerText(), `${(ratioTenths / 10).toFixed(2)}%`);
+  }
+  // ADR-0049 D8 验收：水位线与刻度必须共用同一纵向基准，且水位线不得进入指标带。
+  // 只看 rect，不靠截图目测——旧实现（水位铺满整卡 + 刻度内缩 16px）在这里会差出 100px 以上。
+  for (const ratioTenths of [0, 295, 625, 1000]) {
+    await show({ ...baseline.goals, progress: { ...baseline.goals.progress, ratioPpm: null, ratioTenths } }, 'percent');
+    const axis = await page.evaluate(() => {
+      const scale = document.querySelector('.goal-gauge .goal-scale');
+      const s = scale.getBoundingClientRect();
+      const line = document.querySelector('.goal-water-line').getBoundingClientRect();
+      return {
+        top: s.top, height: s.height, lineTop: line.top,
+        ticks: [...scale.querySelectorAll('.goal-tick')].map(t => {
+          const r = t.getBoundingClientRect();
+          return { label: t.textContent, cy: r.top + r.height / 2 };
+        }),
+        metricTop: document.querySelector('.goal-water-metrics').getBoundingClientRect().top,
+      };
+    });
+    const level = Math.min(100, ratioTenths / 10);
+    const expected = axis.top + (1 - level / 100) * axis.height;
+    assert.ok(Math.abs(axis.lineTop - expected) <= 1.5, `water line off axis at ${level}%: ${axis.lineTop} vs ${expected}`);
+    assert.ok(axis.lineTop <= axis.metricTop - 12, `water line at ${level}% entered the metrics band`);
+    for (const tick of axis.ticks) {
+      const tickValue = Number.parseInt(tick.label, 10);
+      const tickExpected = axis.top + (1 - tickValue / 100) * axis.height;
+      assert.ok(Math.abs(tick.cy - tickExpected) <= 1, `tick ${tick.label} off axis: ${tick.cy} vs ${tickExpected}`);
+    }
   }
   // ppm 精度源（0.0001% 粒度）：低于 0.1% 的真实进度不塌缩为 0。
   await show({ ...baseline.goals, progress: { ...baseline.goals.progress, ratioPpm: 10, ratioTenths: 0 } }, 'percent');
@@ -47,9 +77,11 @@ export async function verifyHomeUsability(page, { width, theme, shots }) {
   await show({ status: 'empty' });
   assert.equal(await page.locator('#home-goal-create').isVisible(), true);
   assert.equal(await orb.getAttribute('aria-valuenow'), null);
-  await inject({ wealth: { ...baseline.wealth, cumulative: { totalMinor: '1234500', complete: true, coverageFrom: '2026-09-01' } } });
+  // 原断言看的是 #home-cumulative-value（存量收益），该概念已并入收益卡的区间收益格子；
+  // 这里保持同一意图：快照里的收益字段必须渲染成非占位值，而不是恒为「–」。
+  await inject({ wealth: baseline.wealth });
   await show(baseline.goals);
-  assert.notEqual(await page.locator('#home-cumulative-value').innerText(), '–');
+  assert.notEqual(await page.locator('#home-all-period-value').innerText(), '–', 'range return renders from the snapshot');
   const order = await page.evaluate(() => {
     const ids = ['hc-total', 'home-goal-body', 'home-all-income', 'home-market-body', 'home-history-chart', 'home-distribution-body', 'home-combination-body', 'home-ai-body', 'home-today-body'];
     return ids.every((id, i) => !i || !!(document.getElementById(ids[i - 1])
@@ -63,7 +95,10 @@ export async function verifyHomeUsability(page, { width, theme, shots }) {
   }
   assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1));
   await page.emulateMedia({ reducedMotion: 'reduce' });
-  assert.equal(await orb.evaluate(node => node.getAnimations({ subtree: true }).length), 0);
+  // 上一步的显示模式切换可能留下一个正在 retarget 的过渡；reduce 下过渡时长 0.01ms，
+  // 等一帧再数，避免把「已经结束但还没从列表摘掉」的那一条当成持续动画。
+  await page.waitForTimeout(120);
+  assert.equal(await orb.evaluate(node => node.getAnimations({ subtree: true }).length), 0, 'reduced motion leaves no running animation');
   if (width === 1280 || width === 320) {
     await page.screenshot({ path: resolve(shots, `usability-${theme}-${width}-amount.png`), fullPage: true });
   }

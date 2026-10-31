@@ -106,6 +106,7 @@ function renderSnapshot() {
   renderEvidence(s);
   if (H.actions) renderActions(H.actions);
   if (actions.homeRenderActions) actions.homeRenderActions(s);
+  if (H.detailOpen) renderDetail();
 }
 
 // ---------- 自定义资金分组（方案 11 §3.1/§4：A 分母展示，旧 B 不混用） ----------
@@ -115,8 +116,6 @@ function renderGroupAllocation(ga) {
 
 function renderWealth(w) {
   const total = document.getElementById("hc-total-value");
-  const invested = document.getElementById("hc-invested-value");
-  const ret = document.getElementById("hc-return-value");
   const cash = document.getElementById("hc-cash-value");
   // 质量 → 副文案；未知不显示 0。
   const setCard = (el, minor, quality, issues) => {
@@ -154,55 +153,50 @@ function renderWealth(w) {
           : `${t("fundHomeSomeDataNeedsVerification")}${(w.issues||[]).map(i => reasonText(i.code,i.count)).join("、") || t("fundHomeMissingData")}）${gapParts.length ? " · " + gapParts.join(" · ") : ""}`;
   document.getElementById("home-currency-manage").hidden = H.displayMode !== "amount" || !(valuation.unconfirmedCurrencies > 0);
 
-  setCard(invested, w.investedI, q);
-  document.getElementById("hc-invested-sub").textContent =
-    t("fundHomeCurrentNoncashValueSeeHoldingsAndAssets");
+  // 已投资市值与累计收益已并入「全部收益」卡与顶部资产格，不再单列一格。
 
-  const r = w.returns || {};
-  const retEl = document.getElementById("hc-return-value");
-  const retSub = document.getElementById("hc-return-sub");
-  if (["ready","partial","reference"].includes(r.status) && r.netReturnMinor != null) {
-    const v = r.netReturnMinor;
-    retEl.textContent = mask(fmtMinor(v) ?? "0");
-    retEl.classList.toggle("hidden-amount", hideAmounts());
-    retEl.style.color = hideAmounts() ? "" : v > 0 ? "var(--home-color-up, var(--color-up))" : v < 0 ? "var(--home-color-down, var(--color-down))" : "";
-    retSub.textContent = `${r.from||""} -- ${r.to||""} · ${t(r.status==="reference"?"fundHomeRangeReference":"fundHomeRangeChecked")}${r.partialCoverage?" · "+t("fundHomeRangePartial"):""} · ${t("fundHomeNetContributionsExcluded")}`;
-  } else {
-    retEl.textContent = t("fundHomeNoCompleteReturnRecord");
-    retEl.classList.add("hidden-amount");
-    retSub.textContent = r.reason === "missing_baseline"
-      ? t("fundHomeMissingOpeningBaselineSaveAValuationSnapshotf0dbb6")
-      : t("fundHomeOpeningOrClosingValuationIsIncomplete");
-  }
+  // 期间净收益大数字与走势合并卡解耦：数字由「全部收益」卡（home-all-period-value）
+  // 与资产走势三指标区（home-overview.js）呈现，此处不再写走势头部节点。
 
   const c = w.cash || {};
   const cashEl = document.getElementById("hc-cash-value");
   const cashSub = document.getElementById("hc-cash-sub");
+  document.getElementById("hc-cash-label").textContent = t(c.availableMinor == null ? "fundHomeCashBalance" : "fundHomeAvailableCash");
+  document.querySelector('[data-detail="cash"]').hidden = !(c.accounts?.length);
   if (c.cashMinor == null) {
     cashEl.textContent = t("fundHomeNotRecorded");
     cashEl.classList.add("hidden-amount");
     cashSub.textContent = t("fundHomeNoCashAssetsRecorded");
-  } else if (c.reserveState === "unconfigured") {
-    cashEl.textContent = t("fundHomePurposeNotConfirmed");
-    cashEl.classList.add("hidden-amount");
-    cashSub.textContent = `${t("fundHomeSettledCash0c36f8")}${mask(fmtMinor(c.cashMinor) ?? "–")}${t("fundHomeReserveNotConfirmed")}`;
-  } else if (c.availableMinor != null) {
+  } else if (c.availableMinor == null) {
+    cashEl.textContent = mask(fmtMinor(c.cashMinor));
+    cashEl.classList.toggle("hidden-amount", hideAmounts());
+    cashSub.textContent = t("fundHomeCashBalanceNoReserve");
+  } else {
     cashEl.textContent = mask(fmtMinor(c.availableMinor) ?? "0");
     cashEl.classList.toggle("hidden-amount", hideAmounts());
     cashSub.textContent = c.shortfallMinor > 0
       ? `${t("fundHomeCashShortfall")}${mask(fmtMinor(c.shortfallMinor) ?? "")}${t("fundHomeCashIsBelowReservesPlusCommitments")}`
       : `${t("fundHomeSettled")}${mask(fmtMinor(c.cashMinor) ?? "")}${t("fundHomeReserve190ba2")}${mask(fmtMinor(c.reservedMinor) ?? "0")}${t("fundHomeCommitment2aa056")}${mask(fmtMinor(c.reservedByOrdersMinor) ?? "0")}`;
-  } else {
-    cashEl.textContent = t("fundHomeNeedsVerificationccf920"); cashEl.classList.remove("hidden-amount"); cashSub.textContent = t("fundHomeSomeAccountReservesAreNotConfirmed");
   }
 }
 
 // 百分比动态小数：最多 4 位并去尾零。后端 ppm（0.0001%）粒度保证任何
 // 非零进度不会塌缩显示为 0（0.001% 显示 0.001，40% 显示 40）。
-function pctText(pct) {
+// ADR-0049 D7-4：hero 文案取 2 位（pctText(x, 2)），aria-valuetext 保留 4 位。
+function pctText(pct, digits = 4) {
   if (!Number.isFinite(pct)) return "–";
-  const trimmed = pct.toFixed(4).replace(/\.?0+$/, "");
+  const trimmed = pct.toFixed(digits).replace(/\.?0+$/, "");
   return trimmed === "" || trimmed === "-" ? "0" : trimmed;
+}
+
+// ADR-0049 D7-3：hero 文案「默认 2 位小数；只有 2 位会把非零进度抹成 0 时才展开到 4 位」——
+// 29.5885 显示 29.59，0.001 必须是 0.001（ppm 精度源不能被四舍五入吃掉）。
+// aria-valuetext 仍用下方 pctText 的 4 位去尾零。
+function pctHero(pct) {
+  if (!Number.isFinite(pct)) return "–";
+  const two = pct.toFixed(2);
+  if (Number(two) === 0 && pct > 0) return pct.toFixed(4).replace(/0+$/, "").replace(/\.$/, "");
+  return two;
 }
 
 function renderGoal(g) {
@@ -223,19 +217,26 @@ function renderGoal(g) {
   const lineTop = level == null ? 100 : Math.max(0, Math.min(100, 100 - level));
   const label = hidePrivate() ? t("fundHomeGoalProgressHidden") : valid ? t("fundHomeGoalProgress") : empty ? t("fundHomeCreateGoal") : t("fundHomeNeedsVerificationccf920");
 
-  const ticks = Array.from({length:21},(_,index)=>{const value=index*5;return `<span class="goal-tick ${value%25===0?'major':''}" style="--tick-top:${100-value}%">${value%25===0?value+'%':''}</span>`;}).join('');
-  const waterBg = level == null ? "" : `
-    <div class="goal-water" style="--line-top:calc(${lineTop}% + ${((level / 100) * 2 - 1) * 16}px)" aria-hidden="true">
-      <div class="goal-water-fill"></div>
-      <div class="goal-water-line"></div>
-      <svg class="goal-water-wave" viewBox="0 0 100 12" preserveAspectRatio="none"><path class="goal-wave-path" d="M0,6 Q25,0 50,6 T100,6"/></svg>
-    </div>
-    <div class="goal-scale left" aria-hidden="true">${ticks}</div>
-    <div class="goal-scale right" aria-hidden="true">${ticks}</div>`;
+  // D7-3：刻度只留 0/25/50/75/100（删右刻度，12px 与正文地板一致）。
+  const ticks = [0,25,50,75,100].map(value=>`<span class="goal-tick ${value%25===0?'major':''}" style="--tick-top:${100-value}%">${value+'%'}</span>`).join('');
+  // D8：水位层与刻度共用 --goal-band 高的仪表带，--line-top 直接是带内百分比，
+  // 不得再做 ±px 重映射（旧代码那 16px 一旦失效，29.59% 会画到 50% 刻度上）。
+  const gaugeAttrs = level == null
+    ? 'aria-hidden="true"'
+    : `style="--line-top:${lineTop}%" role="progressbar" aria-label="${label}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${level}" aria-valuetext="${pctText(ratio)}%"`;
+  // D8-5：无值（隐私模式／不可计算／未建目标）保留空罐 + 完整刻度，卡片高度不随显示模式跳动。
+  const gauge = `<div class="goal-gauge">
+      <div class="goal-water${level == null ? " is-blank" : ""}" ${gaugeAttrs}>
+        <div class="goal-water-fill"></div>
+        <div class="goal-water-line"></div>
+        <svg class="goal-water-wave" viewBox="0 0 100 12" preserveAspectRatio="none"><path class="goal-wave-path" d="M0,6 Q25,0 50,6 T100,6"/></svg>
+      </div>
+      <div class="goal-scale left" aria-hidden="true">${ticks}</div>
+    </div>`;
 
   if (empty) {
     document.getElementById("home-goal-progress")?.replaceChildren();
-    body.innerHTML = `${waterBg}
+    body.innerHTML = `${gauge}
       <div class="goal-water-content">
         <p class="home-empty-hint">${t("fundHomeCreateAFinancialGoalToSeeCoverage")}</p>
         <button class="btn" id="home-goal-create">${t("fundHomeCreateGoal")}</button>
@@ -244,7 +245,7 @@ function renderGoal(g) {
     return;
   }
 
-  const percentDisplay = hidePrivate() ? "****" : valid ? `${pctText(ratio)}%` : "–";
+  const percentDisplay = hidePrivate() ? "****" : valid ? `${pctHero(ratio)}%` : "–";
   const percentSub = hidePrivate() ? t("fundHomeGoalProgressHidden") : valid ? t("fundHomeCurrentCoverage") : t("fundHomeNeedsVerificationccf920");
   const progress = document.getElementById('home-goal-progress');
   if(progress)progress.innerHTML=`<div class="goal-water-percent"><strong>${percentDisplay}</strong><small>${percentSub}</small></div>`;
@@ -252,8 +253,8 @@ function renderGoal(g) {
   const diffLabel = p.surplusMinor > 0 ? t("fundHomeGoalSurplus") : t("fundHomeRemainingGap");
   const diffVal = p.surplusMinor > 0 ? p.surplusMinor : p.gapMinor;
 
-  body.innerHTML = `${waterBg}
-    <div class="goal-water-content" role="progressbar" aria-label="${label}" ${level == null ? "" : `aria-valuenow="${level}" aria-valuemin="0" aria-valuemax="100" aria-valuetext="${pctText(ratio)}%"`}>
+  body.innerHTML = `${gauge}
+    <div class="goal-water-content">
         <div class="goal-water-metrics">
           <div>
             <small>${t("fundHomeTarget")}</small>
@@ -443,20 +444,34 @@ async function refreshInformation(identityOffset=0) {
 }
 
 // ---------- 详情展开 ----------
+function closeDetail() {
+  const kind = H.detailOpen;
+  H.detailOpen = null;
+  document.getElementById("home-detail-panel").style.display = "none";
+  const trigger = document.querySelector(`[data-detail="${CSS.escape(kind || '')}"]`);
+  trigger?.setAttribute("aria-expanded", "false");
+  trigger?.focus();
+}
+function renderDetail() {
+  document.getElementById("home-detail-title").textContent = t(H.detailOpen === "cash" ? "fundHomeCashDetails" : H.detailOpen === "return" ? "fundHomeReturnDetails" : "fundHomeAssetDetails");
+  document.getElementById("home-detail-body").innerHTML = buildDetail(H.detailOpen);
+}
 function toggleDetail(kind) {
   if(kind==='information'){newsScope=infoScope;document.getElementById('tab-news').click();return;}
+  if (!["total", "invested", "cash", "return"].includes(kind)) return;
   const panel = document.getElementById("home-detail-panel");
   const body = document.getElementById("home-detail-body");
   if (!panel || !body) return;
   if (H.detailOpen === kind) {
-    panel.style.display = "none";
-    H.detailOpen = null;
+    closeDetail();
     return;
   }
   H.detailOpen = kind;
-  body.innerHTML = buildDetail(kind);
+  renderDetail();
   panel.style.display = "block";
-  if (kind === "information") void loadInformationFull();
+  document.querySelectorAll('[data-detail]').forEach(button => button.setAttribute('aria-expanded', String(button.dataset.detail === kind)));
+  panel.scrollIntoView({ block: "start", behavior: "instant" });
+  document.getElementById("home-detail-title").focus({ preventScroll: true });
 }
 
 // 全量资讯列表（详情面板内，≤50/页；scope 与首页共享）。
@@ -908,7 +923,7 @@ Object.assign(home, {
 });
 
 actions.setHomeRange = function (range, from = "", to = "") {
-  if(!["today","month","year","all","custom"].includes(range))return Promise.resolve();
+  if(!["today","week","month","half","year1","year","all","custom"].includes(range))return Promise.resolve();
   if(range==="custom"&&(!/^\d{4}-\d{2}-\d{2}$/.test(from)||!/^\d{4}-\d{2}-\d{2}$/.test(to)||from>to||to>(H.snapshot?.requestedRange?.today||new Date(Date.now()+8*3600000).toISOString().slice(0,10))))return Promise.resolve();
   H.range = range;
   H.from = from; H.to = to;
@@ -925,8 +940,16 @@ function bindEvents() {
   document.getElementById("home-privacy-btn")?.addEventListener("click", () => cycleDisplayMode());
   document.getElementById("home-goal-manage")?.addEventListener("click", openGoalManage);
   document.getElementById("home-allocation-manage")?.addEventListener("click", () => home.manageAllocation?.());
-  document.querySelectorAll(".hc-detail").forEach(btn => {
+  document.querySelectorAll("[data-detail]").forEach(btn => {
+    btn.setAttribute("aria-controls", "home-detail-panel");
+    btn.setAttribute("aria-expanded", "false");
     btn.addEventListener("click", () => actions.toggleHomeDetail(btn.dataset.detail));
+  });
+  document.getElementById("home-detail-close").addEventListener("click", closeDetail);
+  document.getElementById("home-detail-panel").addEventListener("keydown", event => { if (event.key === "Escape") { event.preventDefault(); closeDetail(); } });
+  document.getElementById("home-detail-body").addEventListener("click", event => {
+    const view = event.target.closest("[data-wealth-view]")?.dataset.wealthView;
+    if (["positions", "assets"].includes(view)) { closeDetail(); document.getElementById(`tab-${view}`)?.click(); }
   });
   document.getElementById("home-ai-explain")?.addEventListener("click", () => home.openAI?.());
   document.getElementById("home-cash-manage")?.addEventListener("click", () => home.manageCash?.());

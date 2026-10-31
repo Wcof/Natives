@@ -64,6 +64,11 @@ const WEB_SESSION_ADAPTER_JS: &str = include_str!("../../../../extension/platfor
 const WEB_I18N_JS: &str = include_str!("../../../../extension/platform/i18n.js");
 const WEB_CONNECTION_MESSAGES_JS: &str =
     include_str!("../../../../extension/platform/connection-messages.js");
+// ADR-0048: `?theme=archive|volt` resolution shared by space/files/app/apps.
+const WEB_THEME_PARAM_JS: &str = include_str!("../../../../extension/platform/theme-param.js");
+// ADR-0048 D5.2: `?standalone=1` main-panel mode shared by space/files/app.
+const WEB_STANDALONE_BOOT_JS: &str =
+    include_str!("../../../../extension/platform/standalone-boot.js");
 
 fn embedded_web_asset(path: &str) -> Option<(Vec<u8>, &'static str)> {
     let bytes = match path {
@@ -77,6 +82,8 @@ fn embedded_web_asset(path: &str) -> Option<(Vec<u8>, &'static str)> {
         "platform/web-session.js" => WEB_SESSION_ADAPTER_JS,
         "platform/i18n.js" => WEB_I18N_JS,
         "platform/connection-messages.js" => WEB_CONNECTION_MESSAGES_JS,
+        "platform/theme-param.js" => WEB_THEME_PARAM_JS,
+        "platform/standalone-boot.js" => WEB_STANDALONE_BOOT_JS,
         _ => return None,
     };
     Some((
@@ -142,6 +149,9 @@ mod tests {
         assert!(String::from_utf8_lossy(&messages).contains("请从 Natives 打开此页面"));
         let (i18n, _) = serve_static_file("/platform/i18n.js").unwrap();
         assert!(String::from_utf8_lossy(&i18n).contains("connectionMessages"));
+
+        let (standalone, _) = serve_static_file("/platform/standalone-boot.js").unwrap();
+        assert!(String::from_utf8_lossy(&standalone).contains("standalone"));
 
         let (session, mime) = serve_static_file("/platform/session.js").expect("session embedded");
         assert_eq!(mime, "application/javascript; charset=utf-8");

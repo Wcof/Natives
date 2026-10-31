@@ -191,7 +191,7 @@ function switchView(view) {
   const vc = document.getElementById('volume-chart');
   const mc = document.getElementById('minute-chart');
   const mv = document.getElementById('minute-vol');
-  const sep = document.getElementById('sep-range');
+  const rangeTools = document.getElementById('trends-range-tools');
 
   if (dk) dk.classList.remove('active');
   if (wk) wk.classList.remove('active');
@@ -204,7 +204,7 @@ function switchView(view) {
     if (vc) vc.style.display = 'none';
     if (mc) mc.style.display = 'block';
     if (mv) mv.style.display = 'block';
-    if (sep) sep.style.display = 'none';
+    if (rangeTools) rangeTools.style.display = 'none';
     document.querySelectorAll('.tb-btn[data-range]').forEach(b => b.style.display = 'none');
     const zi = document.getElementById('zoom-info');
     if (zi) zi.style.display = 'none';
@@ -230,7 +230,7 @@ function switchView(view) {
     if (mv) mv.style.display = 'none';
     if (kc) kc.style.display = 'block';
     if (vc) vc.style.display = 'block';
-    if (sep) sep.style.display = '';
+    if (rangeTools) rangeTools.style.display = '';
     document.querySelectorAll('.tb-btn[data-range]').forEach(b => b.style.display = '');
     const zi = document.getElementById('zoom-info');
     if (zi) zi.style.display = '';

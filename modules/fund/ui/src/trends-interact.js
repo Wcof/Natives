@@ -130,7 +130,11 @@ function updateZoomInfo(start, end) {
   const sd = activeRows()[si]?.date || '';
   const ed = activeRows()[ei]?.date || '';
   const zi = document.getElementById('zoom-info');
-  if (zi) zi.textContent = `${sd} ~ ${ed} (${ei - si + 1})`;
+  if (zi) {
+    const text = `${sd} ~ ${ed} (${ei - si + 1})`;
+    zi.textContent = text;
+    zi.title = text;
+  }
 }
 
 function syncRangeBtns(start, end) {

@@ -1,10 +1,11 @@
 # Natives 现行规范体系
 
-> 版本：4.2.0 · 维护日期：2026-10-20
+> 版本：4.3.0 · 维护日期：2026-10-28
 > 本目录是 Natives 当前所有 MUST / SHOULD / MAY 的唯一规范权威。
 > 架构主干以 ADR-0031 为准；ADR-0035～0038 分别补充动态端口、空间投资卡、通用模块推理代理和模块 Secret／深链能力。其他 ADR 按其有效范围适用，已被替代的正文只供历史追溯；ADR-0032 的固定 App Runtime 端口已退役，仅保留端口登记要求。
 > ADR-0039 补充包内模块边界、公共契约与验收，不改变现有产品、进程及安全边界；稳定规则见技术 08。
 > ADR-0044 退役模型代理／路由业务、CLIProxyAPI 内核与第三方工具配置注入；Model Host 直连已配置供应商，Tokenusage 仍是唯一本地用量／计费权威。
+> ADR-0048 已生效（2026-10-28）：新增 DeepSeek Harness 插件作为第三业务入口；它复用既有 Core、数据与 8770 端口，不新增监听、不产生第二应用身份。实施前仍不在生产边界内，稳定规则见技术 01 的 R-T8。
 
 ## 当前产品边界
 
@@ -16,6 +17,8 @@ Natives 是一个完整产品。当前生产代码只包括：
 - 单用途 `model-host`；
 - 静态编译进统一 `natives-app-runtime`（ADR-0031）、随完整安装包交付的官方内置模块（`modules/`）；
 - 只负责选择扩展／本机网页、打开 Chrome、扩展引导和简短诊断的薄 Launcher。
+
+（ADR-0048 已生效、尚未实施）DeepSeek Harness 插件只承载现有 Core 页面的隔离 webview 与插件包装，不拥有业务状态；实施前不在当前生产边界内。
 
 Tauri/Next/React 工作台、通用 Daemon、Assistant、Agent、Jobs、Capabilities、Harness、
 Workshop 和 Plugin Runtime 已退出当前架构。它们的历史设计只保留在 superseded ADR、

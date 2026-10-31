@@ -31,7 +31,7 @@
 
 
               <div class="home-ledger-cell" id="hc-cash">
-                <div class="hc-label"><span data-i18n="fundHomeAvailableCash">可用现金</span></div>
+                <div class="hc-label"><span id="hc-cash-label" data-i18n="fundHomeAvailableCash">可用现金</span></div>
                 <div class="hc-value num" id="hc-cash-value">–</div>
                 <div class="hc-sub" id="hc-cash-sub"><span data-i18n="fundHomeSettledReservesCommitments">到账 − 预留 − 占用</span></div>
                 <button class="hc-detail" data-detail="cash"><span data-i18n="fundHomeDetails">详情</span></button>
@@ -77,18 +77,6 @@
                 <div id="home-market-body"></div>
               </div>
 
-              <div class="home-ledger-extra"><div class="home-ledger-cell" id="hc-cumulative">
-                <div class="hc-label" data-i18n="fundHomeCumulativeReturn"></div>
-                <div class="hc-value num" id="home-cumulative-value">–</div>
-                <div class="hc-sub" id="home-cumulative-note"></div>
-                <div class="hc-sub" data-i18n="fundHomeCumulativeScope"></div>
-              </div><div class="home-ledger-cell" id="hc-invested">
-                <div class="hc-label"><span data-i18n="fundHomeInvestedMarketValue">已投资市值</span></div>
-                <div class="hc-value num" id="hc-invested-value">–</div>
-                <div class="hc-sub" id="hc-invested-sub"><span data-i18n="fundHomeCurrentNoncashAssetValue">非现金资产当前价值</span></div>
-                <button class="hc-detail" data-detail="invested"><span data-i18n="fundHomeDetails">详情</span></button>
-              </div></div>
-
               <div class="home-trend-head">
                 <div class="home-trend-title-stack">
                   <h3 class="home-card-title home-trend-title" data-i18n="fundHomeHistoryTitle"></h3>
@@ -96,10 +84,12 @@
                 </div>
                 <div class="home-period-summary" id="hc-return">
                   <span class="hc-range-tabs" role="group" aria-label="收益区间" data-i18n-aria-label="fundHomeReturnRange">
-                    <button class="hc-range" data-range="today"><span data-i18n="fundHomeToday">Today</span></button>
-                    <button class="hc-range active" data-range="month"><span data-i18n="fundHomeThisMonth">本月</span></button>
-                    <button class="hc-range" data-range="year"><span data-i18n="fundHomeThisYear">今年</span></button>
-                    <button class="hc-range" data-range="all"><span data-i18n="fundHomeSinceTrackingBegan">跟踪以来</span></button>
+                    <button class="hc-range" data-range="today"><span data-i18n="fundHomePeriodToday">当日</span></button>
+                    <button class="hc-range" data-range="week"><span data-i18n="fundHomePeriodWeek">本周</span></button>
+                    <button class="hc-range active" data-range="month"><span data-i18n="fundHomePeriodMonth">本月</span></button>
+                    <button class="hc-range" data-range="half"><span data-i18n="fundHomePeriodHalf">半年</span></button>
+                    <button class="hc-range" data-range="year1"><span data-i18n="fundHomePeriodYear">一年</span></button>
+                    <button class="hc-range" data-range="all"><span data-i18n="fundHomePeriodAll">全部</span></button>
                     <button class="hc-range" data-range="custom" aria-controls="home-custom-range"><span data-i18n="fundHomeCustom">自定义</span></button>
                   </span>
                   <div id="home-selected-range" class="home-selected-range"></div>
@@ -108,20 +98,20 @@
                 </div>
               </div>
 
-              <div id="home-history-series" class="home-history-series" role="group" data-i18n-aria-label="fundHomeHistorySeries"></div>
-              <div class="home-chart-total">
-                <span class="home-chart-total-label" data-i18n="fundHomePeriodNetReturn"></span>
-                <div class="home-chart-total-row">
-                  <strong class="hc-value num" id="hc-return-value">–</strong>
-                  <span class="home-chart-total-pct" id="home-chart-twr"></span>
-                  <small class="home-history-selection" id="home-history-selection"></small>
-                </div>
-                <div class="hc-sub" id="hc-return-sub"><span data-i18n="fundHomeTodaySReturnIsNotShownWithout">未经完整核验不显示今日收益</span></div>
+              <div id="home-history-categories" class="home-history-categories is-top" role="group" data-i18n-aria-label="fundHomeHistoryCategoryTitle"></div>
+              <div class="home-trend-controls">
+                <span class="hc-range-tabs" id="home-view-toggle" role="group" data-i18n-aria-label="fundHomeHistoryViewLabel">
+                  <button class="hc-range" data-history-view="amount" type="button"><span data-i18n="fundHomeHistoryViewAmount">资产金额</span></button>
+                  <button class="hc-range" data-history-view="percent" type="button"><span data-i18n="fundHomeHistoryViewPercent">变化对比</span></button>
+                </span>
+                <span class="home-history-selection" id="home-history-selection"></span>
+                <span class="home-trend-count" id="home-series-count" aria-live="polite"></span>
                 <button class="hc-detail" data-detail="return"><span data-i18n="fundHomeDetails">详情</span></button>
               </div>
               <p class="evidence-hint" id="home-history-status"></p>
               <div id="home-history-chart" class="home-history-chart"></div>
-              <div id="home-history-categories" class="home-history-categories"></div>
+              <p class="home-trend-note"><span id="home-trend-scope"></span><span data-i18n="fundHomeHistoryUnitNote"></span></p>
+              <div id="home-holding-cards" class="home-history-categories is-bottom"></div>
               <p class="evidence-hint" id="home-benchmark-status"></p>
               <div id="home-benchmark-chart" class="home-history-chart"></div>
               <div id="home-attribution-body"></div>
@@ -207,9 +197,10 @@
                 <button class="btn home-health-open" id="home-health-open" style="display:none"></button>
               </div>
             </div>
-          <div class="home-detail-panel" id="home-detail-panel" style="display:none">
+          <section class="home-detail-panel" id="home-detail-panel" aria-labelledby="home-detail-title" style="display:none">
+            <header class="home-card-title-row"><h2 id="home-detail-title" class="home-card-title" tabindex="-1"></h2><button type="button" class="btn" id="home-detail-close" data-i18n="fundHomeClose">关闭</button></header>
             <div id="home-detail-body"></div>
-          </div>
+          </section>
 
 
 

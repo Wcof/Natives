@@ -4,7 +4,7 @@
 :root {
   --bg: var(--natives-bg);
   --surface: var(--natives-surface);
-  --border: var(--natives-border);
+  --border: var(--natives-edge);
   --text: var(--natives-text-primary);
   --text-muted: var(--natives-text-muted);
   --primary: var(--natives-accent);

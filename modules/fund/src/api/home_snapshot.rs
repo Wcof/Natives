@@ -43,7 +43,7 @@ fn home_snapshot(
     let range = crate::market::query_param(path, "range").unwrap_or_else(|| "all".into());
     let valid = matches!(
         range.as_str(),
-        "today" | "month" | "year" | "all" | "custom"
+        "today" | "week" | "month" | "half" | "year1" | "year" | "all" | "custom"
     );
     if !valid {
         return Err(super::api_error(400, "FIN_INVALID", "收益区间无效"));

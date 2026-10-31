@@ -10,13 +10,20 @@ export function composeThemeCss(baseCss, moduleCss) {
 // 基础角色（extension/theme.css 拥有）：模块主题重复声明即失败。
 export const BASE_THEME_ROLES = [
   '--natives-bg', '--natives-surface', '--natives-surface-2', '--natives-surface-3',
-  '--natives-text-primary', '--natives-text-muted', '--natives-border', '--natives-control',
+  '--natives-text-primary', '--natives-text-muted', '--natives-control',
   '--natives-accent', '--natives-accent-strong', '--natives-on-accent', '--natives-selected',
   '--natives-danger', '--natives-danger-soft', '--natives-on-danger',
   '--natives-warning', '--natives-warning-soft', '--natives-ok', '--natives-ok-soft',
   '--natives-code', '--natives-match', '--natives-backdrop', '--natives-shadow',
   '--natives-glass', '--natives-glass-hover', '--natives-disabled', '--natives-focus-width',
   '--natives-font', '--natives-font-mono',
+  // Surface Ladder v1（ADR-0049 D1）
+  '--natives-surface-raised', '--natives-surface-chrome', '--natives-surface-well',
+  '--natives-edge', '--natives-accent-edge',
+  '--natives-elev-1', '--natives-elev-2', '--natives-elev-3',
+  '--natives-rim', '--natives-well-inset',
+  // 强调墨色档（ADR-0049 D10）
+  '--natives-accent-ink', '--natives-ok-ink',
 ];
 
 export function findDuplicatedBaseRoles(moduleCss) {

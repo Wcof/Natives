@@ -53,9 +53,7 @@ pub(crate) fn shares_to_amount_minor(shares_raw: i64, nav_raw: i64) -> Option<i6
     if shares_raw < 0 || nav_raw <= 0 {
         return None;
     }
-    let num = (shares_raw as i128) * (nav_raw as i128);
-    let amount = (num + 500_000) / 1_000_000;
-    i64::try_from(amount).ok()
+    crate::fixed::valuation_minor(shares_raw, nav_raw)
 }
 
 struct ResolvedFund {

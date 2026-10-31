@@ -1,0 +1,3 @@
+- insert:
+    - id: natives-files
+      name: '@natives/dsh-files'

@@ -1276,17 +1276,107 @@
   "fundHomeHistoryTitle": {
     "message": "Asset trend"
   },
-  "fundHomeHistoryAllSeries": {
-    "message": "All"
+  "fundHomeHistoryLatestLabel": {
+    "message": "Latest total assets"
+  },
+  "fundHomeHistoryDeltaLabel": {
+    "message": "Change over range"
+  },
+  "fundHomeHistoryDeltaNote": {
+    "message": "Includes cash flows · not an investment return"
+  },
+  "fundHomeHistoryDeltaInsufficient": {
+    "message": "Not enough records yet"
+  },
+  "fundHomeHistoryStartLabel": {
+    "message": "Range start"
+  },
+  "fundHomeHistoryStartNote": {
+    "message": "Based on the first valid record"
+  },
+  "fundHomeHistorySelectedCount": {
+    "message": "{n} / {m} selected"
+  },
+  "fundHomeHistoryHoldingsCount": {
+    "message": "{n} / {m} holdings selected"
+  },
+  "fundHomeHistoryAllHoldings": {
+    "message": "All holdings"
+  },
+  "fundHomeHistoryAllAssets": {
+    "message": "All assets"
+  },
+  "fundHomeHistoryAssetsTotal": {
+    "message": "{n} assets"
+  },
+  "fundHomeHistoryAllHoldingsTitle": {
+    "message": "All holdings"
+  },
+  "fundHomeHistoryAllHoldingsHint": {
+    "message": "Pick an asset to focus its category"
+  },
+  "fundHomeHistoryExpandCards": {
+    "message": "Show all ({n} more)"
+  },
+  "fundHomeHistoryCollapseCards": {
+    "message": "Collapse"
+  },
+  "fundHomeHistoryCategoryTitle": {
+    "message": "Asset categories"
+  },
+  "fundHomeHistoryHoldingTitle": {
+    "message": "Holdings"
+  },
+  "fundHomeHistoryCategoryHint": {
+    "message": "Pick a card to show only that category; pick it again to show all assets"
+  },
+  "fundHomeHistoryHoldingHint": {
+    "message": "Pick an asset to show or hide its line"
+  },
+  "fundHomeHistoryInspectLabel": {
+    "message": "Inspect values at each point; use arrow keys"
+  },
+  "fundHomeHistoryNoRecord": {
+    "message": "No records yet"
+  },
+  "fundHomeHistoryMissingDay": {
+    "message": "No record on this date"
+  },
+  "fundHomeHistoryUnitNote": {
+    "message": "Amounts in CNY"
+  },
+  "fundHomeHistoryScopeAmount": {
+    "message": "Amount changes include cash flows; the axis scales to the current range."
+  },
+  "fundHomeHistoryScopePercent": {
+    "message": "Each series starts at 0% from its first valid point; compare change magnitude."
+  },
+  "fundHomeHistoryScopeChild": {
+    "message": "Holdings replay from registered shares and published NAV; unpriced holdings keep their current value without a line."
+  },
+  "fundHomeHistoryNoHoldings": {
+    "message": "No holdings in this category"
+  },
+  "fundHomeHistoryChoose": {
+    "message": "Select a series to view the trend"
+  },
+  "fundHomeHistoryNone": {
+    "message": "No series selected"
+  },
+  "fundHomeHistoryDetailsCount": {
+    "message": "{n} of {m} details selected"
+  },
+  "fundHomeHistoryPickType": {
+    "message": "Choose a type to see its trend"
   },
   "fundHomeHistoryViewLabel": {
     "message": "Trend view"
   },
   "fundHomeHistoryViewAmount": {
-    "message": "Amount"
+    "message": "Asset amount"
   },
   "fundHomeHistoryViewPercent": {
-    "message": "Percent"
+    "message": "Change compare"
   },
   "fundHomeHistoryViewAmountLocked": {
     "message": "Available after showing amounts"
@@ -1295,7 +1385,7 @@
     "message": "{n} groups"
   },
   "fundHomeHistorySubtitle": {
-    "message": "Total assets stay visible; select a group to overlay."
+    "message": "Select a group to view its assets; All assets includes the total."
   },
   "fundHomeHistoryCategories": {
     "message": "Group trends"
@@ -2324,7 +2414,7 @@
     "message": " items"
   },
   "fundHomeItemsToVerify": {
-    "message": "Items to verify"
+    "message": "Data gaps"
   },
   "fundHomeLastChecked": {
     "message": " · Last checked "
@@ -2441,7 +2531,7 @@
     "message": "Missing NAV"
   },
   "fundHomeMissingOpeningBaselineSaveAValuationSnapshot": {
-    "message": "Missing opening baseline: save a valuation snapshot in Assets to begin tracking period net returns."
+    "message": "The opening total-asset valuation was not recorded. Public NAV history cannot replace personal asset history."
   },
   "fundHomeMissingOpeningBaselineSaveAValuationSnapshotf0dbb6": {
     "message": "Missing opening baseline: save a valuation snapshot in Assets to start tracking"
@@ -2471,10 +2561,10 @@
     "message": "Name"
   },
   "fundHomeNeedsVerification": {
-    "message": "Needs verification: "
+    "message": "Missing data: "
   },
   "fundHomeNeedsVerificationccf920": {
-    "message": "Needs verification"
+    "message": "No data"
   },
   "fundHomeNetContributionsExcluded": {
     "message": " · Net contributions excluded"
@@ -3071,7 +3161,7 @@
     "message": "Benchmark return"
   },
   "fundHomeOverviewCheckData": {
-    "message": "Review missing prices, costs or stale valuations before assessing investment actions."
+    "message": "Market data refreshes automatically. Assets lacking cost or history cannot contribute a complete return."
   },
   "fundHomeOverviewCheckRules": {
     "message": "Review rule evidence and opportunity conditions before deciding what to do."
@@ -3089,7 +3179,7 @@
     "message": "Today’s total net return"
   },
   "fundHomeOverviewDailyMissing": {
-    "message": "Requires actual reconciled valuations for yesterday and today."
+    "message": "A complete opening valuation or cash-flow history is missing; total-asset return is unavailable."
   },
   "fundHomeOverviewExcessReturn": {
     "message": "Excess"
@@ -3575,10 +3665,10 @@
     "message": "Some asset classifications are unknown"
   },
   "fundHomeSomeDataNeedsVerification": {
-    "message": "Some data needs verification ("
+    "message": "Incomplete valuation ("
   },
   "fundHomeSomeValuationsCurrenciesOrClassificationsNeedVerification": {
-    "message": "Some valuations, currencies, or classifications need verification"
+    "message": "Missing valuation, currency or classification records"
   },
   "fundHomeSort": {
     "message": "Sort",
@@ -3667,7 +3757,7 @@
     "message": "Target weight"
   },
   "fundHomeTargetWeightsRemainVisibleActualWeightsNeed": {
-    "message": ". Target weights remain visible; actual weights need verification."
+    "message": ". Target weights remain visible; actual weights require missing valuations."
   },
   "fundHomeTargeta798ac": {
     "message": "Target %"
@@ -3820,7 +3910,7 @@
     "message": "Uses MA20 and MA60 on closed daily candles; at least 61 candles are required."
   },
   "fundHomeUsesVerifiedLocalDataInsufficientDataIs": {
-    "message": "Uses verified local data. Insufficient data is marked for verification and does not produce trade instructions."
+    "message": "Uses recorded data and explains missing inputs; does not generate trade instructions."
   },
   "fundHomeValuation": {
     "message": "Confirm valuation"
@@ -6872,10 +6962,10 @@
     "message": "{month}/{day}"
   },
   "fundLedgerIncomeDateUnknown": {
-    "message": "Date unavailable"
+    "message": "Date unknown"
   },
   "fundLedgerIncomeAgeUnknown": {
-    "message": "Holding age unavailable"
+    "message": "Holding start date not recorded"
   },
   "fundLedgerIncomeHeldDays": {
     "message": "Held {n} days"
@@ -8445,6 +8535,24 @@
   "fundHomeToday": {
     "message": "Today"
   },
+  "fundHomePeriodToday": {
+    "message": "Today"
+  },
+  "fundHomePeriodWeek": {
+    "message": "This week"
+  },
+  "fundHomePeriodMonth": {
+    "message": "This month"
+  },
+  "fundHomePeriodHalf": {
+    "message": "6 months"
+  },
+  "fundHomePeriodYear": {
+    "message": "1 year"
+  },
+  "fundHomePeriodAll": {
+    "message": "All"
+  },
   "fundHomeRangePickStart": {
     "message": "Choose a start date"
   },
@@ -8496,6 +8604,9 @@
   "fundHomeHistoryGroupUnavailable": {
     "message": "A category trend needs valid valuations on at least two dates; missing history is not backfilled."
   },
+  "fundHomeHistoryTypeEmpty": {
+    "message": "No replayable assets in this category yet, so there is no trend to draw"
+  },
   "fundHomeHistoryIntraday": {
     "message": "Intraday valuation observations using the latest available prices, not confirmed returns; gaps over 5 minutes are disconnected"
   },
@@ -8522,9 +8633,6 @@
   },
   "fundHomeHistoryRangeEmpty": {
     "message": "No valuations were recorded in this range. Current assets cannot reconstruct past values."
-  },
-  "fundHomeHistorySeries": {
-    "message": "Choose the asset trend to display"
   },
   "fundHomeHistoryValuationGap": {
     "message": "Prices are missing or valuations are outdated for some assets. Only the known value is shown; review valuations first."
@@ -8590,7 +8698,7 @@
     "message": "Exchange-traded and OTC funds"
   },
   "fundHomeIncomeGaps": {
-    "message": "{n} valuation / cost gaps"
+    "message": "{n} items lack a valuation or cost"
   },
   "fundHomeOfflineBookIncome": {
     "message": "Lifetime book return"
@@ -8611,13 +8719,13 @@
     "message": "{n} stale valuations"
   },
   "fundHomeIncomeMissing": {
-    "message": "Category returns need verification"
+    "message": "No return data"
   },
   "fundHomeRangeReturn": {
     "message": "Selected-period net return"
   },
   "fundHomeOfflineHistoryGap": {
-    "message": "Legacy exit history is incomplete; return needs verification"
+    "message": "Incomplete exit history; return unavailable"
   },
   "fundWatchMoveAllHint": {
     "message": "Choose one target for every selected instrument. All other watchlist memberships will be removed; existing target entries are merged. Holdings are unchanged."
@@ -8638,7 +8746,7 @@
     "message": "The selection already belongs only to the target; no move is needed."
   },
   "fundDetailMissing": {
-    "message": "Needs verification"
+    "message": "–"
   },
   "fundDetailDateUnknown": {
     "message": "Date unavailable"
@@ -8893,7 +9001,7 @@
     "message": "Personal income history"
   },
   "fundDetailMixedSources": {
-    "message": "NAV sources differ; needs verification"
+    "message": "Sources differ; values are not combined"
   },
   "fundHomeAiPublicMaterials": {
     "message": "Public material"
@@ -9768,13 +9876,37 @@
     "message": "Registered assets fully valued"
   },
   "fundHomeQualityPartial": {
-    "message": "Some assets need verification"
+    "message": "Some assets lack valuations"
   },
   "fundHomeQualityEmpty": {
     "message": "No assets yet"
   },
   "fundHomeQualityStale": {
     "message": "Valuation is stale"
+  },
+  "fundHomeCashBalance": {
+    "message": "Cash balance"
+  },
+  "fundHomeCashBalanceNoReserve": {
+    "message": "Cash is settled. Investable cash is unavailable until reserves are set."
+  },
+  "fundHomeCashDetails": {
+    "message": "Cash details"
+  },
+  "fundHomeReturnDetails": {
+    "message": "Return details"
+  },
+  "fundHomeAssetDetails": {
+    "message": "Asset details"
+  },
+  "fundHomeReserveUnset": {
+    "message": "Not set"
+  },
+  "fundHomeAssetBreakdown": {
+    "message": "Assets by current group"
+  },
+  "fundHomeUngrouped": {
+    "message": "Ungrouped assets"
   },
   "dailyFocusTitle": {
     "message": "Daily Focus"

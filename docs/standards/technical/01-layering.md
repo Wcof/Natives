@@ -1,7 +1,7 @@
 # 技术 01 · 进程、分层与通信
 
-> 版本：4.2.0 · 日期：2026-10-15
-> 依据：ADR-0020、ADR-0029、ADR-0031、ADR-0033、ADR-0035～0039、ADR-0042
+> 版本：4.3.0 · 日期：2026-10-28
+> 依据：ADR-0020、ADR-0029、ADR-0031、ADR-0033、ADR-0035～0039、ADR-0042、ADR-0048
 
 ## 当前生产拓扑
 
@@ -17,12 +17,15 @@ Chrome 扩展页面 / 本机独立 Web 页面（127.0.0.1:8770 / 8771，ADR-0042
 
 Natives.app
 └─ 打开 Chrome / 独立 Web / 定位扩展 / 安装引导 / 简短诊断 → 退出
+
+DeepSeek Harness 插件（ADR-0048，第三入口，默认未启用）
+└─ 四个独立插件（各 1 入口 + 1 主面板壳）→ 宿主 Browser 标签（租约 webview）→ 127.0.0.1:8770 现有路由 → 同一 Core、同一数据
 ```
 
 #### R-T1 · Surface 与 Host 职责固定
 
 - **等级**：MUST
-- Surface（包含 Chrome Extension Page 与 ADR-0042 放行的本机独立 Web 页面）只拥有 UI、交互草稿和派生缓存。
+- Surface（包含 Chrome Extension Page、ADR-0042 放行的本机独立 Web 页面，以及 ADR-0048 的 DeepSeek Harness 插件面板）只拥有 UI、交互草稿和派生缓存。
 - Files Host（`native-file-host`）拥有文件、Workspace、Core App Store 和产品配置；在 ADR-0042 下提供受限服务监听模式与 Native Relay 模式。
 - Model Host（`model-host`）拥有 Provider、Credential、直连供应商推理和 Usage；按 `providerId`+`modelId` 直接调用已配置供应商，不提供代理／路由或第三方工具配置注入。
 - App Runtime（`natives-app-runtime`，对应 `com.natives.app_runtime` / `com.natives.local.app_runtime`）是官方内置应用的通用运行时宿主；每个活动 Built-in App 模块按需拉起一个 App Runtime Process，独占承载该模块业务、业务库和运行实例，并通过 ADR-0042 多 Surface 会话机制安全支持多个前端窗口同时访问。
@@ -90,6 +93,17 @@ Page entry
 - 通用 `app.html` 不包含模块业务分支；模块 UI 在无 `allow-same-origin` 的 sandbox iframe 中通过 127.0.0.1 动态端口 loopback 运行。
 - 模块内部职责（如持仓、账本、NAV、导入、迁移）可以拆分，但属于模块内部组件，严禁产生第二产品、第二应用卡片或第二安装对象。
 
+#### R-T8 · 第三入口（DSH 插件）边界
+
+- **等级**：MUST
+- 只通过 DSH 插件机制安装／启用／卸载；不产生 `.app`、LaunchServices 注册、Native Messaging 注册或登录启动项。
+- 运行时按“attach → 源码 checkout → 已安装产品源 → 随包 payload”解析，同一时刻只允许一个 Core，禁止双写。
+- 不新增固定监听端口；`NATIVES_WEB_PORT`、`NATIVES_STATE_DIR` 只用于隔离测试。
+- 页面以主面板全屏 iframe 加载，且只允许 Core 签发的短时 embed URL（ADR-0048 D5.2）：Core 仅对该响应输出 `frame-ancestors` 并省略 `X-Frame-Options`，其余响应保持 `SAMEORIGIN`。插件不得自行创建 `<webview>`；禁止反向代理或把页面并入 DSH 同源。
+- 交付为四个独立包，各自携带同源 runtime 副本；可单独安装／启停／卸载，共用一个 Core 与一份 payload。
+- 启动前校验 payload 哈希与数据 schema：记录高于运行时即拒绝，不降级写。
+- 模块仍随产品分发；插件不得成为模块的第二安装对象或第二数据 writer。
+
 ## 合规自检
 
 - [ ] 页面、Files、Model、模块和 Launcher owner 没有混用。
@@ -97,3 +111,4 @@ Page entry
 - [ ] Service Worker 无状态。
 - [ ] 非 resident Host 随 EOF 退出。
 - [ ] 新进程边界有 ADR。
+- [ ] DSH 插件未新增进程边界、端口或数据 writer。

@@ -48,7 +48,7 @@
   height: 48px;
   padding: 0 16px;
   background: var(--natives-surface);
-  border-bottom: 1px solid var(--natives-border);
+  border-bottom: 1px solid var(--natives-edge);
   flex-shrink: 0;
   gap: 12px;
 }
@@ -61,15 +61,14 @@
   min-width: 0;
 }
 
+/* ADR-0049 D1：卡片面 = raised + edge，四套调色板同一句；
+   原先按主题名在深色下把卡片面抬到 surface-2 的分支已删（面差分交给 raised 角色）。 */
 .fund-basic-card {
-  border: 1px solid var(--natives-border);
-  background: var(--natives-surface);
+  border: 1px solid var(--natives-edge);
+  background: var(--natives-surface-raised);
   border-radius: var(--natives-radius);
   padding: 24px;
   box-sizing: border-box;
-}
-:root:not([data-theme="archive"]) .fund-basic-card {
-  background: var(--natives-surface-2);
 }
 
 .fund-basic-head {
@@ -78,10 +77,10 @@
   gap: 24px;
   padding: 0 0 20px;
   margin-bottom: 20px;
-  border-bottom: 1px solid var(--natives-border);
+  border-bottom: 1px solid var(--natives-edge);
 }
 .fund-basic-head > div + div {
-  border-left: 1px solid var(--natives-border);
+  border-left: 1px solid var(--natives-edge);
   padding-left: 24px;
 }
 .fund-basic-head small {
@@ -122,25 +121,22 @@
 }
 
 .fund-sections-card {
-  border: 1px solid var(--natives-border);
-  background: var(--natives-surface);
+  border: 1px solid var(--natives-edge);
+  background: var(--natives-surface-raised);
   border-radius: var(--natives-radius);
   padding: 20px 24px;
   box-sizing: border-box;
-}
-:root:not([data-theme="archive"]) .fund-sections-card {
-  background: var(--natives-surface-2);
 }
 
 .fund-section-tabs {
   display: flex;
   gap: 8px;
-  border-bottom: 1px solid var(--natives-border);
+  border-bottom: 1px solid var(--natives-edge);
   padding-bottom: 12px;
   margin-bottom: 18px;
 }
 .fund-section-tab {
-  border: 1px solid var(--natives-border);
+  border: 1px solid var(--natives-edge);
   background: transparent;
   color: var(--natives-text-muted);
   padding: 6px 16px;
@@ -164,7 +160,7 @@
   align-items: start;
 }
 .fund-association-grid .table-wrap {
-  border: 1px solid var(--natives-border);
+  border: 1px solid var(--natives-edge);
   border-radius: var(--natives-radius);
   overflow-y: auto;
   max-height: 480px;
@@ -196,7 +192,7 @@
   flex-wrap: wrap;
 }
 .fund-range-btn {
-  border: 1px solid var(--natives-border);
+  border: 1px solid var(--natives-edge);
   background: transparent;
   color: var(--natives-text-muted);
   padding: 4px 12px;
@@ -214,25 +210,23 @@
 .fund-chart-box {
   width: 100%;
   height: 340px;
-  border: 1px solid var(--natives-border);
+  border: 1px solid var(--natives-edge);
   border-radius: var(--natives-radius);
-  background: var(--natives-surface);
+  /* D1：图表画布 = chrome（浅色近白、深色比卡片低一档），不再按主题名换面。 */
+  background: var(--natives-surface-chrome);
   position: relative;
-}
-:root:not([data-theme="archive"]) .fund-chart-box {
-  background: var(--natives-surface-3);
 }
 
 .fund-table-scroll {
   max-height: 260px;
   overflow-y: auto;
-  border: 1px solid var(--natives-border);
+  border: 1px solid var(--natives-edge);
   border-radius: var(--natives-radius);
 }
 
 @media (max-width: 900px) {
   .fund-basic-head { grid-template-columns: 1fr; }
-  .fund-basic-head > div + div { border-left: 0; padding-left: 0; border-top: 1px solid var(--natives-border); padding-top: 16px; }
+  .fund-basic-head > div + div { border-left: 0; padding-left: 0; border-top: 1px solid var(--natives-edge); padding-top: 16px; }
   .fund-basic-grid { grid-template-columns: 1fr 1fr; }
   .fund-association-grid { grid-template-columns: 1fr; }
 }

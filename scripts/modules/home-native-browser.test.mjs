@@ -106,7 +106,7 @@ try {
     await page.waitForFunction(() => document.visibilityState === 'visible', null, {timeout:5000});
   }
   // R2 overview is visible by default; empty recorded data stays unknown.
-  await frame.locator('#hc-total-value').getByText('待核实').waitFor({ state: 'attached' });
+  await frame.locator('#hc-total-value').getByText('暂无数据').waitFor({ state: 'attached' });
   report.steps.push({ name: 'real default home', coldOpenMs: performance.now() - start });
   assert.equal(await frame.locator('.home-overview-region').isVisible(),true);
   assert.equal(await frame.locator('.home-opportunities-region').isVisible(),true);
@@ -222,12 +222,19 @@ c.commit();c.close()
   await frame.locator('dialog[open] [data-close]').click();
   report.steps.push({ name: 'goal CRUD through real Runtime' });
   await frame.locator('.goal-water-content').waitFor();
-  const goalVisual = await frame.locator('.goal-water-content').evaluate(node => ({
-    value: node.getAttribute('aria-valuenow'), text: node.getAttribute('aria-valuetext'),
-    animations: node.getAnimations({ subtree: true }).length,
-  }));
+  const goalVisual = await frame.locator('.goal-water-content').evaluate(content => {
+    // ADR-0049 D7-3：progressbar 语义已移到水位层（.goal-water），
+    // 动画仍在指标区里核对（水位层的波浪在无值态是 display:none，不适合当计数器）。
+    const water = content.closest('#home-goal-body').querySelector('.goal-water');
+    return {
+      value: water.getAttribute('aria-valuenow'), text: water.getAttribute('aria-valuetext'),
+      blank: water.classList.contains('is-blank'),
+      animations: content.getAnimations({ subtree: true }).length,
+    };
+  });
   assert.equal(goalVisual.value, null, 'no recorded assets means unavailable goal progress, not zero');
   assert.equal(goalVisual.text, null);
+  assert.equal(goalVisual.blank, true, 'unavailable progress renders an empty tank, not a made-up level');
   assert.equal(goalVisual.animations, 0);
   if(!await frame.locator('.home-history').evaluate(n=>n.open))await frame.locator('.home-history > summary').click();
   await frame.locator('#home-cumulative-value').waitFor();
@@ -309,10 +316,11 @@ c.commit();c.close()
   const goalRuntime = page.frames().find(f => f.url().startsWith('http://127.0.0.1:'));
   await goalRuntime.waitForFunction(() => Fund.home.snapshot().goals.progress.computable);
   const knownGoal = await goalRuntime.evaluate(() => {
-    const water = document.querySelector('.goal-water-content'), p = Fund.home.snapshot().goals.progress;
-    return { value: water.getAttribute('aria-valuenow'), text: water.getAttribute('aria-valuetext'), ratio: p.ratioPpm == null ? p.ratioTenths / 10 : Number(p.ratioPpm) / 10000 };
+    const water = document.querySelector('.goal-water'), p = Fund.home.snapshot().goals.progress;
+    return { value: water.getAttribute('aria-valuenow'), text: water.getAttribute('aria-valuetext'), blank: water.classList.contains('is-blank'), ratio: p.ratioPpm == null ? p.ratioTenths / 10 : Number(p.ratioPpm) / 10000 };
   });
   assert.equal(Number(knownGoal.value), Math.min(100, knownGoal.ratio));
+  assert.equal(knownGoal.blank, false, 'computable progress must not be flagged blank');
   assert.equal(knownGoal.text, knownGoal.ratio.toFixed(4).replace(/0+$/, '').replace(/\.$/, '') + '%');
   report.steps.push({ name: 'N05 water level matches real Runtime goal projection after recording cash', knownGoal });
   await frame.locator('#tab-positions').click();

@@ -26,6 +26,9 @@ applyColorModeLabel();
 // ---------- 双侧栏折叠联动（左侧边栏与右侧看板各自拥有独立的 collapse-btn） ----------
 
 // 1. 左侧侧边栏折叠：控制外壳 app-sidebar（与 space-toggle-sidebar-btn 一致，彻底隐藏无残留条）
+// 嵌入宿主（DSH）时外壳本身没有左侧菜单，这个按钮没有可折叠的对象：
+// 由 layout.css 隐藏，且不注册点击/状态联动，避免留下一个按了没反应的控件。
+const embeddedShell = document.documentElement.classList.contains("standalone");
 let leftSidebarCollapsed = false;
 const leftSidebarBtn = document.getElementById("btn-toggle-left-sidebar");
 function applyLeftSidebarCollapsed(notify = true) {
@@ -40,7 +43,7 @@ function applyLeftSidebarCollapsed(notify = true) {
     window.parent.postMessage({ type: "toggle-sidebar", collapsed: leftSidebarCollapsed }, "*");
   }
 }
-if (leftSidebarBtn) {
+if (leftSidebarBtn && !embeddedShell) {
   leftSidebarBtn.addEventListener("click", function() {
     leftSidebarCollapsed = !leftSidebarCollapsed;
     applyLeftSidebarCollapsed(true);
@@ -53,7 +56,7 @@ window.addEventListener("message", function(e) {
     applyLeftSidebarCollapsed(false);
   }
 });
-if (window.parent && window.parent !== window) {
+if (!embeddedShell && window.parent && window.parent !== window) {
   window.parent.postMessage({ type: "get-sidebar-state" }, "*");
 }
 

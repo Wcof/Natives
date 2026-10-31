@@ -666,12 +666,10 @@ pub(crate) fn fund_valuation_row(
         stale = is_stale(nav_date, today);
         match nav_currency.as_str() {
             "CNY" => {
-                // 份额(4位) × 净值(4位) → 人民币分(2位)：除以 10^6 向零截断。
-                let product = (position.quantity_raw as i128) * (*unit_nav_raw as i128);
-                let minor = product / 1_000_000;
-                value_minor = Some(i64::try_from(minor).map_err(|_| {
-                    AssetError::Overflow(format!("单个持仓估值超出可表示范围：{minor}"))
-                })?);
+                value_minor = Some(
+                    crate::fixed::valuation_minor(position.quantity_raw, *unit_nav_raw)
+                        .ok_or_else(|| AssetError::Overflow("单个持仓估值超出可表示范围".into()))?,
+                );
             }
             "unknown" => value_gap = Some("currency_unknown".into()),
             _ => value_gap = Some("currency_unsupported".into()),

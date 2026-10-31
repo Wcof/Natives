@@ -1,7 +1,7 @@
 # 05 - 本地服务端口注册表（Local Service Port Registry）
 
 > 状态：生效中（enforced）
-> 依据：ADR-0032 的端口登记台账、ADR-0033 的 Model Host 查询端口、ADR-0035 的 App Runtime 动态端口决策，以及 ADR-0044 的模型代理／网关退役。ADR-0032 的固定 App Runtime 端口已退役。
+> 依据：ADR-0032 的端口登记台账、ADR-0033 的 Model Host 查询端口、ADR-0035 的 App Runtime 动态端口决策、ADR-0044 的模型代理／网关退役，以及 ADR-0048 的 DSH 插件入口（不新增监听）。ADR-0032 的固定 App Runtime 端口已退役。
 > 本文档是 Natives 全部本地 loopback 监听端口的**唯一登记台账**。任何代码引入、变更或退役一个本地监听端口，必须先在此登记/更新，并在对应 ADR 中说明理由。
 
 ## 1. 分配区间与规则
@@ -30,3 +30,10 @@
 - 实际分配端口经 Native Messaging `app:start` 响应中的 `StartResult.port` 上报给扩展 App Owner Page。
 - 业务 API 强制要求 sandbox Origin 与 Bearer Token，彻底消除 `/api/tray/state` / `/api/limits` 的免 Bearer 鉴权特权。
 - 进程外 AI 用量与额度查询统一收口至 `model-host:8766`（ADR-0033）。
+
+## 4. DeepSeek Harness 插件入口（ADR-0048）
+
+- 插件入口**不新增监听端口**：它复用 8770 的既有 Core 服务，或 attach 已在运行的实例（端口取状态目录锁记录）。
+- `NATIVES_WEB_PORT` 只用于隔离测试或端口冲突时的显式覆盖，不得成为产品默认或第二个常驻入口。
+- 同一时刻只允许一个 Core（OS 锁）；插件不得在 8770 之外另起业务监听，也不得在 8771 上伪装开发入口。
+- 认证、Cookie、CSRF 与 Origin 规则沿用 ADR-0042／0045；本入口不增加免鉴权路径。

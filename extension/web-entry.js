@@ -18,7 +18,7 @@ async function showConnectionNotice(){
   if(document.getElementById('natives-connection-notice'))return;
   const notice=document.createElement('section');
   notice.id='natives-connection-notice';notice.setAttribute('role','status');notice.setAttribute('aria-live','polite');
-  notice.style.cssText='position:fixed;bottom:16px;left:16px;right:16px;z-index:999999;padding:16px;border:1px solid var(--natives-border);border-radius:10px;background:var(--natives-surface);color:var(--natives-text-primary);font:14px var(--natives-font);';
+  notice.style.cssText='position:fixed;bottom:16px;left:16px;right:16px;z-index:999999;padding:16px;border:1px solid var(--natives-edge);border-radius:10px;background:var(--natives-surface);color:var(--natives-text-primary);font:14px var(--natives-font);';
   const title=document.createElement('strong');title.textContent=getMessage('webConnectionRequiredTitle');
   const description=document.createElement('p');description.textContent=getMessage('webConnectionRequiredDescription');
   const retry=document.createElement('button');retry.type='button';retry.textContent=getMessage('webConnectionRetry');

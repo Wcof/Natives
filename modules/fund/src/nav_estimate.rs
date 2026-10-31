@@ -185,13 +185,12 @@ pub(crate) fn estimated_income(row: &FundValuationRow, estimate: &Value, today: 
     let amount = value
         .filter(|_| row.nav_currency == "CNY")
         .and_then(|(nav, base)| {
-            i64::try_from(row.quantity_raw as i128 * (nav as i128 - base as i128) / 1_000_000).ok()
+            crate::fixed::valuation_minor(row.quantity_raw, nav)?
+                .checked_sub(crate::fixed::valuation_minor(row.quantity_raw, base)?)
         });
     let market_value = value
         .filter(|_| row.nav_currency == "CNY")
-        .and_then(|(nav, _)| {
-            i64::try_from(row.quantity_raw as i128 * nav as i128 / 1_000_000).ok()
-        });
+        .and_then(|(nav, _)| crate::fixed::valuation_minor(row.quantity_raw, nav));
     json!({"amount":amount.map(|value|Fixed::amount(value).to_string_value()),"rateBps":estimate["rateBps"],
         "date":today,"baselineDate":estimate["baselineDate"],"estimated":true,"coverageBps":estimate["coverageBps"],
         "asOf":estimate["asOf"],"reportDate":estimate["reportDate"],"marketValue":market_value.map(|value|Fixed::amount(value).to_string_value()),"reason":if amount.is_some(){None}else{Some("currency_or_overflow")}})

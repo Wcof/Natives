@@ -80,6 +80,30 @@ fn main() -> io::Result<()> {
         }
         return Ok(());
     }
+    // ADR-0048 第三入口：同一 bootstrap 链只输出 URL，不打开浏览器。
+    // 输出是单行 JSON，仅含一次性页内 URL；token 位于 fragment，不写日志。
+    // D5.2：可选 --embed-ancestors 生成短时签名 grant，供 DSH 主面板 iframe。
+    if cli_args.first().map(String::as_str) == Some("--launcher-url") {
+        let args = &cli_args[1..];
+        let result = match args {
+            [target] => service::launcher::prepare_url(target),
+            [target, flag, ancestors] if flag == "--embed-ancestors" => {
+                service::launcher::prepare_url_embedded(target, ancestors)
+            }
+            _ => Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "unknown launcher arguments",
+            )),
+        };
+        match result {
+            Ok(url) => println!("{}", serde_json::json!({ "url": url })),
+            Err(_) => {
+                eprintln!("Natives: local Web URL preparation failed");
+                std::process::exit(1);
+            }
+        }
+        return Ok(());
+    }
     if cli_args.first().map(String::as_str) == Some("--launcher-setup")
         || cli_args.first().map(String::as_str) == Some("--reveal-extension-dir")
     {

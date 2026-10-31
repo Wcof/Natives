@@ -9,7 +9,9 @@ fn groups(snapshot: &Value) -> Vec<Value> {
         .as_array()
         .map(|rows| {
             rows.iter().map(|g|
-        json!({"groupId":g["groupId"],"name":g["name"],"valueMinor":g["currentMinor"]})
+        json!({"groupId":g["groupId"],"name":g["name"],"valueMinor":g["currentMinor"],
+            "assets":g["assets"].as_array().into_iter().flatten().map(|a|
+                json!({"historyId":a["historyId"],"valueMinor":a["valueMinor"]})).collect::<Vec<_>>()})
     ).collect()
         })
         .unwrap_or_default()
@@ -209,7 +211,8 @@ pub(crate) fn project(
                 .and_then(crate::assets::days_from_civil)
             {
                 if point["source"] == "holding-nav-replay" {
-                    points.entry(day).or_insert_with(|| point.clone());
+                    let saved = points.entry(day).or_insert_with(|| point.clone());
+                    saved["holdingValues"] = point["holdingValues"].clone();
                 } else {
                     points.insert(day, point.clone());
                 }
@@ -256,7 +259,7 @@ fn today_points(
 ) -> Result<Vec<Value>, FinanceError> {
     let current_groups: Vec<Value> = groups(snapshot)
         .into_iter()
-        .map(|g| json!({"groupId":g["groupId"],"name":g["name"],"currentMinor":g["valueMinor"]}))
+        .map(|g| json!({"groupId":g["groupId"],"name":g["name"],"currentMinor":g["valueMinor"],"assets":g["assets"]}))
         .collect();
     let mut narrow = json!({"generatedAt":snapshot["generatedAt"],
         "wealth":{"quality":snapshot["wealth"]["quality"],"totalA":snapshot["wealth"]["totalA"]},

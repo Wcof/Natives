@@ -291,14 +291,13 @@ pub fn apply_quotes(
             row.stale = false;
             continue;
         };
-        let product = (row.quantity_raw as i128) * (input.price_raw as i128);
-        match i64::try_from(product / 1_000_000) {
-            Ok(minor) => {
+        match crate::fixed::valuation_minor(row.quantity_raw, input.price_raw) {
+            Some(minor) => {
                 row.value_minor = Some(minor);
                 row.value_gap = None;
                 matched += 1;
             }
-            Err(_) => {
+            None => {
                 row.value_minor = None;
                 row.value_gap = Some("overflow".into());
             }

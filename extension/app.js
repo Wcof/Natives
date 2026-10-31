@@ -14,13 +14,19 @@ import { isExtension } from './platform/env.js';
 import { getUILanguage } from './platform/i18n.js';
 import { ensureWebSurface } from './platform/surface.js';
 import { createModuleChangeBroker } from './module-change-broker.js';
+import { themeParam } from './platform/theme-param.js';
 
 // AC-11: standalone owner page follows the product appearance preference.
 // 计划 §31.4：主题变化经 auth 级事件转发给模块 iframe，模块不维护第二份主题设置。
 const moduleFrames = new Set();
+// ?theme= 只覆盖本次渲染（ADR-0048 DSH 插件入口），不写回 natives-theme。
+const themeOverride = themeParam(globalThis.location?.search ?? '');
+const resolveOwnerTheme = (theme) => themeOverride ?? (['volt', 'archive'].includes(theme) ? theme : 'archive');
 const applyOwnerTheme = (theme) => {
-  document.documentElement.dataset.theme = ['volt', 'archive'].includes(theme) ? theme : 'archive';
-  const appearance = theme === 'volt' ? 'dark' : 'light';
+  const resolved = resolveOwnerTheme(theme);
+  document.documentElement.dataset.theme = resolved;
+  // The module iframe must follow the resolved appearance, including ?theme=.
+  const appearance = resolved === 'volt' ? 'dark' : 'light';
   for (const owned of moduleFrames) owned.contentWindow?.postMessage({ type: 'theme', appearance }, '*');
 };
 Promise.resolve()
@@ -458,7 +464,9 @@ export function createAppShell({
     helloReceived = false;
     // 首帧主题直传：模块 head 内联脚本在绘制前消费 ?theme=，消除深色用户
     // 开页时沙箱内默认浅色首帧；后续切换仍走 init/theme 消息。
-    frame.src = `http://127.0.0.1:${port}/?theme=${document.documentElement.dataset.theme === 'volt' ? 'volt' : 'archive'}`;
+    // standalone=1 让模块文档也进入嵌入色板（html.standalone），与 DSH 同色系。
+    const embedded = document.documentElement.classList.contains('standalone');
+    frame.src = `http://127.0.0.1:${port}/?theme=${document.documentElement.dataset.theme === 'volt' ? 'volt' : 'archive'}${embedded ? '&standalone=1' : ''}`;
     stage.replaceChildren(frame);
   }
   async function onWindowMessage(event) {
@@ -468,6 +476,8 @@ export function createAppShell({
     if (changeBroker.handle(event)) return;
 
     if (event.data?.type === 'toggle-sidebar') {
+      // 嵌入宿主时外壳没有左侧菜单，忽略模块发来的折叠请求，避免把已隐藏的侧栏再拉起来。
+      if (document.documentElement.classList.contains('standalone')) return;
       const appsCollapse = document.getElementById('apps-toggle-sidebar-btn');
       const appsExpand = document.getElementById('apps-expand-sidebar-btn');
       const filesToggle = document.getElementById('toggle-sidebar') || document.getElementById('app-stage-toggle-sidebar-btn');
@@ -820,7 +830,8 @@ export async function bootAppPage({ openSettings }) {
   // 内部经 isValidViewToken 过滤；早于 welcome 到达时由 fund 页暂存并初始化后应用）。
   const initialView = params.get('view') ?? '';
   const appMenu = document.getElementById('app-menu-apps');
-  if (appMenu) {
+  // ADR-0048：DSH 独立运行（html.standalone）不挂载应用菜单，产品聚合导航由 CSS 隐藏。
+  if (appMenu && !document.documentElement.classList.contains('standalone')) {
     mountAppMenu(appMenu, { t }).then(() => {
       const item = appMenu.querySelector(`[data-app-id="${appId}"]`);
       item?.classList.add('active');

@@ -18,6 +18,40 @@
  *   保持可解析格式，不使用 color-mix 表达基础角色。
  */
 
+/* ===== 派生角色 · Surface Ladder v1（ADR-0049 D1，纯增量） =====
+ * 只服务层级表达，供组件消费；不进 themeColor()/themeRgba() 取样面
+ * （那两个入口只认 6 位 HEX 基础角色）。四个调色板块各写全 10 个角色：
+ * surface-raised / surface-chrome / surface-well / edge / accent-edge /
+ * elev-1 / elev-2 / elev-3 / rim / well-inset。
+ *
+ * 规则（D5 / R-U2 / R-U2b）：
+ * - 深色用 text-primary 混入画布抬亮 raised/chrome，色相留在 60–80°，避免「两种纸」；
+ * - 浅色 raised/chrome 直接复用既有 surface/surface-2，**不得**用 mix(text) 派生，
+ *   否则卡片比画布更暗、读作凹陷；
+ * - well 任何调色板都不许 mix：浅色取 surface-3、深色取 surface（深色面差已有 1.358）；
+ * - edge 恒为半透明，1px 结构边只做收口，必须伴随表面差或 elev；
+ * - accent-edge = 选中态描边（accent 在 volt/sa-dark 上与 raised 混到 78% 才够 3:1）。
+ *
+ * 实测比值（WCAG 相对亮度，2026-10-29 独立复算；改值必须同步改此表）
+ *
+ * | 对 | archive | volt | sa-light | sa-dark |
+ * |---|---|---|---|
+ * | raised / bg | 1.081 | 1.358 | 1.045 | 1.364 |
+ * | chrome / bg | 1.026 | 1.171 | 1.044 | 1.206 |
+ * | raised / chrome | 1.053 | 1.159 | 1.091 | 1.130 |
+ * | well / raised | 1.133 | 1.358 | 1.164 | 1.287 |
+ * | edge / raised（基准 = raised） | 1.260 | 1.300 | 1.260 | 1.271 |
+ * | muted / raised | 5.81 | 5.48 | 5.80 | 4.90 |
+ *
+ * 深色目标值 raised/bg ≥1.35、raised/chrome ≥1.10、well/raised ≥1.20、
+ * edge/raised ≥1.25；回滚下限 ≥1.20，但必须同时保留 edge ≥1.25 与 rim。
+ * 浅色不靠面差分（1.05–1.08），由 edge（≥1.25）+ elev-1 承担 Specular；
+ * 这是 Liquid Crystal 与 Dark Glow 的真实分工。
+ * 若真机复核发现深色 1.358 过亮，只能整体降到 1.24 并同步本表，不得逐块调。
+ * well-inset 只在浅色给出凹陷（边缘对 well 1.25）；深色 45% 黑压在 #0b0c0a 上
+ * 只有 1.03，等于没画，取 none。
+ */
+
 /* ===== Archive（默认：冷中性底色 / 白色内容表面 / 蓝色强调） ===== */
 :root {
   color-scheme: light;
@@ -30,7 +64,6 @@
   --natives-text-primary: #202733;
   --natives-text-muted: #5b6677;
   /* 边界 */
-  --natives-border: #e5e9ef;
   --natives-control: #737f90;
   /* 强调 */
   --natives-accent: #345780;
@@ -60,6 +93,27 @@
   /* 字体栈 */
   --natives-font: -apple-system, BlinkMacSystemFont, "PingFang SC", "Segoe UI", Roboto, sans-serif;
   --natives-font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  /* Surface Ladder v1（浅色：面差分只有 1.05–1.08，层级靠 edge + elev-1） */
+  --natives-surface-raised: var(--natives-surface);
+  --natives-surface-chrome: var(--natives-surface-2);
+  --natives-surface-well: var(--natives-surface-3);
+  --natives-edge: color-mix(in srgb, var(--natives-text-primary) 12%, transparent);
+  --natives-accent-edge: var(--natives-accent);
+  --natives-elev-1: 0 1px 2px rgba(0, 0, 0, .05), 0 1px 1px rgba(0, 0, 0, .03);
+  --natives-elev-2: 0 2px 4px rgba(0, 0, 0, .04), 0 6px 16px rgba(0, 0, 0, .06);
+  --natives-elev-3: 0 12px 36px rgba(0, 0, 0, .12);
+  --natives-rim: inset 0 1px 0 rgba(255, 255, 255, .75);
+  --natives-well-inset: inset 0 1px 2px rgba(0, 0, 0, .10);
+  /* 强调墨色档（ADR-0049 D10）：把 accent/ok 往「正文方向」压 30%，亮底变深、暗底变浅，
+     所以一套公式覆盖四套调色板，不再需要 `:root[data-theme="archive"]` 逐主题分支。
+     声明写在这个默认块里只是为了通过「volt 不得引入 archive 缺失角色」的一致性守卫，
+     选择器是 `:root`，对所有调色板同样生效（var() 按当时胜出的 accent/text-primary 解析）。
+     实测（30% 档 / 原色）：on-accent 压实心底 archive 9.28/7.44、volt 15.78/15.31、
+     standalone-light 18.90/18.90、standalone-dark 17.45/17.45；
+     ok 墨色压 chrome 面 7.59/5.69、13.42/13.01、5.15/3.02、8.21/6.62 ——
+     其中 DSH 浅色板原来只有 3.02:1，是这一档存在的硬理由。 */
+  --natives-accent-ink: color-mix(in srgb, var(--natives-accent) 70%, var(--natives-text-primary));
+  --natives-ok-ink: color-mix(in srgb, var(--natives-ok) 70%, var(--natives-text-primary));
 }
 
 /* ===== Volt（深色 / 荧光强调，保留现有方向） ===== */
@@ -71,7 +125,6 @@
   --natives-surface-3: #1c1e17;
   --natives-text-primary: #f2f2ea;
   --natives-text-muted: #9fa190;
-  --natives-border: #262920;
   --natives-control: #7c836d;
   --natives-accent: #cdf24b;
   --natives-accent-strong: #ddff69;
@@ -90,6 +143,17 @@
   --natives-shadow: 0 10px 40px rgba(0, 0, 0, 0.6);
   --natives-glass: rgba(19, 20, 16, 0.96);
   --natives-glass-hover: rgba(19, 20, 16, 0.99);
+  /* Surface Ladder v1（深色：13%/8%/9%/8% mix 把画布抬到 #292a27 / #1d1e1c） */
+  --natives-surface-raised: color-mix(in srgb, var(--natives-text-primary) 13%, var(--natives-surface));
+  --natives-surface-chrome: color-mix(in srgb, var(--natives-text-primary) 8%, var(--natives-surface));
+  --natives-surface-well: var(--natives-surface);
+  --natives-edge: color-mix(in srgb, var(--natives-text-primary) 9%, transparent);
+  --natives-accent-edge: color-mix(in srgb, var(--natives-accent) 78%, var(--natives-surface-raised));
+  --natives-elev-1: 0 1px 2px rgba(0, 0, 0, .35);
+  --natives-elev-2: 0 4px 14px rgba(0, 0, 0, .45);
+  --natives-elev-3: 0 12px 36px rgba(0, 0, 0, .60);
+  --natives-rim: inset 0 1px 0 rgba(255, 255, 255, .07);
+  --natives-well-inset: none;
 }
 
 #natives-connection-notice :focus-visible {
@@ -97,11 +161,96 @@
   outline-offset: 2px;
 }
 
-.shared-preferences-dialog { color: var(--natives-text-primary); background: var(--natives-surface); border: 1px solid var(--natives-border); border-radius: 12px; padding: 24px; max-width: min(640px, calc(100vw - 32px)); max-height: 80vh; }
+/* ===== DSH 宿主色板（仅嵌入运行：html.standalone） =====
+ * DeepSeek Harness 用 neutral-bluish 阶 + 单色强调（浅色近黑、深色近白），
+ * 与 Archive 的蓝、Volt 的荧光绿并置会显得突兀。这里只重映射产品基础角色，
+ * 不动 Archive/Volt 本身（Chrome 扩展与本机 Web 保持原方向），也不改任何
+ * 布局/行为；主题值仍只有 archive|volt（R-U1）。
+ * 取色来源：DSH 运行时 body 上的 --dsw-static-neutral-bluish-* 与
+ * --dsw-alias-{bg-base,bg-layer-*,border-l*,label-primary,brand-primary,
+ * state-error-primary,state-success-primary}（2026-10-29 实测读取）。
+ */
+html.standalone {
+  --natives-bg: #f9fafb;
+  --natives-surface: #ffffff;
+  --natives-surface-2: #f4f5f7;
+  --natives-surface-3: #ebeef2;
+  --natives-text-primary: #0f1115;
+  --natives-text-muted: #61666b;
+  --natives-control: #adb2b8;
+  --natives-accent: #0f1115;
+  --natives-accent-strong: #000000;
+  --natives-on-accent: #ffffff;
+  --natives-selected: rgba(38, 49, 72, 0.1);
+  --natives-danger: #ec1313;
+  --natives-danger-soft: rgba(236, 19, 19, 0.1);
+  --natives-on-danger: #ffffff;
+  --natives-warning: #8a5a00;
+  --natives-warning-soft: rgba(138, 90, 0, 0.12);
+  --natives-ok: #17a34a;
+  --natives-ok-soft: rgba(34, 197, 94, 0.12);
+  --natives-code: #f4f5f7;
+  --natives-match: #e1e5ee;
+  --natives-backdrop: rgba(0, 0, 0, 0.24);
+  --natives-shadow: 0 12px 36px rgba(15, 17, 21, 0.1);
+  --natives-glass: rgba(255, 255, 255, 0.96);
+  --natives-glass-hover: rgba(255, 255, 255, 0.99);
+  /* Surface Ladder v1（宿主浅色：与 Archive 同构，只是面值来自 DSH） */
+  --natives-surface-raised: var(--natives-surface);
+  --natives-surface-chrome: var(--natives-surface-2);
+  --natives-surface-well: var(--natives-surface-3);
+  --natives-edge: color-mix(in srgb, var(--natives-text-primary) 11%, transparent);
+  --natives-accent-edge: var(--natives-accent);
+  --natives-elev-1: 0 1px 2px rgba(0, 0, 0, .04), 0 2px 6px rgba(0, 0, 0, .04);
+  --natives-elev-2: 0 2px 4px rgba(0, 0, 0, .04), 0 6px 16px rgba(0, 0, 0, .06);
+  --natives-elev-3: 0 12px 36px rgba(0, 0, 0, .12);
+  --natives-rim: inset 0 1px 0 rgba(255, 255, 255, .60);
+  --natives-well-inset: inset 0 1px 2px rgba(0, 0, 0, .10);
+}
+
+html.standalone[data-theme="volt"] {
+  --natives-bg: #151517;
+  --natives-surface: #1b1b1c;
+  --natives-surface-2: #232324;
+  --natives-surface-3: #2c2c2e;
+  --natives-text-primary: #f9fafb;
+  --natives-text-muted: #979da6;
+  --natives-control: #979da6;
+  --natives-accent: #f9fafb;
+  --natives-accent-strong: #ffffff;
+  --natives-on-accent: #151517;
+  --natives-selected: rgba(255, 255, 255, 0.14);
+  --natives-danger: #f25a5a;
+  --natives-danger-soft: rgba(242, 90, 90, 0.14);
+  --natives-on-danger: #151517;
+  --natives-warning: #e6b45c;
+  --natives-warning-soft: rgba(230, 180, 92, 0.14);
+  --natives-ok: #22c55e;
+  --natives-ok-soft: rgba(34, 197, 94, 0.14);
+  --natives-code: #1b1b1c;
+  --natives-match: #3a3d44;
+  --natives-backdrop: rgba(0, 0, 0, 0.5);
+  --natives-shadow: 0 10px 40px rgba(0, 0, 0, 0.55);
+  --natives-glass: rgba(27, 27, 28, 0.96);
+  --natives-glass-hover: rgba(27, 27, 28, 0.99);
+  /* Surface Ladder v1（宿主深色：9%/5% mix = #2f2f30 / #262627） */
+  --natives-surface-raised: color-mix(in srgb, var(--natives-text-primary) 9%, var(--natives-surface));
+  --natives-surface-chrome: color-mix(in srgb, var(--natives-text-primary) 5%, var(--natives-surface));
+  --natives-surface-well: var(--natives-surface);
+  --natives-edge: color-mix(in srgb, var(--natives-text-primary) 8%, transparent);
+  --natives-accent-edge: color-mix(in srgb, var(--natives-accent) 78%, var(--natives-surface-raised));
+  --natives-elev-1: 0 1px 2px rgba(0, 0, 0, .35);
+  --natives-elev-2: 0 6px 18px rgba(0, 0, 0, .40);
+  --natives-elev-3: 0 12px 36px rgba(0, 0, 0, .55);
+  --natives-rim: inset 0 1px 0 rgba(255, 255, 255, .06);
+  --natives-well-inset: none;
+}
+
+.shared-preferences-dialog { color: var(--natives-text-primary); background: var(--natives-surface); border: 1px solid var(--natives-edge); border-radius: 12px; padding: 24px; max-width: min(640px, calc(100vw - 32px)); max-height: 80vh; }
 .shared-preferences-dialog::backdrop { background: var(--natives-backdrop); }
 .shared-preferences-diff { overflow: auto; max-height: 40vh; overflow-wrap: anywhere; }
 .shared-preferences-dialog button { min-height: 32px; padding: 6px 12px; }
-.shared-preference-error { color: var(--natives-text-primary); background: var(--natives-surface); border: 1px solid var(--natives-border); padding: 12px; position: fixed; bottom: 16px; left: 16px; right: 16px; z-index: var(--z-toast, 1000); }
+.shared-preference-error { color: var(--natives-text-primary); background: var(--natives-surface); border: 1px solid var(--natives-edge); padding: 12px; position: fixed; bottom: 16px; left: 16px; right: 16px; z-index: var(--z-toast, 1000); }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {

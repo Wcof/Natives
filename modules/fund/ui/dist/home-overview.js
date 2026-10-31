@@ -4,9 +4,9 @@ const { state, t } = Fund;
 const home = Fund.home = Fund.home || {};
 // 集中度列表分页状态（卡内保留，语言切换/快照刷新不重置页码）。
 const concentrationState = { page: 0 };
-// 资产走势多选状态：off＝隐藏的序列 id（空＝默认全部线同图），view＝用户
-// 选择的金额/百分比视图；隐私遮金额（percent/hidden）时强制百分比视图。
-const historySelection = { off: new Set(), view: "amount" };
+// groupId 为空时显示全部资产，否则只看所选分类；隐私遮金额时强制百分比视图。
+// cardsOpen：分类／资产卡行是否已展开（超过两行才折叠），按行分别记住。
+const historySelection = { groupId: null, detailsOff: new Set(), view: "amount", cursor: null, cardsOpen: {} };
 // 资产走势分组配色（demo 复刻）：与 pill 圆点、主图分类线、各分类走势卡共用；
 // --series-1 与 accent 同色保留给总资产，分组从第 2 色起循环。
 const SERIES_PALETTE = ["--series-2", "--fund-allocation-2", "--series-5", "--fund-allocation-5", "--fund-allocation-3", "--series-3", "--series-6", "--fund-allocation-4"];
@@ -22,79 +22,32 @@ function signedPct(value) {
   const rounded = Math.abs(value) < 0.005 ? 0 : value;
   return `${rounded > 0 ? "+" : ""}${rounded.toFixed(2)}%`;
 }
-// 金额轴紧凑格式：万/亿单位带一位小数去尾零，小值千分位整数（元）。
-function fmtAxisAmount(value) {
-  const abs = Math.abs(value);
-  if (abs >= 1e8) return `${(value / 1e8).toFixed(abs >= 1e9 ? 0 : 1).replace(/\.0$/, "")}亿`;
-  if (abs >= 1e4) return `${(value / 1e4).toFixed(abs >= 1e5 ? 0 : 1).replace(/\.0$/, "")}万`;
-  return Math.round(value).toLocaleString("en-US");
-}
-// pill 行：行首「全部」重置 ＋ 总资产/分组多选 pill ＋ 尾部金额/百分比视图切换。
-// 交互规则：默认全选；全选状态下点任一分组＝进入「总资产＋该分组」单看，
-// 非全选状态点击＝切换该线显隐；点「全部」恢复全部线同图。
-function renderHistorySeriesControls(snapshot, changes = {}, colorOf = () => "var(--series-1)", view = "amount") {
-  const container = document.getElementById("home-history-series");
-  if (!container) return;
-  const groups = snapshot.groupAllocation?.configured ? (snapshot.groupAllocation.groups || []) : [];
-  if (!groups.length) {
-    historySelection.off.clear();
-    container.hidden = true;
-    container.replaceChildren();
-    return;
+// 分类选择只有一层：顶部分类卡（含「全部资产」）是唯一入口；
+// 底部资产卡跟随所选分类显示它的全部资产，总资产只在“全部资产”视图绘制。
+// 口径切换（资产金额/变化对比）是 partials 静态按钮；此处只维护状态并绑定一次。
+function updateViewToggle(view) {
+  const box = document.getElementById("home-view-toggle");
+  if (!box) return;
+  const amountEnabled = home.displayMode() === "amount";
+  for (const button of box.querySelectorAll("[data-history-view]")) {
+    const on = button.dataset.historyView === view;
+    button.classList.toggle("active", on);
+    button.setAttribute("aria-pressed", String(on));
+    if (button.dataset.historyView === "amount") {
+      button.disabled = !amountEnabled;
+      button.title = amountEnabled ? "" : t("fundHomeHistoryViewAmountLocked");
+    }
   }
-  const valid = new Set(["total", ...groups.map(group => String(group.groupId))]);
-  historySelection.off = new Set([...historySelection.off].filter(id => valid.has(id)));
-  container.hidden = false;
-  const hidden = home.displayMode() === "hidden";
-  const amountView = home.displayMode() === "amount";
-  const allOn = historySelection.off.size === 0;
-  const buttons = [{ id: "total", name: t("fundHomeHistoryGroupTotal") }, ...groups.map(group => ({ id: String(group.groupId), name: group.name }))];
-  const reset = `<button type="button" class="history-series-tab history-series-all" data-history-reset aria-pressed="${allOn}">${home.escape(t("fundHomeHistoryAllSeries"))}</button>`;
-  const tabs = buttons.map(button => {
-    // 区间变化与 Demo 的分类卡一致：百分比只描述该分类自身走势，
-    // 隐私模式下连名称一起遮蔽（金额与比例都不外露）。彩点颜色与主图
-    // 分类线、各分类走势卡共用同一 palette，保证三处视觉一致。
-    const change = !hidden && Number.isFinite(changes[button.id])
-      ? `<span class="history-series-change${changes[button.id] > 0 ? " up" : changes[button.id] < 0 ? " down" : ""}" title="${home.escape(t("fundHomeHistoryChange"))}">${signedPct(changes[button.id])}</span>`
-      : "";
-    return `<button type="button" class="history-series-tab" data-history-group="${home.escape(button.id)}" aria-pressed="${!historySelection.off.has(button.id)}"><i class="history-series-dot" style="background:${colorOf(button.id)}" aria-hidden="true"></i>${home.escape(hidden ? "****" : button.name)}${change}</button>`;
-  }).join("");
-  // 视图切换：金额轴只在显示金额的隐私模式下可用；遮金额时固定百分比并禁用。
-  const viewToggle = `<span class="history-view-toggle" role="group" aria-label="${home.escape(t("fundHomeHistoryViewLabel"))}">
-    <button type="button" data-history-view="amount" aria-pressed="${view === "amount"}" ${amountView ? "" : "disabled title=" + home.escape(t("fundHomeHistoryViewAmountLocked"))}>${home.escape(t("fundHomeHistoryViewAmount"))}</button>
-    <button type="button" data-history-view="percent" aria-pressed="${view === "percent"}">${home.escape(t("fundHomeHistoryViewPercent"))}</button>
-  </span>`;
-  container.innerHTML = reset + tabs + viewToggle;
-  container.querySelectorAll("[data-history-reset]").forEach(button => {
-    button.onclick = () => {
-      historySelection.off.clear();
-      home.renderOverview(home.snapshot());
-      requestAnimationFrame(() => document.querySelector("#home-history-series [data-history-reset]")?.focus());
-    };
-  });
-  container.querySelectorAll("[data-history-group]").forEach(button => {
-    button.onclick = () => {
-      const id = button.dataset.historyGroup;
-      if (allOn && id !== "total") {
-        // 全选 → 单看：仅保留总资产基准线与该分组。
-        historySelection.off = new Set(buttons.map(item => item.id).filter(other => other !== id && other !== "total"));
-      } else if (historySelection.off.has(id)) {
-        historySelection.off.delete(id);
-      } else {
-        historySelection.off.add(id);
-      }
-      home.renderOverview(home.snapshot());
-      requestAnimationFrame(() => document.querySelector(`#home-history-series [data-history-group="${id}"]`)?.focus());
-    };
-  });
-  container.querySelectorAll("[data-history-view]").forEach(button => {
-    button.onclick = () => {
-      historySelection.view = button.dataset.historyView;
-      home.renderOverview(home.snapshot());
-      requestAnimationFrame(() => document.querySelector(`#home-history-series [data-history-view="${historySelection.view}"]`)?.focus());
-    };
-  });
 }
+document.getElementById("home-view-toggle")?.querySelectorAll("[data-history-view]").forEach(button => {
+  button.addEventListener("click", () => {
+    if (button.disabled) return;
+    historySelection.view = button.dataset.historyView;
+    historySelection.cursor = null;
+    home.renderOverview(home.snapshot());
+    button.focus();
+  });
+});
 home.renderOverview = snapshot => {
   const p = snapshot.portfolio;
   const body = document.getElementById("home-health-body");
@@ -109,10 +62,10 @@ home.renderOverview = snapshot => {
   const d = p.diagnostics;
   const h = p.history;
   let intraday=h.timeResolution==='minute';
-  const pointTime=point=>intraday?Number(point.observedAt)*1000:Date.parse(point.date);
-  const pointLabel=point=>intraday&&point.observedAt?new Date(pointTime(point)).toLocaleTimeString(state.language,{timeZone:'Asia/Shanghai',hour:'2-digit',minute:'2-digit'}):dateLabel(point.date);
+  const pointTime=(point,minute=intraday)=>minute&&point.observedAt?Number(point.observedAt)*1000:Date.parse(point.date+"T00:00:00+08:00");
+  const pointLabel=(point,minute=intraday)=>minute&&point.observedAt?new Date(pointTime(point,minute)).toLocaleTimeString(state.language,{timeZone:'Asia/Shanghai',hour:'2-digit',minute:'2-digit'}):dateLabel(point.date);
   const text = (id, value) => { const el = document.getElementById(id); if (el) el.textContent = value; };
-  const money = value => value == null ? t("fundHomeNeedsVerificationccf920") : home.money(value);
+  const money = value => value == null ? "–" : home.money(value);
   const day=p.ledger?.day,estimate=p.ledger?.estimatedDay,dailyDate=snapshot.requestedRange?.today;
   const useEstimate=!day?.complete&&estimate?.estimatedCount>0&&estimate.date===day?.date;
   const daily=useEstimate?estimate:day;
@@ -143,32 +96,12 @@ home.renderOverview = snapshot => {
   text("home-all-daily-note",(snapshot.requestedRange?.today||ledger?.day?.date||"")+" · "+(["ready","partial","reference"].includes(p.dailyReturn.status)?t(p.dailyReturn.status==="reference"?"fundHomeRangeReference":"fundHomeOverviewFlowExcluded"):t("fundHomeOverviewDailyMissing")));
   text("home-all-period-value",money(snapshot.wealth.returns?.netReturnMinor));
   text("home-twr-value", hidden ? "****" : h.twrPpm == null ? "–" : percent(BigInt(h.twrPpm) / 100n));
-  // 资产走势大数字区（demo chart-total）：净收益大数字旁同步时间加权收益。
-  const twrHeadline = document.getElementById("home-chart-twr");
-  if (twrHeadline) {
-    const twrValue = hidden || h.twrPpm == null ? null : Number(BigInt(h.twrPpm)) / 10000;
-    twrHeadline.textContent = hidden ? "****" : h.twrPpm == null ? "–" : signedPct(twrValue);
-    twrHeadline.classList.toggle("up", twrValue != null && twrValue > 0);
-    twrHeadline.classList.toggle("down", twrValue != null && twrValue < 0);
-  }
   const total = snapshot.wealth.totalA;
   const invested = snapshot.wealth.investedI;
   text("home-position-value", hidden ? "****" : total != null && invested != null && BigInt(total) > 0n
     ? percent(BigInt(invested) * 10000n / BigInt(total)) : "–");
   text("home-returns-scope", t("fundHomeLedgerScope"));
   const row = (name, value) => `<div class="goal-kv"><span class="k">${name}</span><span class="v">${value}</span></div>`;
-  // N04 累计投资收益（证券账本范围）：浮动＋已实现＋分红/再投资−独立费用；
-  // 未知成本缺口时只显示已知部分并标注，不冒充完整。
-  const cum = snapshot.wealth.cumulative || {};
-  const cumValue = hidden ? "****" : cum.totalMinor == null
-    ? "–"
-    : home.money(cum.totalMinor);
-  const cumNote = cum.coverageFrom
-    ? t("fundHomeCumulativeSince").replace("{date}", dateLabel(cum.coverageFrom))
-      + (cum.complete ? "" : " · " + t("fundHomeCumulativeGaps"))
-    : t("fundHomeMissingData");
-  text("home-cumulative-value", cumValue);
-  text("home-cumulative-note", cumNote);
   body.innerHTML = row(t("fundHomeOverviewConcentration"), hidden ? "****" : d.hhiBps == null ? "–" : (d.hhiBps / 10000).toLocaleString(state.language, {maximumFractionDigits:4}))
     + row(t("fundHomeOverviewCoverage"), t(d.coverage === "complete" ? "fundHomeOverviewComplete" : "fundHomeIncompleteData"))
     + row(t("fundHomeOverviewMissingPrice"), hidden ? "****" : s.missingValueCount)
@@ -204,7 +137,7 @@ home.renderOverview = snapshot => {
   const liveValue = point => !point.observedAt && point.source !== "holding-nav-replay" && point.date === snapshot.requestedRange?.today && point.quality === "reference";
   const groupValue = (point, id) => {
     const recorded = (point.groups || []).find(item => String(item.groupId) === id);
-    if (recorded?.valueMinor != null) return recorded.valueMinor;
+    if (recorded) return recorded.valueMinor ?? null;
     if (liveValue(point)) return groupsById.get(String(id))?.currentMinor ?? null;
     return null;
   };
@@ -231,63 +164,116 @@ home.renderOverview = snapshot => {
   const seriesColor = id => id === "total" || groupIds.indexOf(id) < 0
     ? "var(--series-1)"
     : `var(${SERIES_PALETTE[groupIds.indexOf(id) % SERIES_PALETTE.length]})`;
-  // 多选派生：off 为空＝全部线同图；遮金额隐私（percent/hidden）强制百分比视图。
+  // 两级选择：类型全选＝按类型汇总；未全选＝按所选类型下的明细。
   const view = home.displayMode() === "amount" ? (historySelection.view === "percent" ? "percent" : "amount") : "percent";
-  renderHistorySeriesControls(snapshot, changes, seriesColor, view);
-  let selectedIds = ["total", ...groupIds].filter(id => !historySelection.off.has(id));
-  if (!selectedIds.length) selectedIds = ["total", ...groupIds];
-  const totalOn = selectedIds.includes("total");
-  const selectedGroups = groupIds.filter(id => selectedIds.includes(id));
   // 每条线独立取序列：分类无历史时回退当天真实观察（pill/主图/分类卡同口径）。
   const seriesOf = id => seriesPointsFor(seriesFor(id), id);
-  if (selectedGroups.some(id => seriesFor(id) !== h.points)) intraday = true;
-  const plot = selectedIds.map(id => {
-    const points = seriesOf(id);
-    return { id, color: seriesColor(id), area: id === "total", points, usable: usableOf(points) };
+  const assetsOf = id => (groupsById.get(id)?.assets || []);
+  // 可绘制＝至少两个可用估值点，且不是全零。没绑资产的分组当前值为 0，
+  // 画出来是一条贴底的 0 线：既压扁纵轴，也让人误以为“选了没反应”。
+  // 这类类型只保留按钮位置（置灰+原因），不参与选择、不参与绘制。
+  const isAllZero = points => points.length > 0 && points.every(point => BigInt(point.valueMinor) === 0n);
+  const plottableTypes = new Set(groupIds.filter(id => {
+    const usable = usableOf(seriesOf(id));
+    return usable.length >= 2 && !isAllZero(usable);
+  }));
+  if (!groupsById.has(historySelection.groupId)) historySelection.groupId = null;
+  const detailMode = historySelection.groupId != null;
+  const selectedTypes = detailMode ? [historySelection.groupId] : groupIds;
+  const allTypesOn = !detailMode;
+  // 顶部卡行＝全部资产 + 各分类；底部卡行＝所选分类下的资产（选“全部”时列出所有资产）。
+  const listedGroups = detailMode ? [selectedTypes[0]] : groupIds;
+  const listedAssets = listedGroups.flatMap(id => assetsOf(id).map(asset => ({ ...asset, groupId: id, groupName: groupsById.get(id)?.name || id })));
+  const validDetails = new Set(listedAssets.map(asset => asset.historyId));
+  historySelection.detailsOff = new Set([...historySelection.detailsOff].filter(id => validDetails.has(id)));
+  const liveAssetValue = id => [...groupsById.values()].flatMap(group => group.assets || []).find(asset => asset.historyId === id)?.valueMinor ?? null;
+  const holdingPoints = (points, id) => points.map(point => {
+    const recorded = (point.groups || []).flatMap(group => group.assets || []).find(asset => asset.historyId === id);
+    // A saved observation (including an explicit unknown) wins over daily NAV replay;
+    // the live reference point carries no groups, so reuse the current asset value.
+    let valueMinor = recorded ? recorded.valueMinor : point.holdingValues?.[id] ?? null;
+    if (!recorded && !Object.hasOwn(point.holdingValues || {}, id) && liveValue(point)) valueMinor = liveAssetValue(id);
+    return { ...point, valueMinor, quality: valueMinor == null ? "incomplete" : "reference" };
   });
-  const totalEntry = plot.find(item => item.id === "total");
-  const anyEntry = plot.find(item => item.usable.length);
-  const totalPoints = totalEntry?.points ?? anyEntry?.points ?? h.points;
-  const reconstructed = plot.some(item => item.points.some(point => point.source === "holding-nav-replay"));
-  const observedSeries = intraday || reconstructed || plot.some(item => item.points.some(point => point.source === "valuation-observation"));
+  const detailAccount = asset => snapshot.wealth.cash?.accounts?.find(a => String(a.accountId) === String(asset.accountId))?.accountName || asset.accountId;
+  const detailEntries = listedAssets.map(asset => {
+    const daily = holdingPoints(h.points, asset.historyId);
+    const hasHistory = usableOf(daily).some(point => point.date !== snapshot.requestedRange?.today);
+    const points = hasHistory || !h.todayPoints?.length ? daily : holdingPoints(h.todayPoints, asset.historyId);
+    // 选“全部”时底部混列各分类资产，必须带上分类名；只看单个分类时分类名从标题就能看出来。
+    const detail = [detailMode ? "" : asset.groupName, asset.code, asset.accountId ? detailAccount(asset) : ""].filter(Boolean).join(" · ");
+    return { id: asset.historyId, name: asset.name, groupId: asset.groupId, detail, points };
+  });
+  const shownDetails = detailEntries.filter(entry => !historySelection.detailsOff.has(entry.id));
+  // 没有明细（只绑了现金/线下等不可回放资产）的类型退回按类型汇总，避免选中后消失。
+  const bareTypes = selectedTypes.filter(id => !assetsOf(id).length && plottableTypes.has(id));
+  const detailColor = id => `var(${SERIES_PALETTE[Math.max(0, detailEntries.findIndex(entry => entry.id === id)) % SERIES_PALETTE.length]})`;
+  const plotted = [
+    ...(!detailMode ? [{ id: "total", name: t("fundHomeHistoryGroupTotal"), points: seriesOf("total") }] : []),
+    ...(detailMode
+      ? [...shownDetails.map(entry => ({ id: entry.id, name: entry.name, points: entry.points })), ...bareTypes.map(id => ({ id, name: groupsById.get(id)?.name, points: seriesOf(id) }))]
+      : selectedTypes.filter(id => plottableTypes.has(id)).map(id => ({ id, name: groupsById.get(id)?.name, points: seriesOf(id) }))),
+  ];
+  const entryColor = id => id === "total"
+    ? "var(--series-1)"
+    : detailMode && detailEntries.some(entry => entry.id === id) ? detailColor(id) : seriesColor(id);
+  const plot = plotted.map(item => ({ ...item, color: entryColor(item.id), usable: usableOf(item.points), intraday: item.points.length > 0 && item.points.every(p => p.observedAt && p.date === snapshot.requestedRange?.today) }));
+  // 任一序列使用日内观察（分类当日回退）即按分钟断线；纯日点序列不受影响。
+  intraday = plot.some(item => item.intraday);
+  const reconstructed = plot.some(item => item.points.some(point => point.source === "holding-nav-replay" || (detailMode && point.holdingValues?.[item.id] != null)));
+  // 参考序列（日内/回放/观察）统一虚线标识，来源态在状态行说明。
   let historyStatus = hidden ? t("fundHomeOverviewHistoryHidden") : intraday ? t('fundHomeHistoryIntraday') : reconstructed ? t('fundHomeHistoryReconstructed') : h.reason ? t(reasons[h.reason] || "fundHomeOverviewUnverified") : t("fundHomeOverviewFlowTiming");
   if (!hidden && h.replayReason) historyStatus += ' · ' + t('fundHomeHistoryReplayLimit');
-  if (!hidden && historySelection.off.size && !intraday && selectedGroups.some(id => usableOf(seriesOf(id)).length < 2)) historyStatus += " · " + t("fundHomeHistoryGroupUnavailable");
+  // 选中的类型里有画不出来的：分「没有可回放资产」与「有效估值不足两天」两种，
+  // 否则用户只会看到图上少了几条线却不知道为什么。
+  // 收窄到具体类型后才提示“这一类画不出来”；全选时置灰按钮自己说明了原因。
+  const missingTypes = detailMode ? selectedTypes.filter(id => !plottableTypes.has(id)) : [];
+  if (!hidden && missingTypes.length) {
+    const emptyOnly = missingTypes.every(id => !assetsOf(id).length);
+    historyStatus += " · " + t(emptyOnly ? "fundHomeHistoryTypeEmpty" : "fundHomeHistoryGroupUnavailable");
+  }
   text("home-history-status", historyStatus);
   if (h.truncated) text("home-history-status", document.getElementById("home-history-status").textContent + " · " + t("fundHomeRangeTruncated"));
   if (h.status === "reference") text("home-history-status", document.getElementById("home-history-status").textContent + " · " + t("fundHomeRangeReference"));
   const selection = document.getElementById("home-history-selection");
-  // 选中说明带区间前缀：全部＝「本月 · 全部」；单组沿用「总资产 + 名称」。
-  const rangeNameKey = { today: "fundHomeToday", month: "fundHomeThisMonth", year: "fundHomeThisYear", all: "fundHomeSinceTrackingBegan", custom: "fundHomeCustom" }[snapshot.requestedRange?.key || "month"] || "fundHomeThisMonth";
+  // 选中说明带区间前缀：全部资产 / 单个分类名。
+  const rangeNameKey = { today: "fundHomePeriodToday", week: "fundHomePeriodWeek", month: "fundHomePeriodMonth", half: "fundHomePeriodHalf", year1: "fundHomePeriodYear", year: "fundHomeThisYear", all: "fundHomePeriodAll", custom: "fundHomeCustom" }[snapshot.requestedRange?.key || "month"] || "fundHomeRangeMonth";
   let selectionText;
-  if (!historySelection.off.size) selectionText = t("fundHomeHistoryAllSeries");
-  else if (!selectedGroups.length) selectionText = t("fundHomeHistoryGroupTotal");
-  else if (selectedGroups.length === 1) {
-    const name = groupsById.get(selectedGroups[0])?.name || selectedGroups[0];
-    selectionText = totalOn ? `${t("fundHomeHistoryGroupTotal")} + ${name}` : name;
-  } else {
-    const countText = t("fundHomeHistoryGroupsCount", { n: selectedGroups.length });
-    selectionText = totalOn ? `${t("fundHomeHistoryGroupTotal")} + ${countText}` : countText;
-  }
+  if (!selectedTypes.length) selectionText = t("fundHomeHistoryPickType");
+  else if (allTypesOn) selectionText = t("fundHomeHistoryAllAssets");
+  else selectionText = groupsById.get(selectedTypes[0])?.name || selectedTypes[0];
   if (selection) selection.textContent = hidden ? "****" : `${t(rangeNameKey)} · ${selectionText}`;
+  // 口径按钮状态 + 资产计数（顶部选分类、底部列资产，计数跟随底部列表）。
+  updateViewToggle(view);
+  const countBox = document.getElementById("home-series-count");
+  if (countBox) {
+    countBox.textContent = detailMode
+      ? t("fundHomeHistoryDetailsCount", { n: detailEntries.length - historySelection.detailsOff.size, m: detailEntries.length })
+      : t("fundHomeHistoryAssetsTotal", { n: detailEntries.length });
+  }
   text("home-benchmark-status", t("fundHomeOverviewNoBenchmark"));
   if (chart) {
     chart.replaceChildren();
-    // 金额视图＝每条线画自身金额（看钱）；百分比视图＝各序列以区间首个可绘制
-    // 点归一化为 0% 对比。总资产线带面积填充，各分组线按所选叠加。
+    // All series share one scale; missing values remain gaps.
     const amountView = view === "amount";
     const drawable = plot.map(item => {
       const base = item.usable.length ? BigInt(item.usable[0].valueMinor) : 0n;
-      return { ...item, base, drawable: item.usable.length >= 2 && (amountView || base > 0n) };
+      // 总资产保留单点（用于“只有一个估值”的兜底展示）；其余分类至少要两个
+      // 点才成线，且全零序列（没绑资产的分组）不画，免得贴底 0 线压扁纵轴。
+      const enough = item.id === "total" ? item.usable.length >= 1 : item.usable.length >= 2;
+      const zeroOnly = item.id !== "total" && item.usable.length > 0 && item.usable.every(point => BigInt(point.valueMinor) === 0n);
+      return { ...item, base, area: item.id === "total", drawable: enough && !zeroOnly && (amountView || base > 0n) };
     }).filter(item => item.drawable);
     if (hidden) {
       chart.innerHTML=`<div class="history-empty"><p>${t("fundHomeOverviewHistoryHidden")}</p><button type="button" class="btn" data-history-reveal>${t("fundHomeShowAmounts")}</button></div>`;
       chart.querySelector('[data-history-reveal]').onclick=()=>home.applyDisplayMode('amount');
-    } else if (!drawable.length) {
+    } else if (!plot.length) {
+      chart.innerHTML=`<div class="history-empty"><p>${home.escape(t(selectedTypes.length ? "fundHomeHistoryChoose" : "fundHomeHistoryPickType"))}</p></div>`;
+    } else if (!drawable.length || drawable.every(item => item.usable.length < 2)) {
       const usable = plot.find(item => item.usable.length)?.usable || [];
       const point=usable[0],w=snapshot.wealth;
       const current=snapshot.requestedRange?.to===snapshot.requestedRange?.today;
-      const value=point?.valueMinor??(current?(w.quality!=="empty"?(w.totalA??w.knownA):null):null);
+      const value=point?.valueMinor??(!detailMode&&current?(w.quality!=="empty"?(w.totalA??w.knownA):null):null);
       if(value!=null){
         const partial=(point?point.quality!=="ready"&&point.quality!=="reference":w.totalA==null);
         const key=partial?"fundHomeValuedAssets":point?"fundHomeHistoryOneValue":"fundHomeHistoryCurrentValue";
@@ -301,7 +287,8 @@ home.renderOverview = snapshot => {
       const todayButton=chart.querySelector('[data-history-today]');if(todayButton)todayButton.onclick=()=>Fund.actions.setHomeRange('today');
     } else {
       const TOP = 14, BOTTOM = 104, LEFT = 2, RIGHT = 598;
-      const times = drawable.flatMap(item => item.points.map(pointTime)).filter(Number.isFinite);
+      const timeline = drawable.flatMap(item => item.usable.map(point => ({ point, intraday: item.intraday, time: pointTime(point, item.intraday) }))).filter(entry => Number.isFinite(entry.time)).sort((a, b) => a.time - b.time);
+      const times = timeline.map(entry => entry.time);
       const t0 = times.length ? Math.min(...times) : 0;
       const t1 = times.length ? Math.max(...times) : t0;
       const pctOf = (base, value) => base > 0n ? Number((BigInt(value) - base) * 10000n / base) / 100 : null;
@@ -355,12 +342,12 @@ home.renderOverview = snapshot => {
         const grid = document.createElementNS(svg.namespaceURI, "line");
         grid.setAttribute("x1", String(LEFT)); grid.setAttribute("x2", String(RIGHT));
         grid.setAttribute("y1", String(y)); grid.setAttribute("y2", String(y));
-        grid.setAttribute("stroke", !amountView && value === 0 ? "var(--natives-border-strong, var(--natives-border))" : "var(--natives-border)");
+        grid.setAttribute("stroke", !amountView && value === 0 ? "var(--natives-edge-strong, var(--natives-edge))" : "var(--natives-edge)");
         grid.setAttribute("stroke-width", "1");
         svg.append(grid);
         const label = document.createElement("span");
         label.style.top = `${(y / 120) * 100}%`;
-        if (amountView) label.textContent = fmtAxisAmount(value);
+        if (amountView) label.textContent = Fund.homeTrend.fmtAxisAmount(value, state.language);
         else {
           const digits = step < 0.1 ? 2 : 1;
           const rounded = Math.abs(value) < step / 20 ? 0 : Number(value.toFixed(digits));
@@ -368,26 +355,49 @@ home.renderOverview = snapshot => {
         }
         scale.append(label);
       }
-      // 总资产先画（面积＋线），各所选分组再叠加，共用同一坐标轴。
+      // 连续线段只标线尾；缺口两侧的孤立有效点仍需可见。
+      const defs=document.createElementNS(svg.namespaceURI,"defs");
+      const gradient=document.createElementNS(svg.namespaceURI,"linearGradient");
+      gradient.setAttribute("id","trend-area-fill");
+      gradient.setAttribute("x1","0");gradient.setAttribute("y1","0");gradient.setAttribute("x2","0");gradient.setAttribute("y2","1");
+      for(const [offset,opacity] of [["0",".22"],["1","0"]]){
+        const stop=document.createElementNS(svg.namespaceURI,"stop");
+        stop.setAttribute("offset",offset);stop.setAttribute("stop-color", drawable[0]?.color || "var(--natives-accent)");stop.setAttribute("stop-opacity",opacity);
+        gradient.append(stop);
+      }
+      defs.append(gradient);svg.prepend(defs);
       for (const item of drawable) {
         const node = document.createElementNS(svg.namespaceURI, "g");
         node.setAttribute("data-series", item.id);
         let segment = [], lastTime = null;
+        let lastDrawn = null;
+        const marked = new Set();
+        const mark = point => {
+          if (!point || marked.has(point.join(","))) return;
+          marked.add(point.join(","));
+          const [ex, ey] = point;
+          const dot = document.createElementNS(svg.namespaceURI, "circle");
+          dot.setAttribute("cx", String(ex)); dot.setAttribute("cy", String(ey));
+          dot.setAttribute("r", item.id === "total" ? "2.8" : "2.3");
+          dot.setAttribute("fill", item.color); dot.setAttribute("stroke", "var(--natives-surface)"); dot.setAttribute("stroke-width", "1.2");
+          node.append(dot);
+        };
         const flush = () => {
+          if (segment.length === 1) mark(segment[0]);
           if (segment.length > 1) {
+            const path = Fund.homeTrend.smoothPath(segment);
             if (item.area) {
-              const area = document.createElementNS(svg.namespaceURI, "polygon");
-              // 金额视图面积从图表底部起；百分比视图以 0% 基线起。
+              const area = document.createElementNS(svg.namespaceURI, "path");
+              // 金额视图面积从图表底部起；百分比视图以 0% 基线起；上边沿共用平滑曲线。
               const zero = amountView ? BOTTOM : yOf(0);
-              area.setAttribute("points", `${segment[0].split(",")[0]},${zero} ${segment.join(" ")} ${segment.at(-1).split(",")[0]},${zero}`);
-              area.setAttribute("fill", "var(--draw-fill)");
+              area.setAttribute("d", `${path}L${segment.at(-1)[0]},${zero}L${segment[0][0]},${zero}Z`);
+              area.setAttribute("fill", "url(#trend-area-fill)");
               node.append(area);
             }
-            const line = document.createElementNS(svg.namespaceURI, "polyline");
-            line.setAttribute("points", segment.join(" "));
-            line.setAttribute("fill", "none"); line.setAttribute("stroke", item.color); line.setAttribute("stroke-width", item.id === "total" ? "2" : "1.6");
+            const line = document.createElementNS(svg.namespaceURI, "path");
+            line.setAttribute("d", path);
+            line.setAttribute("fill", "none"); line.setAttribute("stroke", item.color); line.setAttribute("stroke-width", item.id === "total" ? "2.2" : "1.8");
             line.setAttribute("stroke-linecap", "round"); line.setAttribute("stroke-linejoin", "round");
-            if (observedSeries) line.setAttribute("stroke-dasharray", "4 4");
             node.append(line);
           }
           segment = [];
@@ -396,92 +406,234 @@ home.renderOverview = snapshot => {
           if (point.valueMinor == null || !["ready", "reference"].includes(point.quality)) { flush(); lastTime = null; continue; }
           const value = valueOf(item, point);
           if (value == null) { flush(); lastTime = null; continue; }
-          const time = pointTime(point);
-          if (lastTime != null && (point.breakBefore || (intraday ? time - lastTime > 300000 : time - lastTime !== 86400000))) flush();
+          const time = pointTime(point, item.intraday);
+          if (lastTime != null && (point.breakBefore || (item.intraday ? time - lastTime > 300000 : time - lastTime !== 86400000))) flush();
           const x = xOf(time), y = yOf(value);
-          const dot = document.createElementNS(svg.namespaceURI, "circle");
-          dot.setAttribute("cx", String(x)); dot.setAttribute("cy", String(y)); dot.setAttribute("r", item.id === "total" ? "2.8" : "2.4");
-          dot.setAttribute("fill", item.color);
-          node.append(dot);
-          if (point.quality === "reference" && !intraday && !["valuation-observation", "holding-nav-replay"].includes(point.source)) {
+          lastDrawn = [x, y];
+          if (point.quality === "reference" && !item.intraday && !["valuation-observation", "holding-nav-replay"].includes(point.source)) {
             if (segment.length) {
-              const stub = document.createElementNS(svg.namespaceURI, "polyline");
-              stub.setAttribute("points", [segment.at(-1), `${x},${y}`].join(" "));
-              stub.setAttribute("fill", "none"); stub.setAttribute("stroke", item.color); stub.setAttribute("stroke-dasharray", "4 4");
+              const stub = document.createElementNS(svg.namespaceURI, "path");
+              stub.setAttribute("d", `M${segment.at(-1)[0]},${segment.at(-1)[1]}L${x},${y}`);
+              stub.setAttribute("fill", "none"); stub.setAttribute("stroke", item.color);
               node.append(stub);
             }
             flush();
+            mark(lastDrawn);
             lastTime = null;
             continue;
           }
-          segment.push(`${x},${y}`);
+          segment.push([x, y]);
           lastTime = time;
         }
         flush();
+        mark(lastDrawn);
         svg.append(node);
       }
       const plotBox = document.createElement("div");
       plotBox.className = "history-plot";
       plotBox.append(scale, svg);
       chart.append(plotBox);
+      // 小幅波动需要更长的精确刻度；给侧栏留出实际宽度，避免窄窗截断。
+      const axisWidth = Math.ceil(Math.max(scale.clientWidth, ...[...scale.children].map(label => label.getBoundingClientRect().width + 6)));
+      plotBox.style.marginRight = `${axisWidth + 2}px`;
+      scale.style.width = `${axisWidth}px`; scale.style.right = `-${axisWidth + 2}px`;
       const dates=document.createElement('div');dates.className='history-axis';
-      // demo 口径的 5 段日期轴：标签只取真实点日期等距采样，缺日期不补造。
-      const axisCount=Math.min(5,totalPoints.length);
-      const axisLabels=[];
-      for(let k=0;k<axisCount;k++){
-        const idx=Math.round(k*(totalPoints.length-1)/Math.max(axisCount-1,1));
-        const label=pointLabel(totalPoints[idx]);
-        if(!axisLabels.length||axisLabels.at(-1)!==label)axisLabels.push(label);
-      }
+      // 只标实际首尾，避免稀疏采样的中间日期被等距排版放错位置。
+      const axisLabels=[...new Set([timeline[0],timeline.at(-1)].map(entry=>pointLabel(entry.point,entry.intraday)))];
       dates.innerHTML=axisLabels.map(label=>`<span>${home.escape(label)}</span>`).join('');chart.append(dates);
-      const summarySeries = drawable.find(item => item.id === "total") || drawable[0];
-      const first=summarySeries?.usable[0],last=summarySeries?.usable.at(-1);
-      if(first&&last){
-        const summary=document.createElement('p');summary.className='evidence-hint';
-        summary.textContent=`${pointLabel(first)} ${money(first.valueMinor)} -- ${pointLabel(last)} ${money(last.valueMinor)}${Number.isFinite(changes.total)?` · ${signedPct(changes.total)}`:""}`;
-        chart.append(summary);
+      // ── 查看点：竖直虚线 + 各线圆点 + 跟随指针的浮层（不再占下方一条）。
+      // 轴点取所有可绘制序列的 usable 时间并集；悬停、聚焦后方向键、重渲染恢复共用同一索引。
+      const axisTimes=[...new Set(drawable.flatMap(item=>item.usable.map(point=>pointTime(point,item.intraday))))].filter(Number.isFinite).sort((a,b)=>a-b);
+      if(axisTimes.length){
+        const cursorLayer=document.createElementNS(svg.namespaceURI,"g");
+        cursorLayer.setAttribute("data-cursor","");
+        cursorLayer.setAttribute("aria-hidden","true");
+        svg.append(cursorLayer);
+        const pointByTime=item=>{const m=new Map(item.usable.map(p=>[pointTime(p,item.intraday),p]));return m;};
+        const lookup=drawable.map(item=>({item,map:pointByTime(item)}));
+        const tip=document.createElement("div");
+        tip.className="history-tip";
+        tip.hidden=true;
+        plotBox.append(tip);
+        let cursorIndex=Math.min(historySelection.cursor==null?axisTimes.length-1:historySelection.cursor,axisTimes.length-1);
+        if(cursorIndex<0)cursorIndex=0;
+        let shown=historySelection.cursor!=null;
+        const renderCursor=()=>{
+          const time=axisTimes[cursorIndex];
+          const x=xOf(time);
+          cursorLayer.replaceChildren();
+          const guide=document.createElementNS(svg.namespaceURI,"line");
+          guide.setAttribute("x1",String(x));guide.setAttribute("x2",String(x));
+          guide.setAttribute("y1","8");guide.setAttribute("y2","112");
+          guide.setAttribute("stroke","var(--natives-control)");guide.setAttribute("stroke-dasharray","4 5");
+          cursorLayer.append(guide);
+          const rows=[];
+          for(const {item,map} of lookup){
+            const point=map.get(time);
+            const cy=point==null?null:yOf(valueOf(item,point));
+            if(cy!=null&&Number.isFinite(cy)){
+              const dot=document.createElementNS(svg.namespaceURI,"circle");
+              dot.setAttribute("cx",String(x));dot.setAttribute("cy",String(cy));dot.setAttribute("r","3.4");
+              dot.setAttribute("fill",item.color);dot.setAttribute("stroke","var(--natives-surface)");dot.setAttribute("stroke-width","1.4");
+              cursorLayer.append(dot);
+            }
+            const labelName=hidden?"****":item.name;
+            const valueText=point==null?t("fundHomeHistoryMissingDay"):amountView?`¥ ${home.money(point.valueMinor)}`:signedPct(valueOf(item,point));
+            rows.push(`<span class="history-tip-row"><i style="background:${item.color}" aria-hidden="true"></i><span class="history-tip-name">${home.escape(labelName)}</span><b>${home.escape(valueText)}</b></span>`);
+          }
+          const anchor=lookup.find(({map})=>map.has(time));
+          const when=anchor?pointLabel(anchor.map.get(time),anchor.item.intraday):t("fundHomeHistoryNoRecord");
+          tip.innerHTML=`<span class="history-tip-date">${home.escape(when)}</span>${rows.join("")}`;
+          tip.hidden=!shown;
+          if(shown){
+            // x 是 viewBox 坐标（0..600），按实际像素宽度换算并夹在绘图区内。
+            const width=plotBox.clientWidth||0;
+            const left=(x/600)*width-tip.offsetWidth/2;
+            tip.style.left=`${Math.max(0,Math.min(width-tip.offsetWidth,left))}px`;
+          }
+        };
+        const hideCursor=()=>{
+          shown=false;
+          historySelection.cursor=null;
+          tip.hidden=true;
+          cursorLayer.replaceChildren();
+        };
+        const moveTo=clientX=>{
+          const box=svg.getBoundingClientRect();
+          if(!box.width)return;
+          const ratio=Math.max(0,Math.min(1,((clientX-box.left)/box.width*600-LEFT)/(RIGHT-LEFT)));
+          const time=t0+ratio*(t1-t0);
+          const next=axisTimes.reduce((best,value,index)=>Math.abs(value-time)<Math.abs(axisTimes[best]-time)?index:best,0);
+          shown=true;
+          cursorIndex=next;
+          historySelection.cursor=next;
+          renderCursor();
+        };
+        plotBox.addEventListener("pointermove",event=>moveTo(event.clientX));
+        plotBox.addEventListener("pointerleave",hideCursor);
+        // 键盘：图表本身可聚焦，左右键移动查看点，Esc 收起浮层。
+        plotBox.tabIndex=0;
+        plotBox.setAttribute("role","img");
+        plotBox.setAttribute("aria-label",t("fundHomeOverviewHistoryLabel"));
+        plotBox.addEventListener("focus",()=>{shown=true;renderCursor();});
+        plotBox.addEventListener("blur",()=>{tip.hidden=true;});
+        plotBox.addEventListener("keydown",event=>{
+          if(event.key!=="ArrowLeft"&&event.key!=="ArrowRight"&&event.key!=="Home"&&event.key!=="End"&&event.key!=="Escape")return;
+          event.preventDefault();
+          if(event.key==="Escape"){hideCursor();return;}
+          const next=event.key==="Home"?0:event.key==="End"?axisTimes.length-1:cursorIndex+(event.key==="ArrowLeft"?-1:1);
+          cursorIndex=Math.max(0,Math.min(axisTimes.length-1,next));
+          historySelection.cursor=cursorIndex;
+          shown=true;
+          renderCursor();
+        });
+        if(shown)renderCursor();
       }
+      const scopeNode=document.getElementById("home-trend-scope");
+      if(scopeNode)scopeNode.textContent=detailMode?t("fundHomeHistoryScopeChild"):amountView?t("fundHomeHistoryScopeAmount"):t("fundHomeHistoryScopePercent");
     }
   }
-  // 各分类走势（demo category-trends）：横向滚动小卡＝彩点＋名称＋区间变化＋迷你走势，
-  // 点击切换主图分类；sparkline 与主图同源（同一批真实估值点），不足两点不画线。
-  const categories=document.getElementById("home-history-categories");
-  if(categories){
-    const cards=[...groupsById.values()].map(group=>{
-      const id=String(group.groupId);
-      const usable=usableOf(seriesPointsFor(seriesFor(id),id));
-      const change=changes[id];
-      const color=seriesColor(id);
-      const pct=!hidden&&Number.isFinite(change)
-        ?`<span class="history-cat-return${change>0?" up":change<0?" down":""}">${signedPct(change)}</span>`
-        :`<span class="history-cat-return">–</span>`;
-      let spark="";
-      if(!hidden&&usable.length>=2){
-        const values=usable.map(point=>Number(BigInt(point.valueMinor)));
-        const min=Math.min(...values),max=Math.max(...values);
-        const step=usable.length>1?116/(usable.length-1):0;
-        const path=usable.map((point,index)=>`${(2+index*step).toFixed(1)},${(2+(max===min?0.5:1-(values[index]-min)/(max-min))*20).toFixed(1)}`).join(" ");
-        spark=`<svg class="history-cat-spark" viewBox="0 0 120 24" preserveAspectRatio="none" aria-hidden="true"><polyline points="${path}" fill="none" stroke="${color}" stroke-width="1.6"/></svg>`;
-      }
-      const selected=!historySelection.off.has(id);
-      return `<button type="button" class="history-cat-card${selected?" selected":""}" data-history-cat="${home.escape(id)}" aria-pressed="${selected}"><span class="history-cat-name"><i style="background:${color}" aria-hidden="true"></i>${home.escape(hidden?"****":group.name)}</span>${pct}${spark}</button>`;
-    });
-    if(cards.length){
-      categories.hidden=false;
-      categories.innerHTML=`<div class="home-history-categories-head"><strong>${home.escape(t("fundHomeHistoryCategories"))}</strong><span>${home.escape(t("fundHomeHistoryCategoriesHint"))}</span></div><div class="home-history-cat-scroll"><div class="home-history-cat-grid">${cards.join("")}</div></div>`;
-      categories.querySelectorAll("[data-history-cat]").forEach(button=>{
-        button.onclick=()=>{
-          const id=button.dataset.historyCat;
-          // 与 pill 同规则：全选状态下点卡＝单看该分组（总资产基准保留）。
-          if(historySelection.off.size===0)historySelection.off=new Set([...groupIds].filter(other=>other!==id));
-          else if(historySelection.off.has(id))historySelection.off.delete(id);
-          else historySelection.off.add(id);
-          home.renderOverview(home.snapshot());
-          requestAnimationFrame(()=>document.querySelector(`#home-history-categories [data-history-cat="${id}"]`)?.focus());
+  // ── 一套分类入口（2026-10-25 重构）：顶部卡行＝“全部资产 + 各分类”，单选；
+  // 底部卡行＝所选分类下的全部资产，点卡片可单独隐藏某条线。卡＝名称 + 当前值·区间变化 + sparkline。
+  const cardOf = item => {
+    const usable = usableOf(item.points);
+    const change = changeOf(item.points);
+    const current = usable.at(-1)?.valueMinor ?? item.current ?? null;
+    const valueText = current == null ? "–" : `¥ ${home.money(current)}`;
+    const pct = !hidden && Number.isFinite(change)
+      ? `<span class="history-cat-return${change > 0 ? " up" : change < 0 ? " down" : ""}">${signedPct(change)}</span>`
+      : `<span class="history-cat-return">–</span>`;
+    const title = item.title ? ` title="${home.escape(item.title)}"` : "";
+    return `<button type="button" class="history-cat-card${item.on ? " selected" : ""}" data-history-cat="${home.escape(item.id)}" aria-pressed="${item.on}"${title}><span class="history-cat-name"><i style="background:${item.color}" aria-hidden="true"></i><span class="history-cat-label">${item.on ? "✓ " : ""}${home.escape(hidden ? "****" : item.name)}</span></span><span class="history-cat-value">${home.escape(valueText)} · ${pct}</span></button>`;
+  };
+  // 卡行超过一行就折叠：只留第一行，并给“点击展开（还有 N 项）”。展开状态按行保存，
+  // 切换区间／刷新快照后不会自己弹回去。
+  const applyCardFold = (grid, toggle, cards, key, minVisible = 0) => {
+    const els = [...grid.querySelectorAll(".history-cat-card")];
+    const tops = els.map(el => Math.round(el.offsetTop));
+    const firstRow = tops.filter(top => top === tops[0]).length;
+    // 分类行至少留几张：窄屏一行只放得下一两张卡时，折叠会把分类选择器也藏起来。
+    const limit = Math.max(firstRow, minVisible);
+    const extra = cards.length - limit;
+    const collapsible = extra > 0 && grid.offsetWidth > 0;
+    if (toggle) {
+      toggle.hidden = !collapsible;
+      if (collapsible) {
+        const open = historySelection.cardsOpen[key] === true;
+        toggle.textContent = open ? t("fundHomeHistoryCollapseCards") : t("fundHomeHistoryExpandCards", { n: extra });
+        toggle.setAttribute("aria-expanded", String(open));
+        toggle.onclick = () => {
+          historySelection.cardsOpen[key] = !open;
+          applyCardFold(grid, toggle, cards, key, minVisible);
+          toggle.focus();
         };
-      });
-    }else{categories.hidden=true;categories.replaceChildren();}
-  }
+      }
+    }
+    const open = historySelection.cardsOpen[key] === true;
+    els.forEach((el, index) => { el.hidden = collapsible && !open && index >= limit; });
+  };
+  const paintCards = (box, { key, title, hint, cards, minVisible = 0 }) => {
+    if (!box) return;
+    // 隐私模式照样占位：卡片只显示 ****，切回金额时布局不跳动。
+    if (!cards.length) {
+      box.hidden = true;
+      box.replaceChildren();
+      return;
+    }
+    box.hidden = false;
+    box.innerHTML = `<div class="home-history-categories-head"><strong>${home.escape(title)}</strong><span>${home.escape(hint)}</span></div><div class="home-history-cat-scroll"><div class="home-history-cat-grid">${cards.map(cardOf).join("")}</div></div><button type="button" class="home-history-cat-fold" hidden></button>`;
+    applyCardFold(box.querySelector(".home-history-cat-grid"), box.querySelector(".home-history-cat-fold"), cards, key, minVisible);
+  };
+  // 顶行：全部资产 + 有走势的分类（没数据的不做成可点卡片）。
+  paintCards(document.getElementById("home-history-categories"), {
+    key: "categories",
+    minVisible: 3,
+    title: t("fundHomeHistoryCategoryTitle"),
+    hint: t("fundHomeHistoryCategoryHint"),
+    cards: [
+      { id: "total", name: t("fundHomeHistoryAllAssets"), current: snapshot.wealth.totalA, points: seriesOf("total"), color: "var(--series-1)", on: allTypesOn, title: t("fundHomeHistoryCategoryHint") },
+      ...groupIds.filter(id => plottableTypes.has(id)).map(id => ({
+        id, name: groupsById.get(id)?.name, current: groupsById.get(id)?.currentMinor,
+        points: seriesOf(id), color: seriesColor(id), on: detailMode && selectedTypes[0] === id,
+      })),
+    ],
+  });
+  // 底行：所选分类的资产；选“全部资产”时列出所有分类的资产（分类名进副标题）。
+  paintCards(document.getElementById("home-holding-cards"), {
+    key: "holdings",
+    title: detailMode ? `${groupsById.get(selectedTypes[0])?.name || selectedTypes[0]} · ${t("fundHomeHistoryHoldingTitle")}` : t("fundHomeHistoryAllHoldingsTitle"),
+    hint: detailMode ? t("fundHomeHistoryHoldingHint") : t("fundHomeHistoryAllHoldingsHint"),
+    cards: detailEntries.map(entry => ({
+      id: entry.id, name: entry.name, points: entry.points,
+      color: detailMode ? detailColor(entry.id) : seriesColor(entry.groupId),
+      on: !historySelection.detailsOff.has(entry.id),
+      title: hidden ? "" : [entry.name, entry.detail].filter(Boolean).join(" · "),
+    })),
+  });
+  document.querySelectorAll("#home-history-categories [data-history-cat], #home-holding-cards [data-history-cat]").forEach(button => {
+    button.onclick = () => {
+      const id = button.dataset.historyCat;
+      const inTop = button.closest("#home-history-categories") != null;
+      if (inTop) {
+        // 顶部单选：点“全部资产”或再次点已选分类＝回到全部；点其它分类＝只看它。
+        const reset = id === "total" || (!allTypesOn && selectedTypes[0] === id);
+        historySelection.groupId = reset ? null : id;
+        historySelection.detailsOff = new Set();
+      } else if (detailMode) {
+        // 底部：该分类内单独显示／隐藏这条资产线。
+        if (historySelection.detailsOff.has(id)) historySelection.detailsOff.delete(id);
+        else historySelection.detailsOff.add(id);
+      } else {
+        // 全部视图里点资产＝进入它所属分类的明细。
+        const entry = detailEntries.find(item => item.id === id);
+        if (entry) historySelection.groupId = entry.groupId;
+        historySelection.detailsOff = new Set();
+      }
+      home.renderOverview(home.snapshot());
+      const scope = inTop ? "#home-history-categories" : "#home-holding-cards";
+      requestAnimationFrame(() => document.querySelector(`${scope} [data-history-cat="${CSS.escape(id)}"]`)?.focus());
+    };
+  });
   home.renderAttribution(p.attribution);
 };
 home.renderAttribution = data => {
@@ -525,7 +677,6 @@ home.renderBenchmark = data => {
     const line = document.createElementNS(svg.namespaceURI,"polyline");
     line.setAttribute("points",data.points.map(point=>`${(Date.parse(point.date)-Date.parse(data.from))*600/(Date.parse(data.to)-Date.parse(data.from))},${110-Number((BigInt(point[key])-min)*100n/span)}`).join(" "));
     line.setAttribute("fill","none"); line.setAttribute("stroke","currentColor"); line.setAttribute("stroke-width","2"); line.setAttribute("stroke-linecap","round"); line.setAttribute("stroke-linejoin","round");
-    if (key === "benchmarkPpm") line.setAttribute("stroke-dasharray","6 4");
     svg.append(line);
   }
   chart.append(svg);
@@ -736,19 +887,16 @@ home.buildOverviewDetail = function(kind, s, opts) {
   const { hidePrivate, mask, fmtMinorFull, escapeHtml } = opts;
   if (kind === "cash") {
     const c = s.wealth.cash || {};
-    const rows = (c.accounts || []).map(a => `<tr>
-      <td>${hidePrivate() ? t("fundHomeAccount72acfe") : escapeHtml(a.accountName)}</td>
-      <td>${mask(fmtMinorFull(a.cashMinor))}</td>
-      <td>${a.reserveState === "configured" ? mask(fmtMinorFull(a.reservedMinor)) : t("fundHomeNotConfirmed")}</td>
-      <td>${mask(fmtMinorFull(a.reservedByOrdersMinor))}</td>
-      <td>${a.availableMinor != null ? mask(fmtMinorFull(a.availableMinor)) : t("fundHomeNotConfirmed")}</td>
-    </tr>`).join("");
-    return `<table>
-      <thead><tr><td>${t("fundHomeAccount")}</td><td>${t("fundHomeSettledCash")}</td><td>${t("fundHomeReserve")}</td><td>${t("fundHomeCommitment")}</td><td>${t("fundHomeAvailable")}</td></tr></thead>
-      <tbody>${rows || `<tr><td colspan="5">${t("fundHomeNoCashAssetsRecorded")}</td></tr>`}</tbody>
-    </table>
+    const rows = (c.accounts || []).map(a => `<section class="home-cash-account">
+      <h3>${hidePrivate() ? t("fundHomeAccount72acfe") : escapeHtml(a.accountName)}</h3><dl>
+      <div><dt>${t("fundHomeSettledCash")}</dt><dd>${mask(fmtMinorFull(a.cashMinor))}</dd></div>
+      <div><dt>${t("fundHomeReserve")}</dt><dd>${a.reserveState === "configured" ? mask(fmtMinorFull(a.reservedMinor)) : t("fundHomeReserveUnset")}</dd></div>
+      <div><dt>${t("fundHomeCommitment")}</dt><dd>${mask(fmtMinorFull(a.reservedByOrdersMinor))}</dd></div>
+      <div><dt>${t("fundHomeAvailable")}</dt><dd>${a.availableMinor != null ? mask(fmtMinorFull(a.availableMinor)) : "–"}</dd></div>
+    </dl></section>`).join("");
+    return `${rows || t("fundHomeNoCashAssetsRecorded")}
     <div style="margin-top:8px;font-size:12px;color:var(--natives-text-muted)">
-      ${t("fundHomeManageReservesAndCommitmentsInCashReconciliation")}
+      ${t(c.availableMinor == null ? "fundHomeCashBalanceNoReserve" : "fundHomeManageReservesAndCommitmentsInCashReconciliation")}
     </div>`;
   }
   if (kind === "return") {
@@ -788,6 +936,11 @@ home.buildOverviewDetail = function(kind, s, opts) {
       return Number(i.count) > 1 ? `${label} × ${i.count}` : label;
     };
     const issues = (w.issues || []).map(issueLabel).join("；") || t("fundHomeNone");
+    const groups = s.groupAllocation?.groups || [];
+    const amount = value => value == null ? "–" : mask(fmtMinorFull(value));
+    const name = value => hidePrivate() ? "****" : escapeHtml(value);
+    const breakdown = groups.map(g => `<tbody><tr><th scope="row">${name(g.name)}</th><td>${amount(g.currentMinor)}</td></tr>${(g.assets || []).map(a => `<tr><td>${name(a.name)}</td><td>${amount(a.valueMinor)}</td></tr>`).join("")}</tbody>`).join("");
+    const unassigned = s.groupAllocation?.unassignedMinor;
     return `<table>
       <tr><td>${t("fundHomeManagedAssetsA")}</td><td>${w.totalA != null ? mask(fmtMinorFull(w.totalA)) : t("fundHomeNeedsVerificationccf920")}</td></tr>
       <tr><td>${t("fundHomeNoncashMarketValueI")}</td><td>${w.investedI != null ? mask(fmtMinorFull(w.investedI)) : t("fundHomeNeedsVerificationccf920")}</td></tr>
@@ -795,6 +948,9 @@ home.buildOverviewDetail = function(kind, s, opts) {
       <tr><td>${t("fundHomeDataQuality")}</td><td>${escapeHtml(t(qualityKey || "fundHomeNeedsVerificationccf920"))}</td></tr>
       <tr><td>${t("fundHomeItemsToVerify")}</td><td>${escapeHtml(issues)}</td></tr>
     </table>
+    <h3 class="home-card-title">${t("fundHomeAssetBreakdown")}</h3>
+    <table>${breakdown}${unassigned != null && BigInt(unassigned) !== 0n ? `<tbody><tr><td>${t("fundHomeUngrouped")}</td><td>${amount(unassigned)}</td></tr></tbody>` : ""}</table>
+    <div class="home-detail-actions"><button type="button" class="btn" data-wealth-view="positions">${t("fundHomeOverviewHoldings")}</button><button type="button" class="btn" data-wealth-view="assets">${t("fundLedgerNavAssets")}</button></div>
     <div style="margin-top:8px;font-size:12px;color:var(--natives-text-muted)">
       ${t("fundHomeManagedAssetsIncludeOnlyAssetsExplicitlyTracked")}
     </div>`;

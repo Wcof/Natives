@@ -28,6 +28,7 @@ Natives 是单一用户产品：共享页面供 Chrome 扩展与本机 Web 使�
 
 | 任务 | 先读 |
 |---|---|
+| DeepSeek Harness 四个独立插件（ADR-0048 形态 A 已实施；生产签名 payload 待验收） | [ADR-0048](adr/0048-dsh-plugin-third-entry.md)、[执行提示词](development/dsh-plugin-execution-prompt.md)、[证据](development/evidence/dsh-plugin-t0-2026-10-28.md)；空间／文件／Token 统计／投资各一个插件，点击由宿主 Browser 标签打开模块；各自携带同源 runtime 副本，共用同一 Core、数据与 8770；实施状态只在 ROADMAP 汇总 |
 | Chrome 扩展＋本机独立 Web 双入口迁移（进行中，未整体验收） | [完整施工包](/Users/ldh/Downloads/project/plan/memory/dual-entry-migration/README.md)、[当前收尾核验](/Users/ldh/Downloads/project/plan/memory/dual-entry-migration/evidence/20261018-closeout/acceptance.md)、[当前逐页对照](/Users/ldh/Downloads/project/plan/memory/dual-entry-migration/evidence/20261018-closeout/page-comparison.html)；实际进度只在 ROADMAP 汇总。旧截图、局部脚本与诊断长测不自动继承完整验收。 |
 | 2026-10-11 投资产品流程与已确认原型实施 | [当前实施方案](/Users/ldh/Downloads/project/plan/memory/2026-10-11-investment-implementation-plan.md)、[执行提示词](/Users/ldh/Downloads/project/plan/memory/2026-10-11-investment-agent-execution-prompt.md)、[设计与事实索引](/Users/ldh/Downloads/project/plan/memory/README.md)；覆盖资产分布／组合设置／目标水位、首页原地 AI、私人持仓与基金四部分详情及全页面回归。原型仅作设计参考，真实数据契约与工程规范优先；生产实施状态见 ROADMAP |
 | 投资私人详情与资讯决定 | [数据与生命周期补充契约](contracts/fund-holding-detail-contract.md)：历史账户份额、价格覆盖、报告引用与 v28 增量决定记录；当前验证状态见 ROADMAP |

@@ -1,0 +1,879 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<title>Natives · 把日常连起来 · 60s</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{background:#0B0C0A;height:100%;overflow:hidden}
+  #vp{position:fixed;left:0;top:0;background:#0B0C0A}
+  #stage{position:absolute;left:0;top:0;width:1920px;height:1080px;overflow:hidden;background:#0B0C0A}
+  .sc{position:absolute;left:0;top:0;width:1920px;height:1080px;overflow:hidden}
+  .serif{font-family:"Songti SC",STSong,"Times New Roman",serif;font-weight:400;font-synthesis:none}
+  .mono{font-family:"SF Mono",Menlo,Monaco,monospace;font-weight:400}
+  .mask{overflow:hidden;display:block}
+  .mask>span{display:block;will-change:transform}
+  .paper{background:#F5F6F8}
+  .void{background:#0B0C0A}
+
+  .hall{position:absolute;left:96px;top:380px}
+  .hmask{font-family:"Songti SC",STSong,"Times New Roman",serif;font-weight:400;font-size:104px;line-height:1.18;letter-spacing:.035em;color:#202733}
+  .hsub{margin-top:30px;font-size:26px;line-height:1.6;letter-spacing:.02em;color:#5B6677}
+  .void .hmask{color:#F2F2EA}
+  .void .hsub{color:#9FA190}
+
+  /* ── S1 文件墙 ── */
+  #s1 .wall{position:absolute;left:880px;top:0;width:944px;height:1080px;overflow:hidden}
+  #s1 .head{position:absolute;left:0;top:0;width:100%;height:96px;background:#F5F6F8;z-index:3}
+  #s1 .head .n{position:absolute;left:0;top:64px;font-size:13px;letter-spacing:.10em;color:rgba(32,39,51,.42)}
+  #s1 .head .d{position:absolute;right:124px;top:64px;font-size:13px;letter-spacing:.10em;color:rgba(32,39,51,.42)}
+  #s1 .head .s{position:absolute;right:0;top:64px;font-size:13px;letter-spacing:.10em;color:rgba(32,39,51,.42)}
+  #s1 .head .ln{position:absolute;left:0;top:96px;width:110%;height:1px;background:#E5E9EF}
+  #s1 .track{position:absolute;left:0;top:-120px;width:100%}
+  .frow{position:relative;height:34px;line-height:34px;font-size:17px;letter-spacing:.01em;white-space:nowrap;color:rgba(32,39,51,.32)}
+  .frow.dir{color:rgba(32,39,51,.46)}
+  .frow.pin{color:#345780}
+  .frow .nm{display:inline-block;position:relative}
+  .frow .caret{display:inline-block;width:20px;color:#345780;opacity:0}
+  .frow .dt{position:absolute;right:124px;top:0;font-size:14px;color:rgba(32,39,51,.26)}
+  .frow .sz{position:absolute;right:0;top:0;font-size:14px;color:rgba(32,39,51,.26)}
+  .frow .ul{position:absolute;left:0;right:0;bottom:-3px;height:1px;background:#345780;transform-origin:left;transform:scaleX(0)}
+
+  /* ── S2 ── */
+  #s2 .win{position:absolute;left:960px;top:130px;width:806px;height:820px;background:#FFFFFF;border:1px solid #E5E9EF;border-radius:12px;overflow:hidden;box-shadow:0 14px 40px rgba(32,39,51,.06)}
+  #s2 .bar{position:absolute;left:0;top:0;width:100%;height:46px;border-bottom:1px solid #EEF1F5}
+  #s2 .dots{position:absolute;left:22px;top:19px;display:flex;gap:7px}
+  #s2 .dots i{width:9px;height:9px;border-radius:50%;background:#E9EDF2;display:block}
+  #s2 .guide{position:absolute;left:72px;top:150px;width:1px;height:560px;background:#F2F4F7}
+  #s2 .doc{position:absolute;left:96px;top:352px;width:620px;display:flex;align-items:center;font-size:30px;line-height:1.6;color:#202733;letter-spacing:.01em}
+  #s2 .doc .caret{display:inline-block;width:2px;height:34px;background:#345780;margin-left:3px;flex:none}
+  #s2 .note{position:absolute;left:96px;top:462px;width:620px;font-size:21px;line-height:1.6;color:#8E98A7;letter-spacing:.02em}
+  #s2 .sep{position:absolute;left:96px;top:436px;width:610px;height:1px;background:#EDF0F4}
+
+  /* ── S3 ── */
+  #s3 .left{position:absolute;left:0;top:0;width:960px;height:1080px;background:#F5F6F8;overflow:hidden}
+  #s3 .right{position:absolute;left:960px;top:0;width:960px;height:1080px;background:#0B0C0A}
+  #s3 .seamA{position:absolute;z-index:8;left:959px;top:0;width:1px;height:1080px;background:#202733}
+  #s3 .seamB{position:absolute;z-index:8;left:960px;top:0;width:1px;height:1080px;background:rgba(205,242,75,.42)}
+  #s3 .caret{position:absolute;z-index:8;left:979px;top:480px;width:3px;height:40px;background:#CDF24B}
+  #s3 .scWipe{position:absolute;z-index:6;top:0;height:1080px;background:#0B0C0A;width:0;left:960px}
+  #s3 .winGhost{position:absolute;left:960px;top:130px;width:806px;height:820px;border:1px solid #23271D;border-radius:0 10px 10px 0}
+  #s3 .walllbl{position:absolute;left:984px;top:94px;font-size:14px;letter-spacing:.22em;color:#8A95A4}
+
+  /* ── S4 ── */
+  #s4 .hall{top:132px}
+  #s4 .hmask{font-size:82px}
+  #s4 .hsub{font-size:24px;margin-top:22px}
+  #s4 .ch{position:absolute;background:#CDF24B}
+  #s4 .ticks{position:absolute;left:960px;top:0;width:0;height:0}
+  #s4 .tick{position:absolute;left:-8px;width:26px;height:1px;background:rgba(205,242,75,.20)}
+  #s4 .ground{position:absolute;left:269px;top:560px;width:1382px;height:1px;background:rgba(242,242,234,.07);opacity:0}
+  #s4 .node{position:absolute;width:24px;height:24px;background:#0B0C0A;border:1px solid #CDF24B;margin-left:-12px;margin-top:-12px}
+  #s4 .nd{position:absolute;left:1010px;width:520px;text-align:left}
+  #s4 .nd .k{font-size:14px;letter-spacing:.16em;color:#A2A896;margin-bottom:9px}
+  #s4 .nd .n{font-size:18px;color:#F2F2EA;letter-spacing:.005em}
+  #s4 .nd .d{font-size:14px;color:#8F9585;margin-top:8px;line-height:1.5}
+  #s4 .pkt{position:absolute;width:13px;height:13px;background:#0B0C0A;border:3px solid #F2F2EA;margin-left:-6.5px;margin-top:-6.5px;box-sizing:border-box}
+
+  /* ── S5 ── */
+  #s5 .hall{top:132px}
+  #s5 .hmask{font-size:82px}
+  #s5 .hsub{font-size:24px;margin-top:22px}
+  #s5 .rule{position:absolute;background:#6A7160}
+  #s5 .room{position:absolute}
+  #s5 .rm{font-size:22px;color:#F2F2EA;letter-spacing:.12em}
+  #s5 .rs{font-size:13px;color:#8E957F;letter-spacing:.07em;margin-top:10px}
+  #s5 .fur{position:absolute;background:#4A5040}
+  #s5 .door{position:absolute;background:#0B0C0A}
+
+  /* ── S6 ── */
+  #s6 .win{position:absolute;left:422px;top:200px;width:1076px;height:640px;background:#0F100D;border:1px solid #2C3026;border-radius:10px;overflow:hidden}
+  #s6 .bar{position:absolute;left:0;top:0;width:100%;height:52px;border-bottom:1px solid #23271F}
+  #s6 .bar .l{position:absolute;left:40px;top:18px;font-size:14px;color:#9FA190;letter-spacing:.08em}
+  #s6 .bar .dot{position:absolute;left:24px;top:23px;width:6px;height:6px;background:#CDF24B;border-radius:50%}
+  #s6 .bar .r{position:absolute;right:24px;top:18px;font-size:12px;color:#6E7466;letter-spacing:.10em}
+  #s6 .hall{top:52px}
+  #s6 .hmask{font-size:62px}
+  #s6 .q{position:absolute;left:40px;top:96px;width:500px;font-size:26px;line-height:1.62;color:#F2F2EA;letter-spacing:.01em}
+  #s6 .step{position:absolute;left:40px;height:26px;line-height:26px;font-size:15px;letter-spacing:.01em;white-space:nowrap}
+  #s6 .step .tick{display:inline-block;width:6px;height:6px;background:#CDF24B;margin-right:14px;vertical-align:2px}
+  #s6 .step .k{color:#CDF24B;display:inline-block;width:66px}
+  #s6 .step .v{color:#9FA190}
+  #s6 .done{position:absolute;left:40px;top:474px;font-size:19px;color:#9FA190;letter-spacing:.03em}
+  #s6 .cap{position:absolute;left:580px;top:66px;font-size:12px;color:#6E7466;letter-spacing:.10em}
+  #s6 .sheet{position:absolute;left:580px;top:96px;width:456px;height:440px;border-top:1px solid #2C3026;border-bottom:1px solid #2C3026}
+  #s6 .hr{position:absolute;left:0;width:100%;height:1px;background:#2B3024}
+  #s6 .vr{position:absolute;top:0;width:1px;height:100%;background:#2B3024}
+  #s6 .cell{position:absolute;height:1px;background:#495040}
+  #s6 .band{position:absolute;left:183px;top:0;width:91px;height:0;background:rgba(205,242,75,.13)}
+  #s6 .brk{position:absolute;background:#CDF24B}
+  
+
+  /* ── S7 ── */
+  #s7 .hall{top:122px}
+  #s7 .hmask{font-size:88px}
+  #s7 .rule{position:absolute;background:#33382C}
+  #s7 .cell{position:absolute;width:780px}
+  #s7 .code{font-size:13px;letter-spacing:.16em;color:#CDF24B}
+  #s7 .ttl{font-size:30px;color:#F2F2EA;letter-spacing:.04em;margin-top:16px}
+  #s7 .det{font-size:19px;color:#8F9585;letter-spacing:.02em;margin-top:14px;line-height:1.7}
+
+  /* ── S8 ── */
+  #s8 .edge{position:absolute;background:#6A7160}
+  #s8 .echo{position:absolute;background:#414636}
+  #s8 .hall{left:154px;top:392px;width:640px}
+  #s8 .l1{font-family:"Songti SC",STSong,serif;font-weight:400;font-size:44px;line-height:1.5;letter-spacing:.04em;color:#8F9585}
+  #s8 .l2{margin-top:18px;font-family:"Songti SC",STSong,serif;font-weight:400;font-size:176px;line-height:1.02;letter-spacing:.05em;color:#F2F2EA}
+
+  /* ── 标字 ── */
+  #lockup{position:absolute;left:623px;top:474px;height:132px;display:flex;align-items:center;gap:36px}
+  #markA{position:relative;width:132px;height:132px;border-radius:50%;background:#CDF24B;flex:none}
+  #markA svg{position:absolute;left:0;top:0;width:100%;height:100%}
+  #wordmark{font-family:-apple-system,BlinkMacSystemFont,"PingFang SC",sans-serif;font-weight:600;font-size:132px;line-height:1;letter-spacing:-.032em;color:#F2F2EA;white-space:nowrap;overflow:hidden}
+  #wordmark .lw{display:inline-block;overflow:hidden;vertical-align:bottom}
+  #wordmark .li{display:inline-block;will-change:transform}
+  #tagline{position:absolute;left:960px;top:648px;transform:translateX(-50%);font-size:29px;letter-spacing:.18em;color:#9FA190;white-space:nowrap}
+  #endline{position:absolute;left:960px;top:700px;transform:translateX(-50%);font-size:24px;letter-spacing:.05em;color:#8F9585;white-space:nowrap}
+  .meta{position:absolute;font-size:13px;letter-spacing:.10em;color:rgba(242,242,234,.30)}
+  .wm{position:absolute;font-size:11px;letter-spacing:.14em;color:rgba(242,242,234,.32)}
+
+  #morph{position:absolute;z-index:200;background:#FFFFFF;border:1px solid #E5E9EF;opacity:0}
+  #wipe{position:absolute;z-index:200;left:0;top:0;width:1920px;height:2px;background:#CDF24B;opacity:0}
+  #flash{position:absolute;z-index:220;left:0;top:0;width:1920px;height:1080px;background:#CDF24B;transform-origin:1288px 516px;transform:scale(0);opacity:0}
+  #markM{position:absolute;z-index:210;border:2px solid #CDF24B;background:transparent;opacity:0}
+  #markM svg{position:absolute;left:0;top:0;width:100%;height:100%;opacity:0}
+
+  .hsub{font-size:30px}
+  #s4 .nd .k,#s4 .nd .d{font-size:24px}
+  #s4 .nd .n{font-size:30px}
+  #s4 .hall{top:100px}
+  #s5 .rm{font-size:32px} #s5 .rs{font-size:20px}
+  #s6 .step{font-size:23px} #s6 .step .k{width:70px}
+  #s6 .done{font-size:23px} #s6 .cap{font-size:20px}
+  #s6 .bar .l,#s6 .bar .r{font-size:19px;top:14px}
+  #s6 .sheet .hr,#s6 .sheet .vr,#s6 .sheet .cell,#s6 .sheet .band,#s6 .sheet .brk{visibility:hidden}
+  #assetSummary{position:relative;z-index:2;width:100%;border-collapse:collapse;color:#F2F2EA;font:24px -apple-system,"PingFang SC",sans-serif}
+  #assetSummary th,#assetSummary td{text-align:left;border-bottom:1px solid #2C3026;padding:25px 8px}
+  #assetSummary th{color:#CDF24B;font-weight:500}
+  #assetSummary td:last-child{font-size:22px;color:#9FA190}
+  #s7 .hmask{font-size:82px} #s7 .code{font-size:20px} #s7 .det{font-size:24px}
+  #markA svg,#markM svg,#lockup2 svg{padding:24px}
+  .meta{font-size:22px;color:#9FA190;letter-spacing:0}
+  .wm{font-size:18px;color:#9FA190;letter-spacing:0}
+#s2 .note{color:#5B6677;font-size:24px}
+.frow,.frow.dir,.frow .dt,.frow .sz,#s1 .head .n,#s1 .head .d,#s1 .head .s{color:#5B6677}
+.frow.pin{color:#345780}
+</style>
+</head>
+<body>
+<div id="vp">
+  <div id="stage">
+
+    <section class="sc paper" id="s1">
+      <div style="position:absolute;left:96px;top:76px;font:600 30px -apple-system,sans-serif;color:#202733">Natives</div><div class="wall" id="wall">
+        <div class="head"><div class="n">文件示意</div><div class="d">修改时间</div><div class="s">大小</div><div class="ln"></div></div>
+        <div class="track" id="track"></div>
+      </div>
+      <div class="hall">
+        <div class="mask hmask"><span id="s1h">文件在这里</span></div>
+        <div class="hsub" id="s1s">本机文件，随时整理。</div>
+      </div>
+    </section>
+
+    <section class="sc paper" id="s2">
+      <div class="win">
+        <div class="bar"><div class="dots"><i></i><i></i><i></i></div></div>
+        <div class="guide"></div>
+        <div class="doc"><span id="s2t"></span><span class="caret" id="s2c"></span></div>
+        <div class="sep" id="s2sep"></div>
+        <div class="note" id="s2n">在多个入口之间来回切换。</div>
+      </div>
+      <div class="hall">
+        <div class="mask hmask"><span id="s2h">资产在那边</span></div>
+        <div class="hsub" id="s2s">账户、持仓与现金，各有各的记录。</div>
+      </div>
+    </section>
+
+    <section class="sc" id="s3">
+      <div class="left"></div>
+      <div class="right"></div>
+      <div class="seamA" id="seamA"></div>
+      <div class="seamB" id="seamB"></div>
+      <div class="caret" id="s3c"></div>
+      <div class="winGhost" id="winGhost"></div>
+      <div class="walllbl" id="s3lbl">本地能力</div>
+      <div class="scWipe" id="s3Wipe"></div>
+      <div class="hall">
+        <div class="mask hmask"><span id="s3h">把日常连起来</span></div>
+        <div class="hsub" id="s3s">从浏览器，抵达本机数据。</div>
+      </div>
+    </section>
+
+    <section class="sc void" id="s4">
+      <div class="hall">
+        <div class="mask hmask"><span id="s4h">从一个入口出发</span></div>
+        <div class="hsub" id="s4s">扩展与本地 Web，共享本机服务。</div>
+      </div>
+      <div class="ch" id="ch"></div>
+      <div class="ground" id="ground"></div>
+      <div class="ticks" id="s4ticks"></div>
+      <div id="s4nodes"></div>
+      <div class="pkt" id="pkt"></div>
+    </section>
+
+    <section class="sc void" id="s5">
+      <div class="hall">
+        <div class="mask hmask"><span id="s5h">各就其位</span></div>
+        <div class="hsub" id="s5s">空间、文件、投资与 AI 用量。</div>
+      </div>
+      <div class="rule" id="pT1"></div>
+      <div class="rule" id="pT2"></div>
+      <div class="rule" id="pL"></div>
+      <div class="rule" id="pB"></div>
+      <div class="rule" id="pR"></div>
+      <div class="rule" id="pV"></div>
+      <div class="rule" id="pH"></div>
+      <div class="door" id="pDoor"></div>
+      <div class="rule" id="jambL"></div>
+      <div class="rule" id="jambR"></div>
+      <div class="rule" id="sill"></div>
+      <div id="rooms"></div>
+      <div id="furn"></div>
+    </section>
+
+    <section class="sc void" id="s6">
+      <div class="hall"><div class="mask hmask"><span id="s6h">看清每一笔</span></div></div>
+      <div class="win">
+        <div class="bar"><div class="dot"></div><div class="l">投资总览</div><div class="r">能力演绎</div></div>
+        <div class="q" id="s6q">持仓、现金与收益，合在一处。</div>
+        <div class="step" id="st1"><span class="tick"></span><span class="k">行情</span><span class="v">公开报价与基金净值</span></div>
+        <div class="step" id="st2"><span class="tick"></span><span class="k">账本</span><span class="v">份额、成本与现金记录</span></div>
+        <div class="step" id="st3"><span class="tick"></span><span class="k">收益</span><span class="v">按已记录的事实计算</span></div>
+        <div class="done" id="s6done">数据缺口有原因，来源日期看得见。</div>
+        <div class="cap" id="s6cap">资产构成 · 能力示意</div>
+        <div class="sheet" id="sheet"><table id="assetSummary"><thead><tr><th>资产</th><th>记录</th></tr></thead><tbody><tr><td>基金／股票</td><td>份额 × 单价</td></tr><tr><td>账户现金</td><td>已记录余额</td></tr><tr><td>其他资产</td><td>登记估值</td></tr><tr><td>未知数据</td><td>说明缺失原因</td></tr></tbody></table></div>
+      </div>
+    </section>
+
+    <section class="sc void" id="s7">
+      <div class="hall"><div class="mask hmask"><span id="s7h">本地优先，边界清楚</span></div></div>
+      <div class="rule" id="mT"></div>
+      <div class="rule" id="mM"></div>
+      <div class="rule" id="mB"></div>
+      <div class="rule" id="mV"></div>
+      <div class="cell" id="c1" style="left:154px;top:400px">
+        <div class="code">files</div><div class="ttl">文件在本机管理</div><div class="det">文件操作由本机进程执行。</div>
+      </div>
+      <div class="cell" id="c2" style="left:986px;top:400px">
+        <div class="code">keychain</div><div class="ttl">凭据不进模块</div><div class="det">凭据保存在系统钥匙串，业务页面不接收。</div>
+      </div>
+      <div class="cell" id="c3" style="left:154px;top:672px">
+        <div class="code">model</div><div class="ttl">模型由你指定</div><div class="det">直连你所选的供应商，不经中转。</div>
+      </div>
+      <div class="cell" id="c4" style="left:986px;top:672px">
+        <div class="code">127.0.0.1</div><div class="ttl">只监听本机</div><div class="det">不监听 0.0.0.0，不暴露到局域网。</div>
+      </div>
+    </section>
+
+    <section class="sc void" id="s8">
+      <div class="edge" id="eT"></div>
+      <div class="edge" id="eB"></div>
+      <div class="edge" id="eL"></div>
+      <div class="edge" id="eR"></div>
+      <div class="echo" id="ec1"></div>
+      <div class="echo" id="ec2"></div>
+      <div class="echo" id="ec3"></div>
+      <div class="hall">
+        <div class="mask"><span class="l1" id="s8a">你的机器，就是</span></div>
+        <div class="mask"><span class="l2" id="s8b">工作台</span></div>
+      </div>
+    </section>
+
+    <section class="sc void" id="s9">
+      <div id="lockup">
+        <div id="markA">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#0B0C0A" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m13 2-8 12h6l-1 8 9-13h-6z" /></svg>
+        </div>
+        <div id="wordmark"><span class="lw"><span class="li" id="wm0">N</span></span><span class="lw"><span class="li" id="wm1">a</span></span><span class="lw"><span class="li" id="wm2">t</span></span><span class="lw"><span class="li" id="wm3">i</span></span><span class="lw"><span class="li" id="wm4">v</span></span><span class="lw"><span class="li" id="wm5">e</span></span><span class="lw"><span class="li" id="wm6">s</span></span></div>
+      </div>
+      <div id="tagline">本地优先的浏览器工作台</div>
+    </section>
+
+    <section class="sc void" id="s10">
+      <div id="lockup2" style="position:absolute;left:623px;top:431px;height:132px;display:flex;align-items:center;gap:36px;opacity:0">
+        <div style="position:relative;width:132px;height:132px;border-radius:50%;background:#CDF24B;flex:none">
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#0B0C0A" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m13 2-8 12h6l-1 8 9-13h-6z" /></svg>
+        </div>
+        <div style="font-family:-apple-system,BlinkMacSystemFont,'PingFang SC',sans-serif;font-weight:600;font-size:132px;line-height:1;letter-spacing:-.032em;color:#F2F2EA;white-space:nowrap">Natives</div>
+      </div>
+      <div id="endline" style="opacity:0">空间、文件、投资与 AI，用一个入口连接。</div>
+    <div class="meta" style="left:96px;top:1006px">AI 请求直连你配置的供应商</div>
+      <div class="wm" style="right:96px;top:1008px">Created by Huashu-Design</div>
+    </section>
+
+    <div id="morph"></div>
+    <div id="flash"></div>
+    <div id="wipe"></div>
+    <div id="markM">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#0B0C0A" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m13 2-8 12h6l-1 8 9-13h-6z" /></svg>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ══════════════════════════════════════════════════════════
+   Natives · 把日常连起来 · 60s deterministic HTML animation
+   render(t) 是 t 的纯函数；每场拿局部时间，同 t 同帧。
+   ══════════════════════════════════════════════════════════ */
+const DURATION = 60.0, W = 1920, H = 1080;
+
+const clamp = (v,a=0,b=1)=> v<a?a:(v>b?b:v);
+const seg = (t,a,b)=> b<=a ? (t>=b?1:0) : clamp((t-a)/(b-a));
+const lerp = (a,b,k)=> a+(b-a)*k;
+const E = {
+  expo: t => t>=1?1:1-Math.pow(2,-10*t),
+  quart: t => 1-Math.pow(1-t,4),
+  io: t => t<.5 ? 4*t*t*t : 1-Math.pow(-2*t+2,3)/2,
+  lin: t => t
+};
+const $ = id => document.getElementById(id);
+const px = v => (Math.round(v*100)/100)+'px';
+const op = (el,v)=> el.style.opacity = Math.max(0,Math.min(1,v));
+
+/* ── 文件墙数据 ─────────────────────────────────────── */
+const FILES = [
+ [0,'~/',1],[1,'.natives-local/',1],[2,'product-source/',1],[3,'natives-app-runtime',0],
+ [1,'Applications/',1],[2,'Natives.app',0],
+ [1,'Desktop/',1],[2,'截屏 2026-10-24 22.10.png',0],[2,'会议记录-2026-09.md',0],
+ [1,'Downloads/',1],[2,'natives-0.1.0.dmg',0],[2,'财报-600900-2026H1.pdf',0],[2,'design-system.zip',0],
+ [1,'Library/',1],[2,'Application Support/',1],[3,'Natives/',1],
+ [1,'Documents/',1],[2,'2026-Q3-研发台账.xlsx',0,1],
+ [2,'2025-年度决算.xlsx',0],[2,'合同/',1],[3,'供应商-2026-04.pdf',0],[3,'框架协议-签署版.pdf',0],
+ [2,'报销/',1],[3,'2026-09.pdf',0],
+ [1,'Pictures/',1],[2,'长白山-2026-07/',1],[3,'DSC_0412.HEIC',0],[3,'DSC_0418.HEIC',0],
+ [1,'project/',1],[2,'natives/',1],[3,'crates/',1],[4,'native-file-host/',1],[5,'src/',1],[6,'main.rs',0],[6,'session.rs',0],
+ [4,'file-manager-core/',1],[5,'src/',1],[6,'index.rs',0],
+ [3,'modules/',1],[4,'fund/',1],[5,'src/',1],[6,'api/',1],[4,'tokenusage/',1],
+ [3,'docs/',1],[4,'standards/',1],[5,'technical/',1],[6,'03-data.md',0],
+ [3,'extension/',1],[4,'app.html',0],[4,'space.html',0],
+ [2,'meeting_livekit/',1],[3,'src/',1],[4,'editor/',1],[5,'road-network/',1],
+ [1,'Knowledge/',1],[2,'MyKnowledge/',1],[3,'wiki/',1],[4,'log.md',0],[4,'governance-log.md',0],[3,'raw/',1],[4,'2026-10/',1],
+ [1,'.natives/',1],[2,'apps/',1],[3,'fund/',1],[4,'data/',1],[5,'fund.db',0]
+];
+const ROW_H = 34;
+
+function stamp(i){
+  // 确定性的伪时间：按行号铺开在 2026-06 ~ 2026-10
+  const day = 6 + (i*7)%5;                 // 6..10 月
+  const dd  = 1 + (i*13)%27;
+  const hh  = 8 + (i*5)%11;
+  const mm  = (i*17)%60;
+  return `2026-${String(day).padStart(2,'0')}-${String(dd).padStart(2,'0')} ${String(hh).padStart(2,'0')}:${String(mm).padStart(2,'0')}`;
+}
+function sizeOf(i){
+  const kb = 4 + (i*37)%980;
+  return kb>=1024 ? (kb/1024).toFixed(1)+' MB' : kb+' KB';
+}
+
+function buildWall(host, withPin){
+  const frag = document.createDocumentFragment();
+  let pin = null;
+  FILES.forEach((f,i)=>{
+    const [depth,name,isDir,isPin] = f;
+    const d = document.createElement('div');
+    d.className = 'frow' + (isDir?' dir':'') + (isPin?' pin':'');
+    d.style.paddingLeft = (depth*18)+'px';
+    d.innerHTML =
+      '<span class="caret">›</span><span class="nm">' + name.replace(/&/g,'&amp;').replace(/</g,'&lt;') + '</span>' +
+      '<span class="dt">' + stamp(i) + '</span>' +
+      '<span class="sz">' + (isDir?'—':sizeOf(i)) + '</span>';
+    if (isPin && withPin){
+      const ul = document.createElement('div'); ul.className='ul';
+      d.querySelector('.nm').appendChild(ul);
+      pin = {el:d, ul, idx:i};
+    }
+    frag.appendChild(d);
+  });
+  host.appendChild(frag);
+  return pin;
+}
+const PIN = buildWall($('track'), true);
+
+const PIN_Y = 500;
+const TRACK_TOP = PIN_Y - PIN.idx*ROW_H - ROW_H/2;   // 让 pin 行中线落在 y=500
+
+/* ── 4 · 通道节点 ─────────────────────────────────────── */
+const NODES = [
+  {y:230, k:'入口', n:'浏览器里的工作台', d:'Chrome 扩展与本地 Web'},
+  {y:395, k:'连接', n:'认证后的本机服务', d:'权限与数据由本机进程管理'},
+  {y:560, k:'记录', n:'你的文件与资产账本', d:'保留本地记录，连接公开行情'}
+];
+
+/* ── 5 · 各就其位 ─────────────────────────────────────── */
+const PLAN = {X0:269, Y0:560, X1:1651, Y1:1000, VX:860, HY:780};
+const ROOMS = [
+  {x:269, y:560, w:591, h:220, name:'空间', sub:'workspace'},
+  {x:860, y:560, w:791, h:220, name:'文件', sub:'files'},
+  {x:269, y:780, w:591, h:220, name:'AI 用量', sub:'tokenusage'},
+  {x:860, y:780, w:791, h:220, name:'投资', sub:'fund'}
+];
+
+const SHEET_ROWS = 9, SHEET_COLS = 5, SHEET_W = 456, SHEET_H = 440;
+
+/* ── 构建 ─────────────────────────────────────────────── */
+(function build(){
+  const ticks = $('s4ticks');
+  for(let y=166; y<=552; y+=26){
+    const d = document.createElement('div'); d.className='tick';
+    d.style.top = y+'px'; ticks.appendChild(d);
+  }
+  const nhost = $('s4nodes');
+  NODES.forEach((n,i)=>{
+    const dot = document.createElement('div'); dot.className='node'; dot.id='ndot'+i;
+    dot.style.left = '960px'; dot.style.top = n.y+'px'; nhost.appendChild(dot);
+    const lab = document.createElement('div'); lab.className='nd'; lab.id='nlab'+i;
+    lab.style.top = (n.y-38)+'px';
+    lab.innerHTML = '<div class="k">'+n.k+'</div><div class="n">'+n.n+'</div><div class="d">'+n.d+'</div>';
+    nhost.appendChild(lab);
+  });
+  const rhost = $('rooms');
+  ROOMS.forEach((r,i)=>{
+    const el = document.createElement('div'); el.className='room'; el.id='room'+i;
+    el.style.left = (r.x+34)+'px'; el.style.top = (r.y+30)+'px';
+    el.innerHTML = '<div class="rm">'+r.name+'</div><div class="rs">'+r.sub+'</div>';
+    rhost.appendChild(el);
+  });
+  const fhost = $('furn');
+  const mk = (x,y,w,h,id)=>{
+    const d=document.createElement('div'); d.className='fur'; d.id=id;
+    d.style.left=x+'px'; d.style.top=y+'px'; d.style.width=w+'px'; d.style.height=h+'px';
+    d.style.transformOrigin='left center'; fhost.appendChild(d); return d;
+  };
+  mk(300, 672, 280, 1, 'f1'); mk(300, 704, 400, 1, 'f2'); mk(300, 736, 220, 1, 'f3');
+  mk(890, 692, 300,1,'f4'); mk(890, 716, 380,1,'f5'); mk(890, 740, 260,1,'f6');
+  mk(890, 762, 330,1,'f7'); mk(890, 740, 260,1,'f8');
+  mk(300, 900, 24, 24, 'f9'); mk(340, 912, 70, 1, 'f10');
+  // 投资：折线用旋转的细条拼
+  const pts=[[890,960],[950,930],[1010,946],[1070,896],[1130,914],[1190,868]];
+  for(let i=0;i<pts.length-1;i++){
+    const [x1,y1]=pts[i], [x2,y2]=pts[i+1];
+    const len = Math.hypot(x2-x1,y2-y1), ang = Math.atan2(y2-y1,x2-x1)*180/Math.PI;
+    const d = document.createElement('div'); d.className='fur'; d.id='sp'+i;
+    d.style.left=x1+'px'; d.style.top=y1+'px'; d.style.width=len+'px'; d.style.height='1px';
+    d.style.transformOrigin='left center'; d.style.transform='rotate('+ang+'deg)';
+    fhost.appendChild(d);
+  }
+  ['st1','st2','st3'].forEach((id,i)=>{ $(id).style.top = (206+i*46)+'px'; });
+
+  const sh = $('sheet');
+  for(let i=0;i<=SHEET_ROWS;i++){
+    const d=document.createElement('div'); d.className='hr';
+    d.style.top = (i*(SHEET_H/SHEET_ROWS))+'px'; sh.appendChild(d);
+  }
+  for(let i=0;i<=SHEET_COLS;i++){
+    const d=document.createElement('div'); d.className='vr';
+    d.style.left = (i*(SHEET_W/SHEET_COLS))+'px'; sh.appendChild(d);
+  }
+  for(let r=0;r<SHEET_ROWS;r++){
+    for(let c=0;c<3;c++){
+      const d=document.createElement('div'); d.className='cell';
+      d.style.left = (c*(SHEET_W/SHEET_COLS)+14)+'px';
+      d.style.top  = (r*(SHEET_H/SHEET_ROWS)+(SHEET_H/SHEET_ROWS)/2)+'px';
+      d.style.width = (SHEET_W/SHEET_COLS-28)+'px';
+      d.id = 'cl'+r+'_'+c;
+      sh.appendChild(d);
+    }
+  }
+  const band = document.createElement('div'); band.className='band'; band.id='band'; sh.appendChild(band);
+  ['bk1','bk2','bk3'].forEach(id=>{
+    const d=document.createElement('div'); d.className='brk'; d.id=id; sh.appendChild(d);
+  });
+})();
+
+/* ── 标字量宽 ─────────────────────────────────────────── */
+let MARK_X = 623, LOCK_W = 674;
+function measureLockup(){
+  const w = $('wordmark').getBoundingClientRect().width;
+  LOCK_W = 132 + 36 + w;
+  MARK_X = (W - LOCK_W)/2;
+  $('lockup').style.left = MARK_X + 'px';
+  $('lockup2').style.left = MARK_X + 'px';
+}
+
+/* ── 场景时间表 ───────────────────────────────────────── */
+const SC = [
+  {id:'s1', a:0.0,  b:4.6,  fade:0},
+  {id:'s2', a:4.6,  b:9.2,  fade:.4},
+  {id:'s3', a:9.2,  b:14.0, fade:.35},
+  {id:'s4', a:14.0, b:20.4, fade:.35},
+  {id:'s5', a:20.4, b:27.2, fade:.4},
+  {id:'s6', a:27.2, b:32.2, fade:0},
+  {id:'s7', a:32.16, b:38.8, fade:0},
+  {id:'s8', a:38.8, b:48.0, fade:.4},
+  {id:'s9', a:47.4, b:53.6, fade:0},
+  {id:'s10',a:53.6, b:60.0, fade:0}
+];
+
+const maskIn = (el,k)=> el.style.transform = 'translateY(' + ((1-k)*112).toFixed(2) + '%)';
+
+/* ══════ 1 ══════ */
+function s1(t){
+  const sc = 70*E.quart(seg(t,0,3.6));
+  const out = 1 - seg(t,4.12,4.48);
+  op($('wall'), out);
+  op(document.querySelector('#s1 .hall'), out);
+  $('track').style.top = px(TRACK_TOP - sc);
+  PIN.el.style.background = 'rgba(52,87,120,' + (0.072*seg(t,1.1,1.7)).toFixed(3) + ')';
+  PIN.ul.style.transform = 'scaleX(' + E.quart(seg(t,1.25,2.05)).toFixed(3) + ')';
+  PIN.el.querySelector('.caret').style.opacity = seg(t,1.2,1.65);
+  maskIn($('s1h'), 1);
+  $('s1s').style.opacity = 1;
+  $('s1s').style.transform = 'translateY(' + lerp(18,0,E.quart(seg(t,0.5,1.1))).toFixed(1) + 'px';
+}
+
+/* ══════ 2 ══════ */
+const TYPED = '账户、持仓、现金，都想看清楚';
+function s2(t){
+  const k = E.lin(seg(t,1.25,2.85));
+  const n = Math.floor(k*TYPED.length);
+  const done = t > 2.95;
+  $('s2t').textContent = done ? TYPED : TYPED.slice(0,n);
+  $('s2t').style.color = done ? '#5B6677' : '#202733';
+  $('s2c').style.opacity = (t>1.0 && t<2.95) ? (Math.floor(t*3.2)%2===0?1:0.1) : 0;
+  op($('s2sep'), seg(t,2.95,3.25));
+  op($('s2n'), seg(t,3.1,3.6));
+  $('s2n').style.transform = 'translateY(' + lerp(8,0,E.quart(seg(t,3.1,3.6))).toFixed(1) + 'px';
+  maskIn($('s2h'), E.quart(seg(t,0.1,0.88)));
+  $('s2s').style.opacity = seg(t,0.45,1.05);
+  $('s2s').style.transform = 'translateY(' + lerp(18,0,E.quart(seg(t,0.45,1.05))).toFixed(1) + 'px';
+}
+
+/* ══════ 3 ══════ */
+function s3(t){
+  const grow = E.expo(seg(t,0.0,0.62));
+  const seamTop = lerp(130,0,grow), seamH = lerp(820,1080,grow);
+  const A=$('seamA'), B=$('seamB');
+  A.style.top = px(seamTop); A.style.height = px(seamH);
+  const bd = E.quart(seg(t,3.5,4.5));
+  B.style.top = px(seamTop);
+  B.style.width = px(1 + 9*bd);
+  B.style.background = 'rgba(205,242,75,' + lerp(0.42,1,bd).toFixed(3) + ')';
+  $('s3c').style.opacity = 0.5 + 0.5*(Math.floor(t*2.4)%2===0?1:0);
+  maskIn($('s3h'), E.quart(seg(t,0.28,1.02)));
+  $('s3s').style.opacity = seg(t,0.72,1.3);
+  $('s3s').style.transform = 'translateY(' + lerp(18,0,E.quart(seg(t,0.72,1.3))).toFixed(1) + 'px';
+  op($('winGhost'), seg(t,0.55,1.25)*1);
+  op($('s3lbl'), seg(t,1.2,1.8));
+  const wk = E.expo(seg(t,3.95,4.72));
+  const wp = $('s3Wipe');
+  wp.style.width = px(960*wk);
+  wp.style.left  = px(960 - 960*wk);
+}
+
+/* ══════ 4 ══════ */
+function s4(t){
+  const AX = 960;
+  const k = E.expo(seg(t,0,0.5));
+  const ch = $('ch');
+  ch.style.left = px(AX-5);
+  ch.style.top = '0px';
+  ch.style.width = '10px';
+  ch.style.height = px(lerp(1080,560,k));
+  op($('s4ticks'), seg(t,0.6,1.15)*0.85);
+  op($('ground'), seg(t,1.6,2.6));
+
+  NODES.forEach((n,i)=>{
+    const kk = E.quart(seg(t, 0.85+i*0.26, 1.25+i*0.26));
+    const dot=$('ndot'+i), lab=$('nlab'+i);
+    op(dot,kk); op(lab,kk);
+    lab.style.transform = 'translateX(' + lerp(-14,0,kk).toFixed(1) + 'px)';
+  });
+
+  const pk = seg(t, 2.5, 3.85);
+  const pkt = $('pkt');
+  op(pkt, (pk>0 && pk<1) ? 1 : 0);
+  pkt.style.left = px(AX);
+  pkt.style.top  = px(lerp(230,560,E.io(pk)));
+
+  const pulse = seg(t,3.85,4.3);
+  const d2 = $('ndot2');
+  d2.style.transform = (pulse>0 && pulse<1)
+    ? 'scale(' + (1+0.45*Math.sin(Math.PI*pulse)).toFixed(3) + ')'
+    : 'scale(1)';
+
+  op(document.querySelector('#s4 .hall'), 1 - seg(t,5.75,6.3));
+  maskIn($('s4h'), E.quart(seg(t,0.9,1.65)));
+  $('s4s').style.opacity = seg(t,1.3,1.9);
+  $('s4s').style.transform = 'translateY(' + lerp(18,0,E.quart(seg(t,1.3,1.9))).toFixed(1) + 'px';
+}
+
+/* ══════ 5 ══════ */
+function s5(t){
+  const {X0,Y0,X1,Y1,VX,HY} = PLAN;
+  const GAP = 30, AX = 960;
+  const pT1=$('pT1'), pT2=$('pT2'), pL=$('pL'), pB=$('pB'), pR=$('pR'), pV=$('pV'), pH=$('pH');
+
+  const kT = E.quart(seg(t,0.0,0.6));
+  const lenL = (AX-GAP-X0), lenR = (X1-AX-GAP);
+  pT1.style.top=px(Y0); pT1.style.left=px(AX-GAP-lenL*kT); pT1.style.width=px(lenL*kT); pT1.style.height='1px';
+  pT2.style.top=px(Y0); pT2.style.left=px(AX+GAP);           pT2.style.width=px(lenR*kT); pT2.style.height='1px';
+
+  const kL=E.quart(seg(t,0.35,0.95)), kB=E.quart(seg(t,0.6,1.15)), kR=E.quart(seg(t,0.85,1.4));
+  pL.style.left=px(X0); pL.style.top=px(Y0); pL.style.width='1px'; pL.style.height=px((Y1-Y0)*kL);
+  pB.style.left=px(X0); pB.style.top=px(Y1); pB.style.width=px((X1-X0)*kB); pB.style.height='1px';
+  pR.style.left=px(X1); pR.style.top=px(Y1-(Y1-Y0)*kR); pR.style.width='1px'; pR.style.height=px((Y1-Y0)*kR);
+  pV.style.left=px(VX); pV.style.top=px(Y0); pV.style.width='1px'; pV.style.height=px((Y1-Y0)*E.quart(seg(t,1.2,1.7)));
+  pH.style.left=px(X0); pH.style.top=px(HY); pH.style.width=px((X1-X0)*E.quart(seg(t,1.45,1.95))); pH.style.height='1px';
+
+  // 门槛：干线抵达的位置
+  const dk=E.quart(seg(t,1.8,2.1));
+  const door=$('pDoor');
+  door.style.left=px(AX-GAP); door.style.top=px(Y0+9);
+  door.style.width=px(GAP*2*dk); door.style.height='2px';
+  door.style.background='#CDF24B';
+  op(door, 0);
+  const jl=$('jambL'), jr=$('jambR'), sl=$('sill');
+  op(jl,0); op(jr,0);
+  sl.style.left=px(AX-GAP); sl.style.top=px(Y0+5); sl.style.width=px(GAP*2*dk); sl.style.height='1px';
+  sl.style.background='#8A9078';
+
+  ROOMS.forEach((r,i)=>{
+    const kk=E.quart(seg(t,2.15+i*0.12,2.6+i*0.12));
+    op($('room'+i),kk);
+    $('room'+i).style.transform='translateY('+lerp(10,0,kk).toFixed(1)+'px)';
+  });
+
+  for(let i=1;i<=10;i++){
+    const el=$('f'+i); if(!el) continue;
+    const kk=E.quart(seg(t,2.7+i*0.08,3.2+i*0.08));
+    op(el,0.7*kk);
+    if(i!==9) el.style.transform='scaleX('+kk.toFixed(3)+')';
+    else { el.style.transform='scale('+kk.toFixed(3)+')'; }
+  }
+  for(let i=0;i<5;i++){
+    const el=$('sp'+i); if(!el) continue;
+    const kk=E.quart(seg(t,3.2+i*0.09,3.6+i*0.09));
+    op(el,0.9*kk);
+  }
+
+  maskIn($('s5h'), E.quart(seg(t,0.05,0.8)));
+  $('s5s').style.opacity = seg(t,0.4,1.0);
+  $('s5s').style.transform = 'translateY(' + lerp(18,0,E.quart(seg(t,0.4,1.0))).toFixed(1) + 'px';
+}
+
+/* ══════ 6 ══════ */
+function s6(t){
+  const wipe = E.quart(seg(t,0.0,0.55));
+  $('s6').style.clipPath = 'inset(0 0 ' + ((1-wipe)*100).toFixed(2) + '% 0)';
+  const wl = $('wipe');
+  if (t>=0 && t<0.62){ op(wl, 1); wl.style.top = px(1080*wipe); }
+  else op(wl, 0);
+
+  maskIn($('s6q'), E.quart(seg(t,0.55,1.1)));
+  ['st1','st2','st3'].forEach((id,i)=>{
+    const k=E.quart(seg(t,1.1+i*0.26,1.5+i*0.26));
+    op($(id),k);
+    $(id).style.transform='translateY('+lerp(8,0,k).toFixed(1)+'px)';
+  });
+  for(let r=0;r<SHEET_ROWS;r++){
+    for(let c=0;c<3;c++){
+      const el=$('cl'+r+'_'+c); if(!el) continue;
+      op(el, 0.9*seg(t, 1.85 + r*0.075 + c*0.02, 2.0 + r*0.075 + c*0.02));
+    }
+  }
+  $('band').style.height = px(SHEET_H*E.quart(seg(t,2.05,3.2)));
+
+  document.querySelectorAll("#assetSummary tr").forEach((row,i)=>op(row,E.quart(seg(t,0.7+i*0.22,1.1+i*0.22))));
+  const bk=E.quart(seg(t,3.0,3.6));
+  const bx=183+91+12, by=0, bh=440*bk;
+  const b1=$('bk1'), b2=$('bk2'), b3=$('bk3');
+  b1.style.left=px(bx+2); b1.style.top=px(by); b1.style.width='2px'; b1.style.height=px(bh);
+  b2.style.left=px(bx-16); b2.style.top=px(by); b2.style.height='2px'; b2.style.width=px(18*bk);
+  b3.style.left=px(bx-16); b3.style.top=px(by+bh-2); b3.style.height='2px'; b3.style.width=px(18*bk);
+
+  op($('s6done'), seg(t,3.65,4.05));
+  $('s6done').style.transform='translateY('+lerp(8,0,E.quart(seg(t,3.65,4.05))).toFixed(1)+'px';
+
+  const fl=E.expo(seg(t,4.72,4.96));
+  const f=$('flash');
+  op(f, fl>0?1:0);
+  f.style.transform='scale('+(0.001+fl*2.2).toFixed(4)+')';
+
+  maskIn($('s6h'), E.quart(seg(t,0.5,1.15)));
+}
+
+/* ══════ 7 ══════ */
+function s7(t){
+  const mT=$('mT'), mM=$('mM'), mB=$('mB'), mV=$('mV');
+  mT.style.left=px(154); mT.style.top='380px'; mT.style.height='1px'; mT.style.width=px(1612*E.quart(seg(t,0.2,0.8)));
+  mM.style.left=px(154); mM.style.top='640px'; mM.style.height='1px'; mM.style.width=px(1612*E.quart(seg(t,0.5,1.05)));
+  mB.style.left=px(154); mB.style.top='900px'; mB.style.height='1px'; mB.style.width=px(1612*E.quart(seg(t,0.8,1.35)));
+  mV.style.left='960px'; mV.style.top='380px'; mV.style.width='1px'; mV.style.height=px(520*E.quart(seg(t,0.65,1.3)));
+
+  const beat=seg(t,4.9,5.45);
+  const boost = (beat>0&&beat<1) ? 0.5*Math.sin(Math.PI*beat) : 0;
+  ['c1','c2','c3','c4'].forEach((id,i)=>{
+    const k=E.quart(seg(t,0.5+i*0.24,1.1+i*0.24));
+    const el=$(id);
+    op(el,k);
+    el.style.transform='translateY('+lerp(16,0,k).toFixed(1)+'px)';
+    const code=el.querySelector('.code');
+    code.style.opacity = (0.8+boost*0.9).toFixed(3);
+  });
+  maskIn($('s7h'), E.quart(seg(t,0.15,0.85)));
+}
+
+/* ══════ 8 ══════ */
+function s8(t){
+  const k=E.expo(seg(t,0.05,0.95));
+  const SX0=834, SX1=1394, SY0=281, SY1=841;
+  const eT=$('eT'), eB=$('eB'), eL=$('eL'), eR=$('eR');
+  eT.style.top=px(lerp(380,SY0,k)); eT.style.left=px(lerp(154,SX0,k));
+  eT.style.height='1px'; eT.style.width=px(lerp(1612,SX1-SX0,k));
+  eB.style.top=px(lerp(900,SY1,k)); eB.style.left=px(lerp(154,SX0,k));
+  eB.style.height='1px'; eB.style.width=px(lerp(1612,SX1-SX0,k));
+  eL.style.left=px(lerp(960,SX0,k)); eL.style.top=px(lerp(380,SY0,k));
+  eL.style.width='1px'; eL.style.height=px(lerp(520,SY1-SY0,k));
+  eR.style.left=px(lerp(960,SX1,k)); eR.style.top=px(lerp(380,SY0,k));
+  eR.style.width='1px'; eR.style.height=px(lerp(520,SY1-SY0,k));
+
+  const ek=1-seg(t,2.6,4.2);
+  const ec1=$('ec1'), ec2=$('ec2');
+  ec1.style.left=px(SX0); ec1.style.top=px(SY0+90); ec1.style.width=px(SX1-SX0); ec1.style.height='1px'; op(ec1,ek*0.5);
+  ec2.style.left=px(SX0); ec2.style.top=px((SY0+SY1)/2); ec2.style.width=px(SX1-SX0); ec2.style.height='1px'; op(ec2,ek*0.32);
+  const ec3=$('ec3');
+  ec3.style.left=px(SX0+0.56*(SX1-SX0)); ec3.style.top=px(SY0); ec3.style.width='1px'; ec3.style.height=px(SY1-SY0); op(ec3,ek*0.26);
+
+  const out = 1 - seg(t, 6.3, 6.75);
+  const edgeOut = 1 - seg(t, 6.3, 6.65);
+  [eT,eB,eL,eR].forEach(e=>op(e,edgeOut));
+  maskIn($('s8a'), E.quart(seg(t,0.45,1.1)));
+  maskIn($('s8b'), E.quart(seg(t,0.72,1.48)));
+  op($('s8a'), out); op($('s8b'), out);
+  $('s8a').style.color='#8F9585'; $('s8b').style.color='#F2F2EA';
+
+  const dk=seg(t,5.15,5.75);
+  const door=$('doorTmp') || (()=>{
+    const d=document.createElement('div'); d.id='doorTmp';
+    d.style.cssText='position:absolute;background:#CDF24B;height:2px;';
+    $('s8').appendChild(d); return d; })();
+  door.style.width=px(120*dk);
+  door.style.left=px((SX0+SX1)/2 - 60*dk);
+  door.style.top=px(SY1-1);
+  op(door, dk*edgeOut);
+}
+
+/* ══════ 9 ══════ */
+function s9(t){
+  op($('markA'), seg(t,0.0,0.2));
+  const up = 43*E.quart(seg(t,3.95,4.85));
+  $('lockup').style.top = px(474-up);
+  $('tagline').style.top = px(648-up);
+  op($('tagline'), seg(t,1.5,2.05) * (1-seg(t,4.85,5.5)));
+  const letters=['wm0','wm1','wm2','wm3','wm4','wm5','wm6'];
+  letters.forEach((id,i)=>{
+    const k=E.quart(seg(t, 0.1+i*0.045, 0.48+i*0.045));
+    const el=$(id);
+    el.style.transform='translateY('+((1-k)*110).toFixed(1)+'%)';
+    el.style.opacity=k;
+  });
+}
+
+/* ══════ 10 ══════ */
+function s10(t){
+  const k=E.quart(seg(t,0.55,1.25));
+  op($('lockup2'), seg(t,0.0,0.18));
+  $('lockup2').style.top = px(431 - 8*k);
+  op($('endline'), seg(t,0.95,1.65));
+  $('endline').style.transform='translateX(-50%) translateY('+lerp(12,0,k).toFixed(1)+'px)';
+}
+
+/* ══════ 全局过渡 ══════ */
+function overlays(t){
+  const m=$('morph');
+  if (t>=4.12 && t<=4.95){
+    const k=E.expo(seg(t,4.12,4.9));
+    op(m,1);
+    m.style.left=px(lerp(880,960,k));
+    m.style.top=px(lerp(PIN_Y-87,130,k));
+    m.style.width=px(lerp(944,806,k));
+    m.style.height=px(lerp(34,820,k));
+    m.style.borderRadius=px(lerp(0,12,k));
+  } else op(m,0);
+
+  const mm=$('markM');
+  if (t>=45.15 && t<=48.4){
+    const k=E.expo(seg(t,45.15,46.6));
+    const ms=lerp(560,132,k);
+    const mx=lerp(834,MARK_X,k), my=lerp(281,474,k);
+    mm.style.left=px(mx); mm.style.top=px(my);
+    mm.style.width=px(ms); mm.style.height=px(ms);
+    mm.style.borderRadius=(k*50).toFixed(1)+'%';
+    const fk=seg(t,45.4,46.4);
+    mm.style.background='rgba(205,242,75,'+fk.toFixed(3)+')';
+    mm.style.borderWidth=px(lerp(2,0,fk));
+    mm.style.borderColor='rgba(205,242,75,'+lerp(1,0,fk).toFixed(3)+')';
+    mm.querySelector('svg').style.opacity=seg(t,45.5,46.5);
+    op(mm, t<48.15 ? 1 : (1-seg(t,48.15,48.4)));
+  } else op(mm,0);
+}
+
+/* ══════ 主渲染 ══════ */
+const FN = {s1,s2,s3,s4,s5,s6,s7,s8,s9,s10};
+function render(t){
+  t = clamp(t, 0, DURATION-0.0001);
+  SC.forEach((s,i)=>{
+    const el=$(s.id);
+    let al = s.fade>0 ? clamp(seg(t, s.a, s.a+s.fade)) : (t>=s.a?1:0);
+    el.style.opacity = al;
+    el.style.zIndex = 10+i;
+    el.style.display = (t < s.a-0.6 || t > s.b+0.6) ? 'none' : 'block';
+    FN[s.id](t - s.a);
+  });
+  overlays(t);
+  if (t >= 32.4) $('s6').style.clipPath = 'inset(0 0 0 0)';
+  if (t > 32.34) op($('flash'), 0);
+  if (t > 27.9) op($('wipe'), 0);
+}
+
+/* ══════ 时钟 ══════ */
+let time=0, playing=true, lastTick=null, frozen=null;
+const qs = new URLSearchParams(location.search);
+if (qs.has('t')){ frozen=parseFloat(qs.get('t')); time=frozen; playing=false; }
+
+function tick(now){
+  if (lastTick===null){
+    lastTick=now; window.__ready=true; render(time);
+    requestAnimationFrame(tick); return;
+  }
+  const dt=(now-lastTick)/1000; lastTick=now;
+  if (playing && frozen===null){
+    let nt=time+dt;
+    if (nt>=DURATION){ if (window.__recording){ nt=DURATION-0.001; playing=false; } else nt=0; }
+    time=nt; window.__t=time; render(time);
+  }
+  requestAnimationFrame(tick);
+}
+window.__seek = (t)=>{ time=t; window.__t=t; playing=false; lastTick=null; render(t); };
+window.__play = ()=>{ playing=true; lastTick=null; };
+
+document.fonts.ready.then(()=>{ measureLockup(); render(time); requestAnimationFrame(tick); });
+
+function fit(){
+  const s=Math.min(window.innerWidth/W, window.innerHeight/H);
+  const vp=$('vp');
+  vp.style.width=W+'px'; vp.style.height=H+'px';
+  vp.style.zoom=s;
+  vp.style.left=((window.innerWidth-W*s)/2/s)+'px';
+  vp.style.top=((window.innerHeight-H*s)/2/s)+'px';
+}
+window.addEventListener('resize', fit); fit();
+
+window.addEventListener('keydown', e=>{
+  if (e.code==='Space'){ e.preventDefault(); playing=!playing; lastTick=null; }
+  if (e.key==='ArrowRight'){ window.__seek(Math.min(DURATION,(window.__t||0)+1)); }
+  if (e.key==='ArrowLeft'){ window.__seek(Math.max(0,(window.__t||0)-1)); }
+});
+</script>
+</body>
+</html>

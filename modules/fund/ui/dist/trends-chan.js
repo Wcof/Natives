@@ -136,7 +136,7 @@ function renderChanlunDaily(data) {
   }
 
   if (zhongshus.length > 0) {
-    html += '<div style="margin-top:6px;font-size:var(--natives-fs-secondary);color:var(--natives-text-muted);border-top:1px solid var(--natives-border);padding-top:4px">中枢列表</div>';
+    html += '<div style="margin-top:6px;font-size:var(--natives-fs-secondary);color:var(--natives-text-muted);border-top:1px solid var(--natives-edge);padding-top:4px">中枢列表</div>';
     if (currentZs) {
       html += `<div style="margin:4px 0;padding:5px 8px;background:var(--natives-selected);border:1px solid color-mix(in srgb, var(--natives-accent) 30%, transparent);border-radius:4px;font-size:var(--natives-fs-secondary);color:var(--natives-accent)">
         当前价格 <b>${currentPrice.toFixed(2)}</b> 处于中枢 <b>[${currentZs.zd} - ${currentZs.zg}]</b> 内，区间上沿压力 ${currentZs.zg}，下沿支撑 ${currentZs.zd}

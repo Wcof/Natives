@@ -211,8 +211,15 @@ fn handle_session_exchange(stream: &mut TcpStream, state: &ServiceState, req: &H
                     state.auth.lock().unwrap().revoke_session(previous);
                 }
             }
-            let cookie_val =
-                format!("{cookie_name}={session_id}; Path=/; SameSite=Strict; HttpOnly");
+            // CHIPS (`Secure; Partitioned`) is required for the ADR-0048 DSH
+            // main-panel iframe: the Core page runs cross-site inside
+            // `dsh-app://app`, where a `SameSite=Strict` cookie is never sent
+            // and a non-partitioned cookie is rejected outright. `Secure` is
+            // settable on the loopback origin; CSRF and exact-Origin checks
+            // are unchanged.
+            let cookie_val = format!(
+                "{cookie_name}={session_id}; Path=/; SameSite=None; Secure; Partitioned; HttpOnly"
+            );
             let body = json!({
                 "ok": true,
                 "csrfToken": csrf_token,
@@ -286,7 +293,9 @@ fn handle_session_check(stream: &mut TcpStream, state: &ServiceState, req: &Http
             return;
         }
         state.auth.lock().unwrap().revoke_session(session_id);
-        let cookie_clear = format!("{cookie_name}=; Path=/; Max-Age=0; HttpOnly");
+        let cookie_clear = format!(
+            "{cookie_name}=; Path=/; Max-Age=0; SameSite=None; Secure; Partitioned; HttpOnly"
+        );
         let _ = write_http_raw(
             stream,
             200,
@@ -298,20 +307,22 @@ fn handle_session_check(stream: &mut TcpStream, state: &ServiceState, req: &Http
     }
 }
 
-fn handle_static(stream: &mut TcpStream, route: &str) {
+fn handle_static(stream: &mut TcpStream, route: &str, full_path: &str) {
     if let Some((body, mime)) = serve_static_file(route) {
-        let _ = write_http_raw_with_cache(
-            stream,
-            200,
-            "OK",
-            mime,
-            "no-cache",
-            &[
-                ("X-Content-Type-Options", "nosniff"),
-                ("X-Frame-Options", "SAMEORIGIN"),
-            ],
-            &body,
-        );
+        // ADR-0048 D5.2: only a valid grant replaces XFO for this one document.
+        let frame_policy = if mime.starts_with("text/html") {
+            super::read_relay_secret()
+                .ok()
+                .and_then(|secret| super::embed::frame_policy(full_path, &secret))
+        } else {
+            None
+        };
+        let mut headers = vec![("X-Content-Type-Options", "nosniff")];
+        match frame_policy.as_deref() {
+            Some(policy) => headers.push(("Content-Security-Policy", policy)),
+            None => headers.push(("X-Frame-Options", "SAMEORIGIN")),
+        }
+        let _ = write_http_raw_with_cache(stream, 200, "OK", mime, "no-cache", &headers, &body);
     } else {
         let _ = write_http_raw(
             stream,
@@ -363,7 +374,7 @@ pub(crate) fn handle_client(mut stream: TcpStream, state: Arc<ServiceState>) {
     } else if matches!(route, "/web/events" | "/native/events") && req.method == "GET" {
         handle_events_sse(&mut stream, &state, &req);
     } else if req.method == "GET" {
-        handle_static(&mut stream, route);
+        handle_static(&mut stream, route, &req.path);
     } else {
         let _ = write_http_raw(
             &mut stream,

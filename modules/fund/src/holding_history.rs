@@ -77,9 +77,6 @@ pub(crate) fn project(
     let mut reconstructed = false;
     for day in start.max(end - 399)..=end {
         let date = assets::civil_from_days(day);
-        if points.contains_key(&date) {
-            continue;
-        }
         let mut values = BTreeMap::new();
         let mut price_from: Option<&str> = None;
         let mut price_to: Option<&str> = None;
@@ -99,6 +96,20 @@ pub(crate) fn project(
             }
             values.insert((*account, *fund), value);
         }
+        let holding_values: BTreeMap<String, Option<String>> = values
+            .iter()
+            .map(|((account, fund), value)| {
+                (
+                    format!("fund-{account}-{fund}"),
+                    value.map(|v| v.to_string()),
+                )
+            })
+            .collect();
+        // Preserve saved totals/groupings; holding replay is an independent reference.
+        if let Some(saved) = points.get_mut(&date) {
+            saved["holdingValues"] = json!(holding_values);
+            continue;
+        }
         let total = if other_assets {
             None
         } else {
@@ -113,12 +124,12 @@ pub(crate) fn project(
         points.insert(
             date.clone(),
             json!({"date":date,"valueMinor":total.map(|v|v.to_string()),"quality":"reference",
-            "groups":groups,"source":"holding-nav-replay","priceFrom":price_from,"priceTo":price_to,
+            "groups":groups,"holdingValues":holding_values,"source":"holding-nav-replay","priceFrom":price_from,"priceTo":price_to,
             "periodReturnMinor":null,"twrPpm":null}),
         );
         reconstructed = true;
     }
-    if reconstructed {
+    if reconstructed || !points.is_empty() {
         let mut rows: Vec<Value> = points.into_values().collect();
         if rows.len() > 400 {
             rows.drain(..rows.len() - 400);
@@ -141,10 +152,12 @@ pub(crate) fn project(
             from.into()
         };
         history["points"] = rows.into();
-        history["reconstructed"] = true.into();
-        history["source"] = "snapshots-and-holding-nav-replay".into();
-        history["status"] = "reference".into();
-        history["twrPpm"] = Value::Null;
+        if reconstructed {
+            history["reconstructed"] = true.into();
+            history["source"] = "snapshots-and-holding-nav-replay".into();
+            history["status"] = "reference".into();
+            history["twrPpm"] = Value::Null;
+        }
         if start < end - 399 {
             history["truncated"] = true.into();
         }
@@ -225,6 +238,8 @@ mod tests {
         assert_eq!(h["from"], start);
         assert_eq!(h["points"][0]["groups"][0]["valueMinor"], "1000");
         assert_eq!(h["points"][3]["groups"][0]["valueMinor"], "1300");
+        assert_eq!(h["points"][0]["holdingValues"]["fund-1-1"], "1000");
+        assert_eq!(h["points"][3]["holdingValues"]["fund-1-1"], "1300");
         assert_eq!(h["points"][0]["groups"][0]["basis"], "current-bindings");
         assert_eq!(h["points"][0]["priceFrom"], start);
         assert_eq!(
@@ -256,6 +271,7 @@ mod tests {
             json!({"points":[{"date":start,"valueMinor":"9999","quality":"ready","groups":[]}]});
         store.with_read(|c| project(c, &mut h, "", &end)).unwrap();
         assert_eq!(h["points"][0]["valueMinor"], "9999");
+        assert_eq!(h["points"][0]["holdingValues"]["fund-1-1"], "1000");
         assert!(
             h["points"][0]["groups"].as_array().unwrap().is_empty(),
             "never alter an older saved grouping"
@@ -265,6 +281,7 @@ mod tests {
             .unwrap();
         let missing = read(&store, "", &end);
         assert!(missing["points"][0]["valueMinor"].is_null());
+        assert!(missing["points"][0]["holdingValues"]["fund-1-1"].is_null());
         assert_eq!(missing["points"][1]["valueMinor"], "1100");
         store
             .with_write(|c| {

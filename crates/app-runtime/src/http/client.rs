@@ -141,7 +141,11 @@ fn runtime_csp(parent_origin: &str, web_port: Option<u16>) -> String {
     let web_origins = web_port
         .map(|port| format!(" http://127.0.0.1:{port} http://localhost:{port}"))
         .unwrap_or_default();
-    format!("default-src 'none'; script-src 'self' 'unsafe-inline'; connect-src 'self'; style-src 'self' 'unsafe-inline'; form-action 'none'; base-uri 'none'; frame-ancestors {parent_origin}{web_origins};")
+    // ADR-0048: the DSH main panel embeds the Web surface, so the verified
+    // ancestor chain can be `dsh-app://app → http://127.0.0.1:<web port> →
+    // this UI`. Only DSH registers those schemes; the exact parent origin and
+    // web-port origins stay mandatory.
+    format!("default-src 'none'; script-src 'self' 'unsafe-inline'; connect-src 'self'; style-src 'self' 'unsafe-inline'; form-action 'none'; base-uri 'none'; frame-ancestors {parent_origin}{web_origins} dsh-app: dsh:;")
 }
 
 #[cfg(test)]
@@ -154,7 +158,7 @@ mod csp_tests {
             "chrome-extension://abcdefghijklmnopabcdefghijklmnop",
             Some(49152),
         );
-        assert!(csp.contains("frame-ancestors chrome-extension://abcdefghijklmnopabcdefghijklmnop http://127.0.0.1:49152 http://localhost:49152;"));
+        assert!(csp.contains("frame-ancestors chrome-extension://abcdefghijklmnopabcdefghijklmnop http://127.0.0.1:49152 http://localhost:49152 dsh-app: dsh:;"));
         assert!(!csp.contains("chrome-extension: "));
         assert!(!csp.contains(":8770"));
         assert!(csp.contains("style-src 'self' 'unsafe-inline';"));

@@ -3,7 +3,7 @@
 :root {
   --bg:var(--natives-bg); --text:var(--natives-text-primary); --muted:var(--natives-text-muted);
   --surface:var(--natives-surface); --surface-2:var(--natives-surface-2); --surface-3:var(--natives-surface-3);
-  --line:var(--natives-border); --hover:var(--natives-surface-3); --selected:var(--natives-selected);
+  --line:var(--natives-edge); --hover:var(--natives-surface-3); --selected:var(--natives-selected);
   --accent:var(--natives-accent); --accent-strong:var(--natives-accent-strong); --on-accent:var(--natives-on-accent);
   --danger:var(--natives-danger); --on-danger:var(--natives-on-danger); --success:var(--natives-ok); --warning:var(--natives-warning);
   --backdrop:var(--natives-backdrop); --shadow:var(--natives-shadow);
@@ -382,3 +382,7 @@ button.action.primary { background:var(--accent); border-color:var(--accent); co
   .app-stage { padding:12px; }
   .app-card { padding:12px; }
 }
+
+/* ADR-0048：DSH 独立运行（?standalone=1）——隐藏产品聚合壳（导航与页头），只保留模块内容 */
+html.standalone .app-shell-nav,
+html.standalone .app-shell-head { display:none; }

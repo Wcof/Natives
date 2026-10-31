@@ -81,7 +81,7 @@ function redrawChart() {
 
   mCtx.clearRect(0, 0, kRect.width, kRect.height);
 
-  mCtx.strokeStyle = themeColor("--natives-border");
+  mCtx.strokeStyle = themeColor("--natives-edge");
   mCtx.lineWidth = 1;
   for (let gridY = 25; gridY < bounds.chartH; gridY += 35) {
     mCtx.beginPath();

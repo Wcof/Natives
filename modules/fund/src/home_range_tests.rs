@@ -182,3 +182,37 @@ fn unregistered_cash_does_not_hide_complete_registered_investments() {
         assert!(value["wealth"]["cash"]["cashMinor"].is_null());
     }
 }
+
+#[test]
+fn rolling_ranges_use_monday_and_calendar_month_ends() {
+    use crate::home::resolve_range;
+    assert_eq!(
+        resolve_range("week", None, None, "2026-10-25").0,
+        "2026-10-19"
+    );
+    assert_eq!(
+        resolve_range("week", None, None, "2026-10-19").0,
+        "2026-10-19"
+    );
+    assert_eq!(
+        resolve_range("half", None, None, "2026-10-25").0,
+        "2026-04-25"
+    );
+    assert_eq!(
+        resolve_range("half", None, None, "2026-08-31").0,
+        "2026-02-28"
+    );
+    assert_eq!(
+        resolve_range("year1", None, None, "2026-10-25").0,
+        "2025-10-25"
+    );
+    assert_eq!(
+        resolve_range("year1", None, None, "2024-02-29").0,
+        "2023-02-28"
+    );
+    assert_eq!(resolve_range("half", None, None, "").0, "");
+    assert_eq!(
+        resolve_range("year1", None, None, "2026-10-25").1,
+        "2026-10-25"
+    );
+}
