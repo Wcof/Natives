@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 
 // Extension locales are the authority; this embedded projection serves the opaque iframe.
 // Fund-owned key namespaces are defined once here; check-ui and extension packaging reuse them.
-export const FUND_MODULE_KEY_PREFIXES = ['fundHome', 'fundLedger', 'fundDetail', 'fundError', 'fundFocus', 'fundSettings', 'fundWatch', 'fundMarket', 'fundTrends', 'fundScan', 'fundChart'];
+export const FUND_MODULE_KEY_PREFIXES = ['fundHome', 'fundNav', 'fundLg', 'fundLedger', 'fundDetail', 'fundError', 'fundFocus', 'fundSettings', 'fundWatch', 'fundMarket', 'fundTrends', 'fundScan', 'fundChart'];
 
 export function isFundModuleKey(key) {
   return FUND_MODULE_KEY_PREFIXES.some((prefix) => key.startsWith(prefix));

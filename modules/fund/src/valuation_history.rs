@@ -339,7 +339,7 @@ mod tests {
         for _ in 0..2 {
             assert_eq!(
                 crate::migration::run_migrations(dir.path(), &conn, "test").unwrap(),
-                29
+                crate::storage::SCHEMA_VERSION
             );
         }
         assert_eq!(

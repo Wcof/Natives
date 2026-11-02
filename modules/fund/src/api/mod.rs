@@ -68,6 +68,10 @@ pub fn handle_api_request(
     request: &HttpRequest,
     route: &str,
 ) -> Result<String, (u16, String)> {
+    // V2 账本（invest）优先分发；旧路由保持原样，直到 P5 阶段统一下线。
+    if route == "/api/v2" || route.starts_with("/api/v2/") {
+        return crate::invest::handle(store, request, route);
+    }
     if route == "/api/diagnostics/sql" {
         return diagnostics::handle(request);
     }

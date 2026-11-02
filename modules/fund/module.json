@@ -11,7 +11,7 @@
   },
   "entryRoute": "app.html?app=fund",
   "moduleApiVersion": 1,
-  "dataSchemaVersion": 29,
+  "dataSchemaVersion": 31,
   "capabilityVersion": 4,
   "views": [
     "home",

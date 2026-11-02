@@ -149,9 +149,11 @@ sideResizer.addEventListener("keydown", function(e) {
 applySideWidth(sideWidth, false);
 
 // ---------- 标签页切换与数字键 1-9 直达（0=首页） ----------
-const tabs = ["watchlist", "market", "trends", "positions", "assets", "tx", "import", "nav", "news", "history"];
+// 顺序即 1-9 快捷键优先级（方案 B：主入口在前，研究次之，记录类靠后）。
+// 主入口 home 由 0 直达，不占 1-9 键位。
+const tabs = ["positions", "assets", "watchlist", "market", "trends", "news", "tx", "nav", "history", "import"];
 // 首页是默认视图但不占 1-9 快捷键位（方案 01 §3）；allViews 驱动视图切换循环。
-const allViews = ["home", "settings"].concat(tabs);
+const allViews = ["home", "ledger", "settings"].concat(tabs);
 function setTabSelected(el, selected) {
   if (!el) return;
   // DES 02 R03：主导航为 tab（aria-selected）；工具菜单项为 menuitem（data-active）。
@@ -223,6 +225,8 @@ tabs.forEach(function(t) {
         if (v) v.hidden = (other !== t);
       })
       document.body.classList.toggle("market-active", t === "market");
+      // 离开账本时恢复行情侧栏，否则侧栏会一直被 ledger-active 隐藏
+      sideBody.classList.remove("ledger-active");
       updateRefreshScope(t);;
       if (t !== "watchlist") actions.leaveWatchlist?.();
       if (t === "trends") {
@@ -288,10 +292,42 @@ if (homeBtn) {
     document.body.classList.remove("market-active");
     updateRefreshScope("home");
     sideBody.classList.add("home-active");
-    sideBody.classList.remove("trends-active");
+    sideBody.classList.remove("trends-active", "ledger-active");
     switchSidePane("home");
     actions.leaveWatchlist?.();actions.pauseTrends?.();
     if (actions.loadHome) actions.loadHome();
+  });
+}
+
+// 账本（V2）：默认首屏，独立于旧首页；0 键直达。
+const ledgerBtn = document.getElementById("tab-ledger");
+if (ledgerBtn) {
+  ledgerBtn.addEventListener("click", function () {
+    Fund.leaveFundDetail?.();
+    Fund.holdingSummary?.clear();
+    actions.leaveFinanceSettings?.();
+    actions.leaveDecisionHistory?.();
+    actions.leaveNewsPage?.();
+    actions.leaveAssets?.();
+    actions.leaveTx?.();
+    if (actions.leavePositions) actions.leavePositions();
+    actions.leaveWatchlist?.();
+    actions.leaveHome?.();
+    actions.pauseTrends?.();
+    const sdView = document.getElementById("view-stock-detail");
+    if (sdView) sdView.hidden = true;
+    if (actions.pauseStockDetail) actions.pauseStockDetail();
+    allViews.forEach(function (other) {
+      const el = document.getElementById("tab-" + other);
+      setTabSelected(el, other === "ledger");
+      const v = document.getElementById("view-" + other);
+      if (v) v.hidden = other !== "ledger";
+      sideBody.classList.toggle("ledger-active", other === "ledger");
+    });
+    sideBody.classList.remove("stock-detail-active", "trends-active", "home-active");
+    document.body.classList.remove("market-active");
+    updateRefreshScope("ledger");
+    Fund.ledgerV2?.enter();
   });
 }
 
@@ -318,7 +354,7 @@ document.addEventListener("keydown", function(e) {
   const tag = (document.activeElement && document.activeElement.tagName || "").toLowerCase();
   if (tag === "input" || tag === "textarea" || tag === "select") return;
   if (e.key === "0") {
-    const btn = document.getElementById("tab-home");
+    const btn = document.getElementById("tab-ledger");
     if (btn) btn.click();
     return;
   }
@@ -331,7 +367,8 @@ document.addEventListener("keydown", function(e) {
 // ---------- 工具菜单与刷新范围（DES 02 R03） ----------
 // 刷新按钮标注当前刷新范围；视图切换时更新（休市也可手动拉取的既有语义不变）。
 const refreshScopeKeys = {
-  home: "fundHomeHome", positions: "fundLedgerPagePositions", assets: "fundLedgerNavAssets",
+  home: "fundNavOverview", positions: "fundNavPositions", assets: "fundNavAssets",
+  ledger: "fundLgTitle",
   tx: "fundLedgerPageTransactions", watchlist: "fundLedgerNavWatchlist", market: "fundLedgerNavMarket",
   trends: "fundLedgerNavTrends", import: "fundLedgerNavImport", nav: "fundLedgerNavNav", settings: "fundHomeFinanceSettings",
   news:'fundHomeNews',history:'fundHomeDecisionHistory',

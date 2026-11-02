@@ -12,8 +12,10 @@ use std::path::Path;
 use std::sync::Mutex;
 
 /// 当前业务 schema 版本（v3 人工资产/币种，v4 目标/配置，v5 投资首页账本，
-/// v6 交易现金待核对/理由归档，v7 首页自定义资金分组，v27 自定义分类说明）。
-pub const SCHEMA_VERSION: i64 = 29;
+/// v6 交易现金待核对/理由归档，v7 首页自定义资金分组，v27 自定义分类说明，
+/// v30 资产模型 V2：instruments/flows/holdings/quotes/fx_rates/snapshots/
+/// snapshot_items/ai_evaluations/ai_settings + accounts 渠道与币种）。
+pub const SCHEMA_VERSION: i64 = 31;
 
 pub struct Store {
     conn: Mutex<Connection>,
@@ -442,6 +444,8 @@ impl Store {
                 conn.execute_batch(crate::migration_late::SCHEMA_V27_SQL)?;
                 conn.execute_batch(crate::migration_late::SCHEMA_V28_SQL)?;
                 conn.execute_batch(crate::migration_late::SCHEMA_V29_SQL)?;
+                conn.execute_batch(crate::migration_late::SCHEMA_V30_SQL)?;
+                conn.execute_batch(crate::migration_late::SCHEMA_V31_SQL)?;
                 conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
                 Ok(())
             })?;
@@ -510,6 +514,8 @@ impl Store {
             conn.execute_batch(crate::migration_late::SCHEMA_V27_SQL)?;
             conn.execute_batch(crate::migration_late::SCHEMA_V28_SQL)?;
             conn.execute_batch(crate::migration_late::SCHEMA_V29_SQL)?;
+            conn.execute_batch(crate::migration_late::SCHEMA_V30_SQL)?;
+            conn.execute_batch(crate::migration_late::SCHEMA_V31_SQL)?;
             conn.pragma_update(None, "user_version", SCHEMA_VERSION)?;
             Ok(())
         })?;

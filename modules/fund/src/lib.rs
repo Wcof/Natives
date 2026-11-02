@@ -32,6 +32,7 @@ mod home_urgent;
 pub mod import;
 pub mod information;
 mod information_decisions;
+pub mod invest;
 pub mod ledger;
 mod legacy_assets;
 pub mod market;

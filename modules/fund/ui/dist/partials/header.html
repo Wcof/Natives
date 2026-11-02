@@ -8,7 +8,9 @@
     <div class="ticker-item" data-code="sh000300"><b><span data-i18n="fundMarketUiCSI300">沪深300</span></b><span class="ticker-val">–</span></div>
   </div>
 
-  <!-- 顶部主导航：七项主要业务入口；批量导入／公募净值收进工具菜单（DES 02 R03） -->
+  <!-- 顶部主导航：3 个主入口（概览／持仓／资产）；研究、记录与数据类收进工具抽屉。
+       定位：我的钱现在值多少、变化从哪来、下一步该做什么。
+       见 docs/development/invest-ia-simplification-plan.md -->
   <header class="top-header">
     <div class="header-left">
       <div class="brand-group">
@@ -16,21 +18,28 @@
       <div class="brand-title"><svg class="svg-icon" aria-hidden="true"><use href="#i-bolt" /></svg> <span data-i18n="fundHomeInvestmentBrand">投资终端</span></div>
       </div>
       <nav class="main-nav" role="tablist">
-        <button role="tab" id="tab-home" aria-selected="true" data-i18n="fundHomeHome">首页</button>
-        <button role="tab" id="tab-positions" data-i18n="fundLedgerPagePositions">持仓记账</button>
-        <button role="tab" id="tab-assets" data-i18n="fundLedgerNavAssets">投资资产</button>
-        <button role="tab" id="tab-watchlist" aria-selected="false" data-i18n="fundLedgerNavWatchlist">自选总览</button>
-        <button role="tab" id="tab-trends" data-i18n="fundLedgerNavTrends">趋势分析</button>
-        <button role="tab" id="tab-news" aria-selected="false" data-i18n="fundHomeNews"></button>
-        <button type="button" id="tab-ai" data-i18n="fundHomeAiDecision"></button>
-        <button role="tab" id="tab-history" aria-selected="false" data-i18n="fundHomeDecisionHistory"></button>
+        <button role="tab" id="tab-ledger" aria-selected="true" data-i18n="fundLgTitle">账本</button>
         <div class="tools-wrap">
-          <button type="button" id="btn-tools-menu" class="collapse-btn tools-btn" aria-haspopup="menu" aria-expanded="false" data-i18n="fundHomeToolsMenu">工具</button>
+          <button type="button" id="btn-tools-menu" class="collapse-btn tools-btn" aria-haspopup="menu" aria-expanded="false" aria-controls="tools-menu"><span data-i18n="fundHomeToolsMenu">工具</span><svg class="svg-icon" aria-hidden="true"><use href="#i-chevron" /></svg></button>
           <div id="tools-menu" role="menu" aria-label="工具" hidden>
-            <button role="menuitem" type="button" id="tab-tx" data-i18n="fundLedgerPageTransactions"></button>
-            <button role="menuitem" type="button" id="tab-market" data-i18n="fundMarketDiscovery"></button>
+            <p class="tools-group-label" data-i18n="fundNavGroupLegacy">经典视图</p>
+            <button role="menuitem" type="button" id="tab-home" data-i18n="fundNavOverview">概览</button>
+            <button role="menuitem" type="button" id="tab-positions" data-i18n="fundNavPositions">持仓</button>
+            <button role="menuitem" type="button" id="tab-assets" data-i18n="fundNavAssets">资产</button>
+            <div role="separator" class="tools-separator"></div>
+            <p class="tools-group-label" data-i18n="fundNavGroupResearch">研究</p>
+            <button role="menuitem" type="button" id="tab-watchlist" data-i18n="fundLedgerNavWatchlist">自选总览</button>
+            <button role="menuitem" type="button" id="tab-trends" data-i18n="fundLedgerNavTrends">趋势分析</button>
+            <button role="menuitem" type="button" id="tab-market" data-i18n="fundMarketDiscovery">市场发现</button>
+            <button role="menuitem" type="button" id="tab-news" data-i18n="fundHomeNews">资讯</button>
+            <div role="separator" class="tools-separator"></div>
+            <p class="tools-group-label" data-i18n="fundNavGroupRecord">记录与数据</p>
+            <button role="menuitem" type="button" id="tab-tx" data-i18n="fundLedgerPageTransactions">交易流水</button>
             <button role="menuitem" type="button" id="tab-import" data-i18n="fundLedgerNavImport">批量导入</button>
             <button role="menuitem" type="button" id="tab-nav" data-i18n="fundLedgerNavNav">公募净值</button>
+            <button role="menuitem" type="button" id="tab-history" data-i18n="fundHomeDecisionHistory">决策历史</button>
+            <div role="separator" class="tools-separator"></div>
+            <button role="menuitem" type="button" id="tab-ai" data-i18n="fundHomeAiDecision">AI 决策</button>
           </div>
         </div>
       </nav>

@@ -462,6 +462,16 @@ pub const LATE_MIGRATIONS: &[Migration] = &[
         name: "valuation_observations_v29",
         sql: SCHEMA_V29_SQL,
     },
+    Migration {
+        version: 30,
+        name: "asset_model_v2_instruments_flows_holdings_v30",
+        sql: SCHEMA_V30_SQL,
+    },
+    Migration {
+        version: 31,
+        name: "trading_days_calendar_v31",
+        sql: SCHEMA_V31_SQL,
+    },
 ];
 
 /// v26：场外基金操作（N09）：订单（加仓/减仓/转换两腿）、定投计划与期次、
@@ -590,4 +600,195 @@ CREATE TABLE IF NOT EXISTS valuation_observations (
 );
 CREATE INDEX IF NOT EXISTS idx_valuation_observations_date
     ON valuation_observations(date, minute);
+"#;
+
+/// v30：资产模型 V2（投资模块重构 P1）。设计文档 docs/development/invest-v2-design.md
+///
+/// 原则：
+/// 1. 只新增表与列，**不改不删任何旧表**。45 张投研表的归档是 P5 阶段的事，
+///    必须在备份与验证通过后单独执行（技术 03 R-D3 / R-D8）。
+/// 2. 精度沿用 `crate::fixed`：份额/价格 4 位小数，金额/费用 2 位小数，
+///    汇率 6 位小数。全部 i64 定点，禁止浮点累计。
+/// 3. `holdings` 与既有 `positions` 同语义：是 `flows` 的只读回放投影，
+///    不做第二权威。重建投影不得丢流水。
+/// 4. 快照与 AI 评估表自包含，不对 accounts/instruments 建外键：
+///    标的或账户被删除后，历史快照仍须可读。
+/// 5. 增长有界（技术 03 R-D7）：snapshots 每日 ≤1 行，
+///    snapshot_items 每日 ≤持仓数，默认保留 3 年，由后续清理任务按月归档。
+pub const SCHEMA_V30_SQL: &str = r#"
+-- 账户扩展：渠道天然绑定市场与币种，因此不单独建 market 表。
+-- 用 ALTER 加列而非重建（技术 03 R-D3）；既有行取 DEFAULT，满足 CHECK。
+ALTER TABLE accounts ADD COLUMN channel TEXT NOT NULL DEFAULT 'domestic_broker'
+    CHECK (channel IN ('domestic_broker','fund_platform','overseas_broker','crypto_exchange'));
+ALTER TABLE accounts ADD COLUMN currency TEXT NOT NULL DEFAULT 'CNY';
+
+-- 标的：股票 / 基金 / 数字货币统一。
+-- A/C 类基金共用 group_code 归组：独立记账（净值与费率不同），合并展示。
+CREATE TABLE IF NOT EXISTS instruments (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    code             TEXT    NOT NULL,
+    name             TEXT    NOT NULL DEFAULT '',
+    asset_class      TEXT    NOT NULL CHECK (asset_class IN ('stock','fund','crypto')),
+    market           TEXT    NOT NULL DEFAULT 'CN'
+                     CHECK (market IN ('CN','HK','US','CRYPTO')),
+    currency         TEXT    NOT NULL DEFAULT 'CNY',
+    group_code       TEXT,
+    share_class      TEXT,
+    quote_symbol     TEXT,
+    latest_price_raw INTEGER,
+    latest_price_at  TEXT,
+    price_stale      INTEGER NOT NULL DEFAULT 0,
+    archived_at      TEXT,
+    created_at       TEXT    NOT NULL,
+    updated_at       TEXT    NOT NULL,
+    UNIQUE (code, market)
+);
+CREATE INDEX IF NOT EXISTS idx_instruments_group
+    ON instruments(group_code) WHERE group_code IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_instruments_class
+    ON instruments(asset_class, market);
+
+-- 流水：唯一录入权威。五类事件，SPLIT 只改数量不改金额。
+CREATE TABLE IF NOT EXISTS flows (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id    INTEGER NOT NULL REFERENCES accounts(id),
+    instrument_id INTEGER NOT NULL REFERENCES instruments(id),
+    type          TEXT    NOT NULL
+                  CHECK (type IN ('BUY','SELL','DIVIDEND','SPLIT','FEE')),
+    quantity_raw  INTEGER NOT NULL DEFAULT 0,
+    price_raw     INTEGER NOT NULL DEFAULT 0,
+    amount_raw    INTEGER NOT NULL DEFAULT 0,
+    fee_raw       INTEGER NOT NULL DEFAULT 0,
+    split_from    INTEGER,
+    split_to      INTEGER,
+    trade_date    TEXT    NOT NULL,
+    note          TEXT    NOT NULL DEFAULT '',
+    source        TEXT    NOT NULL DEFAULT 'manual',
+    request_id    TEXT    UNIQUE,
+    external_id   TEXT,
+    created_at    TEXT    NOT NULL,
+    -- 拆股/送转必须给出可还原的比例，否则数量无法回放。
+    -- 必须显式判空：SQL 中 NULL > 0 结果为 NULL，而 CHECK 遇到 NULL 会放行。
+    CHECK (type <> 'SPLIT'
+           OR (split_from IS NOT NULL AND split_to IS NOT NULL
+               AND split_from > 0 AND split_to > 0))
+);
+CREATE INDEX IF NOT EXISTS idx_flows_holding
+    ON flows(account_id, instrument_id, trade_date);
+CREATE INDEX IF NOT EXISTS idx_flows_date ON flows(trade_date);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_flows_external
+    ON flows(account_id, external_id) WHERE external_id IS NOT NULL;
+
+-- 持仓投影：由 flows 回放。数量、成本、已实现盈亏均派生，禁止手工修改。
+-- opened_at 用于计算持有天数（日均收益的分母）。
+CREATE TABLE IF NOT EXISTS holdings (
+    account_id    INTEGER NOT NULL REFERENCES accounts(id),
+    instrument_id INTEGER NOT NULL REFERENCES instruments(id),
+    quantity_raw  INTEGER NOT NULL DEFAULT 0,
+    cost_raw      INTEGER NOT NULL DEFAULT 0,
+    realized_raw  INTEGER NOT NULL DEFAULT 0,
+    opened_at     TEXT    NOT NULL DEFAULT '',
+    as_of         TEXT    NOT NULL DEFAULT '',
+    updated_at    TEXT    NOT NULL,
+    PRIMARY KEY (account_id, instrument_id)
+);
+CREATE INDEX IF NOT EXISTS idx_holdings_instrument ON holdings(instrument_id);
+
+-- 行情缓存：只存当前持仓标的，不存全市场历史（ADR：不做行情终端）。
+CREATE TABLE IF NOT EXISTS quotes (
+    instrument_id INTEGER NOT NULL REFERENCES instruments(id),
+    trade_date    TEXT    NOT NULL,
+    close_raw     INTEGER NOT NULL,
+    currency      TEXT    NOT NULL,
+    source        TEXT    NOT NULL,
+    fetched_at    TEXT    NOT NULL,
+    PRIMARY KEY (instrument_id, trade_date)
+);
+CREATE INDEX IF NOT EXISTS idx_quotes_date ON quotes(trade_date);
+
+-- 汇率缓存：只存实际用到的币种对。rate_raw 为 6 位小数定点。
+CREATE TABLE IF NOT EXISTS fx_rates (
+    base       TEXT    NOT NULL,
+    quote      TEXT    NOT NULL,
+    rate_raw   INTEGER NOT NULL,
+    rate_date  TEXT    NOT NULL,
+    source     TEXT    NOT NULL,
+    fetched_at TEXT    NOT NULL,
+    PRIMARY KEY (base, quote, rate_date)
+);
+
+-- 每日总览快照：走势图与环比的数据源，不在查询时重算历史。
+CREATE TABLE IF NOT EXISTS snapshots (
+    snapshot_date TEXT    PRIMARY KEY,
+    currency      TEXT    NOT NULL DEFAULT 'CNY',
+    net_worth_raw INTEGER NOT NULL,
+    cost_raw      INTEGER NOT NULL,
+    realized_raw  INTEGER NOT NULL DEFAULT 0,
+    stale         INTEGER NOT NULL DEFAULT 0,
+    created_at    TEXT    NOT NULL
+);
+
+-- 快照明细：按持仓粒度存储，支持按类别 / 账户 / 标的任意维度聚合。
+-- asset_class 与 market 冗余存储：标的日后改名或归档，历史快照仍可正确归类。
+CREATE TABLE IF NOT EXISTS snapshot_items (
+    snapshot_date    TEXT    NOT NULL REFERENCES snapshots(snapshot_date) ON DELETE CASCADE,
+    account_id       INTEGER NOT NULL,
+    instrument_id    INTEGER NOT NULL,
+    asset_class      TEXT    NOT NULL,
+    market           TEXT    NOT NULL,
+    quantity_raw     INTEGER NOT NULL,
+    price_raw        INTEGER NOT NULL,
+    market_value_raw INTEGER NOT NULL,
+    cost_raw         INTEGER NOT NULL,
+    PRIMARY KEY (snapshot_date, account_id, instrument_id)
+);
+CREATE INDEX IF NOT EXISTS idx_snapshot_items_instrument
+    ON snapshot_items(instrument_id, snapshot_date);
+
+-- AI 评估：存结果与输入快照，可回溯当时判断依据。
+-- 只存 providerId/modelId 安全引用，不存任何凭据（ADR-0038/0044）。
+CREATE TABLE IF NOT EXISTS ai_evaluations (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    account_id     INTEGER NOT NULL,
+    instrument_id  INTEGER NOT NULL,
+    provider_id    TEXT    NOT NULL DEFAULT '',
+    model_id       TEXT    NOT NULL DEFAULT '',
+    prompt_version TEXT    NOT NULL DEFAULT 'v1',
+    score          INTEGER NOT NULL CHECK (score BETWEEN 0 AND 100),
+    tone           TEXT    NOT NULL CHECK (tone IN ('steady','watch','alert')),
+    label          TEXT    NOT NULL,
+    summary        TEXT    NOT NULL,
+    concerns_json  TEXT    NOT NULL DEFAULT '[]',
+    snapshot_json  TEXT    NOT NULL,
+    created_at     TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_ai_evaluations_holding
+    ON ai_evaluations(account_id, instrument_id, created_at);
+
+-- AI 设置：单行配置。不存 baseUrl 与 apiKey——模型凭据只经 Model Host 与 Keychain。
+CREATE TABLE IF NOT EXISTS ai_settings (
+    scope            TEXT    PRIMARY KEY DEFAULT 'default',
+    provider_id      TEXT,
+    model_id         TEXT,
+    style            TEXT    NOT NULL DEFAULT 'neutral'
+                     CHECK (style IN ('conservative','neutral','aggressive')),
+    show_on_overview INTEGER NOT NULL DEFAULT 1 CHECK (show_on_overview IN (0,1)),
+    updated_at       TEXT    NOT NULL
+);
+"#;
+
+/// v31：交易日历（解决法定节假日）。
+///
+/// 不硬编码节假日表，而是从指数日 K 反推：上证指数有行情的日期就是 A 股交易日，
+/// 恒生指数对应港股，标普 500 对应美股。这样调休、临时休市自动包含，零维护。
+///
+/// 只存有行情的日期，不存"休市"记录——空白即休市，避免维护两份真值。
+pub const SCHEMA_V31_SQL: &str = r#"
+CREATE TABLE IF NOT EXISTS trading_days (
+    market     TEXT NOT NULL,
+    trade_date TEXT NOT NULL,
+    PRIMARY KEY (market, trade_date)
+);
+CREATE INDEX IF NOT EXISTS idx_trading_days_lookup
+    ON trading_days(market, trade_date DESC);
 "#;

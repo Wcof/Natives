@@ -7007,6 +7007,30 @@
     "message": "Tools",
     "description": "Investment shell: tools menu (import/NAV entries)"
   },
+  "fundNavOverview": {
+    "message": "Overview",
+    "description": "Invest shell: primary entry 1/3"
+  },
+  "fundNavPositions": {
+    "message": "Holdings",
+    "description": "Invest shell: primary entry 2/3"
+  },
+  "fundNavAssets": {
+    "message": "Assets",
+    "description": "Invest shell: primary entry 3/3"
+  },
+  "fundNavGroupResearch": {
+    "message": "Research",
+    "description": "Invest shell: tools drawer group label"
+  },
+  "fundNavGroupRecord": {
+    "message": "Records & data",
+    "description": "Invest shell: tools drawer group label"
+  },
+  "fundNavGroupLegacy": {
+    "message": "Classic views",
+    "description": "投资外壳：工具抽屉分组标题（旧视图）"
+  },
   "fundHomeHealthOpen": {
     "message": "Open full health check",
     "description": "Fund health drawer: fundHomeHealthOpen"
@@ -10078,5 +10102,308 @@
   },
   "cardDisplayLimitHint": {
     "message": "Up to {n}"
+  },
+  "fundLgTitle": {
+    "message": "Ledger"
+  },
+  "fundLgSections": {
+    "message": "Ledger sections"
+  },
+  "fundLgOverview": {
+    "message": "Overview"
+  },
+  "fundLgHoldings": {
+    "message": "Holdings"
+  },
+  "fundLgFlows": {
+    "message": "Flows"
+  },
+  "fundLgAiSettings": {
+    "message": "AI settings"
+  },
+  "fundLgAddFlow": {
+    "message": "Record"
+  },
+  "fundLgNetWorth": {
+    "message": "Net worth"
+  },
+  "fundLgCost": {
+    "message": "Cost"
+  },
+  "fundLgUnrealized": {
+    "message": "Unrealized"
+  },
+  "fundLgRealized": {
+    "message": "Realized"
+  },
+  "fundLgNetWorthTrend": {
+    "message": "Net worth trend"
+  },
+  "fundLgByClass": {
+    "message": "By asset class"
+  },
+  "fundLgAccount": {
+    "message": "Account"
+  },
+  "fundLgInstrument": {
+    "message": "Instrument"
+  },
+  "fundLgType": {
+    "message": "Type"
+  },
+  "fundLgTypeBuy": {
+    "message": "Buy"
+  },
+  "fundLgTypeSell": {
+    "message": "Sell"
+  },
+  "fundLgTypeDividend": {
+    "message": "Dividend"
+  },
+  "fundLgTypeSplit": {
+    "message": "Split"
+  },
+  "fundLgTypeFee": {
+    "message": "Fee"
+  },
+  "fundLgQuantity": {
+    "message": "Quantity"
+  },
+  "fundLgPrice": {
+    "message": "Price"
+  },
+  "fundLgAmount": {
+    "message": "Amount"
+  },
+  "fundLgFee": {
+    "message": "Fee"
+  },
+  "fundLgSplitRatio": {
+    "message": "Ratio (1→2 means 1 and 2)"
+  },
+  "fundLgDate": {
+    "message": "Date"
+  },
+  "fundLgNote": {
+    "message": "Note"
+  },
+  "fundLgCancel": {
+    "message": "Cancel"
+  },
+  "fundLgSave": {
+    "message": "Save"
+  },
+  "fundLgClose": {
+    "message": "Close"
+  },
+  "fundLgMaster": {
+    "message": "Accounts & instruments"
+  },
+  "fundLgAccounts": {
+    "message": "Accounts"
+  },
+  "fundLgAccountName": {
+    "message": "Account name"
+  },
+  "fundLgChannelDomestic": {
+    "message": "Domestic broker"
+  },
+  "fundLgChannelFund": {
+    "message": "Fund platform"
+  },
+  "fundLgChannelOverseas": {
+    "message": "Overseas broker"
+  },
+  "fundLgChannelCrypto": {
+    "message": "Crypto exchange"
+  },
+  "fundLgAddAccount": {
+    "message": "Add account"
+  },
+  "fundLgInstruments": {
+    "message": "Instruments"
+  },
+  "fundLgCode": {
+    "message": "Code"
+  },
+  "fundLgName": {
+    "message": "Name"
+  },
+  "fundLgClassStock": {
+    "message": "Stock"
+  },
+  "fundLgClassFund": {
+    "message": "Fund"
+  },
+  "fundLgClassCrypto": {
+    "message": "Crypto"
+  },
+  "fundLgGroupCode": {
+    "message": "A/C group (optional)"
+  },
+  "fundLgAddInstrument": {
+    "message": "Add instrument"
+  },
+  "fundLgAiProvider": {
+    "message": "Provider"
+  },
+  "fundLgAiProviderHint": {
+    "message": "providerId"
+  },
+  "fundLgAiModel": {
+    "message": "Model"
+  },
+  "fundLgAiModelHint": {
+    "message": "modelId"
+  },
+  "fundLgAiStyle": {
+    "message": "Style"
+  },
+  "fundLgStyleConservative": {
+    "message": "Conservative"
+  },
+  "fundLgStyleNeutral": {
+    "message": "Neutral"
+  },
+  "fundLgStyleAggressive": {
+    "message": "Aggressive"
+  },
+  "fundLgAiKeyNote": {
+    "message": "Model credentials are managed by Natives. Only choose an existing model here; no key is stored."
+  },
+  "fundLgLoadFailed": {
+    "message": "Failed to load, please retry"
+  },
+  "fundLgAsOf": {
+    "message": "As of"
+  },
+  "fundLgIncomplete": {
+    "message": "Some holdings lack prices or FX rates; net worth is partially converted"
+  },
+  "fundLgDays": {
+    "message": "{n} days"
+  },
+  "fundLgNoSeries": {
+    "message": "No snapshots yet; the trend starts once you hold something"
+  },
+  "fundLgNoHoldings": {
+    "message": "No holdings yet"
+  },
+  "fundLgHoldingCount": {
+    "message": "{n} holdings"
+  },
+  "fundLgNoPrice": {
+    "message": "No price"
+  },
+  "fundLgFlowCount": {
+    "message": "Last {n} flows"
+  },
+  "fundLgNoFlows": {
+    "message": "No flows yet. Use Record to start"
+  },
+  "fundLgDelete": {
+    "message": "Delete"
+  },
+  "fundLgActions": {
+    "message": "Actions"
+  },
+  "fundLgColName": {
+    "message": "Instrument"
+  },
+  "fundLgColAccount": {
+    "message": "Account"
+  },
+  "fundLgColAvgCost": {
+    "message": "Avg cost"
+  },
+  "fundLgColValue": {
+    "message": "Value"
+  },
+  "fundLgColPnl": {
+    "message": "P&L"
+  },
+  "fundLgColDays": {
+    "message": "Days held"
+  },
+  "fundLgColDaily": {
+    "message": "Daily gain"
+  },
+  "fundLgNeedMaster": {
+    "message": "Add an account and instrument first (double-click the title)"
+  },
+  "fundLgNoAccounts": {
+    "message": "No accounts yet; double-click the title to add"
+  },
+  "fundLgNoInstruments": {
+    "message": "No instruments yet; double-click the title to add"
+  },
+  "fundLgAiCheck": {
+    "message": "Ask AI"
+  },
+  "fundLgAiRunning": {
+    "message": "Analyzing…"
+  },
+  "fundLgAiUnavailable": {
+    "message": "AI unavailable. Check the model connection in Natives"
+  },
+  "fundLgAiNoModel": {
+    "message": "No default model available. Configure one in Natives first"
+  },
+  "fundLgAiEmpty": {
+    "message": "AI returned nothing"
+  },
+  "fundLgAiUnparsable": {
+    "message": "AI output did not match the expected format, please retry"
+  },
+  "fundLgAiTimeout": {
+    "message": "AI analysis timed out, please retry"
+  },
+  "fundLgAiReport": {
+    "message": "AI review"
+  },
+  "fundLgAiHint": {
+    "message": "AI provides risk and structure hints only; it is not investment advice."
+  },
+  "fundLgAiToneSteady": {
+    "message": "Steady"
+  },
+  "fundLgAiToneWatch": {
+    "message": "Watch"
+  },
+  "fundLgAiToneAlert": {
+    "message": "Alert"
+  },
+  "fundLgAiNoConcerns": {
+    "message": "No concerns"
+  },
+  "fundLgSync": {
+    "message": "Sync quotes"
+  },
+  "fundLgSyncing": {
+    "message": "Syncing…"
+  },
+  "fundLgSyncDone": {
+    "message": "Updated {updated} · missing {missing} · skipped {skipped}"
+  },
+  "fundLgBackfillDone": {
+    "message": "Backfilled {days} days"
+  },
+  "fundLgFxDone": {
+    "message": "FX {n} pairs"
+  },
+  "fundLgAiPrevious": {
+    "message": "Previous {score} · {tone} ({date})"
+  },
+  "fundLgAiFirst": {
+    "message": "First review"
+  },
+  "fundLgAiTrend": {
+    "message": "Score trend"
+  },
+  "fundLgAiTrendHint": {
+    "message": "{n} reviews so far"
+  },
+  "fundLgCalendarDone": {
+    "message": "Calendar {n} days"
   }
 }

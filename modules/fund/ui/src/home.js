@@ -973,7 +973,7 @@ function localizeHome() {
   }
   const root = document.getElementById("view-home");
   const tab = document.getElementById("tab-home");
-  if (tab) tab.textContent = t("fundHomeHome");
+  if (tab) tab.textContent = t("fundNavOverview");
   root?.querySelectorAll("[data-i18n]").forEach(node => { node.textContent = t(node.dataset.i18n); });
   for (const attr of ["title", "aria-label"]) root?.querySelectorAll(`[data-i18n-${attr}]`).forEach(node => { node.setAttribute(attr, t(node.getAttribute(`data-i18n-${attr}`))); });
   const privacy = document.getElementById("home-privacy-btn");

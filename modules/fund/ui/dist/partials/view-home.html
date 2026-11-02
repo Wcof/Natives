@@ -39,15 +39,9 @@
             <div class="home-ledger-cell"><div class="hc-label" data-i18n="fundHomeDailySummary"></div><div class="hc-value num" id="home-pending-summary">–</div><p class="hc-sub" id="home-daily-summary-note"></p></div>
 <div class="home-ledger-cell"><div class="hc-label" data-i18n="fundHomeReviewSummary"></div><div class="hc-value num" id="home-review-summary">–</div><p class="hc-sub" data-i18n="fundHomeReviewSummaryNote"></p></div></div>
 
-
-          <!-- 区1：目标水位（方案 11 §3.1-1） -->
-          <div class="home-card home-goal home-goal-water">
-            <div class="home-card-title-row cardhead">
-              <span class="home-card-title"><span data-i18n="fundHomePrimaryFinancialGoal">目标水位</span></span>
-              <div class="goal-water-heading-actions"><div id="home-goal-progress"></div><button class="btn" id="home-goal-manage"><span data-i18n="fundHomeManageGoals">管理目标</span></button></div>
-            </div>
-            <div id="home-goal-body"></div>
-          </div>
+          <!-- 主侧栏：左为收益／配置／资讯，右为账户状态（方案 B） -->
+          <div class="home-layout">
+          <div class="home-col-main">
 
 
 
@@ -181,22 +175,33 @@
             </section>
           </div>
 
+          </div><!-- /home-col-main -->
 
-            <div class="home-mid-grid" style="display:grid;grid-template-columns:1fr;gap:12px">
-              <div class="home-card" style="padding:14px 18px">
-                <div class="home-card-title-row" style="margin-bottom:6px">
-                  <h3 class="home-card-title" data-i18n="fundHomeOverviewToday"></h3>
-                  <div style="display:flex;gap:8px;align-items:center">
-                    <button class="btn btn-sm" id="home-today-rules" data-i18n="fundHomeManageRules"></button>
-                    <button class="btn btn-sm" id="home-open-positions" data-i18n="fundHomeOverviewHoldings"></button>
-                  </div>
-                </div>
-                <div id="home-today-body"></div>
-                <div id="home-health-body" class="evidence-hint" style="margin-top:6px"></div>
-                <div id="home-concentration-list"></div>
-                <button class="btn home-health-open" id="home-health-open" style="display:none"></button>
+          <aside class="home-col-side" aria-label="账户状态">
+            <!-- 目标水位（方案 11 §3.1-1） -->
+            <div class="home-card home-goal home-goal-water">
+              <div class="home-card-title-row cardhead">
+                <span class="home-card-title"><span data-i18n="fundHomePrimaryFinancialGoal">目标水位</span></span>
+                <div class="goal-water-heading-actions"><div id="home-goal-progress"></div><button class="btn" id="home-goal-manage"><span data-i18n="fundHomeManageGoals">管理目标</span></button></div>
               </div>
+              <div id="home-goal-body"></div>
             </div>
+
+            <div class="home-card home-today-card">
+              <div class="home-card-title-row cardhead">
+                <h3 class="home-card-title" data-i18n="fundHomeOverviewToday"></h3>
+                <div class="home-card-actions">
+                  <button class="btn btn-sm" id="home-today-rules" data-i18n="fundHomeManageRules"></button>
+                  <button class="btn btn-sm" id="home-open-positions" data-i18n="fundHomeOverviewHoldings"></button>
+                </div>
+              </div>
+              <div id="home-today-body"></div>
+              <div id="home-health-body" class="evidence-hint"></div>
+              <div id="home-concentration-list"></div>
+              <button class="btn home-health-open" id="home-health-open" style="display:none"></button>
+            </div>
+          </aside>
+          </div><!-- /home-layout -->
           <section class="home-detail-panel" id="home-detail-panel" aria-labelledby="home-detail-title" style="display:none">
             <header class="home-card-title-row"><h2 id="home-detail-title" class="home-card-title" tabindex="-1"></h2><button type="button" class="btn" id="home-detail-close" data-i18n="fundHomeClose">关闭</button></header>
             <div id="home-detail-body"></div>

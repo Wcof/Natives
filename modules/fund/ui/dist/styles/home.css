@@ -31,6 +31,21 @@
   flex-direction: column;
   gap: 24px;
 }
+/* 主侧栏：左 2/3 内容，右 1/3 账户状态（方案 B，参考 Cointrail 卡片分栏） */
+.home-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  gap: 24px;
+  align-items: start;
+  min-width: 0;
+}
+.home-col-main { display: flex; flex-direction: column; gap: 24px; min-width: 0; }
+.home-col-side { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.home-card-actions { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.home-today-card .evidence-hint { margin-top: 8px; }
+@media (max-width: 1180px) {
+  .home-layout { grid-template-columns: 1fr; gap: 16px; }
+}
 .home-wrap button {min-height:32px;font-size: var(--natives-fs-secondary);}
 .home-wrap .up {color:var(--color-up);}
 .home-wrap .down {color:var(--color-down);}
@@ -56,8 +71,8 @@
 .home-card {
   background: var(--natives-surface-raised);
   border: 1px solid var(--natives-edge);
-  border-radius: var(--natives-radius);
-  padding: 16px 20px;
+  border-radius: var(--fund-card-radius);
+  padding: 20px 24px;
   box-sizing: border-box;
   position: relative;
 }
@@ -124,7 +139,7 @@
   display: flex; align-items: center; justify-content: space-between;
   margin-bottom: 10px; gap: 8px; flex-wrap: wrap;
 }
-.home-card-title { font-size: 14px; font-weight: 700; color: var(--natives-text-primary); }
+.home-card-title { font-size: 14px; font-weight: 600; color: var(--natives-text-primary); }
 .home-alert-count { font-size: var(--natives-fs-secondary); color: var(--natives-text-muted); }
 .home-card-foot { margin-top: 10px; }
 .home-coverage { font-size: var(--natives-fs-secondary); color:var(--natives-text-muted); }
@@ -852,7 +867,7 @@ html[data-motion-paused] .goal-wave-path { animation-play-state: paused; }
 .home-market-line em { font-family: var(--font-mono); font-size: var(--natives-fs-secondary); font-style: normal; font-variant-numeric: tabular-nums; font-weight: 650; white-space: nowrap; }
 /* 代码与时间属于必要信息，不再压到 9px；最长两行，超出的部分在 title 里。 */
 .home-market-meta { display: -webkit-box; margin-top: 2px; overflow: hidden; color: var(--natives-text-muted); font-size: var(--natives-fs-secondary); line-height: 1.35; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
-#home-history-chart .history-plot { position: relative; height: 300px; margin-left: 0; margin-right: 46px; }
+#home-history-chart .history-plot { position: relative; height: 260px; margin-left: 0; margin-right: 46px; }
 #home-history-chart .history-plot svg { display: block; width: 100%; height: 100%; max-height: none; }
 #home-history-chart .history-y { position: absolute; left: auto; right: -46px; top: 0; bottom: 0; width: 44px; pointer-events: none; }
 #home-history-chart .history-y span { position: absolute; left: 2px; transform: translateY(-50%); color: var(--chart-text-dim); font-family: var(--font-mono); font-size: 9px; font-variant-numeric: tabular-nums; white-space: nowrap; }

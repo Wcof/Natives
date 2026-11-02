@@ -505,15 +505,26 @@ fn v18_to_v19_account_metadata_matches_fresh_init() {
     assert_eq!(row, (1, 0, None));
 
     // 与新库初始化逐列／逐索引一致。
+    // v19 只新增 accounts 元数据三列；v20 之后的列（含 v30 的 channel/currency）
+    // 由各自迁移负责，不属于本测试范围——全表全量一致性由
+    // fresh_init_and_migration_ladder_produce_identical_tables 保障。
     let fresh_dir = tempfile::tempdir().unwrap();
     let fresh_store = crate::storage::Store::open(fresh_dir.path()).unwrap();
     fresh_store
         .with_read(|fconn| {
-            assert_eq!(
-                columns(fconn, "accounts"),
-                columns(&conn, "accounts"),
-                "v19 accounts 列集合与新库不一致"
-            );
+            let fresh_cols = columns(fconn, "accounts");
+            let migrated_cols = columns(&conn, "accounts");
+            for name in ["version", "sort_order", "archived_at"] {
+                let expected = fresh_cols
+                    .iter()
+                    .find(|c| c.0 == name)
+                    .unwrap_or_else(|| panic!("新库缺少 accounts.{name}"));
+                let actual = migrated_cols
+                    .iter()
+                    .find(|c| c.0 == name)
+                    .unwrap_or_else(|| panic!("v19 升级后缺少 accounts.{name}"));
+                assert_eq!(expected, actual, "accounts.{name} 定义与新库不一致");
+            }
             assert_eq!(
                 columns(fconn, "account_ops"),
                 columns(&conn, "account_ops"),
@@ -619,4 +630,215 @@ fn v21_observation_upgrade_preserves_rows_and_matches_new_schema() {
             .with_read(|c| Ok::<_, FinanceError>(columns(c)))
             .unwrap()
     );
+}
+
+/// v30 新增的资产模型表清单（设计文档 docs/development/invest-v2-design.md）。
+const V30_TABLES: &[&str] = &[
+    "instruments",
+    "flows",
+    "holdings",
+    "quotes",
+    "fx_rates",
+    "snapshots",
+    "snapshot_items",
+    "ai_evaluations",
+    "ai_settings",
+];
+
+/// v30 必须同时满足：旧数据完好、旧表未被改动、新表可读、accounts 取到默认渠道、
+/// 重复执行幂等、无 FK 违规。这是 P1 阶段的唯一验收依据。
+#[test]
+fn v30_asset_model_upgrade_preserves_v29_data_and_is_idempotent() {
+    let dir = tempfile::tempdir().unwrap();
+    let conn = open_fresh(dir.path());
+    for step in all_migrations().iter().filter(|step| step.version <= 29) {
+        conn.execute_batch(step.sql).unwrap();
+        conn.pragma_update(None, "user_version", step.version)
+            .unwrap();
+    }
+
+    // v30 之前新表不存在，确保本测试真的在验证迁移而不是空跑
+    assert!(
+        conn.query_row("SELECT COUNT(*) FROM instruments", [], |r| r
+            .get::<_, i64>(0))
+            .is_err(),
+        "v29 时不应存在 instruments 表"
+    );
+
+    conn.execute(
+        "INSERT INTO accounts(name,note,created_at,updated_at) VALUES('华泰证券','主力','0','0')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO funds(code,name,fund_type,updated_at) VALUES('000001','华夏成长','混合','0')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO transactions(account_id,fund_id,type,quantity_raw,price_raw,amount_raw,trade_date,created_at)
+         VALUES(1,1,'BUY',1000000,15000,1500000,'2026-01-02','0')",
+        [],
+    )
+    .unwrap();
+
+    assert_eq!(
+        run_migrations(dir.path(), &conn, "test").unwrap(),
+        crate::storage::SCHEMA_VERSION
+    );
+    // 幂等：重复执行不重复应用
+    assert_eq!(
+        run_migrations(dir.path(), &conn, "test").unwrap(),
+        crate::storage::SCHEMA_VERSION
+    );
+
+    // 旧数据逐项完好
+    assert_eq!(
+        conn.query_row("SELECT name FROM accounts WHERE id=1", [], |r| r
+            .get::<_, String>(0))
+            .unwrap(),
+        "华泰证券"
+    );
+    assert_eq!(
+        conn.query_row("SELECT code FROM funds WHERE id=1", [], |r| r
+            .get::<_, String>(0))
+            .unwrap(),
+        "000001"
+    );
+    assert_eq!(
+        conn.query_row(
+            "SELECT quantity_raw FROM transactions WHERE account_id=1",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        1000000
+    );
+
+    // accounts 新列对既有行取默认值，不破坏 CHECK
+    let (channel, currency): (String, String) = conn
+        .query_row(
+            "SELECT channel,currency FROM accounts WHERE id=1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(channel, "domestic_broker");
+    assert_eq!(currency, "CNY");
+
+    // 新表全部可读且为空
+    for table in V30_TABLES {
+        let count: i64 = conn
+            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+            .unwrap_or_else(|e| panic!("{table} 不可读: {e}"));
+        assert_eq!(count, 0, "{table} 新建时应为空");
+    }
+
+    assert_eq!(
+        conn.query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |r| r
+            .get::<_, i64>(
+            0
+        ))
+        .unwrap(),
+        0
+    );
+
+    // 新库走的是「SCHEMA_V1 + 逐版增量 SQL」的独立路径，不是迁移阶梯。
+    // 两条路径必须同时含 v30 新表，否则全新用户会缺表。
+    let fresh_dir = tempfile::tempdir().unwrap();
+    let fresh = crate::storage::Store::open(fresh_dir.path()).unwrap();
+    assert_eq!(
+        fresh.schema_version().unwrap(),
+        crate::storage::SCHEMA_VERSION
+    );
+    fresh
+        .with_read(|c| {
+            for table in V30_TABLES {
+                let count: i64 = c
+                    .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+                    .unwrap_or_else(|e| panic!("新库缺少 {table}: {e}"));
+                assert_eq!(count, 0, "新库 {table} 应为空");
+            }
+            Ok::<(), rusqlite::Error>(())
+        })
+        .unwrap();
+}
+
+/// v30 的业务约束必须真正生效：未知事件类型、缺比例的拆股、越界评分都要被拒绝。
+/// 这些是回放正确性的前提，不能只靠应用层校验。
+#[test]
+fn v30_flow_and_evaluation_constraints_reject_invalid_rows() {
+    let dir = tempfile::tempdir().unwrap();
+    let conn = open_fresh(dir.path());
+    run_migrations(dir.path(), &conn, "test").unwrap();
+
+    conn.execute(
+        "INSERT INTO accounts(name,channel,currency,created_at,updated_at)
+         VALUES('币安','crypto_exchange','USDT','0','0')",
+        [],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO instruments(code,name,asset_class,market,currency,created_at,updated_at)
+         VALUES('BTC','比特币','crypto','CRYPTO','USDT','0','0')",
+        [],
+    )
+    .unwrap();
+
+    // 合法买入：0.12 枚 × 65000 USDT
+    conn.execute(
+        "INSERT INTO flows(account_id,instrument_id,type,quantity_raw,price_raw,amount_raw,trade_date,created_at)
+         VALUES(1,1,'BUY',1200,650000000,78000,'2026-01-02','0')",
+        [],
+    )
+    .unwrap();
+
+    // SPLIT 缺比例：数量无法回放，必须拒绝
+    assert!(
+        conn.execute(
+            "INSERT INTO flows(account_id,instrument_id,type,quantity_raw,trade_date,created_at)
+             VALUES(1,1,'SPLIT',1000,'2026-02-02','0')",
+            [],
+        )
+        .is_err(),
+        "缺 split_from/split_to 的拆股应被拒绝"
+    );
+
+    // 未知事件类型
+    assert!(
+        conn.execute(
+            "INSERT INTO flows(account_id,instrument_id,type,trade_date,created_at)
+             VALUES(1,1,'TRANSFER','2026-02-02','0')",
+            [],
+        )
+        .is_err(),
+        "未登记的事件类型应被拒绝"
+    );
+
+    // 合法 SPLIT：1 拆 2
+    conn.execute(
+        "INSERT INTO flows(account_id,instrument_id,type,split_from,split_to,trade_date,created_at)
+         VALUES(1,1,'SPLIT',1,2,'2026-03-02','0')",
+        [],
+    )
+    .unwrap();
+
+    // 评分越界
+    assert!(
+        conn.execute(
+            "INSERT INTO ai_evaluations(account_id,instrument_id,score,tone,label,summary,snapshot_json,created_at)
+             VALUES(1,1,101,'steady','标签','摘要','{}','0')",
+            [],
+        )
+        .is_err(),
+        "评分超出 0-100 应被拒绝"
+    );
+
+    // 合法评估
+    conn.execute(
+        "INSERT INTO ai_evaluations(account_id,instrument_id,score,tone,label,summary,snapshot_json,created_at)
+         VALUES(1,1,72,'steady','仓位偏重','单一标的占比偏高，注意分散。','{}','0')",
+        [],
+    )
+    .unwrap();
 }

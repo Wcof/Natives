@@ -19,6 +19,10 @@ mod sectors;
 mod smartbox;
 mod util;
 
+// 供 invest 账本复用行情能力（只读、不新增上游契约）。
+// fetch_kline_data 与 normalize_symbol 已在下方向外重导出，这里只补行情批量拉取。
+pub(crate) use quotes::fetch_tencent_quotes;
+
 pub use handlers::{
     api_market_detail, api_market_etfs, api_market_indices, api_market_kline, api_market_minute,
     api_market_quotes, api_market_sector_stocks, api_market_sectors, api_market_stocks,

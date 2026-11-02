@@ -1,0 +1,239 @@
+      <!-- 账本 V2：概览 / 持仓 / 流水 三段式，数据全来自 /api/v2/*。默认首屏。 -->
+      <section id="view-ledger">
+        <div class="lg-wrap">
+          <header class="lg-head">
+            <div class="lg-head-left">
+              <h2 class="lg-title" id="lg-title" data-i18n="fundLgTitle">账本</h2>
+              <span class="lg-asof" id="lg-asof"></span>
+            </div>
+            <div class="lg-head-right">
+              <div class="lg-seg" role="tablist" aria-label="账本分区" data-i18n-aria-label="fundLgSections">
+                <button role="tab" type="button" id="lg-tab-overview" aria-selected="true" data-lg="overview" data-i18n="fundLgOverview">概览</button>
+                <button role="tab" type="button" id="lg-tab-holdings" aria-selected="false" data-lg="holdings" data-i18n="fundLgHoldings">持仓</button>
+                <button role="tab" type="button" id="lg-tab-flows" aria-selected="false" data-lg="flows" data-i18n="fundLgFlows">流水</button>
+              </div>
+              <button class="btn" type="button" id="lg-sync" data-i18n="fundLgSync">同步行情</button>
+              <button class="btn" type="button" id="lg-settings-open" data-i18n="fundLgAiSettings">AI 设置</button>
+              <button class="btn btn-accent" type="button" id="lg-add-flow" data-i18n="fundLgAddFlow">记一笔</button>
+            </div>
+          </header>
+
+          <div class="lg-status" id="lg-status" role="status" aria-live="polite" hidden></div>
+
+          <!-- 概览 -->
+          <div class="lg-panel" data-lg-panel="overview">
+            <div class="lg-hero">
+              <div class="lg-hero-main">
+                <div class="lg-k" data-i18n="fundLgNetWorth">净资产</div>
+                <div class="lg-hero-value num" id="lg-networth">–</div>
+                <div class="lg-hero-sub" id="lg-hero-sub"></div>
+              </div>
+              <dl class="lg-hero-side">
+                <div><dt data-i18n="fundLgCost">成本</dt><dd class="num" id="lg-cost">–</dd></div>
+                <div><dt data-i18n="fundLgUnrealized">浮动盈亏</dt><dd class="num" id="lg-unrealized">–</dd></div>
+                <div><dt data-i18n="fundLgRealized">已实现</dt><dd class="num" id="lg-realized">–</dd></div>
+              </dl>
+            </div>
+
+            <section class="lg-card" aria-labelledby="lg-chart-title">
+              <div class="lg-card-head">
+                <h3 id="lg-chart-title" data-i18n="fundLgNetWorthTrend">净值走势</h3>
+                <span class="lg-hint" id="lg-series-note"></span>
+              </div>
+              <div class="lg-chart" id="lg-chart"></div>
+            </section>
+
+            <section class="lg-card" aria-labelledby="lg-class-title">
+              <div class="lg-card-head">
+                <h3 id="lg-class-title" data-i18n="fundLgByClass">按类别</h3>
+              </div>
+              <div class="lg-classes" id="lg-classes"></div>
+            </section>
+          </div>
+
+          <!-- 持仓 -->
+          <div class="lg-panel" data-lg-panel="holdings" hidden>
+            <section class="lg-card">
+              <div class="lg-card-head">
+                <h3 data-i18n="fundLgHoldings">持仓</h3>
+                <span class="lg-hint" id="lg-holdings-note"></span>
+              </div>
+              <div id="lg-holdings"></div>
+            </section>
+          </div>
+
+          <!-- 流水 -->
+          <div class="lg-panel" data-lg-panel="flows" hidden>
+            <section class="lg-card">
+              <div class="lg-card-head">
+                <h3 data-i18n="fundLgFlows">流水</h3>
+                <span class="lg-hint" id="lg-flows-note"></span>
+              </div>
+              <div id="lg-flows"></div>
+            </section>
+          </div>
+        </div>
+      </section>
+
+      <!-- 记一笔 -->
+      <dialog id="lg-flow-dialog" class="lg-dialog" aria-labelledby="lg-flow-dialog-title">
+        <header>
+          <h2 id="lg-flow-dialog-title" tabindex="-1" data-i18n="fundLgAddFlow">记一笔</h2>
+          <button type="button" class="btn" data-lg-close data-i18n="fundLgClose">关闭</button>
+        </header>
+        <form id="lg-flow-form" method="dialog" novalidate>
+          <div class="lg-field">
+            <label for="lg-f-account" data-i18n="fundLgAccount">账户</label>
+            <select id="lg-f-account" required></select>
+          </div>
+          <div class="lg-field">
+            <label for="lg-f-instrument" data-i18n="fundLgInstrument">标的</label>
+            <select id="lg-f-instrument" required></select>
+          </div>
+          <div class="lg-field">
+            <label for="lg-f-type" data-i18n="fundLgType">类型</label>
+            <select id="lg-f-type">
+              <option value="BUY" data-i18n="fundLgTypeBuy">买入</option>
+              <option value="SELL" data-i18n="fundLgTypeSell">卖出</option>
+              <option value="DIVIDEND" data-i18n="fundLgTypeDividend">分红</option>
+              <option value="SPLIT" data-i18n="fundLgTypeSplit">拆股/送转</option>
+              <option value="FEE" data-i18n="fundLgTypeFee">费用</option>
+            </select>
+          </div>
+          <div class="lg-field" data-lg-when="BUY SELL">
+            <label for="lg-f-quantity" data-i18n="fundLgQuantity">数量</label>
+            <input id="lg-f-quantity" inputmode="decimal" autocomplete="off">
+          </div>
+          <div class="lg-field" data-lg-when="BUY SELL">
+            <label for="lg-f-price" data-i18n="fundLgPrice">价格</label>
+            <input id="lg-f-price" inputmode="decimal" autocomplete="off">
+          </div>
+          <div class="lg-field" data-lg-when="BUY SELL DIVIDEND FEE">
+            <label for="lg-f-amount" data-i18n="fundLgAmount">金额</label>
+            <input id="lg-f-amount" inputmode="decimal" autocomplete="off">
+          </div>
+          <div class="lg-field" data-lg-when="BUY SELL">
+            <label for="lg-f-fee" data-i18n="fundLgFee">费用</label>
+            <input id="lg-f-fee" inputmode="decimal" autocomplete="off">
+          </div>
+          <div class="lg-field" data-lg-when="SPLIT">
+            <label for="lg-f-split" data-i18n="fundLgSplitRatio">比例（如 1 拆 2 填 1 和 2）</label>
+            <div class="lg-split">
+              <input id="lg-f-split-from" inputmode="numeric" autocomplete="off" placeholder="1">
+              <span>→</span>
+              <input id="lg-f-split-to" inputmode="numeric" autocomplete="off" placeholder="2">
+            </div>
+          </div>
+          <div class="lg-field">
+            <label for="lg-f-date" data-i18n="fundLgDate">日期</label>
+            <input id="lg-f-date" type="date" required>
+          </div>
+          <div class="lg-field lg-field-wide">
+            <label for="lg-f-note" data-i18n="fundLgNote">备注</label>
+            <input id="lg-f-note" autocomplete="off">
+          </div>
+          <p class="lg-form-error" id="lg-form-error" role="alert" hidden></p>
+          <footer>
+            <button type="button" class="btn" data-lg-close data-i18n="fundLgCancel">取消</button>
+            <button type="submit" class="btn btn-accent" id="lg-flow-submit" data-i18n="fundLgSave">保存</button>
+          </footer>
+        </form>
+      </dialog>
+
+      <!-- 基础维护：账户与标的 -->
+      <dialog id="lg-master-dialog" class="lg-dialog" aria-labelledby="lg-master-title">
+        <header>
+          <h2 id="lg-master-title" tabindex="-1" data-i18n="fundLgMaster">账户与标的</h2>
+          <button type="button" class="btn" data-lg-close data-i18n="fundLgClose">关闭</button>
+        </header>
+        <div class="lg-master">
+          <section>
+            <h3 data-i18n="fundLgAccounts">账户</h3>
+            <div id="lg-account-list" class="lg-master-list"></div>
+            <div class="lg-master-form">
+              <input id="lg-a-name" data-i18n-placeholder="fundLgAccountName" placeholder="账户名称">
+              <select id="lg-a-channel">
+                <option value="domestic_broker" data-i18n="fundLgChannelDomestic">境内券商</option>
+                <option value="fund_platform" data-i18n="fundLgChannelFund">场外基金平台</option>
+                <option value="overseas_broker" data-i18n="fundLgChannelOverseas">境外券商</option>
+                <option value="crypto_exchange" data-i18n="fundLgChannelCrypto">数字资产交易所</option>
+              </select>
+              <select id="lg-a-currency">
+                <option value="CNY">CNY</option>
+                <option value="USD">USD</option>
+                <option value="HKD">HKD</option>
+                <option value="USDT">USDT</option>
+              </select>
+              <button type="button" class="btn" id="lg-a-add" data-i18n="fundLgAddAccount">添加账户</button>
+            </div>
+          </section>
+          <section>
+            <h3 data-i18n="fundLgInstruments">标的</h3>
+            <div id="lg-instrument-list" class="lg-master-list"></div>
+            <div class="lg-master-form">
+              <input id="lg-i-code" data-i18n-placeholder="fundLgCode" placeholder="代码">
+              <input id="lg-i-name" data-i18n-placeholder="fundLgName" placeholder="名称">
+              <select id="lg-i-class">
+                <option value="stock" data-i18n="fundLgClassStock">股票</option>
+                <option value="fund" data-i18n="fundLgClassFund">基金</option>
+                <option value="crypto" data-i18n="fundLgClassCrypto">数字货币</option>
+              </select>
+              <select id="lg-i-market">
+                <option value="CN">CN</option>
+                <option value="HK">HK</option>
+                <option value="US">US</option>
+                <option value="CRYPTO">CRYPTO</option>
+              </select>
+              <select id="lg-i-currency">
+                <option value="CNY">CNY</option>
+                <option value="USD">USD</option>
+                <option value="HKD">HKD</option>
+                <option value="USDT">USDT</option>
+              </select>
+              <input id="lg-i-group" data-i18n-placeholder="fundLgGroupCode" placeholder="A/C 归组（可选）">
+              <button type="button" class="btn" id="lg-i-add" data-i18n="fundLgAddInstrument">添加标的</button>
+            </div>
+          </section>
+        </div>
+      </dialog>
+
+      <!-- AI 评估结果 -->
+      <dialog id="lg-ai-report" class="lg-dialog" aria-labelledby="lg-ai-report-title">
+        <header>
+          <h2 id="lg-ai-report-title" tabindex="-1" data-i18n="fundLgAiReport">AI 评估</h2>
+          <button type="button" class="btn" data-lg-close data-i18n="fundLgClose">关闭</button>
+        </header>
+        <div id="lg-ai-report-body" class="lg-ai-report"></div>
+        <p class="lg-note" data-i18n="fundLgAiHint">AI 只做风险与结构提示，不构成投资建议。</p>
+      </dialog>
+
+      <!-- AI 设置 -->
+      <dialog id="lg-ai-dialog" class="lg-dialog" aria-labelledby="lg-ai-title">
+        <header>
+          <h2 id="lg-ai-title" tabindex="-1" data-i18n="fundLgAiSettings">AI 设置</h2>
+          <button type="button" class="btn" data-lg-close data-i18n="fundLgClose">关闭</button>
+        </header>
+        <div class="lg-form">
+          <div class="lg-field">
+            <label for="lg-ai-provider" data-i18n="fundLgAiProvider">供应商</label>
+            <input id="lg-ai-provider" autocomplete="off" data-i18n-placeholder="fundLgAiProviderHint" placeholder="providerId">
+          </div>
+          <div class="lg-field">
+            <label for="lg-ai-model" data-i18n="fundLgAiModel">模型</label>
+            <input id="lg-ai-model" autocomplete="off" data-i18n-placeholder="fundLgAiModelHint" placeholder="modelId">
+          </div>
+          <div class="lg-field">
+            <label for="lg-ai-style" data-i18n="fundLgAiStyle">评估风格</label>
+            <select id="lg-ai-style">
+              <option value="conservative" data-i18n="fundLgStyleConservative">保守</option>
+              <option value="neutral" data-i18n="fundLgStyleNeutral">中性</option>
+              <option value="aggressive" data-i18n="fundLgStyleAggressive">进取</option>
+            </select>
+          </div>
+          <p class="lg-note" data-i18n="fundLgAiKeyNote">模型凭据由 Natives 统一管理，此处只选择已有模型，不保存任何密钥。</p>
+          <footer>
+            <button type="button" class="btn" data-lg-close data-i18n="fundLgCancel">取消</button>
+            <button type="button" class="btn btn-accent" id="lg-ai-save" data-i18n="fundLgSave">保存</button>
+          </footer>
+        </div>
+      </dialog>
